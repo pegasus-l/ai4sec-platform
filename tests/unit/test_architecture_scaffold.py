@@ -43,6 +43,7 @@ def test_pipeline_registry_has_all_domain_entries() -> None:
     assert "vulnerabilities.material_snapshot_import" in names
     assert "vulnerabilities.material_raw_pipeline" in names
     assert "vulnerabilities.material_local_raw_import" in names
+    assert "vulnerabilities.knowledge_extraction_pipeline" in names
 
 
 def test_source_registry_has_expected_connectors() -> None:

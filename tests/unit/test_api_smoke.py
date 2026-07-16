@@ -52,12 +52,12 @@ def test_raw_pipeline_builds_from_source_raw_files() -> None:
     client = TestClient(app)
     response = client.post(
         "/api/runs",
-        json={"pipeline_name": "news.ai_for_sec_raw_pipeline", "reset": True, "params": {"date": "2026-07-10"}},
+        json={"pipeline_name": "news.ai_for_sec_local_raw_import", "reset": True, "params": {"date": "2026-07-10"}},
     )
     assert response.status_code == 200
     data = response.json()
     assert data["status"] == "success"
-    assert data["pipeline_name"] == "news.ai_for_sec_raw_pipeline"
+    assert data["pipeline_name"] == "news.ai_for_sec_local_raw_import"
     step_names = [step["name"] for step in data["summary"]["steps"]]
     assert step_names == ["import_ai_for_sec_raw", "normalize_ai_for_sec_raw", "build_raw_news_domain_items"]
 
@@ -102,8 +102,8 @@ def test_v9_contract_endpoint_aliases_exist() -> None:
 def test_threat_and_vulnerability_raw_pipelines_run() -> None:
     client = TestClient(app)
     cases = [
-        ("threats.huawei_raw_pipeline", {"limit": 20}, "/api/threats/today"),
-        ("vulnerabilities.material_raw_pipeline", {"report_limit": 2, "item_limit": 20}, "/api/vulnerabilities/today"),
+        ("threats.huawei_local_raw_import", {"limit": 20}, "/api/threats/today"),
+        ("vulnerabilities.material_local_raw_import", {"report_limit": 2, "item_limit": 20}, "/api/vulnerabilities/today"),
     ]
     for pipeline_name, params, check_path in cases:
         response = client.post("/api/runs", json={"pipeline_name": pipeline_name, "reset": True, "params": params})
@@ -134,3 +134,22 @@ def test_capability_pipeline_assesses_news_candidates() -> None:
     assert any(item["artifact_type"] == "capability_assessments" for item in detail["artifacts"])
     calls = client.get("/api/operations/model-calls").json()
     assert calls["items"]
+
+
+def test_vulnerability_knowledge_pipeline_extracts_candidates() -> None:
+    client = TestClient(app)
+    raw_run = client.post(
+        "/api/runs",
+        json={"pipeline_name": "vulnerabilities.material_local_raw_import", "reset": True, "params": {"report_limit": 2, "item_limit": 20}},
+    )
+    assert raw_run.status_code == 200
+    response = client.post("/api/runs", json={"pipeline_name": "vulnerabilities.knowledge_extraction_pipeline", "params": {"limit": 5}})
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "success"
+    assert data["summary"]["steps"][1]["metrics"]["extracted"] > 0
+    knowledge = client.get("/api/vulnerabilities/knowledge").json()
+    assert knowledge["items"]
+    assert knowledge["items"][0]["source_material_id"]
+    queue = client.get("/api/vulnerabilities/migration-queue").json()
+    assert queue["items"]

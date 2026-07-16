@@ -31,8 +31,22 @@ def material_detail(item_id: int, conn: sqlite3.Connection = Depends(get_db)) ->
 
 @router.get("/knowledge")
 def knowledge(conn: sqlite3.Connection = Depends(get_db)) -> dict:
-    data = domain_items.list_items(conn, DOMAIN, item_type="material", limit=50)
-    return {"domain": DOMAIN, "items": [{"item_id": item["id"], "title": item["title"], "status": item["status"], "key_findings": item.get("payload", {}).get("legacy", {}).get("key_findings", [])} for item in data["items"]]}
+    data = domain_items.list_items(conn, DOMAIN, item_type="knowledge", limit=50)
+    return {
+        "domain": DOMAIN,
+        "items": [
+            {
+                "item_id": item["id"],
+                "title": item["title"],
+                "status": item["status"],
+                "summary": item.get("summary", ""),
+                "source_material_id": item.get("payload", {}).get("source_material_id"),
+                "key_findings": item.get("payload", {}).get("key_findings", []),
+                "verification_clues": item.get("payload", {}).get("verification_clues", []),
+            }
+            for item in data["items"]
+        ],
+    }
 
 
 @router.get("/migration-queue")
