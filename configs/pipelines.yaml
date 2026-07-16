@@ -1,0 +1,10 @@
+pipelines:
+  legacy.sample_import:
+    domain: operations
+    description: 临时旧处理结果导入，用于展示和字段摸底
+  news.ai_for_sec_raw_pipeline:
+    domain: news
+    description: AI-for-Sec raw 六源导入、规范化、去重、构造资讯/能力候选
+  news.ai_for_sec_shadow_import:
+    domain: news
+    description: 兼容旧 structured shadow 输出导入

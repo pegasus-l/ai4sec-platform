@@ -1,0 +1,3 @@
+paths:
+  output_dir: output
+  database_path: output/ai4sec_platform.db

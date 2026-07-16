@@ -1,0 +1,7 @@
+providers:
+  mock:
+    type: mock
+model_profiles:
+  mock_default:
+    provider: mock
+    model: mock-json

@@ -37,3 +37,13 @@ def sources(conn: sqlite3.Connection = Depends(get_db)) -> dict:
 @router.get("/audits")
 def audits(conn: sqlite3.Connection = Depends(get_db)) -> dict:
     return operations.audits(conn, DOMAIN)
+
+
+@router.get("/page")
+def page() -> dict:
+    return {
+        "domain": DOMAIN,
+        "title": "资讯洞察",
+        "description": "AI-for-Sec raw pipeline 资讯入口，当前优先展示 raw pipeline 生成的待审阅条目。",
+        "tabs": ["全部动态", "精选", "日报", "论文", "阅读列表", "专题"],
+    }

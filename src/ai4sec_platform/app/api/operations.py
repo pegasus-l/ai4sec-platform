@@ -32,3 +32,13 @@ def audits(domain: str | None = None, conn: sqlite3.Connection = Depends(get_db)
 @router.get("/human-queue")
 def human_queue(domain: str | None = None, conn: sqlite3.Connection = Depends(get_db)) -> dict:
     return operations.human_queue(conn, domain)
+
+
+@router.get("/quality-findings")
+def quality_findings(domain: str | None = None, conn: sqlite3.Connection = Depends(get_db)) -> dict:
+    return operations.audits(conn, domain)
+
+
+@router.get("/queue-items")
+def queue_items(domain: str | None = None, conn: sqlite3.Connection = Depends(get_db)) -> dict:
+    return operations.human_queue(conn, domain)

@@ -1,0 +1,22 @@
+sources:
+  news:
+    - arxiv
+    - github
+    - rss
+    - x_feed
+    - asis
+    - awesome
+  capabilities:
+    - github
+    - manual_import
+    - repro_results
+  threats:
+    - huawei_repo
+    - cve
+    - firmware
+    - mirror
+  vulnerabilities:
+    - anysearch
+    - crawl4ai
+    - github
+    - manual_import

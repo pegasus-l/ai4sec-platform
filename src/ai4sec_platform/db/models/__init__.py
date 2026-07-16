@@ -24,6 +24,43 @@ CREATE INDEX IF NOT EXISTS idx_domain_items_domain ON domain_items(domain);
 CREATE INDEX IF NOT EXISTS idx_domain_items_type ON domain_items(domain, item_type);
 CREATE INDEX IF NOT EXISTS idx_domain_items_score ON domain_items(domain, score DESC);
 
+
+CREATE TABLE IF NOT EXISTS raw_artifacts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id TEXT NOT NULL,
+    domain TEXT NOT NULL,
+    source TEXT NOT NULL,
+    source_type TEXT NOT NULL DEFAULT '',
+    source_path TEXT NOT NULL DEFAULT '',
+    artifact_id INTEGER,
+    item_count INTEGER NOT NULL DEFAULT 0,
+    payload_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL,
+    FOREIGN KEY(run_id) REFERENCES pipeline_runs(run_id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_raw_artifacts_run ON raw_artifacts(run_id);
+CREATE INDEX IF NOT EXISTS idx_raw_artifacts_domain_source ON raw_artifacts(domain, source);
+
+CREATE TABLE IF NOT EXISTS normalized_items (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id TEXT NOT NULL,
+    domain TEXT NOT NULL,
+    item_key TEXT NOT NULL,
+    source TEXT NOT NULL,
+    source_type TEXT NOT NULL DEFAULT '',
+    title TEXT NOT NULL,
+    url TEXT NOT NULL DEFAULT '',
+    primary_date TEXT NOT NULL DEFAULT '',
+    normalized_json TEXT NOT NULL DEFAULT '{}',
+    raw_artifact_id INTEGER,
+    created_at TEXT NOT NULL,
+    FOREIGN KEY(run_id) REFERENCES pipeline_runs(run_id) ON DELETE CASCADE,
+    FOREIGN KEY(raw_artifact_id) REFERENCES raw_artifacts(id) ON DELETE SET NULL
+);
+CREATE INDEX IF NOT EXISTS idx_normalized_run ON normalized_items(run_id);
+CREATE INDEX IF NOT EXISTS idx_normalized_domain ON normalized_items(domain);
+CREATE INDEX IF NOT EXISTS idx_normalized_key ON normalized_items(domain, item_key);
+
 CREATE TABLE IF NOT EXISTS evidence_items (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     domain TEXT NOT NULL,
@@ -131,6 +168,8 @@ def reset_db(conn: sqlite3.Connection) -> None:
     tables = [
         "human_queue_items",
         "quality_audits",
+        "normalized_items",
+        "raw_artifacts",
         "data_sources",
         "artifacts",
         "task_runs",

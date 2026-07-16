@@ -29,6 +29,61 @@ def row_to_dict(row: sqlite3.Row) -> dict[str, Any]:
     return item
 
 
+
+def create_raw_artifact(
+    conn: sqlite3.Connection,
+    *,
+    run_id: str,
+    domain: str,
+    source: str,
+    source_type: str = "",
+    source_path: str = "",
+    artifact_id: int | None = None,
+    item_count: int = 0,
+    payload: dict[str, Any] | None = None,
+) -> int:
+    cur = conn.execute(
+        """
+        INSERT INTO raw_artifacts (run_id, domain, source, source_type, source_path, artifact_id, item_count, payload_json, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (run_id, domain, source, source_type, source_path, artifact_id, item_count, dumps(payload or {}), utc_now()),
+    )
+    return int(cur.lastrowid)
+
+
+def create_normalized_item(
+    conn: sqlite3.Connection,
+    *,
+    run_id: str,
+    domain: str,
+    item_key: str,
+    source: str,
+    source_type: str,
+    title: str,
+    url: str = "",
+    primary_date: str = "",
+    normalized: dict[str, Any] | None = None,
+    raw_artifact_id: int | None = None,
+) -> int:
+    cur = conn.execute(
+        """
+        INSERT INTO normalized_items (run_id, domain, item_key, source, source_type, title, url, primary_date, normalized_json, raw_artifact_id, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (run_id, domain, item_key, source, source_type, title, url, primary_date, dumps(normalized or {}), raw_artifact_id, utc_now()),
+    )
+    return int(cur.lastrowid)
+
+
+def list_normalized_items(conn: sqlite3.Connection, *, run_id: str, domain: str = "news", limit: int = 1000) -> list[dict[str, Any]]:
+    rows = conn.execute(
+        "SELECT * FROM normalized_items WHERE run_id = ? AND domain = ? ORDER BY id LIMIT ?",
+        (run_id, domain, limit),
+    ).fetchall()
+    return [row_to_dict(row) for row in rows]
+
+
 def create_domain_item(
     conn: sqlite3.Connection,
     *,
@@ -96,14 +151,36 @@ def create_pipeline_run(
     source_path: str = "",
 ) -> None:
     now = utc_now()
+    existing = conn.execute("SELECT run_id, started_at, created_at FROM pipeline_runs WHERE run_id = ?", (run_id,)).fetchone()
+    if existing:
+        conn.execute(
+            """
+            UPDATE pipeline_runs
+            SET domain = ?, pipeline_name = ?, status = ?, started_at = ?, finished_at = ?,
+                production_writes = ?, summary_json = ?, source_path = ?
+            WHERE run_id = ?
+            """,
+            (
+                domain,
+                pipeline_name,
+                status,
+                started_at or existing["started_at"] or now,
+                finished_at,
+                int(production_writes),
+                dumps(summary or {}),
+                source_path,
+                run_id,
+            ),
+        )
+        return
     conn.execute(
         """
-        INSERT OR REPLACE INTO pipeline_runs (
+        INSERT INTO pipeline_runs (
             run_id, domain, pipeline_name, status, started_at, finished_at,
             production_writes, summary_json, source_path, created_at
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
-        (run_id, domain, pipeline_name, status, started_at or now, finished_at or now, int(production_writes), dumps(summary or {}), source_path, now),
+        (run_id, domain, pipeline_name, status, started_at or now, finished_at, int(production_writes), dumps(summary or {}), source_path, now),
     )
 
 
@@ -188,7 +265,7 @@ def list_evidence(conn: sqlite3.Connection, domain: str, item_id: int) -> list[d
 
 
 def list_table(conn: sqlite3.Connection, table: str, *, domain: str | None = None, limit: int = 50) -> list[dict[str, Any]]:
-    allowed = {"pipeline_runs", "task_runs", "artifacts", "data_sources", "quality_audits", "human_queue_items"}
+    allowed = {"pipeline_runs", "task_runs", "artifacts", "data_sources", "quality_audits", "human_queue_items", "raw_artifacts", "normalized_items"}
     if table not in allowed:
         raise ValueError(f"Unsupported table: {table}")
     if domain and table in {"pipeline_runs", "data_sources", "quality_audits", "human_queue_items"}:

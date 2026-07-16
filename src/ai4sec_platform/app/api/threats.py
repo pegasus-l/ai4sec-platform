@@ -37,3 +37,18 @@ def tracking_queue(conn: sqlite3.Connection = Depends(get_db)) -> dict:
 @router.get("/audits")
 def audits(conn: sqlite3.Connection = Depends(get_db)) -> dict:
     return operations.audits(conn, DOMAIN)
+
+
+@router.get("/tracking")
+def tracking(conn: sqlite3.Connection = Depends(get_db)) -> dict:
+    return operations.human_queue(conn, DOMAIN)
+
+
+@router.get("/graph")
+def graph(conn: sqlite3.Connection = Depends(get_db)) -> dict:
+    targets_data = domain_items.list_items(conn, DOMAIN, item_type="target", limit=100)
+    nodes = [
+        {"id": f"target:{item['id']}", "label": item["title"], "type": "target", "score": item.get("score")}
+        for item in targets_data["items"]
+    ]
+    return {"domain": DOMAIN, "nodes": nodes, "edges": [], "status": "partial", "note": "第一阶段仅返回目标节点，CVE/固件/镜像关系待后续 threat raw pipeline 补齐。"}

@@ -38,3 +38,8 @@ def repro_runs(conn: sqlite3.Connection = Depends(get_db)) -> dict:
 @router.get("/conversion-queue")
 def conversion_queue(conn: sqlite3.Connection = Depends(get_db)) -> dict:
     return operations.human_queue(conn, DOMAIN)
+
+
+@router.get("/conversions")
+def conversions(conn: sqlite3.Connection = Depends(get_db)) -> dict:
+    return operations.human_queue(conn, DOMAIN)

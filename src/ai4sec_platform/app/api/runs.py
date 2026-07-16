@@ -1,12 +1,38 @@
 from __future__ import annotations
 
 import sqlite3
+from typing import Any
+
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel, Field
 
 from ai4sec_platform.app.dependencies import get_db
 from ai4sec_platform.db import repositories as repo
+from ai4sec_platform.pipelines.registry import default_registry
+from ai4sec_platform.pipelines.runner import PipelineRunner
 
 router = APIRouter(prefix="/runs", tags=["runs"])
+
+
+class RunPipelineRequest(BaseModel):
+    pipeline_name: str = Field(default="legacy.sample_import")
+    reset: bool = False
+    params: dict[str, Any] = Field(default_factory=dict)
+
+
+@router.get("/pipelines")
+def pipelines() -> dict:
+    return {"items": default_registry().list()}
+
+
+@router.post("")
+def start_run(request: RunPipelineRequest) -> dict:
+    params = dict(request.params)
+    params["reset"] = request.reset
+    try:
+        return PipelineRunner().run(request.pipeline_name, params)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @router.get("")
