@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>AI4SEC TMG · Platform v6</title>
+  <title>AI4SEC TMG · Platform v9</title>
   <style>
     :root {
       color-scheme: dark;
@@ -1222,55 +1222,55 @@
       return { id: item.id, name: item.queue_type, title: item.queue_type, domain: item.domain, status: item.status, priority: item.priority, description: item.reason, suggestion: item.reason };
     }
 
+    function normalizeV9Contract(data) {
+      const opsRules = data.ops?.rules || {};
+      return {
+        loaded: true,
+        error: '',
+        manifest: data.manifest || { source: 'AI4SEC v9 contract API' },
+        news: {
+          asisPage: data.news?.asisPage || {},
+          sources: data.news?.sources || [],
+          items: data.news?.items || [],
+        },
+        capability: {
+          today: data.capability?.today || [],
+          library: data.capability?.library || [],
+          reproRuns: data.capability?.reproRuns || [],
+          conversions: data.capability?.conversions || [],
+        },
+        threat: {
+          today: data.threat?.today || [],
+          targets: data.threat?.targets || [],
+          tracking: data.threat?.tracking || [],
+          graph: data.threat?.graph || { nodes: [], edges: [] },
+          riskAssessments: data.threat?.riskAssessments || [],
+        },
+        vuln: {
+          today: data.vuln?.today || [],
+          materials: data.vuln?.materials || [],
+          knowledge: data.vuln?.knowledge || [],
+          migration: data.vuln?.migration || [],
+        },
+        ops: {
+          tasks: data.ops?.tasks || [],
+          sources: data.ops?.sources || [],
+          rules: Array.isArray(opsRules) ? opsRules : Object.entries(opsRules).flatMap(([domain, rules]) => (rules || []).map((rule, index) => ({ id: `${domain}-${index}`, domain, name: rule.name, description: rule.description || rule.value, status: 'draft' }))),
+          quality: data.ops?.quality || [],
+          queue: data.ops?.queue || [],
+          modelCalls: data.ops?.modelCalls || [],
+        },
+      };
+    }
+
     async function loadSampleData() {
       try {
-        const [overview, newsToday, newsAll, newsSources, capToday, capAll, reproRuns, capQueue, threatToday, threatTargets, threatQueue, vulnToday, vulnMaterials, vulnKnowledge, vulnQueue, opsTasks, opsSources, opsRules, opsQuality, opsQueue] = await Promise.all([
-          loadJSON('/api/dashboard/overview'),
-          loadJSON('/api/news/today'), loadJSON('/api/news/items?limit=80'), loadJSON('/api/news/sources'),
-          loadJSON('/api/capabilities/today'), loadJSON('/api/capabilities/items?limit=80'), loadJSON('/api/capabilities/repro-runs'), loadJSON('/api/capabilities/conversion-queue'),
-          loadJSON('/api/threats/today'), loadJSON('/api/threats/targets?limit=80'), loadJSON('/api/threats/tracking-queue'),
-          loadJSON('/api/vulnerabilities/today'), loadJSON('/api/vulnerabilities/materials?limit=80'), loadJSON('/api/vulnerabilities/knowledge'), loadJSON('/api/vulnerabilities/migration-queue'),
-          loadJSON('/api/operations/tasks'), loadJSON('/api/operations/sources'), loadJSON('/api/operations/rules'), loadJSON('/api/operations/audits'), loadJSON('/api/operations/human-queue'),
-        ]);
-        const newsItems = apiItems(newsAll).map(mapNews);
-        const newsFeatured = apiItems(newsToday).map(mapNews);
-        const capItems = apiItems(capAll).map(mapCapability);
-        const capFeatured = apiItems(capToday).map(mapCapability);
-        const threatItems = apiItems(threatTargets).map(mapThreat);
-        const threatFeatured = apiItems(threatToday).map(mapThreat);
-        const vulnItems = apiItems(vulnMaterials).map(mapVuln);
-        const vulnFeatured = apiItems(vulnToday).map(mapVuln);
-        const queueItems = apiItems(opsQueue).map(mapQueue);
-        Object.assign(sampleData, {
-          loaded: true, error: '', manifest: { source: 'AI4SEC local API', overview },
-          news: { asisPage: {}, sources: apiItems(newsSources).map(mapSource), items: newsItems.length ? newsItems : newsFeatured },
-          capability: {
-            today: capFeatured, library: capItems,
-            reproRuns: apiItems(reproRuns).map(item => ({ id: String(item.item_id || item.id), title: item.title, status: item.status || 'pending', repro_status: item.status || 'pending', repo_url: item.source_url, last_event: '第一阶段仅展示复现状态' })),
-            conversions: apiItems(capQueue).map(mapQueue),
-          },
-          threat: {
-            today: threatFeatured, targets: threatItems,
-            tracking: apiItems(threatQueue).map(item => ({ ...mapQueue(item), target_id: String(item.item_id || item.id), title: item.queue_type || '跟踪项', next_action: item.reason })),
-            graph: { nodes: threatItems.slice(0, 8), edges: [] },
-          },
-          vuln: {
-            today: vulnFeatured, materials: vulnItems,
-            knowledge: apiItems(vulnKnowledge).map(item => ({ ...mapVuln({ id: item.item_id, title: item.title, summary: (item.key_findings || []).join('；'), status: item.status, tags: ['知识提取'], payload: { legacy: { key_findings: item.key_findings || [] } } }), extraction_status: '待确认' })),
-            migration: apiItems(vulnQueue).map(mapQueue),
-          },
-          ops: {
-            tasks: apiItems(opsTasks).map(mapTask),
-            sources: apiItems(opsSources).map(mapSource),
-            rules: Object.entries(opsRules.items || {}).flatMap(([domain, rules]) => (rules || []).map((rule, index) => ({ id: `${domain}-${index}`, domain, name: rule.name, description: rule.description || rule.value, status: 'draft' }))),
-            quality: apiItems(opsQuality).map(mapAudit),
-            queue: queueItems,
-          },
-        });
+        const contract = await loadJSON('/api/frontend/v9');
+        Object.assign(sampleData, normalizeV9Contract(contract));
       } catch (error) {
         sampleData.loaded = false;
         sampleData.error = error.message;
-        console.warn('Failed to load local API data; using static fallback.', error);
+        console.warn('Failed to load v9 contract API data; using static fallback.', error);
       }
     }
 
