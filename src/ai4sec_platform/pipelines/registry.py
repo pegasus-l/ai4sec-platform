@@ -3,8 +3,8 @@ from __future__ import annotations
 from ai4sec_platform.pipelines.base import PipelineDefinition
 from ai4sec_platform.domains.capabilities.pipelines import capability_assessment_placeholder_pipeline
 from ai4sec_platform.domains.news.pipelines import ai_for_sec_raw_pipeline, ai_for_sec_shadow_import_pipeline
-from ai4sec_platform.domains.threats.pipelines import huawei_snapshot_import_pipeline
-from ai4sec_platform.domains.vulnerabilities.pipelines import material_snapshot_import_pipeline
+from ai4sec_platform.domains.threats.pipelines import huawei_raw_pipeline, huawei_snapshot_import_pipeline
+from ai4sec_platform.domains.vulnerabilities.pipelines import material_snapshot_import_pipeline, vulnerability_raw_pipeline
 from ai4sec_platform.pipelines.steps.import_existing import ImportLegacySamplesStep
 
 
@@ -38,5 +38,7 @@ def default_registry() -> PipelineRegistry:
     registry.register(ai_for_sec_raw_pipeline())
     registry.register(capability_assessment_placeholder_pipeline())
     registry.register(huawei_snapshot_import_pipeline())
+    registry.register(huawei_raw_pipeline())
     registry.register(material_snapshot_import_pipeline())
+    registry.register(vulnerability_raw_pipeline())
     return registry

@@ -97,3 +97,22 @@ def test_v9_contract_endpoint_aliases_exist() -> None:
     for path in paths:
         response = client.get(path)
         assert response.status_code == 200, path
+
+
+def test_threat_and_vulnerability_raw_pipelines_run() -> None:
+    client = TestClient(app)
+    cases = [
+        ("threats.huawei_raw_pipeline", {"limit": 20}, "/api/threats/today"),
+        ("vulnerabilities.material_raw_pipeline", {"report_limit": 2, "item_limit": 20}, "/api/vulnerabilities/today"),
+    ]
+    for pipeline_name, params, check_path in cases:
+        response = client.post("/api/runs", json={"pipeline_name": pipeline_name, "reset": True, "params": params})
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "success"
+        assert data["pipeline_name"] == pipeline_name
+        assert len(data["summary"]["steps"]) == 3
+        detail = client.get(f"/api/runs/{data['run_id']}").json()
+        assert any(item["artifact_type"] == "manifest" for item in detail["artifacts"])
+        domain_data = client.get(check_path).json()
+        assert domain_data["items"]

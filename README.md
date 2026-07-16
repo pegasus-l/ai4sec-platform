@@ -108,3 +108,21 @@ app / core / db / schemas / sources / artifacts / pipelines / domains / agents /
 ```
 
 其中 `news.ai_for_sec_raw_pipeline` 已可运行；其他业务域已具备标准目录、service/pipeline/adapter/builder/audit 文件边界和 placeholder pipeline，后续继续在这些文件中填实真实逻辑，不再新增散乱脚本。
+
+## 已实现 Raw Pipelines
+
+当前已实现三条 raw pipeline：
+
+```bash
+PYTHONPATH=src python3 -m ai4sec_platform.cli.run_pipeline --pipeline news.ai_for_sec_raw_pipeline --reset
+PYTHONPATH=src python3 -m ai4sec_platform.cli.run_pipeline --pipeline threats.huawei_raw_pipeline --reset
+PYTHONPATH=src python3 -m ai4sec_platform.cli.run_pipeline --pipeline vulnerabilities.material_raw_pipeline --reset
+```
+
+说明：
+
+- `news.ai_for_sec_raw_pipeline` 从 AI-for-Sec 六类 raw 文件导入。
+- `threats.huawei_raw_pipeline` 从华为 repo/CVE/固件/镜像 raw JSON 导入。
+- `vulnerabilities.material_raw_pipeline` 从漏洞素材 report JSON 导入。
+- 三者都会写 `raw_artifacts`、`normalized_items`、`domain_items`、`evidence_items`、`pipeline_runs`、`task_runs` 和 manifest。
+- 所有 pipeline 仍保持 `production_writes=false`。
