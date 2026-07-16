@@ -126,3 +126,13 @@ PYTHONPATH=src python3 -m ai4sec_platform.cli.run_pipeline --pipeline vulnerabil
 - `vulnerabilities.material_raw_pipeline` 从漏洞素材 report JSON 导入。
 - 三者都会写 `raw_artifacts`、`normalized_items`、`domain_items`、`evidence_items`、`pipeline_runs`、`task_runs` 和 manifest。
 - 所有 pipeline 仍保持 `production_writes=false`。
+
+## 能力洞察 Pipeline
+
+在 `news.ai_for_sec_raw_pipeline` 运行后，可以继续运行：
+
+```bash
+PYTHONPATH=src python3 -m ai4sec_platform.cli.run_pipeline --pipeline capabilities.from_news_pipeline
+```
+
+该 pipeline 会复用或生成能力候选，使用 mock model provider 完成第一版能力评估，并写入 `model_calls`。

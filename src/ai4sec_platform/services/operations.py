@@ -42,3 +42,7 @@ def rules(domain: str | None = None) -> dict[str, Any]:
     if domain:
         return {"domain": domain, "items": RULES.get(domain, [])}
     return {"domain": "all", "items": RULES}
+
+
+def model_calls(conn: sqlite3.Connection, domain: str | None = None) -> list[dict[str, Any]]:
+    return repo.list_table(conn, "model_calls", domain=None, limit=50)

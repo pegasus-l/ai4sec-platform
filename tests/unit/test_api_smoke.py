@@ -116,3 +116,21 @@ def test_threat_and_vulnerability_raw_pipelines_run() -> None:
         assert any(item["artifact_type"] == "manifest" for item in detail["artifacts"])
         domain_data = client.get(check_path).json()
         assert domain_data["items"]
+
+
+def test_capability_pipeline_assesses_news_candidates() -> None:
+    client = TestClient(app)
+    news_run = client.post(
+        "/api/runs",
+        json={"pipeline_name": "news.ai_for_sec_raw_pipeline", "reset": True, "params": {"date": "2026-07-10"}},
+    )
+    assert news_run.status_code == 200
+    response = client.post("/api/runs", json={"pipeline_name": "capabilities.from_news_pipeline", "params": {"limit": 10}})
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "success"
+    assert data["summary"]["steps"][1]["metrics"]["assessed"] == 10
+    detail = client.get(f"/api/runs/{data['run_id']}").json()
+    assert any(item["artifact_type"] == "capability_assessments" for item in detail["artifacts"])
+    calls = client.get("/api/operations/model-calls").json()
+    assert calls["items"]

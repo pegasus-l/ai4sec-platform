@@ -236,6 +236,61 @@ def create_human_queue_item(conn: sqlite3.Connection, *, domain: str, item_id: i
     )
 
 
+
+def create_model_call(
+    conn: sqlite3.Connection,
+    *,
+    run_id: str,
+    agent_name: str,
+    model_profile: str,
+    provider: str = "mock",
+    status: str = "success",
+    input_payload: dict[str, Any] | None = None,
+    output_payload: dict[str, Any] | None = None,
+    latency_ms: int = 0,
+    error_message: str = "",
+    task_run_id: str = "",
+) -> int:
+    cur = conn.execute(
+        """
+        INSERT INTO model_calls (run_id, task_run_id, agent_name, model_profile, provider, status, input_json, output_json, latency_ms, error_message, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (run_id, task_run_id, agent_name, model_profile, provider, status, dumps(input_payload or {}), dumps(output_payload or {}), latency_ms, error_message, utc_now()),
+    )
+    return int(cur.lastrowid)
+
+
+def update_domain_item(
+    conn: sqlite3.Connection,
+    *,
+    item_id: int,
+    status: str | None = None,
+    score: float | None = None,
+    metrics: dict[str, Any] | None = None,
+    payload: dict[str, Any] | None = None,
+) -> None:
+    existing = conn.execute("SELECT metrics_json, payload_json FROM domain_items WHERE id = ?", (item_id,)).fetchone()
+    if not existing:
+        return
+    current_metrics = loads(existing["metrics_json"], {})
+    current_payload = loads(existing["payload_json"], {})
+    if metrics:
+        current_metrics.update(metrics)
+    if payload:
+        current_payload.update(payload)
+    fields = ["metrics_json = ?", "payload_json = ?", "updated_at = ?"]
+    params: list[Any] = [dumps(current_metrics), dumps(current_payload), utc_now()]
+    if status is not None:
+        fields.append("status = ?")
+        params.append(status)
+    if score is not None:
+        fields.append("score = ?")
+        params.append(score)
+    params.append(item_id)
+    conn.execute(f"UPDATE domain_items SET {', '.join(fields)} WHERE id = ?", params)
+
+
 def list_domain_items(conn: sqlite3.Connection, domain: str, *, item_type: str | None = None, limit: int = 50, status: str | None = None) -> list[dict[str, Any]]:
     sql = "SELECT * FROM domain_items WHERE domain = ?"
     params: list[Any] = [domain]
@@ -265,7 +320,7 @@ def list_evidence(conn: sqlite3.Connection, domain: str, item_id: int) -> list[d
 
 
 def list_table(conn: sqlite3.Connection, table: str, *, domain: str | None = None, limit: int = 50) -> list[dict[str, Any]]:
-    allowed = {"pipeline_runs", "task_runs", "artifacts", "data_sources", "quality_audits", "human_queue_items", "raw_artifacts", "normalized_items"}
+    allowed = {"pipeline_runs", "task_runs", "artifacts", "data_sources", "quality_audits", "human_queue_items", "raw_artifacts", "normalized_items", "model_calls"}
     if table not in allowed:
         raise ValueError(f"Unsupported table: {table}")
     if domain and table in {"pipeline_runs", "data_sources", "quality_audits", "human_queue_items"}:

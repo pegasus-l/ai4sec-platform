@@ -117,6 +117,25 @@ CREATE TABLE IF NOT EXISTS artifacts (
 );
 CREATE INDEX IF NOT EXISTS idx_artifacts_run_id ON artifacts(run_id);
 
+
+CREATE TABLE IF NOT EXISTS model_calls (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id TEXT NOT NULL,
+    task_run_id TEXT NOT NULL DEFAULT '',
+    agent_name TEXT NOT NULL,
+    model_profile TEXT NOT NULL,
+    provider TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL,
+    input_json TEXT NOT NULL DEFAULT '{}',
+    output_json TEXT NOT NULL DEFAULT '{}',
+    latency_ms INTEGER NOT NULL DEFAULT 0,
+    error_message TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    FOREIGN KEY(run_id) REFERENCES pipeline_runs(run_id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_model_calls_run ON model_calls(run_id);
+CREATE INDEX IF NOT EXISTS idx_model_calls_agent ON model_calls(agent_name);
+
 CREATE TABLE IF NOT EXISTS data_sources (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     domain TEXT NOT NULL,
@@ -171,6 +190,7 @@ def reset_db(conn: sqlite3.Connection) -> None:
         "normalized_items",
         "raw_artifacts",
         "data_sources",
+        "model_calls",
         "artifacts",
         "task_runs",
         "pipeline_runs",

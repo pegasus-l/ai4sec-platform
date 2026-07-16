@@ -42,3 +42,8 @@ def quality_findings(domain: str | None = None, conn: sqlite3.Connection = Depen
 @router.get("/queue-items")
 def queue_items(domain: str | None = None, conn: sqlite3.Connection = Depends(get_db)) -> dict:
     return operations.human_queue(conn, domain)
+
+
+@router.get("/model-calls")
+def model_calls(domain: str | None = None, conn: sqlite3.Connection = Depends(get_db)) -> dict:
+    return {"domain": domain or "all", "items": operations.model_calls(conn, domain)}
