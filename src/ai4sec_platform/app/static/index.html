@@ -1142,13 +1142,23 @@
       return (item.tags || [fallback]).filter(Boolean)[0] || fallback;
     }
 
+    function normalizeTechPoints(value, tags = []) {
+      if (Array.isArray(value)) return value;
+      if (typeof value === 'string' && value.trim()) {
+        const bracketed = [...value.matchAll(/\[([^\]]+)\]/g)].map(match => match[1]);
+        if (bracketed.length) return bracketed;
+        return value.split(/[;；,，]/).map(part => part.trim()).filter(Boolean);
+      }
+      return Array.isArray(tags) ? tags : [];
+    }
+
     function mapNews(item) {
       return {
         id: String(item.id), title: item.title, subtitle: item.title, summary: item.summary,
         source: item.source || 'AI-for-Sec', source_url: item.source_url,
         category: firstTag(item, item.item_type || '资讯'), score: item.score,
         source_type: item.payload?.legacy?.type || item.item_type,
-        tech_points: item.payload?.legacy?.tech_points || (item.tags || []).join(' / '),
+        tech_points: normalizeTechPoints(item.payload?.legacy?.tech_points, item.tags),
         highlight: item.summary,
       };
     }
