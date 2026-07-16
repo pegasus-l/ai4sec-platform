@@ -169,3 +169,31 @@ def test_threat_risk_pipeline_reasons_targets() -> None:
     assert assessments["items"]
     calls = client.get("/api/operations/model-calls?domain=threats").json()
     assert calls["items"]
+
+
+def test_frontend_v9_contract_returns_all_page_blocks() -> None:
+    client = TestClient(app)
+    client.post("/api/runs", json={"pipeline_name": "news.ai_for_sec_local_raw_import", "reset": True, "params": {"date": "2026-07-10"}})
+    client.post("/api/runs", json={"pipeline_name": "capabilities.from_news_pipeline", "params": {"limit": 3}})
+    client.post("/api/runs", json={"pipeline_name": "threats.huawei_local_raw_import", "params": {"limit": 10}})
+    client.post("/api/runs", json={"pipeline_name": "vulnerabilities.material_local_raw_import", "params": {"report_limit": 1, "item_limit": 10}})
+    response = client.get("/api/frontend/v9")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["manifest"]["data_mode"] == "local_raw_file_only"
+    assert data["manifest"]["live_source_fetch_enabled"] is False
+    assert data["news"]["items"]
+    assert data["capability"]["today"]
+    assert data["threat"]["targets"]
+    assert data["vuln"]["materials"]
+    assert "tasks" in data["ops"]
+
+
+def test_frontend_v9_file_contract_aliases_sample_json_paths() -> None:
+    client = TestClient(app)
+    response = client.get("/api/frontend/v9/files/manifest.json")
+    assert response.status_code == 200
+    assert response.json()["data_mode"] == "local_raw_file_only"
+    news_items = client.get("/api/frontend/v9/files/news/items.json")
+    assert news_items.status_code == 200
+    assert isinstance(news_items.json(), list)

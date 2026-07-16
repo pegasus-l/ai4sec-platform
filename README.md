@@ -35,6 +35,8 @@ GET /api/operations/tasks
 GET /api/operations/sources
 GET /api/operations/audits
 GET /api/operations/human-queue
+GET /api/frontend/v9
+GET /api/frontend/v9/files/{path}
 ```
 
 ## 文档
@@ -137,3 +139,24 @@ PYTHONPATH=src python3 -m ai4sec_platform.cli.run_pipeline --pipeline capabiliti
 ```
 
 该 pipeline 会复用或生成能力候选，使用 mock model provider 完成第一版能力评估，并写入 `model_calls`。
+
+## 前端 v9 数据契约
+
+后端已提供聚合接口，直接返回 `/mnt/d/漏洞挖掘/洞察工具/dashboard/demo/index-v9.html` 所需的主要数据块：
+
+```text
+GET /api/frontend/v9
+```
+
+同时提供兼容 demo 样例 JSON 目录的路径别名：
+
+```text
+GET /api/frontend/v9/files/manifest.json
+GET /api/frontend/v9/files/news/items.json
+GET /api/frontend/v9/files/capability/today.json
+GET /api/frontend/v9/files/threat/targets.json
+GET /api/frontend/v9/files/vuln/materials.json
+GET /api/frontend/v9/files/ops/tasks.json
+```
+
+这些数据仍来自本地原始数据导入后的新处理链路，不读取旧系统已处理完成的展示结果作为正式主输入。
