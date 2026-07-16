@@ -2,7 +2,7 @@
 
 AI4SEC 统一洞察平台新工程目录。
 
-当前阶段目标：先用旧系统现有数据导入 SQLite，提供四个业务域和统一运营入口的展示 API；暂不做真实采集、模型重跑、复现执行或生产写入。
+当前阶段目标：只读取旧系统已经落盘的本地原始数据文件，走新平台自己的导入、标准化、去重、证据、评估和展示链路；暂不做联网数据源获取、真实模型重跑、复现执行或生产写入。
 
 ## 快速开始
 
@@ -50,17 +50,18 @@ AGENTS.md
 - `.env` 被 Git 忽略。
 - 输出数据库位于 `output/ai4sec_platform.db`，也被 Git 忽略。
 - 当前实现 `production_writes=false`，不写生产路径。
+- 当前实现 `live_source_fetch_enabled=false`，所有 source connector 只能读本地 JSON 原始文件；HTTP/HTTPS 路径会被拒绝。
 
 
 ## 前端页面
 
-当前已内置前端工作台，页面壳对齐 `/mnt/d/漏洞挖掘/洞察工具/dashboard/demo/index-v6.html`，并由 FastAPI 直接提供服务。
+当前已内置前端工作台，页面壳会继续向 `/mnt/d/漏洞挖掘/洞察工具/dashboard/demo/index-v9.html` 的信息架构迁移，并由 FastAPI 直接提供服务。
 
 ```text
 http://127.0.0.1:8000/
 ```
 
-页面会调用 `/api/dashboard/overview`、四个业务域 `today` 接口和统一运营接口。首次访问前请先运行旧数据导入命令。
+页面会调用 `/api/dashboard/overview`、四个业务域接口和统一运营接口。首次访问前请先运行本地原始数据导入 pipeline。
 
 ## 后端任务触发
 
@@ -79,24 +80,24 @@ POST /api/runs
 
 该 pipeline 会创建总控 PipelineRun，执行旧数据导入 step，写入 TaskRun、Artifact 和 manifest，仍保持 `production_writes=false`。
 
-## Raw Pipeline 纠偏说明
+## 本地原始数据导入说明
 
-当前保留 `legacy.sample_import` 作为临时展示导入，但正式主线已经开始迁移到 raw pipeline。
+当前保留 `legacy.sample_import` 作为临时展示导入，但正式主线已经迁移到 local raw import。这里的 `raw` 指“旧系统已经保存到磁盘的原始 JSON 文件”，不是联网采集。
 
-第一条 raw pipeline：
+新闻洞察本地原始数据导入：
 
 ```bash
 PYTHONPATH=src python3 -m ai4sec_platform.cli.run_pipeline \
-  --pipeline news.ai_for_sec_raw_pipeline \
+  --pipeline news.ai_for_sec_local_raw_import \
   --reset
 ```
 
-该 pipeline 从 AI-for-Sec raw 六源文件读取数据，写入 `raw_artifacts`、`normalized_items`，再构造 `news` 和 `capabilities` 的 `domain_items`。它不以旧 `selected_entries.json` 作为正式主输入。
+该 pipeline 从 AI-for-Sec 本地 raw 六源文件读取数据，写入 `raw_artifacts`、`normalized_items`，再构造 `news` 和 `capabilities` 的 `domain_items`。它不联网，也不以旧 `selected_entries.json` 作为正式主输入。
 
 对应 API：
 
 ```text
-POST /api/runs {"pipeline_name": "news.ai_for_sec_raw_pipeline", "reset": true, "params": {"date": "2026-07-10"}}
+POST /api/runs {"pipeline_name": "news.ai_for_sec_local_raw_import", "reset": true, "params": {"date": "2026-07-10"}}
 ```
 
 ## 工程骨架状态
@@ -107,29 +108,29 @@ POST /api/runs {"pipeline_name": "news.ai_for_sec_raw_pipeline", "reset": true, 
 app / core / db / schemas / sources / artifacts / pipelines / domains / agents / models / ops / cli
 ```
 
-其中 `news.ai_for_sec_raw_pipeline` 已可运行；其他业务域已具备标准目录、service/pipeline/adapter/builder/audit 文件边界和 placeholder pipeline，后续继续在这些文件中填实真实逻辑，不再新增散乱脚本。
+其中三条 local raw import 已可运行；其他业务域继续在标准目录、service/pipeline/adapter/builder/audit 文件边界内填实逻辑，不再新增散乱脚本。
 
-## 已实现 Raw Pipelines
+## 已实现本地原始数据导入 Pipelines
 
-当前已实现三条 raw pipeline：
+当前已实现三条本地原始数据导入 pipeline，兼容旧 `*_raw_pipeline` 名称，但建议使用 `*_local_raw_import`：
 
 ```bash
-PYTHONPATH=src python3 -m ai4sec_platform.cli.run_pipeline --pipeline news.ai_for_sec_raw_pipeline --reset
-PYTHONPATH=src python3 -m ai4sec_platform.cli.run_pipeline --pipeline threats.huawei_raw_pipeline --reset
-PYTHONPATH=src python3 -m ai4sec_platform.cli.run_pipeline --pipeline vulnerabilities.material_raw_pipeline --reset
+PYTHONPATH=src python3 -m ai4sec_platform.cli.run_pipeline --pipeline news.ai_for_sec_local_raw_import --reset
+PYTHONPATH=src python3 -m ai4sec_platform.cli.run_pipeline --pipeline threats.huawei_local_raw_import --reset
+PYTHONPATH=src python3 -m ai4sec_platform.cli.run_pipeline --pipeline vulnerabilities.material_local_raw_import --reset
 ```
 
 说明：
 
-- `news.ai_for_sec_raw_pipeline` 从 AI-for-Sec 六类 raw 文件导入。
-- `threats.huawei_raw_pipeline` 从华为 repo/CVE/固件/镜像 raw JSON 导入。
-- `vulnerabilities.material_raw_pipeline` 从漏洞素材 report JSON 导入。
+- `news.ai_for_sec_local_raw_import` 从 AI-for-Sec 六类本地 raw 文件导入。
+- `threats.huawei_local_raw_import` 从华为 repo/CVE/固件/镜像本地 raw JSON 导入。
+- `vulnerabilities.material_local_raw_import` 从漏洞素材 report 本地 JSON 导入。
 - 三者都会写 `raw_artifacts`、`normalized_items`、`domain_items`、`evidence_items`、`pipeline_runs`、`task_runs` 和 manifest。
-- 所有 pipeline 仍保持 `production_writes=false`。
+- 所有 pipeline 仍保持 `production_writes=false` 和 `live_source_fetch_enabled=false`。
 
 ## 能力洞察 Pipeline
 
-在 `news.ai_for_sec_raw_pipeline` 运行后，可以继续运行：
+在 `news.ai_for_sec_local_raw_import` 运行后，可以继续运行：
 
 ```bash
 PYTHONPATH=src python3 -m ai4sec_platform.cli.run_pipeline --pipeline capabilities.from_news_pipeline

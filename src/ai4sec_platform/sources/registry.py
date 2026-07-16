@@ -14,4 +14,11 @@ class SourceRegistry:
             raise ValueError(f"Unknown source connector: {name}") from exc
 
     def list(self) -> list[dict[str, str]]:
-        return [{"connector_name": key, "source_type": value.source_type} for key, value in sorted(self._connectors.items())]
+        return [
+            {
+                "connector_name": key,
+                "source_type": value.source_type,
+                "mode": "local_raw_file_only",
+            }
+            for key, value in sorted(self._connectors.items())
+        ]

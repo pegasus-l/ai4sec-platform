@@ -3,14 +3,16 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
+from ai4sec_platform.core.config import load_settings
 from ai4sec_platform.schemas.sources import SourceFetchRequest, SourceHealth
 from ai4sec_platform.sources.result import SourceFetchResult
 
 
 class JsonFileConnector:
     connector_name = "json_file"
-    source_type = "json_file"
+    source_type = "local_raw_file_adapter"
 
     def health_check(self, config: dict) -> SourceHealth:
         path = Path(config.get("path", ""))
@@ -19,7 +21,16 @@ class JsonFileConnector:
         return SourceHealth(status="missing", message=str(path))
 
     def fetch(self, request: SourceFetchRequest) -> SourceFetchResult:
-        path = Path(request.config.get("path") or request.params.get("path") or "")
+        raw_path = str(request.config.get("path") or request.params.get("path") or "")
+        parsed = urlparse(raw_path)
+        if parsed.scheme in {"http", "https"}:
+            return SourceFetchResult(
+                source_name=request.source_name,
+                connector_name=self.connector_name,
+                metadata={"path": raw_path, "live_source_fetch_enabled": load_settings().live_source_fetch_enabled},
+                errors=["live_source_fetch_disabled"],
+            )
+        path = Path(raw_path)
         if not path.exists():
             return SourceFetchResult(source_name=request.source_name, connector_name=self.connector_name, metadata={"path": str(path)}, errors=["missing_path"])
         try:

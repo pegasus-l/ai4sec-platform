@@ -16,6 +16,7 @@ class Settings(BaseModel):
     output_dir: Path
     database_path: Path
     production_writes: bool = False
+    live_source_fetch_enabled: bool = False
     legacy_sources: dict[str, str] = {}
     import_limits: dict[str, int] = {}
 
@@ -39,6 +40,7 @@ def load_settings(project_root: Path | None = None) -> Settings:
         output_dir=output_dir,
         database_path=database_path,
         production_writes=bool(app.get("production_writes", False)),
+        live_source_fetch_enabled=bool(app.get("live_source_fetch_enabled", False)),
         legacy_sources=dict(data.get("legacy_sources", {})),
         import_limits=dict(data.get("import_limits", {})),
     )

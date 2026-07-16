@@ -16,6 +16,18 @@ def test_json_source_connector_reads_ai_for_sec_raw() -> None:
     assert result.metadata["path"] == str(path)
 
 
+def test_json_source_connector_rejects_live_http_fetch_by_default() -> None:
+    connector = SourceRegistry().get("arxiv")
+    result = connector.fetch(
+        SourceFetchRequest(
+            source_name="arxiv_live",
+            config={"path": "https://export.arxiv.org/api/query?search_query=cat:cs.CR"},
+        )
+    )
+    assert result.items == []
+    assert result.errors == ["live_source_fetch_disabled"]
+
+
 def test_llm_router_defaults_to_mock_provider() -> None:
     result = LLMRouter().complete_json(prompt="return json", payload={"hello": "world"})
     assert result["status"] == "mock"

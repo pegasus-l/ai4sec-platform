@@ -35,11 +35,18 @@ def test_architecture_scaffold_files_exist() -> None:
 def test_pipeline_registry_has_all_domain_entries() -> None:
     names = {item["name"] for item in default_registry().list()}
     assert "news.ai_for_sec_raw_pipeline" in names
+    assert "news.ai_for_sec_local_raw_import" in names
     assert "capabilities.assessment_placeholder" in names
     assert "threats.huawei_snapshot_import" in names
+    assert "threats.huawei_raw_pipeline" in names
+    assert "threats.huawei_local_raw_import" in names
     assert "vulnerabilities.material_snapshot_import" in names
+    assert "vulnerabilities.material_raw_pipeline" in names
+    assert "vulnerabilities.material_local_raw_import" in names
 
 
 def test_source_registry_has_expected_connectors() -> None:
-    names = {item["connector_name"] for item in SourceRegistry().list()}
+    registry_items = SourceRegistry().list()
+    names = {item["connector_name"] for item in registry_items}
     assert {"arxiv", "github", "rss", "anysearch", "huawei_repo", "cve", "firmware"}.issubset(names)
+    assert {item["mode"] for item in registry_items} == {"local_raw_file_only"}
