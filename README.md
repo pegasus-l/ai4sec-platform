@@ -50,7 +50,7 @@ AGENTS.md
 
 ## 前端页面
 
-当前已内置一个轻量前端工作台，直接由 FastAPI 提供服务。
+当前已内置前端工作台，页面壳对齐 `/mnt/d/漏洞挖掘/洞察工具/dashboard/demo/index-v6.html`，并由 FastAPI 直接提供服务。
 
 ```text
 http://127.0.0.1:8000/

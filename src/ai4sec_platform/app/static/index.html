@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>AI4SEC TMG · Demo v3</title>
+  <title>AI4SEC TMG · Platform v6</title>
   <style>
     :root {
       color-scheme: dark;
@@ -446,20 +446,112 @@
       .search { width: 100%; }
       .filter-grid { grid-template-columns: 1fr; }
     }
+
+
+  /* DETAIL PAGE COMPONENTS */
+  .view-switch { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:14px; }
+  .view-pill { padding:7px 11px; border:1px solid var(--line); border-radius:999px; background:rgba(15,23,42,.45); color:var(--muted); font-size:12px; }
+  .view-pill.active { color:var(--text); border-color:rgba(56,189,248,.48); background:rgba(56,189,248,.09); }
+  .data-table { width:100%; border-collapse:separate; border-spacing:0 8px; }
+  .data-table th { color:var(--faint); font-size:11px; letter-spacing:.08em; text-align:left; padding:0 10px 4px; font-weight:900; }
+  .data-table td { padding:11px 10px; background:rgba(2,6,23,.34); border-top:1px solid rgba(148,163,184,.12); border-bottom:1px solid rgba(148,163,184,.12); color:var(--muted); font-size:12px; vertical-align:top; }
+  .data-table td:first-child { border-left:1px solid rgba(148,163,184,.12); border-radius:12px 0 0 12px; color:var(--text); font-weight:800; }
+  .data-table td:last-child { border-right:1px solid rgba(148,163,184,.12); border-radius:0 12px 12px 0; }
+  .table-title { color:var(--text); font-weight:850; line-height:1.35; }
+  .table-sub { color:var(--faint); margin-top:4px; line-height:1.35; }
+  .status-tag { display:inline-flex; align-items:center; gap:5px; padding:4px 8px; border-radius:999px; border:1px solid rgba(56,189,248,.28); color:var(--sky); background:rgba(56,189,248,.07); font-size:11px; white-space:nowrap; }
+  .status-tag.warn { color:var(--amber); border-color:rgba(245,158,11,.3); background:rgba(245,158,11,.07); }
+  .status-tag.hot { color:var(--rose); border-color:rgba(251,113,133,.3); background:rgba(251,113,133,.07); }
+  .status-tag.good { color:var(--green); border-color:rgba(52,211,153,.3); background:rgba(52,211,153,.07); }
+  .kanban { display:grid; grid-template-columns:repeat(3, minmax(0,1fr)); gap:12px; }
+  .kanban-col { min-height:260px; border:1px solid var(--line); border-radius:16px; background:rgba(2,6,23,.24); padding:12px; }
+  .kanban-head { display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; color:var(--text); font-size:13px; font-weight:900; }
+  .mini-card { border:1px solid rgba(148,163,184,.14); background:rgba(15,23,42,.48); border-radius:13px; padding:11px; margin-top:8px; }
+  .mini-card b { display:block; color:var(--text); font-size:13px; line-height:1.35; }
+  .mini-card p { margin:6px 0 0; color:var(--muted); font-size:12px; line-height:1.5; }
+  .detail-layout { display:grid; grid-template-columns:minmax(0,1fr) 330px; gap:14px; align-items:start; }
+  .detail-stack { display:grid; gap:12px; }
+  .field-grid { display:grid; grid-template-columns:repeat(2, minmax(0,1fr)); gap:10px; }
+  .field { border:1px solid rgba(148,163,184,.14); border-radius:13px; padding:11px; background:rgba(2,6,23,.26); }
+  .field span { display:block; color:var(--faint); font-size:11px; margin-bottom:6px; }
+  .field b { color:var(--text); font-size:13px; line-height:1.4; }
+  .steps { display:grid; gap:10px; counter-reset:step; }
+  .step { position:relative; padding:11px 12px 11px 44px; border:1px solid rgba(148,163,184,.14); border-radius:14px; background:rgba(2,6,23,.28); color:var(--muted); font-size:12px; line-height:1.5; }
+  .step:before { counter-increment:step; content:counter(step); position:absolute; left:12px; top:10px; display:grid; place-items:center; width:22px; height:22px; border-radius:50%; background:rgba(56,189,248,.12); color:var(--sky); font-weight:900; }
+  .score-ring { width:72px; height:72px; border-radius:50%; display:grid; place-items:center; border:1px solid rgba(56,189,248,.36); background:radial-gradient(circle, rgba(56,189,248,.16), rgba(2,6,23,.18)); color:var(--sky); font-size:20px; font-weight:900; }
+  .empty-hint { padding:18px; border:1px dashed rgba(148,163,184,.24); border-radius:16px; color:var(--muted); background:rgba(2,6,23,.22); font-size:13px; line-height:1.7; }
+  .op-grid { display:grid; grid-template-columns:1.1fr .9fr; gap:14px; align-items:start; }
+  .op-card-grid { display:grid; grid-template-columns:repeat(2, minmax(0,1fr)); gap:10px; }
+  .op-card { border:1px solid rgba(148,163,184,.15); border-radius:15px; padding:13px; background:rgba(2,6,23,.30); min-height:110px; }
+  .op-card h4 { margin:0; color:var(--text); font-size:14px; }
+  .op-card p { margin:8px 0 0; color:var(--muted); font-size:12px; line-height:1.55; }
+  .rule-card { display:grid; gap:8px; border:1px solid rgba(148,163,184,.14); border-radius:14px; background:rgba(2,6,23,.28); padding:12px; }
+  .rule-row { display:flex; justify-content:space-between; gap:10px; color:var(--muted); font-size:12px; }
+  .rule-row b { color:var(--text); }
+  @media (max-width: 1180px) { .kanban, .detail-layout, .op-grid { grid-template-columns:1fr; } .field-grid, .op-card-grid { grid-template-columns:1fr; } }
+
+
+
+  /* NEWS + SYSTEM PAGE VARIANTS */
+  .hero-grid { display:grid; grid-template-columns:1.25fr .75fr; gap:14px; align-items:stretch; }
+  .hero-large { min-height:310px; border:1px solid rgba(56,189,248,.24); border-radius:18px; padding:18px; background:radial-gradient(circle at 85% 0%, rgba(56,189,248,.18), transparent 34%), rgba(2,6,23,.32); display:flex; flex-direction:column; justify-content:space-between; }
+  .hero-large h2 { margin:10px 0 0; font-size:27px; line-height:1.22; letter-spacing:-.035em; }
+  .hero-large p { color:var(--muted); line-height:1.7; font-size:13px; }
+  .timeline-list { display:grid; gap:11px; }
+  .timeline-card { display:grid; grid-template-columns:88px 1fr auto; gap:12px; align-items:start; padding:13px; border:1px solid rgba(148,163,184,.14); border-radius:15px; background:rgba(2,6,23,.30); }
+  .time-badge { color:var(--sky); font-size:12px; font-weight:900; }
+  .daily-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:12px; }
+  .daily-card { border:1px solid rgba(148,163,184,.15); border-radius:16px; background:rgba(2,6,23,.30); padding:14px; min-height:180px; display:flex; flex-direction:column; justify-content:space-between; }
+  .daily-card h4 { margin:0; font-size:15px; color:var(--text); line-height:1.35; }
+  .daily-card p { color:var(--muted); font-size:12px; line-height:1.55; }
+  .paper-layout { display:grid; grid-template-columns:minmax(0,1fr) 300px; gap:14px; align-items:start; }
+  .topic-roadmap { display:grid; gap:10px; position:relative; }
+  .topic-lane { display:grid; grid-template-columns:130px 1fr; gap:12px; align-items:start; padding:13px; border:1px solid rgba(148,163,184,.14); border-radius:15px; background:rgba(2,6,23,.28); }
+  .topic-date { color:var(--sky); font-weight:900; font-size:12px; }
+  .request-form { display:grid; gap:12px; }
+  .form-row { display:grid; gap:6px; }
+  .form-row label { color:var(--faint); font-size:12px; font-weight:800; }
+  .fake-input { min-height:40px; border:1px solid rgba(148,163,184,.18); border-radius:12px; background:rgba(2,6,23,.32); padding:11px 12px; color:var(--muted); font-size:13px; }
+  .logout-box { display:grid; place-items:center; min-height:390px; text-align:center; border:1px solid rgba(148,163,184,.16); border-radius:18px; background:radial-gradient(circle at 50% 0%, rgba(251,113,133,.12), transparent 36%), rgba(2,6,23,.28); }
+  .logout-box h2 { font-size:30px; margin:10px 0; }
+  @media (max-width:1180px) { .hero-grid, .paper-layout { grid-template-columns:1fr; } .daily-grid { grid-template-columns:1fr; } .timeline-card, .topic-lane { grid-template-columns:1fr; } }
+
+
+
+  /* INTERACTION LAYER */
+  .clickable { cursor:pointer; transition:transform .18s, border-color .18s, background .18s; }
+  .clickable:hover { transform:translateY(-1px); border-color:rgba(56,189,248,.42) !important; background:rgba(56,189,248,.06) !important; }
+  .drawer-backdrop { position:fixed; inset:0; background:rgba(2,6,23,.58); backdrop-filter:blur(3px); z-index:80; opacity:0; pointer-events:none; transition:opacity .2s; }
+  .drawer-backdrop.open { opacity:1; pointer-events:auto; }
+  .detail-drawer { position:fixed; z-index:90; top:14px; right:14px; bottom:14px; width:min(560px, calc(100vw - 28px)); border:1px solid rgba(56,189,248,.25); border-radius:22px; background:linear-gradient(165deg, rgba(15,23,42,.98), rgba(2,6,23,.94)); box-shadow:0 30px 100px rgba(0,0,0,.55); transform:translateX(calc(100% + 24px)); transition:transform .24s ease; display:grid; grid-template-rows:auto 1fr; overflow:hidden; }
+  .detail-drawer.open { transform:translateX(0); }
+  .drawer-head { display:flex; align-items:flex-start; justify-content:space-between; gap:14px; padding:18px 18px 14px; border-bottom:1px solid var(--line); }
+  .drawer-head h2 { margin:8px 0 0; font-size:22px; line-height:1.25; }
+  .drawer-close { width:34px; height:34px; border:1px solid var(--line); border-radius:12px; background:rgba(2,6,23,.38); color:var(--muted); font-size:22px; cursor:pointer; }
+  .drawer-close:hover { color:var(--text); border-color:rgba(56,189,248,.4); }
+  .drawer-body { overflow:auto; padding:16px 18px 20px; display:grid; gap:12px; }
+  .drawer-section { border:1px solid rgba(148,163,184,.15); border-radius:15px; background:rgba(2,6,23,.28); padding:13px; }
+  .drawer-section h3 { margin:0 0 9px; font-size:14px; color:var(--text); }
+  .drawer-section p, .drawer-section li { color:var(--muted); font-size:12px; line-height:1.65; }
+  .drawer-actions { display:flex; gap:8px; flex-wrap:wrap; }
+  .pill-button { border:1px solid rgba(56,189,248,.28); border-radius:999px; padding:7px 10px; background:rgba(56,189,248,.07); color:var(--sky); font-size:12px; cursor:pointer; }
+  .view-pill { cursor:pointer; }
+  .view-pill:hover { border-color:rgba(56,189,248,.45); color:var(--text); }
+
   </style>
 </head>
 <body>
   <div class="shell">
     <header class="global-bar">
       <div class="brand">
-        <div class="brand-eye">AI</div>
+        <div class="brand-eye">AS</div>
         <div class="brand-title">
           <strong>AI4SEC TMG</strong>
           <span>Threat · Material · Capability Gateway</span>
         </div>
       </div>
       <nav class="top-tabs" id="topTabs" aria-label="顶部任务栏"></nav>
-      <div class="status-pill"><i></i><span>AI4SEC Platform · 已连接本地 API</span></div>
+      <div class="status-pill"><i></i><span>AI4SEC Platform · 本地 API</span></div>
     </header>
 
     <main class="main">
@@ -492,6 +584,18 @@
     </main>
   </div>
 
+  <div class="drawer-backdrop" id="drawerBackdrop"></div>
+  <aside class="detail-drawer" id="detailDrawer" aria-label="详情抽屉">
+    <div class="drawer-head">
+      <div>
+        <div class="label"><span class="dot"></span><span id="drawerType">DETAIL</span></div>
+        <h2 id="drawerTitle">详情</h2>
+      </div>
+      <button class="drawer-close" id="drawerClose" type="button">×</button>
+    </div>
+    <div class="drawer-body" id="drawerBody"></div>
+  </aside>
+
   <script>
     const tasks = [
       { id: 'news', label: '资讯洞察', hint: '原 ASIS 内容', accent: '#38bdf8', bg: 'rgba(56,189,248,0.14)', glow: 'rgba(56,189,248,0.24)' },
@@ -499,11 +603,13 @@
       { id: 'threat', label: '威胁洞察', hint: '华为开源仓库风险与挖洞目标', accent: '#a78bfa', bg: 'rgba(167,139,250,0.13)', glow: 'rgba(167,139,250,0.22)' },
       { id: 'vuln', label: '漏洞洞察', hint: '漏洞知识工程与以洞找洞素材', accent: '#fb7185', bg: 'rgba(251,113,133,0.12)', glow: 'rgba(251,113,133,0.20)' },
     ];
+
     const asisDomains = [
       { id: 'ai-for-sec', label: 'AI for SEC', desc: '学术 / GitHub / 日报链路', tag: 'SEC', icon: 'A/S' },
       { id: 'ai-sec', label: 'AI SEC', desc: 'AI 安全产业与攻防资讯', tag: 'AIS', icon: 'SEC' },
       { id: 'ai', label: 'AI', desc: '通用 AI 技术与生态资讯', tag: 'AI', icon: 'AI' },
     ];
+
     const asisReading = [
       ['精选', 'featured', 'Radar'], ['全部动态', 'all', 'Feed'], ['日报', 'daily', 'Daily'],
       ['论文', 'papers', 'Paper'], ['阅读清单', 'reading-list', 'Queue'], ['专题时间线', 'topics', 'Topic'],
@@ -513,29 +619,45 @@
       ['质量审计', 'ops-quality', 'QA'], ['人工队列', 'ops-queue', 'Queue'],
     ];
     const asisSystem = [['更新日志', 'changelog', 'Log'], ['需求收集', 'requirements', 'Req'], ['退出', 'logout', 'Exit']];
+
     const navModel = {
-      news: () => [{ title: '阅读', items: asisReading }, { title: '运营', items: unifiedOps }, { title: '系统', items: asisSystem }],
-      capability: () => [{ title: '前沿项目能力化', items: [['今日能力', 'today-capabilities', 'Today'], ['能力库', 'capability-library', 'Tech'], ['复现验证', 'repro-validation', 'Repro'], ['能力转化', 'capability-conversion', 'Track']] }, { title: '运营', items: unifiedOps }, { title: '系统', items: asisSystem }],
-      threat: () => [{ title: '开源威胁洞察', items: [['今日关注', 'today', 'Today'], ['目标库', 'targets', 'Target'], ['跟踪队列', 'tracking', 'Track']] }, { title: '运营', items: unifiedOps }, { title: '系统', items: asisSystem }],
-      vuln: () => [{ title: '漏洞知识洞察', items: [['今日素材', 'today-materials', 'Today'], ['素材库', 'materials', 'View'], ['知识提取', 'knowledge-extract', 'Text'], ['迁移队列', 'migration', 'Track']] }, { title: '运营', items: unifiedOps }, { title: '系统', items: asisSystem }],
+      news: () => [
+        { title: '阅读', items: asisReading },
+        { title: '运营', items: unifiedOps },
+        { title: '系统', items: asisSystem },
+      ],
+      capability: () => [
+        { title: '前沿项目能力化', items: [
+          ['今日能力', 'today-capabilities', 'Today'], ['能力库', 'capability-library', 'Tech'], ['复现验证', 'repro-validation', 'Repro'], ['能力转化', 'capability-conversion', 'Track'],
+        ]},
+        { title: '运营', items: unifiedOps },
+        { title: '系统', items: [['更新日志', 'changelog', 'Log'], ['需求收集', 'requirements', 'Req'], ['退出', 'logout', 'Exit']] },
+      ],
+      threat: () => [
+        { title: '开源威胁洞察', items: [
+          ['今日关注', 'today', 'Today'], ['目标库', 'targets', 'Target'], ['跟踪队列', 'tracking', 'Track'],
+        ]},
+        { title: '运营', items: unifiedOps },
+        { title: '系统', items: [['更新日志', 'changelog', 'Log'], ['需求收集', 'requirements', 'Req'], ['退出', 'logout', 'Exit']] },
+      ],
+      vuln: () => [
+        { title: '漏洞知识洞察', items: [
+          ['今日素材', 'today-materials', 'Today'], ['素材库', 'materials', 'View'], ['知识提取', 'knowledge-extract', 'Text'], ['迁移队列', 'migration', 'Track'],
+        ]},
+        { title: '运营', items: unifiedOps },
+        { title: '系统', items: [['更新日志', 'changelog', 'Log'], ['需求收集', 'requirements', 'Req'], ['退出', 'logout', 'Exit']] },
+      ],
     };
-    const iconMap = { Radar: '⌁', Feed: '☷', Daily: '◷', Paper: '□', Queue: '▤', Topic: '◎', Jobs: '↻', Sources: '◇', Rules: '≋', QA: '◈', Log: '↧', Req: '+', Exit: '↪', Tech: '⌬', Repro: '</>', Today: '★', Target: '◎', Track: '▤', View: '◫', Text: 'T' };
-    const backendDomain = { news: 'news', capability: 'capabilities', threat: 'threats', vuln: 'vulnerabilities' };
-    const state = { task: 'news', domain: 'ai-for-sec', nav: 'all', overview: null };
+
+    const state = { task: 'news', domain: 'ai-for-sec', nav: 'all', targetView: 'list', materialView: 'list' };
+    const DATA_ROOT = './data/ai4sec_tmg_sample/';
+    const sampleData = { loaded: false, error: '', manifest: null, news: {}, capability: {}, threat: {}, vuln: {}, ops: {} };
     const $ = (id) => document.getElementById(id);
     const task = () => tasks.find((item) => item.id === state.task);
-    const domain = () => asisDomains.find((item) => item.id === state.domain) || asisDomains[0];
+    const domain = () => asisDomains.find((item) => item.id === state.domain);
     const isDomainTask = () => ['news', 'capability'].includes(state.task);
 
-    async function api(path) {
-      const res = await fetch(path);
-      if (!res.ok) throw new Error(`${path} ${res.status}`);
-      return res.json();
-    }
-
-    async function loadOverview() {
-      state.overview = await api('/api/dashboard/overview');
-    }
+    const iconMap = { Radar: '⌁', Feed: '☷', Daily: '◷', Paper: '□', Queue: '▤', Topic: '◎', Admin: '⚙', Review: '✓', Jobs: '↻', Health: '♡', QA: '◈', Sources: '◇', Log: '↧', Req: '+', Exit: '↪', Tech: '⌬', Fetch: '⇣', Render: '▥', Repro: '</>', Loop: '∞', Model: 'μ', Eval: '%', Logs: '¶', Graph: '✣', Repo: '⌘', Asset: '▣', CVE: '!', FW: '▧', Path: '⌁', Rules: '≋', Mirror: '◉', View: '◫', Class: '#', Text: 'T', Cluster: '●', PoC: '</>', Chart: '▥', Search: '⌕', Today: '★', Target: '◎', Track: '▤' };
 
     function renderTopTabs() {
       $('topTabs').innerHTML = tasks.map((item) => `
@@ -555,19 +677,36 @@
     function renderDomainSwitcher() {
       if (!isDomainTask()) {
         const active = task();
-        $('domainSwitcher').innerHTML = `<button class="domain-btn active" type="button"><span class="domain-icon">${state.task === 'threat' ? 'OS' : 'VU'}</span><span class="domain-main"><strong>${active.label}</strong><span>${active.hint}</span></span><span class="domain-tag">OPS</span></button>`;
+        $('domainSwitcher').innerHTML = `
+          <button class="domain-btn active" type="button">
+            <span class="domain-icon">${state.task === 'threat' ? 'OS' : 'VU'}</span>
+            <span class="domain-main"><strong>${active.label}</strong><span>${active.hint}</span></span>
+            <span class="domain-tag">OPS</span>
+          </button>`;
         return;
       }
       $('domainSwitcher').innerHTML = asisDomains.map((item) => `
         <button class="domain-btn ${state.domain === item.id ? 'active' : ''}" data-domain="${item.id}" type="button">
-          <span class="domain-icon">${item.icon}</span><span class="domain-main"><strong>${item.label}</strong><span>${state.task === 'news' ? item.desc : capabilityDomainDesc(item.id)}</span></span><span class="domain-tag">${item.tag}</span>
+          <span class="domain-icon">${item.icon}</span>
+          <span class="domain-main"><strong>${item.label}</strong><span>${state.task === 'news' ? item.desc : capabilityDomainDesc(item.id)}</span></span>
+          <span class="domain-tag">${item.tag}</span>
         </button>
       `).join('');
-      document.querySelectorAll('[data-domain]').forEach((btn) => btn.addEventListener('click', () => { state.domain = btn.dataset.domain; renderAll(false); }));
+      document.querySelectorAll('[data-domain]').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          state.domain = btn.dataset.domain;
+          state.nav = defaultNav(state.task);
+          renderAll();
+        });
+      });
     }
 
     function capabilityDomainDesc(id) {
-      return { 'ai-for-sec': 'AI-for-Sec 链路能力看板', 'ai-sec': 'AI 安全资讯运营能力', 'ai': '通用 AI 资讯与技术能力' }[id] || '';
+      return {
+        'ai-for-sec': 'AI-for-Sec 链路能力看板',
+        'ai-sec': 'AI 安全资讯运营能力',
+        'ai': '通用 AI 资讯与技术能力',
+      }[id];
     }
 
     function defaultNav(taskId) {
@@ -575,6 +714,7 @@
     }
 
     function currentGroups() { return navModel[state.task](); }
+
     function navLabel() {
       for (const group of currentGroups()) {
         const found = group.items.find((item) => item[1] === state.nav);
@@ -585,53 +725,69 @@
 
     function renderSideNav() {
       $('sideNav').innerHTML = currentGroups().map((group) => `
-        <div class="nav-group"><div class="group-title">${group.title}</div>${group.items.map(([label, id, meta]) => `
-          <button class="nav-item ${state.nav === id ? 'active' : ''}" data-nav="${id}" type="button"><span class="nav-left"><span class="nav-ico">${iconMap[meta] || '•'}</span><span class="nav-text">${label}</span></span><span class="nav-meta">${meta}</span></button>
-        `).join('')}</div>
+        <div class="nav-group">
+          <div class="group-title">${group.title}</div>
+          ${group.items.map(([label, id, meta]) => `
+            <button class="nav-item ${state.nav === id ? 'active' : ''}" data-nav="${id}" type="button">
+              <span class="nav-left"><span class="nav-ico">${iconMap[meta] || '•'}</span><span class="nav-text">${label}</span></span>
+              <span class="nav-meta">${meta}</span>
+            </button>
+          `).join('')}
+        </div>
       `).join('');
-      document.querySelectorAll('[data-nav]').forEach((btn) => btn.addEventListener('click', () => { state.nav = btn.dataset.nav; renderAll(false); }));
+      document.querySelectorAll('[data-nav]').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          state.nav = btn.dataset.nav;
+          renderAll(false);
+        });
+      });
     }
 
     function renderChrome() {
       const activeTask = task();
       const activeDomain = isDomainTask() ? domain().label : activeTask.hint;
+      const label = navLabel();
       $('sideLabel').textContent = activeTask.label;
       $('sideTitle').textContent = sideTitle();
       $('sideDesc').textContent = sideDesc();
       $('sideNote').textContent = sideNote();
       $('crumbTask').textContent = activeTask.label;
       $('crumbDomain').textContent = activeDomain;
-      $('crumbNav').textContent = navLabel();
-      $('pageTitle').textContent = `${activeDomain} · ${navLabel()}`;
+      $('crumbNav').textContent = label;
+      $('pageTitle').textContent = `${isDomainTask() ? domain().label : activeTask.label} · ${label}`;
       $('pageDesc').textContent = pageDesc();
       $('modeChip').textContent = activeTask.label;
     }
 
     function sideTitle() {
-      return { news: 'ASIS 内容域', capability: '能力域与运营', threat: '开源目标与运营', vuln: '素材域与运营' }[state.task];
-    }
-    function sideDesc() {
-      return {
-        news: '资讯洞察按 AI for SEC / AI SEC / AI 分域，阅读菜单保持 ASIS 风格。',
-        capability: '能力洞察面向前沿项目能力化、复现验证和能力转化。',
-        threat: '威胁洞察面向华为开源仓库、CVE、固件和攻击面风险。',
-        vuln: '漏洞洞察面向漏洞素材、知识提取和迁移挖洞队列。',
-      }[state.task];
-    }
-    function sideNote() {
-      if (state.task === 'news') return '原 ASIS 阅读菜单：精选、全部动态、日报、论文、阅读清单、专题时间线。';
-      return '运营入口统一为：采集任务、数据源、规则配置、质量审计、人工队列。';
-    }
-    function pageDesc() {
-      return {
-        news: '当前接入 AI-for-Sec selected_entries 旧数据，展示资讯卡片和审阅证据。',
-        capability: '当前从高分且有代码地址的资讯条目生成能力候选，复现状态为第一阶段占位。',
-        threat: '当前接入华为 repo 攻击面评分结果，展示目标库和风险证据。',
-        vuln: '当前接入漏洞素材旧报告，展示高相关素材、关键发现和知识提取候选。',
-      }[state.task];
+      if (state.task === 'news') return 'ASIS 内容域';
+      if (state.task === 'capability') return '能力域与运营';
+      if (state.task === 'threat') return '开源目标与运营';
+      return '素材域与运营';
     }
 
-    async function renderContent() {
+    function sideDesc() {
+      if (state.task === 'news') return '资讯洞察只在外层新增任务栏和 AI for SEC / AI SEC / AI 切换，阅读细分保持原 ASIS 一致。';
+      if (state.task === 'capability') return '能力洞察不重复资讯流，而是把前沿论文和开源项目推进到评分、复现和能力转化。';
+      if (state.task === 'threat') return '开源威胁洞察围绕“发现目标、判断风险、查看证据、加入跟踪”的挖洞动线组织。';
+      return '漏洞洞察围绕外部漏洞素材、知识提取和迁移挖洞组织，目标是服务“以洞找洞”。';
+    }
+
+    function sideNote() {
+      if (state.task === 'news') return '原 ASIS 阅读菜单保持一致：精选、全部动态、日报、论文、阅读清单、专题时间线。';
+      if (state.task === 'capability') return 'AI for SEC / AI SEC / AI 在能力洞察里更像领域筛选；能力详情从今日能力、能力库、复现验证或能力转化进入。';
+      if (state.task === 'threat') return '目标详情不是单独页签；从今日关注、目标库或跟踪队列点击仓库后打开。图谱作为目标库里的视图模式。';
+      return '四个洞察域的运营入口统一为：采集任务、数据源、规则配置、质量审计、人工队列。';
+    }
+
+    function pageDesc() {
+      if (state.task === 'news') return '这里应该嵌入或复用原 ASIS 内容区，避免对现有资讯阅读体验做大改动。';
+      if (state.task === 'capability') return '这里演示能力洞察：从前沿项目筛选，到自动复现，再到内部能力落地转化。';
+      if (state.task === 'threat') return '这里演示开源威胁洞察：从华为开源仓库中发现高价值挖洞目标，并持续跟踪风险变化。';
+      return '这里演示漏洞知识洞察：把外部漏洞文章、PoC 和技术分析沉淀为可迁移的挖洞知识。';
+    }
+
+    function renderContent() {
       if (state.nav.startsWith('ops-')) return renderOps();
       if (['changelog', 'requirements', 'logout'].includes(state.nav)) return renderSystem();
       if (state.task === 'news') return renderNews();
@@ -640,113 +796,638 @@
       return renderVuln();
     }
 
-    async function fetchDomainItems(taskId, navId) {
-      const endpoints = {
-        news: { all: '/api/news/items', featured: '/api/news/today', daily: '/api/news/today', papers: '/api/news/items', 'reading-list': '/api/news/today', topics: '/api/news/today' },
-        capability: { 'today-capabilities': '/api/capabilities/today', 'capability-library': '/api/capabilities/items', 'repro-validation': '/api/capabilities/repro-runs', 'capability-conversion': '/api/capabilities/conversion-queue' },
-        threat: { today: '/api/threats/today', targets: '/api/threats/targets', tracking: '/api/threats/tracking-queue' },
-        vuln: { 'today-materials': '/api/vulnerabilities/today', materials: '/api/vulnerabilities/materials', 'knowledge-extract': '/api/vulnerabilities/knowledge', migration: '/api/vulnerabilities/migration-queue' },
-      };
-      const path = endpoints[taskId][navId] || Object.values(endpoints[taskId])[0];
-      const data = await api(path);
-      return Array.isArray(data.items) ? data.items : [];
+    function metricGrid(items) {
+      return `<div class="metrics">${items.map(([label, value, sub, color]) => `
+        <div class="metric" style="--metric-glow:${color}"><span>${label}</span><strong>${value}</strong><small>${sub}</small></div>
+      `).join('')}</div>`;
     }
 
-    async function renderNews() {
-      const items = await fetchDomainItems('news', state.nav);
-      const sources = await api('/api/news/sources');
-      $('contentBody').innerHTML = `${metricGrid(metricsFor('news', [['ASIS 信源', sources.items.length, 'legacy sources', 'rgba(56,189,248,0.2)']]))}
-        <div class="grid-2"><section class="panel"><div class="panel-head"><h3>ASIS 风格资讯流</h3><span>${items.length} 条 · ${navLabel()}</span></div><div class="panel-body"><div class="asis-list">${itemCards(items, 'news')}</div><div class="note">复用 v3 demo 的 ASIS 信息架构，数据来自 AI-for-Sec 旧 selected_entries 导入。</div></div></section>${sidePanel('资讯详情策略', '原 ASIS 作为内容核心，只在外层增加统一任务栏。点击卡片可查看旧审阅意见和原始字段。')}</div>`;
-      bindDetailCards('news');
+    function renderNews() {
+      if (state.nav === 'featured') return renderNewsFeatured();
+      if (state.nav === 'daily') return renderNewsDaily();
+      if (state.nav === 'papers') return renderNewsPapers();
+      if (state.nav === 'reading-list') return renderNewsReadingList();
+      if (state.nav === 'topics') return renderNewsTopics();
+      return renderNewsAll();
     }
 
-    async function renderCapability() {
-      const items = await fetchDomainItems('capability', state.nav);
-      $('contentBody').innerHTML = `${metricGrid(metricsFor('capabilities'))}<div class="grid-2"><section class="panel"><div class="panel-head"><h3>${navLabel()}工作台</h3><span>资讯输入 → 技术评估 → 复现占位 → 能力沉淀</span></div><div class="panel-body"><div class="asis-list">${itemCards(items, 'capabilities')}</div><div class="note">第一阶段不触发复现 runner，只展示候选和待复现状态。</div></div></section>${sidePanel('能力转化看板', '能力详情从今日能力、能力库、复现验证或能力转化入口进入。')}</div>`;
-      bindDetailCards('capabilities');
+    function newsMetrics(items, sources) {
+      return metricGrid([
+        ['ASIS 信源', String((sources || []).length || 27), '复用 ASIS 数据源配置', 'rgba(56,189,248,0.2)'], ['阅读菜单', '6', '保持原 ASIS 一致', 'rgba(245,158,11,0.2)'],
+        ['样例条目', String((items || []).length), 'shadow 输出占位', 'rgba(167,139,250,0.18)'], ['当前视图', navLabel(), '独立页面样式', 'rgba(52,211,153,0.18)'],
+      ]);
     }
 
-    async function renderThreat() {
-      const items = await fetchDomainItems('threat', state.nav);
-      $('contentBody').innerHTML = `${metricGrid(metricsFor('threats'))}<div class="grid-2"><section class="panel"><div class="panel-head"><h3>${navLabel()}工作台</h3><span>发现目标 → 判断风险 → 查看证据 → 加入跟踪</span></div><div class="panel-body"><div class="asis-list">${itemCards(items, 'threats')}</div><div class="note">当前优先目标库列表和详情，图谱后续再接。</div></div></section>${sidePanel('目标库视图切换', '图谱不丢，但服务于找目标；第一阶段先做列表、详情和跟踪队列。')}</div>`;
-      bindDetailCards('threats');
+    function renderNewsFeatured() {
+      const items = sampleData.news.items || [];
+      const sources = sampleData.news.sources || [];
+      const top = items[0] || {};
+      $('contentBody').innerHTML = `${newsMetrics(items, sources)}
+        <div class="hero-grid"><section class="hero-large"><div><span class="status-tag hot">FEATURED</span><h2>${escapeHTML(top.title || 'ASIS 精选洞察')}</h2><p>${escapeHTML(top.summary || top.highlight || '精选页突出今天最值得读、最值得反馈和最适合进入日报/专题的内容。')}</p></div><div class="badges"><span class="badge sky">${escapeHTML(top.source || 'ASIS')}</span><span class="badge amber">score ${escapeHTML(top.score ?? '-')}</span><span class="badge">加入阅读清单</span></div></section><aside class="panel"><div class="panel-head"><h3>精选理由</h3><span>Why It Matters</span></div><div class="panel-body"><div class="timeline">${items.slice(0,4).map((item)=>`<div class="time-row"><b>${escapeHTML(item.title)}</b>${escapeHTML(item.highlight || item.summary || '')}</div>`).join('')}</div></div></aside></div>`;
     }
 
-    async function renderVuln() {
-      const items = await fetchDomainItems('vuln', state.nav);
-      $('contentBody').innerHTML = `${metricGrid(metricsFor('vulnerabilities'))}<div class="grid-2"><section class="panel"><div class="panel-head"><h3>${navLabel()}工作台</h3><span>外部素材 → 漏洞知识 → 迁移挖洞</span></div><div class="panel-body"><div class="asis-list">${itemCards(items, 'vulnerabilities')}</div><div class="note">漏洞洞察不是文章展示页，而是漏洞知识提取与迁移挖洞工作台。</div></div></section>${sidePanel('知识工程视图', '素材详情展示相关性理由、关键发现、知识字段和迁移操作入口。')}</div>`;
-      bindDetailCards('vulnerabilities');
+    function renderNewsAll() {
+      const items = sampleData.news.items || [];
+      const sources = sampleData.news.sources || [];
+      $('contentBody').innerHTML = `${newsMetrics(items, sources)}<section class="panel"><div class="panel-head"><h3>全部动态</h3><span>时间轴 + 来源 + 分数 + 标签</span></div><div class="panel-body"><div class="timeline-list">${items.map((item,index)=>`<article class="timeline-card"><div><div class="time-badge">T-${index}</div><div class="table-sub">${escapeHTML(item.source || '')}</div></div><div><div class="table-title">${escapeHTML(item.title)}</div><div class="table-sub">${escapeHTML(item.summary || item.highlight || '')}</div><div class="badges">${(item.tech_points||[]).slice(0,3).map(t=>`<span class="badge sky">${escapeHTML(t)}</span>`).join('')}</div></div><div class="score-ring">${escapeHTML(item.score ?? '-')}</div></article>`).join('')}</div></div></section>`;
     }
 
-    async function renderOps() {
-      const map = { 'ops-tasks': ['/api/operations/tasks', '采集任务'], 'ops-sources': ['/api/operations/sources', '数据源'], 'ops-rules': ['/api/operations/rules', '规则配置'], 'ops-quality': ['/api/operations/audits', '质量审计'], 'ops-queue': ['/api/operations/human-queue', '人工队列'] };
-      const [path, label] = map[state.nav];
-      const data = await api(`${path}?domain=${backendDomain[state.task] || ''}`);
-      const items = Array.isArray(data.items) ? data.items : Object.entries(data.items || {}).flatMap(([domain, rules]) => rules.map(rule => ({ domain, ...rule })));
-      $('contentBody').innerHTML = `${metricGrid([['运营入口', '5', '四个洞察域统一', 'rgba(56,189,248,0.2)'], ['当前域', task().label, '内容按域变化', 'rgba(167,139,250,0.18)'], ['当前页面', label, '统一运营模型', 'rgba(52,211,153,0.18)'], ['记录数', String(items.length), 'API 返回', 'rgba(245,158,11,0.2)']])}<section class="panel"><div class="panel-head"><h3>${task().label} · ${label}</h3><span>同一入口，不同域内容</span></div><div class="panel-body"><div class="filter-grid">${items.map(opsCard).join('')}</div><div class="note">这五个名字在资讯、能力、开源威胁、漏洞四个域保持一致；用户不用重新学习每个域的运营菜单。</div></div></section>`;
+    function renderNewsDaily() {
+      const items = sampleData.news.items || [];
+      $('contentBody').innerHTML = `${newsMetrics(items, sampleData.news.sources || [])}<section class="panel"><div class="panel-head"><h3>日报</h3><span>日报归档 / 生成状态 / 条目构成</span></div><div class="panel-body"><div class="daily-grid">${[0,1,2].map(i=>`<div class="daily-card"><div><span class="status-tag ${i===0?'good':''}">${i===0?'今日':'历史'}</span><h4>AI for Sec 前沿技术速报 · ${i===0?'今日':'T-'+i}</h4><p>${escapeHTML((items[i]||{}).summary || '展示日报标题、核心推荐数量、关注列表和生成状态。')}</p></div><div class="badges"><span class="badge sky">核心 ${Math.max(1, items.length-i)}</span><span class="badge amber">关注 ${i+3}</span><span class="badge">查看全文</span></div></div>`).join('')}</div></div></section>`;
+    }
+
+    function renderNewsPapers() {
+      const items = (sampleData.news.items || []).filter(x=>x.source_type==='paper' || x.source==='arxiv');
+      const rows = items.length ? items : (sampleData.news.items || []);
+      $('contentBody').innerHTML = `${newsMetrics(rows, sampleData.news.sources || [])}<div class="paper-layout"><section class="panel"><div class="panel-head"><h3>论文</h3><span>论文阅读、代码链接、技术点</span></div><div class="panel-body"><table class="data-table"><thead><tr><th>论文</th><th>来源</th><th>技术点</th><th>分数</th><th>动作</th></tr></thead><tbody>${rows.map(item=>`<tr><td><div class="table-title">${escapeHTML(item.subtitle || item.title)}</div><div class="table-sub">${escapeHTML(item.source_url || '')}</div></td><td>${escapeHTML(item.source || '')}</td><td>${(item.tech_points||[]).slice(0,3).map(t=>`<span class="status-tag">${escapeHTML(t)}</span>`).join(' ')}</td><td>${escapeHTML(item.score ?? '-')}</td><td><span class="status-tag">读论文</span> <span class="status-tag">找代码</span></td></tr>`).join('')}</tbody></table></div></section><aside class="panel"><div class="panel-head"><h3>论文详情样式</h3><span>Paper Detail</span></div><div class="panel-body"><div class="steps"><div class="step">摘要、作者、发布时间、arXiv/原文链接。</div><div class="step">代码仓库、实验、数据集、复现价值。</div><div class="step">进入能力洞察或阅读清单。</div></div></div></aside></div>`;
+    }
+
+    function renderNewsReadingList() {
+      const items = sampleData.news.items || [];
+      const groups = ['待读','精读中','已读/已反馈'];
+      $('contentBody').innerHTML = `${newsMetrics(items, sampleData.news.sources || [])}<section class="panel"><div class="panel-head"><h3>阅读清单</h3><span>有状态的阅读收藏</span></div><div class="panel-body"><div class="kanban">${groups.map((g,gi)=>`<div class="kanban-col"><div class="kanban-head"><span>${g}</span><span class="status-tag">${items.filter((_,idx)=>idx%3===gi).length}</span></div>${items.filter((_,idx)=>idx%3===gi).map(item=>`<div class="mini-card"><b>${escapeHTML(item.title)}</b><p>${escapeHTML(item.summary || item.highlight || '')}</p><div class="badges"><span class="badge sky">${escapeHTML(item.source || '')}</span><span class="badge amber">${escapeHTML(item.category || '')}</span></div></div>`).join('') || '<div class="empty-hint">暂无条目</div>'}</div>`).join('')}</div></div></section>`;
+    }
+
+    function renderNewsTopics() {
+      const items = sampleData.news.items || [];
+      $('contentBody').innerHTML = `${newsMetrics(items, sampleData.news.sources || [])}<section class="panel"><div class="panel-head"><h3>专题时间线</h3><span>围绕一个主题持续汇聚内容</span></div><div class="panel-body"><div class="topic-roadmap">${items.map((item,index)=>`<div class="topic-lane"><div><div class="topic-date">阶段 ${index+1}</div><span class="status-tag">${escapeHTML(item.category || '专题')}</span></div><div><div class="table-title">${escapeHTML(item.title)}</div><div class="table-sub">${escapeHTML(item.summary || item.highlight || '')}</div><div class="badges"><span class="badge sky">加入专题</span><span class="badge amber">关联内容</span><span class="badge">生成报告</span></div></div></div>`).join('')}</div></div></section>`;
+    }
+
+    function renderCapability() {
+      const today = sampleData.capability.today || [];
+      const library = sampleData.capability.library || [];
+      const reproRuns = sampleData.capability.reproRuns || [];
+      const conversions = sampleData.capability.conversions || [];
+      const metrics = metricGrid([
+        ['今日能力', String(today.length || 12), `${domain().label} 高潜力候选`, 'rgba(52,211,153,0.2)'], ['能力库', String(library.length || 186), '已评分能力资产', 'rgba(56,189,248,0.18)'],
+        ['复现验证', String(reproRuns.length || 24), '自动复现任务', 'rgba(245,158,11,0.2)'], ['能力转化', String(conversions.length || 17), '待集成/待二开', 'rgba(167,139,250,0.18)'],
+      ]);
+      if (state.nav === 'capability-library') return renderCapabilityLibrary(metrics, library);
+      if (state.nav === 'repro-validation') return renderReproValidation(metrics, reproRuns, library);
+      if (state.nav === 'capability-conversion') return renderCapabilityConversion(metrics, conversions, library);
+      return renderTodayCapabilities(metrics, today);
+    }
+
+    function renderTodayCapabilities(metrics, today) {
+      $('contentBody').innerHTML = `${metrics}
+        <div class="detail-layout">
+          <section class="panel"><div class="panel-head"><h3>今日能力推荐</h3><span>先看最值得复现/转化的项目</span></div><div class="panel-body">
+            <div class="view-switch"><span class="view-pill active">推荐</span><span class="view-pill">高可复现</span><span class="view-pill">高应用潜力</span><span class="view-pill">需人工判断</span></div>
+            <div class="asis-list">${today.slice(0,8).map((item,index)=>capabilityCard(item,index)).join('') || '<div class="empty-hint">暂无今日能力样例。</div>'}</div>
+          </div></section>
+          <aside class="panel"><div class="panel-head"><h3>能力详情预览</h3><span>点击项目后进入</span></div><div class="panel-body">${capabilityDetailPreview(today[0])}</div></aside>
+        </div>`;
+    }
+
+    function renderCapabilityLibrary(metrics, library) {
+      $('contentBody').innerHTML = `${metrics}
+        <section class="panel"><div class="panel-head"><h3>能力库</h3><span>已评分、已分类、可检索的能力资产</span></div><div class="panel-body">
+          <div class="view-switch"><span class="view-pill active">列表视图</span><span class="view-pill">能力分类</span><span class="view-pill">应用场景</span><span class="view-pill">代码可用性</span></div>
+          <table class="data-table"><thead><tr><th>能力</th><th>场景</th><th>技术点</th><th>评分</th><th>复现</th><th>转化</th></tr></thead><tbody>
+            ${library.map((item)=>`<tr><td><div class="table-title">${escapeHTML(item.title)}</div><div class="table-sub">${escapeHTML(item.source || '')} · ${escapeHTML(item.source_type || '')}</div></td><td>${escapeHTML((item.application_scenarios||[]).join(' / '))}</td><td>${(item.tech_points||[]).slice(0,3).map(t=>`<span class="status-tag">${escapeHTML(t)}</span>`).join(' ')}</td><td><div class="score-ring">${escapeHTML(item.score ?? '-')}</div></td><td><span class="status-tag ${item.repro_status==='candidate'?'good':'warn'}">${escapeHTML(item.repro_status || '未知')}</span></td><td><span class="status-tag">${escapeHTML(item.conversion_status || '待评估')}</span></td></tr>`).join('')}
+          </tbody></table>
+        </div></section>`;
+    }
+
+    function renderReproValidation(metrics, reproRuns, library) {
+      const fallback = library.filter((item)=>item.code_url).map((item)=>({title:item.title,status:item.repro_status,repo_url:item.code_url,last_event:'等待复现调度'}));
+      const rows = reproRuns.length ? reproRuns : fallback;
+      $('contentBody').innerHTML = `${metrics}
+        <div class="detail-layout"><section class="panel"><div class="panel-head"><h3>复现验证</h3><span>自动复现状态、日志、环境和产物</span></div><div class="panel-body">
+          <table class="data-table"><thead><tr><th>项目</th><th>状态</th><th>仓库</th><th>环境</th><th>最近事件</th></tr></thead><tbody>
+            ${rows.map((run)=>`<tr><td><div class="table-title">${escapeHTML(run.title)}</div><div class="table-sub">${escapeHTML(run.id || '')}</div></td><td><span class="status-tag ${run.status==='queued'?'warn':'good'}">${escapeHTML(run.status || 'not_started')}</span></td><td>${escapeHTML(run.repo_url || '')}</td><td>${escapeHTML(run.environment || 'shadow runner')}</td><td>${escapeHTML(run.last_event || '')}</td></tr>`).join('')}
+          </tbody></table>
+        </div></section><aside class="panel"><div class="panel-head"><h3>复现详情样式</h3><span>日志 / 产物 / 失败原因</span></div><div class="panel-body"><div class="steps"><div class="step">准备环境：解析 README、依赖、Dockerfile、测试命令。</div><div class="step">执行复现：记录 stdout/stderr、退出码、耗时和容器信息。</div><div class="step">沉淀结果：成功产物、截图、失败原因、人工处理建议。</div></div></div></aside></div>`;
+    }
+
+    function renderCapabilityConversion(metrics, conversions, library) {
+      const groups = ['待评估','待复现','待集成','待二开','持续观察','已采用'];
+      $('contentBody').innerHTML = `${metrics}
+        <section class="panel"><div class="panel-head"><h3>能力转化</h3><span>有状态、有目的的收藏 / 专题</span></div><div class="panel-body">
+          <div class="kanban">${groups.slice(0,6).map((group)=>`<div class="kanban-col"><div class="kanban-head"><span>${group}</span><span class="status-tag">${conversions.filter(c=>c.status===group).length}</span></div>${conversions.filter(c=>c.status===group).slice(0,4).map((card)=>`<div class="mini-card"><b>${escapeHTML(card.title)}</b><p>${escapeHTML(card.next_action || card.notes || '')}</p><div class="badges"><span class="badge sky">${escapeHTML(card.scenario || '')}</span><span class="badge amber">${escapeHTML(card.status || '')}</span></div></div>`).join('') || '<div class="empty-hint">暂无卡片</div>'}</div>`).join('')}</div>
+        </div></section>`;
+    }
+
+    function renderOps() {
+      if (state.nav === 'ops-tasks') return renderOpsTasks();
+      if (state.nav === 'ops-sources') return renderOpsSources();
+      if (state.nav === 'ops-rules') return renderOpsRules();
+      if (state.nav === 'ops-quality') return renderOpsQuality();
+      if (state.nav === 'ops-queue') return renderOpsQueue();
+    }
+
+    function opsMetric(active, records) {
+      return metricGrid([
+        ['运营入口', '5', '四个洞察域统一', 'rgba(56,189,248,0.2)'], ['当前页面', active, '样式与操作不同', 'rgba(167,139,250,0.18)'],
+        ['样例记录', String(records.length), 'demo/data 读取', 'rgba(245,158,11,0.2)'], ['当前域', task().label, '按域过滤/展示', 'rgba(52,211,153,0.18)'],
+      ]);
+    }
+
+    function domainOps(records) {
+      return (records || []).filter((item)=>!item.domain || item.domain === state.task || item.domain === 'all');
+    }
+
+    function renderOpsTasks() {
+      const records = domainOps(sampleData.ops.tasks || []);
+      $('contentBody').innerHTML = `${opsMetric('采集任务', records)}<div class="op-grid"><section class="panel"><div class="panel-head"><h3>采集任务控制台</h3><span>调度、重跑、失败原因、产物</span></div><div class="panel-body"><table class="data-table"><thead><tr><th>任务</th><th>域</th><th>状态</th><th>说明</th><th>操作</th></tr></thead><tbody>${records.map(r=>`<tr><td><div class="table-title">${escapeHTML(r.name)}</div><div class="table-sub">${escapeHTML(r.id)}</div></td><td>${escapeHTML(r.domain)}</td><td><span class="status-tag warn">${escapeHTML(r.status)}</span></td><td>${escapeHTML(r.description)}</td><td><span class="status-tag">查看日志</span> <span class="status-tag">重跑</span></td></tr>`).join('')}</tbody></table></div></section><aside class="panel"><div class="panel-head"><h3>任务详情样式</h3><span>Run Detail</span></div><div class="panel-body"><div class="steps"><div class="step">展示调度周期、上次运行、下次运行、输入源。</div><div class="step">展示 stdout/stderr、错误摘要、产物路径和 checksum。</div><div class="step">支持 shadow 重跑、禁用、复制配置。</div></div></div></aside></div>`;
+    }
+
+    function renderOpsSources() {
+      const records = domainOps(sampleData.ops.sources || []);
+      $('contentBody').innerHTML = `${opsMetric('数据源', records)}<div class="op-grid"><section class="panel"><div class="panel-head"><h3>数据源管理</h3><span>来源、覆盖率、健康状态</span></div><div class="panel-body"><div class="op-card-grid">${records.map(r=>`<div class="op-card"><h4>${escapeHTML(r.name)}</h4><p>${escapeHTML(r.type || '数据源')} · ${escapeHTML(r.domain || '')}</p><p>记录数：<b>${escapeHTML(r.record_count ?? '-')}</b></p><div class="badges"><span class="badge sky">启用</span><span class="badge amber">覆盖率待审计</span></div></div>`).join('')}</div></div></section><aside class="panel"><div class="panel-head"><h3>来源详情</h3><span>Source Detail</span></div><div class="panel-body"><div class="field-grid"><div class="field"><span>健康检查</span><b>最近抓取 / 成功率 / 延迟</b></div><div class="field"><span>覆盖范围</span><b>组织、站点、关键词、接口</b></div><div class="field"><span>权限</span><b>公开 / 内网 / 需认证</b></div><div class="field"><span>质量</span><b>重复、噪声、失效链接</b></div></div></div></aside></div>`;
+    }
+
+    function renderOpsRules() {
+      const records = domainOps(sampleData.ops.rules || []);
+      $('contentBody').innerHTML = `${opsMetric('规则配置', records)}<div class="detail-layout"><section class="panel"><div class="panel-head"><h3>规则配置中心</h3><span>分类、筛选、评分、抽取、推荐</span></div><div class="panel-body"><div class="detail-stack">${records.map(r=>`<div class="rule-card"><div class="rule-row"><b>${escapeHTML(r.name)}</b><span class="status-tag">${escapeHTML(r.domain)}</span></div><div class="rule-row"><span>${escapeHTML(r.description)}</span></div><div class="rule-row"><span>版本：draft</span><span>操作：编辑 / 测试 / 发布 shadow</span></div></div>`).join('')}</div></div></section><aside class="panel"><div class="panel-head"><h3>规则测试面板</h3><span>Rule Test</span></div><div class="panel-body"><div class="steps"><div class="step">选择一条样例数据运行规则。</div><div class="step">展示命中原因、权重、最终分类/评分。</div><div class="step">发布前只写 shadow，不影响生产。</div></div></div></aside></div>`;
+    }
+
+    function renderOpsQuality() {
+      const records = domainOps(sampleData.ops.quality || []);
+      $('contentBody').innerHTML = `${opsMetric('质量审计', records)}<section class="panel"><div class="panel-head"><h3>质量审计</h3><span>坏数据、失败任务、误判、过期来源</span></div><div class="panel-body"><table class="data-table"><thead><tr><th>问题</th><th>域</th><th>严重度</th><th>建议</th><th>状态</th></tr></thead><tbody>${records.map(r=>`<tr><td><div class="table-title">${escapeHTML(r.title)}</div><div class="table-sub">${escapeHTML(r.id)}</div></td><td>${escapeHTML(r.domain)}</td><td><span class="status-tag ${r.severity==='warn'?'warn':'good'}">${escapeHTML(r.severity)}</span></td><td>${escapeHTML(r.suggestion)}</td><td><span class="status-tag">待处理</span></td></tr>`).join('')}</tbody></table></div></section>`;
+    }
+
+    function renderOpsQueue() {
+      const records = domainOps(sampleData.ops.queue || []);
+      $('contentBody').innerHTML = `${opsMetric('人工队列', records)}<section class="panel"><div class="panel-head"><h3>人工队列</h3><span>复核、确认、忽略、升级</span></div><div class="panel-body"><div class="kanban">${['待确认','待研判','待复核'].map(status=>`<div class="kanban-col"><div class="kanban-head"><span>${status}</span><span class="status-tag">${records.filter(r=>r.status===status).length}</span></div>${records.filter(r=>r.status===status).map(r=>`<div class="mini-card"><b>${escapeHTML(r.title)}</b><p>${escapeHTML(r.type)} · ${escapeHTML(r.domain)}</p><div class="badges"><span class="badge sky">分配</span><span class="badge amber">处理</span></div></div>`).join('') || '<div class="empty-hint">暂无卡片</div>'}</div>`).join('')}</div></div></section>`;
     }
 
     function renderSystem() {
-      $('contentBody').innerHTML = `${metricGrid([['系统页面', '全局', '四个洞察域共用', 'rgba(56,189,248,0.2)'], ['当前项', navLabel(), '占位展示', 'rgba(167,139,250,0.18)'], ['状态', 'Shadow', '不写生产', 'rgba(52,211,153,0.18)'], ['来源', 'AI4SEC', '本地后端', 'rgba(245,158,11,0.2)']])}<section class="panel"><div class="panel-head"><h3>${navLabel()}</h3><span>System</span></div><div class="panel-body"><div class="detail-box"><em>第一阶段</em><h2>系统页暂作占位</h2><p>当前重点是四域数据展示和统一运营入口，系统页后续再接入更新日志、需求收集和退出逻辑。</p></div></div></section>`;
+      if (state.nav === 'requirements') return renderRequirementsPage();
+      if (state.nav === 'logout') return renderLogoutPage();
+      return renderChangelogPage();
     }
 
-    function metricsFor(domainId, extras = []) {
-      const card = (state.overview?.domains || []).find(d => d.domain === domainId) || { item_count: 0, queue_count: 0, audit_status: 'unknown' };
-      const labels = { news: ['今日资讯', 'AI-for-Sec 条目'], capabilities: ['今日能力', '待复现候选'], threats: ['今日关注', '高风险目标'], vulnerabilities: ['今日素材', '高相关素材'] };
-      return [[labels[domainId][0], String(card.item_count), labels[domainId][1], 'rgba(56,189,248,0.2)'], ['人工队列', String(card.queue_count), '待处理', 'rgba(245,158,11,0.2)'], ['审计状态', card.audit_status, '质量审计', 'rgba(52,211,153,0.18)'], ...extras].slice(0, 4);
+    function systemMetrics() {
+      return metricGrid([
+        ['系统页面', '全局', '四个洞察域共用', 'rgba(56,189,248,0.2)'], ['来源域', task().label, '作为上下文参数', 'rgba(167,139,250,0.18)'],
+        ['当前页', navLabel(), '独立页面样式', 'rgba(52,211,153,0.18)'], ['状态', 'Demo', '不执行真实提交/退出', 'rgba(245,158,11,0.2)'],
+      ]);
     }
 
-    function metricGrid(items) {
-      return `<div class="metrics">${items.map(([label, value, meta, bg]) => `<div class="metric" style="--metric-bg:${bg}"><span>${escapeHTML(label)}</span><strong>${escapeHTML(value)}</strong><em>${escapeHTML(meta)}</em></div>`).join('')}</div>`;
+    function renderChangelogPage() {
+      $('contentBody').innerHTML = `${systemMetrics()}<section class="panel"><div class="panel-head"><h3>更新日志</h3><span>平台级变更，支持按来源域过滤</span></div><div class="panel-body"><div class="timeline-list">${[
+        ['v5', '补齐资讯阅读六页、运营五页、系统三页的独立页面样式。'],
+        ['v4', '接入 demo/data 样例 JSON，能力/威胁/漏洞主要页面细化。'],
+        ['v3', '确定 AI4SEC TMG 信息架构与统一运营入口。'],
+      ].map((row,i)=>`<article class="timeline-card"><div><div class="time-badge">${row[0]}</div><div class="table-sub">2026-07-${16-i}</div></div><div><div class="table-title">${row[1]}</div><div class="table-sub">来源域：${escapeHTML(task().label)} · 可按模块筛选。</div></div><span class="status-tag good">已记录</span></article>`).join('')}</div></div></section>`;
     }
 
-    function itemCards(items, domainId) {
-      if (!items.length) return `<div class="empty">暂无数据，请先运行旧数据导入。</div>`;
-      return items.slice(0, 12).map((item, index) => {
-        const score = item.score === null || item.score === undefined ? '--' : (Number(item.score) > 1 ? Number(item.score).toFixed(0) : Number(item.score).toFixed(2));
-        return `<article class="asis-card clickable" data-detail-domain="${domainId}" data-detail-id="${item.id}"><div class="rank">${String(index + 1).padStart(2, '0')}</div><div><h4>${escapeHTML(item.title)}</h4><p>${escapeHTML(item.summary || '')}</p><div class="badges"><span class="badge sky">${escapeHTML(item.status || 'active')}</span><span class="badge amber">评分 ${score}</span>${(item.tags || []).slice(0, 2).map(t => `<span class="badge">${escapeHTML(t)}</span>`).join('')}</div></div><div class="score">${score}</div></article>`;
-      }).join('');
+    function renderRequirementsPage() {
+      $('contentBody').innerHTML = `${systemMetrics()}<div class="detail-layout"><section class="panel"><div class="panel-head"><h3>需求收集</h3><span>从任意洞察域进入时自动带来源上下文</span></div><div class="panel-body"><div class="request-form"><div class="form-row"><label>来源模块</label><div class="fake-input">${escapeHTML(task().label)} / ${escapeHTML(navLabel())}</div></div><div class="form-row"><label>需求类型</label><div class="fake-input">页面优化 / 数据字段 / 工作流 / 运营规则</div></div><div class="form-row"><label>需求描述</label><div class="fake-input" style="min-height:120px">这里展示真实表单样式：用户描述缺什么字段、哪个页面不好用、希望新增什么动作。</div></div><div class="badges"><span class="badge sky">提交需求</span><span class="badge amber">保存草稿</span><span class="badge">关联当前页面</span></div></div></div></section><aside class="panel"><div class="panel-head"><h3>需求队列</h3><span>分类处理</span></div><div class="panel-body"><div class="kanban" style="grid-template-columns:1fr"><div class="kanban-col"><div class="kanban-head"><span>待评审</span><span class="status-tag">3</span></div><div class="mini-card"><b>补充目标详情字段</b><p>来自威胁洞察 / 目标库</p></div><div class="mini-card"><b>能力转化看板支持负责人</b><p>来自能力洞察 / 能力转化</p></div></div></div></div></aside></div>`;
     }
 
-    function opsCard(item) {
-      const title = item.pipeline_name || item.name || item.audit_type || item.queue_type || item.step_name || item.domain || '运营项';
-      const desc = item.summary || item.reason || item.description || item.status || JSON.stringify(item.summary || item.details || item.payload || item.metrics || {}).slice(0, 120);
-      return `<div class="filter-card"><b>${escapeHTML(title)}</b><span>${escapeHTML(desc || '')}</span></div>`;
+    function renderLogoutPage() {
+      $('contentBody').innerHTML = `${systemMetrics()}<div class="logout-box"><div><span class="status-tag hot">LOGOUT DEMO</span><h2>退出登录</h2><p style="color:var(--muted);max-width:520px;line-height:1.7">真实系统中这里会清理 HttpOnly session/cookie 并跳转登录页。Demo 中不执行真实退出，只展示确认页样式。</p><div class="badges" style="justify-content:center;margin-top:18px"><span class="badge sky">确认退出</span><span class="badge amber">返回 ${escapeHTML(task().label)}</span><span class="badge">切换账号</span></div></div></div>`;
     }
 
-    function sidePanel(title, content) {
-      return `<aside class="panel"><div class="panel-head"><h3>${escapeHTML(title)}</h3><span>AI4SEC Platform</span></div><div class="panel-body"><div class="detail-box"><em>当前策略</em><h2>${escapeHTML(title)}</h2><p>${escapeHTML(content)}</p></div><div class="timeline" style="margin-top:14px"><div class="time-row"><b>第一阶段</b>旧数据导入 + 页面展示</div><div class="time-row"><b>后续阶段</b>采集 connector、模型重跑、复现执行和生产替换</div></div></div></aside>`;
+    function renderThreat() {
+      const today = sampleData.threat.today || [];
+      const targets = sampleData.threat.targets || [];
+      const tracking = sampleData.threat.tracking || [];
+      const graph = sampleData.threat.graph || { nodes: [], edges: [] };
+      const metrics = metricGrid([
+        ['今日关注', String(today.length || 18), '新增/上升风险目标', 'rgba(167,139,250,0.2)'], ['目标库', String(targets.length || 8065), '华为开源仓库样例', 'rgba(56,189,248,0.18)'],
+        ['图谱节点', String((graph.nodes || []).length || 0), 'Repo / CVE / 组织', 'rgba(251,113,133,0.2)'], ['跟踪中', String(tracking.length || 42), '待研判/待审计', 'rgba(52,211,153,0.18)'],
+      ]);
+      if (state.nav === 'targets') return renderThreatTargets(metrics, targets, graph);
+      if (state.nav === 'tracking') return renderThreatTracking(metrics, tracking);
+      return renderThreatToday(metrics, today);
     }
 
-    function bindDetailCards(domainId) {
-      document.querySelectorAll('[data-detail-id]').forEach(el => el.addEventListener('click', async () => {
-        const id = Number(el.dataset.detailId);
-        const detailPath = { news: `/api/news/items/${id}`, capabilities: `/api/capabilities/items/${id}`, threats: `/api/threats/targets/${id}`, vulnerabilities: `/api/vulnerabilities/materials/${id}` }[domainId];
-        const item = await api(detailPath);
-        $('contentBody').insertAdjacentHTML('afterbegin', `<section class="panel" id="detailPanel"><div class="panel-head"><h3>${escapeHTML(item.title)}</h3><span>详情</span></div><div class="panel-body"><div class="detail-box"><em>${escapeHTML(item.status || '')}</em><h2>${escapeHTML(item.title)}</h2><p>${escapeHTML(item.summary || '')}</p></div><div class="timeline" style="margin-top:14px">${(item.evidence || []).map(ev => `<div class="time-row"><b>${escapeHTML(ev.title || ev.evidence_type)}</b>${escapeHTML(ev.content || '').slice(0, 500)}</div>`).join('')}</div></div></section>`);
-        document.getElementById('detailPanel')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-      }));
+    function renderThreatToday(metrics, today) {
+      $('contentBody').innerHTML = `${metrics}<div class="detail-layout"><section class="panel"><div class="panel-head"><h3>今日关注</h3><span>今天值得优先看的开源目标</span></div><div class="panel-body"><div class="asis-list">${today.slice(0,10).map((item,index)=>threatCard(item,index)).join('')}</div></div></section><aside class="panel"><div class="panel-head"><h3>目标详情预览</h3><span>点击仓库打开</span></div><div class="panel-body"><div class="steps"><div class="step">为什么推荐：风险等级、历史漏洞、攻击面、生态影响。</div><div class="step">证据链：CVE、issue、release、固件、镜像、关键词命中。</div><div class="step">下一步：加入跟踪、分配研判、进入审计/复现。</div></div></div></aside></div>`;
+    }
+
+    function renderThreatTargets(metrics, targets, graph) {
+      const view = state.targetView;
+      const viewSwitch = `<div class="view-switch"><span class="view-pill ${view==='list'?'active':''}" onclick="setTargetView('list')">列表视图</span><span class="view-pill ${view==='graph'?'active':''}" onclick="setTargetView('graph')">图谱视图</span><span class="view-pill ${view==='dist'?'active':''}" onclick="setTargetView('dist')">分布视图</span></div>`;
+      let main = '';
+      if (view === 'graph') {
+        main = `<div class="kg" style="min-height:520px"><svg viewBox="0 0 760 520" preserveAspectRatio="none"><path d="M120 120 C260 160,310 180,390 230 S545 150,610 110" stroke="#38bdf8" stroke-width="2" fill="none" /><path d="M390 230 C490 280,540 360,600 420" stroke="#34d399" stroke-width="2" fill="none" /><path d="M390 230 C305 310,260 390,205 430" stroke="#fb7185" stroke-width="2" fill="none" /></svg><div class="node n1" style="top:18%">Org</div><div class="node n2" style="top:42%">Repo</div><div class="node n3" style="top:18%">CVE</div><div class="node n4" style="top:72%">Attack Surface</div><div class="node n5" style="top:72%">Issue</div></div><div class="note">图谱样例含 ${(graph.nodes||[]).length} 节点、${(graph.edges||[]).length} 边；点击真实节点后应打开同一个目标详情。</div>`;
+      } else if (view === 'dist') {
+        const grades = countBy(targets, 'risk_grade');
+        const orgs = countBy(targets.slice(0, 80), 'org');
+        main = `<div class="field-grid"><div class="field"><span>风险等级分布</span><b>${Object.entries(grades).map(([k,v])=>`${escapeHTML(k)}:${v}`).join(' / ')}</b></div><div class="field"><span>组织 Top</span><b>${Object.entries(orgs).slice(0,5).map(([k,v])=>`${escapeHTML(k)}:${v}`).join(' / ')}</b></div></div><div class="bars" style="margin-top:14px">${bars(Object.entries(grades).map(([k,v])=>[k, Math.min(100, v*8)]))}</div>`;
+      } else {
+        main = `<table class="data-table"><thead><tr><th>仓库</th><th>风险</th><th>历史漏洞</th><th>攻击面</th><th>推荐原因</th></tr></thead><tbody>${targets.slice(0,18).map(t=>`<tr class="clickable" onclick="openDetail('threat','${escapeAttr(t.id)}')"><td><div class="table-title">${escapeHTML(t.org)} / ${escapeHTML(t.name)}</div><div class="table-sub">${escapeHTML(t.repo_url)}</div></td><td><span class="status-tag hot">${escapeHTML(t.risk_grade)}</span><div class="table-sub">score ${escapeHTML(t.risk_score)}</div></td><td>${escapeHTML(t.historical_cve_count)}</td><td>${(t.attack_surface_tags||[]).slice(0,3).map(x=>`<span class="status-tag">${escapeHTML(x)}</span>`).join(' ')}</td><td>${escapeHTML(t.recommendation_reason)}</td></tr>`).join('')}</tbody></table>`;
+      }
+      $('contentBody').innerHTML = `${metrics}<div class="detail-layout"><section class="panel"><div class="panel-head"><h3>目标库</h3><span>列表视图 / 图谱视图 / 分布视图</span></div><div class="panel-body">${viewSwitch}${main}</div></section><aside class="panel"><div class="panel-head"><h3>目标详情入口</h3><span>点击列表行打开</span></div><div class="panel-body"><div class="steps"><div class="step">列表视图用于排序、筛选、批量比较。</div><div class="step">图谱视图用于看组织、仓库、CVE、固件、镜像关系。</div><div class="step">分布视图用于看风险、组织、攻击面分布。</div></div></div></aside></div>`;
+    }
+
+    function renderThreatTracking(metrics, tracking) {
+      $('contentBody').innerHTML = `${metrics}<section class="panel"><div class="panel-head"><h3>跟踪队列</h3><span>待研判 / 持续跟踪 / 已忽略 / 已关闭</span></div><div class="panel-body"><div class="kanban">${['待研判','持续跟踪','已关闭'].map(status=>`<div class="kanban-col"><div class="kanban-head"><span>${status}</span><span class="status-tag">${tracking.filter(x=>x.status===status).length}</span></div>${tracking.filter(x=>x.status===status).slice(0,6).map(x=>`<div class="mini-card"><b>${escapeHTML(x.title)}</b><p>${escapeHTML(x.next_action || '')}</p><div class="badges"><span class="badge sky">${escapeHTML(x.priority || '')}</span><span class="badge amber">${escapeHTML(x.owner || '未分配')}</span></div></div>`).join('') || '<div class="empty-hint">暂无卡片</div>'}</div>`).join('')}</div></div></section>`;
+    }
+
+    function renderVuln() {
+      const today = sampleData.vuln.today || [];
+      const materials = sampleData.vuln.materials || [];
+      const knowledge = sampleData.vuln.knowledge || [];
+      const migration = sampleData.vuln.migration || [];
+      const metrics = metricGrid([
+        ['今日素材', String(today.length || 37), '新抓取/高相关', 'rgba(251,113,133,0.2)'], ['素材库', String(materials.length || 1906), '可检索外部文章', 'rgba(56,189,248,0.18)'],
+        ['知识提取', String(knowledge.length || 84), '漏洞模式/根因/触发条件', 'rgba(245,158,11,0.2)'], ['迁移队列', String(migration.length || 26), '待代码搜索/复现', 'rgba(52,211,153,0.18)'],
+      ]);
+      if (state.nav === 'materials') return renderVulnMaterials(metrics, materials);
+      if (state.nav === 'knowledge-extract') return renderKnowledgeExtract(metrics, knowledge);
+      if (state.nav === 'migration') return renderMigrationQueue(metrics, migration);
+      return renderTodayMaterials(metrics, today);
+    }
+
+    function renderTodayMaterials(metrics, today) {
+      $('contentBody').innerHTML = `${metrics}<div class="detail-layout"><section class="panel"><div class="panel-head"><h3>今日素材</h3><span>最新/高相关/高置信度素材</span></div><div class="panel-body"><div class="asis-list">${today.slice(0,10).map((item,index)=>vulnCard(item,index)).join('')}</div></div></section><aside class="panel"><div class="panel-head"><h3>素材详情预览</h3><span>点击素材打开</span></div><div class="panel-body"><div class="steps"><div class="step">原文摘要、抓取正文、相关性判断理由。</div><div class="step">关键发现、漏洞知识字段、可迁移目标。</div><div class="step">入库、复核、生成规则、加入迁移队列、忽略。</div></div></div></aside></div>`;
+    }
+
+    function renderVulnMaterials(metrics, materials) {
+      const view = state.materialView;
+      const viewSwitch = `<div class="view-switch"><span class="view-pill ${view==='list'?'active':''}" onclick="setMaterialView('list')">列表视图</span><span class="view-pill ${view==='category'?'active':''}" onclick="setMaterialView('category')">分类视图</span><span class="view-pill ${view==='source'?'active':''}" onclick="setMaterialView('source')">来源视图</span></div>`;
+      let main = '';
+      if (view === 'category') {
+        const cats = countBy(materials, 'category');
+        main = `<div class="op-card-grid">${Object.entries(cats).map(([k,v])=>`<div class="op-card clickable" onclick="setMaterialView('list')"><h4>${escapeHTML(k || '未分类')}</h4><p>${v} 条素材</p><div class="bars">${bars([[k, Math.min(100, v*10)]])}</div></div>`).join('')}</div>`;
+      } else if (view === 'source') {
+        const srcs = countBy(materials, 'source_host');
+        main = `<div class="op-card-grid">${Object.entries(srcs).slice(0,12).map(([k,v])=>`<div class="op-card"><h4>${escapeHTML(k || 'unknown')}</h4><p>${v} 条素材 · 可用于评估来源质量。</p><span class="status-tag">查看来源</span></div>`).join('')}</div>`;
+      } else {
+        main = `<table class="data-table"><thead><tr><th>素材</th><th>分类</th><th>来源</th><th>相关性</th><th>状态</th></tr></thead><tbody>${materials.slice(0,18).map(m=>`<tr class="clickable" onclick="openDetail('vuln','${escapeAttr(m.id)}')"><td><div class="table-title">${escapeHTML(m.title)}</div><div class="table-sub">${escapeHTML(m.url)}</div></td><td><span class="status-tag">${escapeHTML(m.category)}</span></td><td>${escapeHTML(m.source_host)}</td><td>${escapeHTML(m.relevance_score ?? '-')}</td><td><span class="status-tag warn">${escapeHTML(m.status)}</span></td></tr>`).join('')}</tbody></table>`;
+      }
+      $('contentBody').innerHTML = `${metrics}<section class="panel"><div class="panel-head"><h3>素材库</h3><span>列表视图 / 分类视图 / 来源视图</span></div><div class="panel-body">${viewSwitch}${main}</div></section>`;
+    }
+
+    function renderKnowledgeExtract(metrics, knowledge) {
+      $('contentBody').innerHTML = `${metrics}<div class="detail-layout"><section class="panel"><div class="panel-head"><h3>知识提取</h3><span>把文章变成漏洞知识工程资产</span></div><div class="panel-body"><div class="detail-stack">${knowledge.slice(0,8).map(k=>`<div class="rule-card"><div class="rule-row"><b>${escapeHTML(k.title)}</b><span class="status-tag">${escapeHTML(k.extraction_status)}</span></div><div class="field-grid"><div class="field"><span>漏洞类型</span><b>${escapeHTML(k.vulnerability_type)}</b></div><div class="field"><span>根因模式</span><b>${escapeHTML(k.root_cause_pattern)}</b></div><div class="field"><span>触发条件</span><b>${escapeHTML(k.trigger_condition)}</b></div><div class="field"><span>可迁移技术栈</span><b>${escapeHTML((k.transferable_stack||[]).join(' / '))}</b></div></div><div class="rule-row"><span>代码搜索关键词：${escapeHTML((k.code_search_keywords||[]).join(', ') || '待生成')}</span></div></div>`).join('')}</div></div></section><aside class="panel"><div class="panel-head"><h3>抽取字段</h3><span>人工确认后入库</span></div><div class="panel-body"><div class="steps"><div class="step">漏洞类型、根因模式、触发条件、攻击入口。</div><div class="step">关键函数/API/配置、利用链步骤、修复方式。</div><div class="step">可迁移技术栈、代码特征、搜索关键词。</div></div></div></aside></div>`;
+    }
+
+    function renderMigrationQueue(metrics, migration) {
+      $('contentBody').innerHTML = `${metrics}<section class="panel"><div class="panel-head"><h3>迁移队列</h3><span>从漏洞知识到以洞找洞行动</span></div><div class="panel-body"><div class="kanban">${['待分析','待代码搜索','待复现'].map(status=>`<div class="kanban-col"><div class="kanban-head"><span>${status}</span><span class="status-tag">${migration.filter(m=>m.status===status).length}</span></div>${migration.filter(m=>m.status===status).slice(0,6).map(m=>`<div class="mini-card"><b>${escapeHTML(m.title)}</b><p>${escapeHTML(m.next_action)}</p><div class="badges"><span class="badge sky">queries ${escapeHTML(m.generated_query_count)}</span><span class="badge amber">${escapeHTML((m.target_scope||[])[0] || '')}</span></div></div>`).join('') || '<div class="empty-hint">暂无卡片</div>'}</div>`).join('')}</div></div></section>`;
+    }
+
+    function opsDescription(id) {
+      return {
+        'ops-tasks': '管理采集、抓取、扫描、评测、复现等自动任务。',
+        'ops-sources': '管理系统依赖的数据来源、站点、仓库、接口和输出目录。',
+        'ops-rules': '管理分类、筛选、抽取、评分、推荐和告警规则。',
+        'ops-quality': '检查失败任务、低质量结果、误关联、误判和数据新鲜度。',
+        'ops-queue': '承接需要人工确认、复核、处理、忽略或升级的项目。',
+      }[id];
+    }
+
+    function opsCopy() {
+      const base = {
+        news: {
+          pending: '14', health: '96%',
+          items: {
+            'ops-tasks': [['RSS / arXiv / GitHub 采集', '查看定时采集状态、失败原因和重跑入口。'], ['日报生成任务', '管理日报候选、摘要生成和渲染任务。']],
+            'ops-sources': [['资讯来源', '维护 arXiv、GitHub、RSS、X、ASIS、awesome list 等来源。'], ['来源健康', '检查过期、失效、重复和低质量来源。']],
+            'ops-rules': [['分类与推荐规则', '维护资讯分类、强推荐、专题匹配和过滤规则。'], ['摘要规则', '配置阅读摘要、技术点提取和报告输出口径。']],
+            'ops-quality': [['质量审计', '检查重复、错误分类、摘要缺失、链接失效和信源异常。'], ['反馈回流', '统计用户收藏、点赞、踩和删除反馈。']],
+            'ops-queue': [['专题候选', '人工审核候选专题、精选候选和用户反馈。'], ['异常内容', '处理误判、低置信度和待补充条目。']],
+          },
+        },
+        capability: {
+          pending: '21', health: '91%',
+          items: {
+            'ops-tasks': [['Pipeline 任务', '管理 CandidateBuild、ReadAndReview、Summary、Render 等任务。'], ['复现/评测任务', '查看复现 runner、模型评测和 shadow run 状态。']],
+            'ops-sources': [['能力数据源', '维护任务日志、模型调用记录、复现输出和流水线 manifest。'], ['输出目录', '检查 shadow 输出、结构化结果和比较报告。']],
+            'ops-rules': [['能力标签', '维护技术点模块、能力分类、成功率口径和异常判断规则。'], ['模型策略', '配置模型选择、降级策略和评测口径。']],
+            'ops-quality': [['能力质量', '审计失败任务、模型错误、输出缺失和结构化 schema 问题。'], ['稳定性趋势', '查看成功率、耗时、失败原因和重试结果。']],
+            'ops-queue': [['异常确认', '人工确认复现异常、模型异常和高价值能力缺口。'], ['反馈处理', '处理用户对能力结果的纠错和需求。']],
+          },
+        },
+        threat: {
+          pending: '36', health: '88%',
+          items: {
+            'ops-tasks': [['仓库/CVE/固件抓取', '管理华为开源组织、历史漏洞、固件、镜像和 release 抓取任务。'], ['风险更新任务', '触发攻击面评分、风险排序和目标库刷新。']],
+            'ops-sources': [['开源威胁数据源', '维护 GitCode/GitHub 组织、CVE 来源、固件站、AscendHub、镜像站和 OpenX。'], ['来源覆盖率', '检查组织、仓库、固件和镜像覆盖是否完整。']],
+            'ops-rules': [['风险评分规则', '配置历史漏洞、攻击面、活跃度、star、关键词和挖洞价值权重。'], ['证据抽取规则', '维护 CVE、issue、release、固件、镜像和关键词关联规则。']],
+            'ops-quality': [['数据质量', '审计误关联、过期仓库、孤立节点、重复 CVE 和缺失证据。'], ['图谱质量', '检查节点关系、实体别名、边权重和增量变化。']],
+            'ops-queue': [['高风险目标复核', '人工确认推荐挖洞目标、误报、忽略和升级。'], ['关系/证据复核', '复核仓库-CVE-固件-镜像关联证据。']],
+          },
+        },
+        vuln: {
+          pending: '29', health: '84%',
+          items: {
+            'ops-tasks': [['搜索与抓取任务', '管理关键词搜索、URL 抓取、正文抽取和报告生成任务。'], ['素材刷新任务', '重跑低质量、失败或过期素材。']],
+            'ops-sources': [['漏洞素材来源', '维护搜索引擎、安全博客、PoC 仓库、漏洞库和社区来源。'], ['来源覆盖率', '检查来源站点、URL 分类和抓取成功率。']],
+            'ops-rules': [['分类规则', '维护 PoC/Exploit、深度技术分析、内核安全、学术会议等分类规则。'], ['相关性规则', '配置相关性判断、置信度阈值、抽取字段和噪声过滤。']],
+            'ops-quality': [['抽取质量', '审计正文为空、内容过短、附件缺失、误判相关和低置信度结果。'], ['分类质量', '检查分类分布、异常来源和重复素材。']],
+            'ops-queue': [['待复核素材', '人工复核高价值、低置信度、疑似 PoC 和异常分类素材。'], ['处理结果', '标记已确认、已忽略、待复现或进入报告。']],
+          },
+        },
+      };
+      return base;
+    }
+
+    function capabilityDetailPreview(item) {
+      if (!item) return '<div class="empty-hint">暂无能力详情样例。</div>';
+      return `<div class="detail-box"><em>CAPABILITY DETAIL</em><h2>${escapeHTML(item.title)}</h2><p>${escapeHTML(item.summary || item.review || '')}</p></div><div class="field-grid" style="margin-top:12px"><div class="field"><span>评分</span><b>${escapeHTML(item.score ?? '-')}</b></div><div class="field"><span>复现</span><b>${escapeHTML(item.repro_status || 'unknown')}</b></div><div class="field"><span>场景</span><b>${escapeHTML((item.application_scenarios||[]).join(' / '))}</b></div><div class="field"><span>转化</span><b>${escapeHTML(item.conversion_status || '待评估')}</b></div></div>`;
     }
 
     function escapeHTML(value) {
-      return String(value ?? '').replace(/[&<>'"]/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[ch]));
+      return String(value ?? '').replace(/[&<>'"]/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[ch]));
     }
 
-    async function renderAll(rebuild = true) {
+    async function loadJSON(path) {
+      const response = await fetch(path, { cache: 'no-store' });
+      if (!response.ok) throw new Error(`${path}: ${response.status}`);
+      return response.json();
+    }
+
+    function apiItems(data) {
+      return Array.isArray(data?.items) ? data.items : [];
+    }
+
+    function firstTag(item, fallback = '') {
+      return (item.tags || [fallback]).filter(Boolean)[0] || fallback;
+    }
+
+    function mapNews(item) {
+      return {
+        id: String(item.id), title: item.title, subtitle: item.title, summary: item.summary,
+        source: item.source || 'AI-for-Sec', source_url: item.source_url,
+        category: firstTag(item, item.item_type || '资讯'), score: item.score,
+        source_type: item.payload?.legacy?.type || item.item_type,
+        tech_points: item.payload?.legacy?.tech_points || (item.tags || []).join(' / '),
+        highlight: item.summary,
+      };
+    }
+
+    function mapCapability(item) {
+      return {
+        id: String(item.id), capability_id: `cap-${item.id}`, title: item.title, summary: item.summary,
+        score: item.score, source: item.source, code_url: item.payload?.code_url || item.source_url,
+        repro_status: item.payload?.repro_status || item.status || '待复现',
+        status: item.status || '待复现', conversion_status: '待评估',
+        capability_type: firstTag(item, '能力候选'),
+        application_scenarios: (item.tags || []).slice(0, 3),
+        review: item.summary,
+      };
+    }
+
+    function mapThreat(item) {
+      return {
+        id: String(item.id), target_id: `target-${item.id}`, title: item.title,
+        name: item.payload?.legacy?.name || item.title, org: item.payload?.legacy?.org || '',
+        description: item.summary, reason: item.summary, recommendation_reason: item.summary,
+        risk_score: item.metrics?.attack_surface_score ?? item.score,
+        risk_grade: item.metrics?.grade || item.payload?.risk_grade || item.status,
+        priority: item.status, status: item.status,
+        attack_surface_tags: item.tags || [], historical_cve_count: item.payload?.legacy?.historical_cve_count || 0,
+        evidence_refs: [{ type: 'risk_score', description: item.summary, source_url: item.source_url }],
+        source_url: item.source_url,
+      };
+    }
+
+    function mapVuln(item) {
+      const legacy = item.payload?.legacy || {};
+      return {
+        id: String(item.id), material_id: `material-${item.id}`, knowledge_id: `knowledge-${item.id}`,
+        title: item.title, summary: item.summary, check_reason: item.summary,
+        relevance_score: item.metrics?.confidence ?? item.score,
+        category: firstTag(item, '漏洞素材'), vulnerability_type: firstTag(item, '漏洞素材'),
+        status: item.status, extraction_status: item.status,
+        source_host: (() => { try { return new URL(item.source_url).host; } catch { return item.source || ''; } })(),
+        source_url: item.source_url,
+        key_findings: legacy.key_findings || [],
+        code_search_keywords: (item.tags || []).slice(0, 5),
+        transferable_stack: item.tags || [],
+        next_action: '人工确认后进入知识提取或迁移队列',
+      };
+    }
+
+    function mapTask(item) {
+      return { id: item.run_id || item.id, name: item.pipeline_name || item.step_name || '任务', domain: item.domain || 'all', status: item.status || 'unknown', description: item.source_path || JSON.stringify(item.summary || item.metrics || {}).slice(0, 160) };
+    }
+
+    function mapSource(item) {
+      return { id: item.id, name: item.name, domain: item.domain, type: item.source_type, status: item.status, record_count: item.summary?.entries || item.summary?.projects || item.summary?.items || item.summary?.candidates || '', description: item.summary?.path || '' };
+    }
+
+    function mapAudit(item) {
+      return { id: item.id, title: item.audit_type, name: item.audit_type, domain: item.domain, status: item.status, severity: item.status === 'pass' ? 'low' : 'medium', description: item.summary, suggestion: item.summary };
+    }
+
+    function mapQueue(item) {
+      return { id: item.id, name: item.queue_type, title: item.queue_type, domain: item.domain, status: item.status, priority: item.priority, description: item.reason, suggestion: item.reason };
+    }
+
+    async function loadSampleData() {
       try {
-        if (!state.overview) await loadOverview();
-        renderTopTabs();
-        renderDomainSwitcher();
-        renderSideNav();
-        renderChrome();
-        await renderContent();
+        const [overview, newsToday, newsAll, newsSources, capToday, capAll, reproRuns, capQueue, threatToday, threatTargets, threatQueue, vulnToday, vulnMaterials, vulnKnowledge, vulnQueue, opsTasks, opsSources, opsRules, opsQuality, opsQueue] = await Promise.all([
+          loadJSON('/api/dashboard/overview'),
+          loadJSON('/api/news/today'), loadJSON('/api/news/items?limit=80'), loadJSON('/api/news/sources'),
+          loadJSON('/api/capabilities/today'), loadJSON('/api/capabilities/items?limit=80'), loadJSON('/api/capabilities/repro-runs'), loadJSON('/api/capabilities/conversion-queue'),
+          loadJSON('/api/threats/today'), loadJSON('/api/threats/targets?limit=80'), loadJSON('/api/threats/tracking-queue'),
+          loadJSON('/api/vulnerabilities/today'), loadJSON('/api/vulnerabilities/materials?limit=80'), loadJSON('/api/vulnerabilities/knowledge'), loadJSON('/api/vulnerabilities/migration-queue'),
+          loadJSON('/api/operations/tasks'), loadJSON('/api/operations/sources'), loadJSON('/api/operations/rules'), loadJSON('/api/operations/audits'), loadJSON('/api/operations/human-queue'),
+        ]);
+        const newsItems = apiItems(newsAll).map(mapNews);
+        const newsFeatured = apiItems(newsToday).map(mapNews);
+        const capItems = apiItems(capAll).map(mapCapability);
+        const capFeatured = apiItems(capToday).map(mapCapability);
+        const threatItems = apiItems(threatTargets).map(mapThreat);
+        const threatFeatured = apiItems(threatToday).map(mapThreat);
+        const vulnItems = apiItems(vulnMaterials).map(mapVuln);
+        const vulnFeatured = apiItems(vulnToday).map(mapVuln);
+        const queueItems = apiItems(opsQueue).map(mapQueue);
+        Object.assign(sampleData, {
+          loaded: true, error: '', manifest: { source: 'AI4SEC local API', overview },
+          news: { asisPage: {}, sources: apiItems(newsSources).map(mapSource), items: newsItems.length ? newsItems : newsFeatured },
+          capability: {
+            today: capFeatured, library: capItems,
+            reproRuns: apiItems(reproRuns).map(item => ({ id: String(item.item_id || item.id), title: item.title, status: item.status || 'pending', repro_status: item.status || 'pending', repo_url: item.source_url, last_event: '第一阶段仅展示复现状态' })),
+            conversions: apiItems(capQueue).map(mapQueue),
+          },
+          threat: {
+            today: threatFeatured, targets: threatItems,
+            tracking: apiItems(threatQueue).map(item => ({ ...mapQueue(item), target_id: String(item.item_id || item.id), title: item.queue_type || '跟踪项', next_action: item.reason })),
+            graph: { nodes: threatItems.slice(0, 8), edges: [] },
+          },
+          vuln: {
+            today: vulnFeatured, materials: vulnItems,
+            knowledge: apiItems(vulnKnowledge).map(item => ({ ...mapVuln({ id: item.item_id, title: item.title, summary: (item.key_findings || []).join('；'), status: item.status, tags: ['知识提取'], payload: { legacy: { key_findings: item.key_findings || [] } } }), extraction_status: '待确认' })),
+            migration: apiItems(vulnQueue).map(mapQueue),
+          },
+          ops: {
+            tasks: apiItems(opsTasks).map(mapTask),
+            sources: apiItems(opsSources).map(mapSource),
+            rules: Object.entries(opsRules.items || {}).flatMap(([domain, rules]) => (rules || []).map((rule, index) => ({ id: `${domain}-${index}`, domain, name: rule.name, description: rule.description || rule.value, status: 'draft' }))),
+            quality: apiItems(opsQuality).map(mapAudit),
+            queue: queueItems,
+          },
+        });
       } catch (error) {
-        $('contentBody').innerHTML = `<section class="panel"><div class="panel-head"><h3>加载失败</h3><span>API Error</span></div><div class="panel-body"><div class="detail-box"><em>Error</em><h2>${escapeHTML(error.message)}</h2><p>请确认已运行导入命令并启动 FastAPI 服务。</p></div></div></section>`;
+        sampleData.loaded = false;
+        sampleData.error = error.message;
+        console.warn('Failed to load local API data; using static fallback.', error);
       }
     }
 
-    $('searchInput').addEventListener('input', () => {});
+    function newsCard(item, index, sourceLabel) {
+      return `<article class="asis-card clickable" onclick="openDetail('news','${escapeAttr(item.id || item.title || index)}')"><div class="rank">${String(index + 1).padStart(2, '0')}</div><div><h4>${escapeHTML(item.title || item.subtitle || item.id)}</h4><p>${escapeHTML(item.summary || item.highlight || '')}</p><div class="badges"><span class="badge sky">${escapeHTML(item.source || 'ASIS')}</span><span class="badge amber">${escapeHTML(item.category || navLabel())}</span><span class="badge">${escapeHTML(sourceLabel)}</span></div></div><div class="score">${item.score ?? ''}</div></article>`;
+    }
+
+    function capabilityCardsForNav() {
+      if (state.nav === 'today-capabilities') return filterByDomain(sampleData.capability.today || []);
+      if (state.nav === 'capability-library') return filterByDomain(sampleData.capability.library || []);
+      if (state.nav === 'repro-validation') return sampleData.capability.reproRuns || [];
+      if (state.nav === 'capability-conversion') return filterByDomain(sampleData.capability.conversions || []);
+      return filterByDomain(sampleData.capability.today || []);
+    }
+
+    function capabilityCard(item, index) {
+      const title = item.title || item.capability_id || item.id;
+      const desc = item.summary || item.last_event || item.next_action || item.notes || item.review || '';
+      const badge = item.status || item.repro_status || item.conversion_status || item.capability_type || '能力';
+      const score = item.score ?? (item.status ? '' : index + 1);
+      return `<article class="asis-card clickable" onclick="openDetail('capability','${escapeAttr(item.id || item.capability_id || title)}')"><div class="rank">${String(index + 1).padStart(2, '0')}</div><div><h4>${escapeHTML(title)}</h4><p>${escapeHTML(desc)}</p><div class="badges"><span class="badge sky">${escapeHTML(badge)}</span><span class="badge amber">${escapeHTML((item.application_scenarios || [item.scenario || navLabel()])[0])}</span><span class="badge">${escapeHTML(item.source || item.domain || 'sample')}</span></div></div><div class="score">${escapeHTML(score)}</div></article>`;
+    }
+
+    function threatCardsForNav() {
+      if (state.nav === 'today') return sampleData.threat.today || [];
+      if (state.nav === 'targets') return sampleData.threat.targets || [];
+      if (state.nav === 'tracking') return sampleData.threat.tracking || [];
+      return sampleData.threat.today || [];
+    }
+
+    function threatCard(item, index) {
+      const title = item.title || `${item.org || ''} / ${item.name || item.id}`;
+      const desc = item.reason || item.recommendation_reason || item.next_action || item.description || '';
+      const badge = item.risk_grade || item.priority || item.status || '目标';
+      const score = item.risk_score ?? item.historical_cve_count ?? '';
+      const id = item.target_id || item.id || title;
+      return `<article class="asis-card clickable" onclick="openDetail('threat','${escapeAttr(id)}')"><div class="rank">${String(index + 1).padStart(2, '0')}</div><div><h4>${escapeHTML(title)}</h4><p>${escapeHTML(desc)}</p><div class="badges"><span class="badge sky">${escapeHTML(badge)}</span><span class="badge amber">${escapeHTML((item.attack_surface_tags || [navLabel()])[0])}</span><span class="badge">${escapeHTML(item.status || 'sample')}</span></div></div><div class="score">${escapeHTML(score)}</div></article>`;
+    }
+
+    function vulnCardsForNav() {
+      if (state.nav === 'today-materials') return sampleData.vuln.today || [];
+      if (state.nav === 'materials') return sampleData.vuln.materials || [];
+      if (state.nav === 'knowledge-extract') return sampleData.vuln.knowledge || [];
+      if (state.nav === 'migration') return sampleData.vuln.migration || [];
+      return sampleData.vuln.today || [];
+    }
+
+    function vulnCard(item, index) {
+      const title = item.title || item.material_id || item.id;
+      const desc = item.summary || item.check_reason || item.root_cause_pattern || item.next_action || '';
+      const badge = item.category || item.vulnerability_type || item.status || '素材';
+      const score = item.relevance_score ?? item.generated_query_count ?? '';
+      const id = item.material_id || item.id || title;
+      return `<article class="asis-card clickable" onclick="openDetail('vuln','${escapeAttr(id)}')"><div class="rank">${String(index + 1).padStart(2, '0')}</div><div><h4>${escapeHTML(title)}</h4><p>${escapeHTML(desc)}</p><div class="badges"><span class="badge sky">${escapeHTML(badge)}</span><span class="badge amber">${escapeHTML(item.source_host || (item.transferable_stack || [navLabel()])[0])}</span><span class="badge">${escapeHTML(item.status || item.extraction_status || 'sample')}</span></div></div><div class="score">${escapeHTML(score)}</div></article>`;
+    }
+
+    function opsTimelineItem(item) {
+      const title = item.name || item.title || item.id;
+      const desc = item.description || item.suggestion || item.status || `${item.type || ''} · ${item.domain || ''}`;
+      return `<div class="time-row"><b>${escapeHTML(title)}</b>${escapeHTML(desc)}</div>`;
+    }
+
+    function statusBars(items, labels) {
+      const counts = Object.fromEntries(labels.map((label) => [label, 0]));
+      (items || []).forEach((item) => { if (counts[item.status] !== undefined) counts[item.status] += 1; });
+      const max = Math.max(1, ...Object.values(counts));
+      return labels.map((label) => [label, Math.round((counts[label] / max) * 100)]);
+    }
+
+    function categoryDiversity(items) {
+      return Math.min(100, new Set((items || []).map((item) => item.category).filter(Boolean)).size * 18);
+    }
+
+    function sourceDiversity(items) {
+      return Math.min(100, new Set((items || []).map((item) => item.source_host).filter(Boolean)).size * 8);
+    }
+
+    function asisCards(items) {
+      return items.map(([title, desc, badge, score], index) => `
+        <article class="asis-card">
+          <div class="rank">${String(index + 1).padStart(2, '0')}</div>
+          <div><h4>${title}</h4><p>${desc}</p><div class="badges"><span class="badge sky">${badge}</span><span class="badge amber">${navLabel()}</span><span class="badge">Demo</span></div></div>
+          <div class="score">${score}</div>
+        </article>`).join('');
+    }
+
+    function bars(items) {
+      return items.map(([name, value]) => `
+        <div class="bar-row"><b>${name}</b><div class="track"><div class="fill" style="width:${value}%"></div></div><span>${value}%</span></div>
+      `).join('');
+    }
+
+    function escapeAttr(value) {
+      return String(value ?? '').replace(/[&<>'"]/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[ch]));
+    }
+
+    function countBy(items, field) {
+      const counts = {};
+      (items || []).forEach((item) => {
+        const key = item[field] || 'unknown';
+        counts[key] = (counts[key] || 0) + 1;
+      });
+      return counts;
+    }
+
+    function filterByDomain(items) {
+      if (state.task !== 'capability') return items;
+      const key = state.domain.replace(/-/g, '_');
+      const filtered = (items || []).filter((item) => !item.domain || item.domain === key || item.domain === state.domain);
+      return filtered.length ? filtered : (items || []);
+    }
+
+    function setTargetView(view) {
+      state.targetView = view;
+      renderAll(false);
+    }
+
+    function setMaterialView(view) {
+      state.materialView = view;
+      renderAll(false);
+    }
+
+    function findDetail(type, id) {
+      const pools = {
+        news: sampleData.news.items || [],
+        capability: [...(sampleData.capability.today || []), ...(sampleData.capability.library || []), ...(sampleData.capability.reproRuns || []), ...(sampleData.capability.conversions || [])],
+        threat: [...(sampleData.threat.targets || []), ...(sampleData.threat.today || []), ...(sampleData.threat.tracking || [])],
+        vuln: [...(sampleData.vuln.materials || []), ...(sampleData.vuln.today || []), ...(sampleData.vuln.knowledge || []), ...(sampleData.vuln.migration || [])],
+      };
+      const raw = String(id || '').replace(/&amp;/g, '&').replace(/&#39;/g, "'").replace(/&quot;/g, '"');
+      return (pools[type] || []).find((item) => [item.id, item.title, item.target_id, item.capability_id, item.material_id, item.knowledge_id].filter(Boolean).map(String).includes(raw)) || (pools[type] || [])[0] || {};
+    }
+
+    function openDetail(type, id) {
+      const item = findDetail(type, id);
+      const title = item.title || item.name || item.id || '详情';
+      $('drawerType').textContent = type.toUpperCase();
+      $('drawerTitle').textContent = title;
+      $('drawerBody').innerHTML = drawerHTML(type, item);
+      $('drawerBackdrop').classList.add('open');
+      $('detailDrawer').classList.add('open');
+    }
+
+    function closeDetail() {
+      $('drawerBackdrop').classList.remove('open');
+      $('detailDrawer').classList.remove('open');
+    }
+
+    function drawerHTML(type, item) {
+      if (type === 'capability') return `<div class="drawer-section"><h3>能力摘要</h3><p>${escapeHTML(item.summary || item.review || item.next_action || '')}</p></div><div class="drawer-section"><h3>评分与状态</h3><div class="field-grid"><div class="field"><span>评分</span><b>${escapeHTML(item.score ?? '-')}</b></div><div class="field"><span>复现</span><b>${escapeHTML(item.repro_status || item.status || '-')}</b></div><div class="field"><span>转化</span><b>${escapeHTML(item.conversion_status || item.status || '-')}</b></div><div class="field"><span>场景</span><b>${escapeHTML((item.application_scenarios || [item.scenario || '待确认']).join(' / '))}</b></div></div></div><div class="drawer-section"><h3>操作</h3><div class="drawer-actions"><button class="pill-button">加入复现</button><button class="pill-button">加入能力转化</button><button class="pill-button">标记采用/放弃</button></div></div>`;
+      if (type === 'threat') return `<div class="drawer-section"><h3>推荐原因</h3><p>${escapeHTML(item.recommendation_reason || item.reason || item.next_action || '')}</p></div><div class="drawer-section"><h3>风险画像</h3><div class="field-grid"><div class="field"><span>风险等级</span><b>${escapeHTML(item.risk_grade || item.priority || '-')}</b></div><div class="field"><span>风险分</span><b>${escapeHTML(item.risk_score ?? '-')}</b></div><div class="field"><span>历史漏洞</span><b>${escapeHTML(item.historical_cve_count ?? '-')}</b></div><div class="field"><span>攻击面</span><b>${escapeHTML((item.attack_surface_tags || []).join(' / ') || '待分析')}</b></div></div></div><div class="drawer-section"><h3>证据链</h3><ul>${(item.evidence_refs || []).slice(0,5).map(e=>`<li>${escapeHTML(e.description || e.source_url || e.type)}</li>`).join('') || '<li>样例中暂无详细证据，正式版从 CVE/issue/固件/镜像关联生成。</li>'}</ul></div><div class="drawer-section"><h3>操作</h3><div class="drawer-actions"><button class="pill-button">加入跟踪</button><button class="pill-button">分配研判</button><button class="pill-button">进入审计</button></div></div>`;
+      if (type === 'vuln') return `<div class="drawer-section"><h3>素材摘要</h3><p>${escapeHTML(item.summary || item.check_reason || item.next_action || '')}</p></div><div class="drawer-section"><h3>知识字段</h3><div class="field-grid"><div class="field"><span>漏洞类型</span><b>${escapeHTML(item.vulnerability_type || item.category || '-')}</b></div><div class="field"><span>状态</span><b>${escapeHTML(item.status || item.extraction_status || '-')}</b></div><div class="field"><span>来源</span><b>${escapeHTML(item.source_host || '-')}</b></div><div class="field"><span>关键词</span><b>${escapeHTML((item.code_search_keywords || []).join(', ') || item.search_keywords || '待生成')}</b></div></div></div><div class="drawer-section"><h3>操作</h3><div class="drawer-actions"><button class="pill-button">入库</button><button class="pill-button">生成规则</button><button class="pill-button">加入迁移队列</button><button class="pill-button">忽略</button></div></div>`;
+      return `<div class="drawer-section"><h3>资讯摘要</h3><p>${escapeHTML(item.summary || item.highlight || '')}</p></div><div class="drawer-section"><h3>来源</h3><p>${escapeHTML(item.source_url || item.source || '')}</p></div><div class="drawer-section"><h3>操作</h3><div class="drawer-actions"><button class="pill-button">加入阅读清单</button><button class="pill-button">加入专题</button><button class="pill-button">反馈</button></div></div>`;
+    }
+
+    function renderAll(rebuild = true) {
+      renderTopTabs();
+      renderDomainSwitcher();
+      renderSideNav();
+      renderChrome();
+      renderContent();
+    }
+
+    $('drawerClose').addEventListener('click', closeDetail);
+    $('drawerBackdrop').addEventListener('click', closeDetail);
     renderAll();
+    loadSampleData().then(() => renderAll());
   </script>
 </body>
 </html>
