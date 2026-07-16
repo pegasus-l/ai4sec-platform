@@ -40,6 +40,7 @@ def test_pipeline_registry_has_all_domain_entries() -> None:
     assert "threats.huawei_snapshot_import" in names
     assert "threats.huawei_raw_pipeline" in names
     assert "threats.huawei_local_raw_import" in names
+    assert "threats.risk_reasoning_pipeline" in names
     assert "vulnerabilities.material_snapshot_import" in names
     assert "vulnerabilities.material_raw_pipeline" in names
     assert "vulnerabilities.material_local_raw_import" in names

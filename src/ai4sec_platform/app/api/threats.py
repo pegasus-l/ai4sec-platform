@@ -44,6 +44,25 @@ def tracking(conn: sqlite3.Connection = Depends(get_db)) -> dict:
     return operations.human_queue(conn, DOMAIN)
 
 
+@router.get("/risk-assessments")
+def risk_assessments(limit: int = Query(50, ge=1, le=200), conn: sqlite3.Connection = Depends(get_db)) -> dict:
+    data = domain_items.list_items(conn, DOMAIN, item_type="target", limit=limit)
+    return {
+        "domain": DOMAIN,
+        "items": [
+            {
+                "item_id": item["id"],
+                "title": item["title"],
+                "status": item["status"],
+                "score": item.get("score"),
+                "risk_assessment": item.get("payload", {}).get("risk_assessment", {}),
+            }
+            for item in data["items"]
+            if item.get("payload", {}).get("risk_assessment")
+        ],
+    }
+
+
 @router.get("/graph")
 def graph(conn: sqlite3.Connection = Depends(get_db)) -> dict:
     targets_data = domain_items.list_items(conn, DOMAIN, item_type="target", limit=100)

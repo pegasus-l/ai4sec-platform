@@ -85,6 +85,7 @@ def test_v9_contract_endpoint_aliases_exist() -> None:
         "/api/threats/targets",
         "/api/threats/tracking",
         "/api/threats/graph",
+        "/api/threats/risk-assessments",
         "/api/vulnerabilities/materials",
         "/api/vulnerabilities/knowledge",
         "/api/vulnerabilities/migration-queue",
@@ -153,3 +154,18 @@ def test_vulnerability_knowledge_pipeline_extracts_candidates() -> None:
     assert knowledge["items"][0]["source_material_id"]
     queue = client.get("/api/vulnerabilities/migration-queue").json()
     assert queue["items"]
+
+
+def test_threat_risk_pipeline_reasons_targets() -> None:
+    client = TestClient(app)
+    raw_run = client.post("/api/runs", json={"pipeline_name": "threats.huawei_local_raw_import", "reset": True, "params": {"limit": 30}})
+    assert raw_run.status_code == 200
+    response = client.post("/api/runs", json={"pipeline_name": "threats.risk_reasoning_pipeline", "params": {"limit": 8}})
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "success"
+    assert data["summary"]["steps"][1]["metrics"]["reasoned"] > 0
+    assessments = client.get("/api/threats/risk-assessments").json()
+    assert assessments["items"]
+    calls = client.get("/api/operations/model-calls?domain=threats").json()
+    assert calls["items"]
