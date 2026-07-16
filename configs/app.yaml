@@ -1,0 +1,17 @@
+app:
+  name: AI4SEC Platform
+  environment: local
+  production_writes: false
+paths:
+  output_dir: output
+  database_path: output/ai4sec_platform.db
+legacy_sources:
+  ai_for_sec_raw_dir: /home/liuqi777/ai-for-sec-report/output/raw
+  insight_platform_output_dir: /mnt/d/漏洞挖掘/洞察工具/dashboard/insight-platform/output
+  huawei_dir: /mnt/d/漏洞挖掘/洞察工具/dashboard/repo-info/huawei
+  vulnerability_dir: /mnt/d/漏洞挖掘/洞察工具/dashboard/vul-info/project_demo_0626
+import_limits:
+  news: 20
+  capabilities: 12
+  threats: 20
+  vulnerabilities: 20

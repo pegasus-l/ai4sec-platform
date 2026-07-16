@@ -1,0 +1,15 @@
+[project]
+name = "ai4sec-platform"
+version = "0.1.0"
+description = "AI4SEC unified insight platform shadow backend"
+requires-python = ">=3.11"
+dependencies = [
+  "fastapi",
+  "uvicorn",
+  "pydantic",
+  "PyYAML",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]

@@ -1,0 +1,203 @@
+from __future__ import annotations
+
+import json
+import sqlite3
+from typing import Any
+
+from ai4sec_platform.core.time import utc_now
+
+
+def dumps(value: Any) -> str:
+    return json.dumps(value if value is not None else {}, ensure_ascii=False)
+
+
+def loads(value: str | None, fallback: Any = None) -> Any:
+    if not value:
+        return fallback
+    try:
+        return json.loads(value)
+    except Exception:
+        return fallback
+
+
+def row_to_dict(row: sqlite3.Row) -> dict[str, Any]:
+    item = dict(row)
+    for key in ["tags_json", "metrics_json", "payload_json", "summary_json", "details_json", "payload_summary_json"]:
+        if key in item:
+            out_key = key.removesuffix("_json")
+            item[out_key] = loads(item.pop(key), [] if key == "tags_json" else {})
+    return item
+
+
+def create_domain_item(
+    conn: sqlite3.Connection,
+    *,
+    domain: str,
+    item_type: str,
+    title: str,
+    summary: str = "",
+    score: float | None = None,
+    status: str = "active",
+    source: str = "",
+    source_url: str = "",
+    primary_date: str = "",
+    tags: list[str] | None = None,
+    metrics: dict[str, Any] | None = None,
+    payload: dict[str, Any] | None = None,
+) -> int:
+    now = utc_now()
+    cur = conn.execute(
+        """
+        INSERT INTO domain_items (
+            domain, item_type, title, summary, score, status, source, source_url,
+            primary_date, tags_json, metrics_json, payload_json, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (domain, item_type, title, summary, score, status, source, source_url, primary_date, dumps(tags or []), dumps(metrics or {}), dumps(payload or {}), now, now),
+    )
+    return int(cur.lastrowid)
+
+
+def create_evidence(
+    conn: sqlite3.Connection,
+    *,
+    domain: str,
+    domain_item_id: int,
+    evidence_type: str,
+    title: str = "",
+    content: str = "",
+    source_url: str = "",
+    confidence: float | None = None,
+    payload: dict[str, Any] | None = None,
+) -> int:
+    cur = conn.execute(
+        """
+        INSERT INTO evidence_items (
+            domain, domain_item_id, evidence_type, title, content,
+            source_url, confidence, payload_json, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (domain, domain_item_id, evidence_type, title, content, source_url, confidence, dumps(payload or {}), utc_now()),
+    )
+    return int(cur.lastrowid)
+
+
+def create_pipeline_run(
+    conn: sqlite3.Connection,
+    *,
+    run_id: str,
+    domain: str,
+    pipeline_name: str,
+    status: str = "success",
+    started_at: str = "",
+    finished_at: str = "",
+    production_writes: bool = False,
+    summary: dict[str, Any] | None = None,
+    source_path: str = "",
+) -> None:
+    now = utc_now()
+    conn.execute(
+        """
+        INSERT OR REPLACE INTO pipeline_runs (
+            run_id, domain, pipeline_name, status, started_at, finished_at,
+            production_writes, summary_json, source_path, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (run_id, domain, pipeline_name, status, started_at or now, finished_at or now, int(production_writes), dumps(summary or {}), source_path, now),
+    )
+
+
+def create_task_run(conn: sqlite3.Connection, *, run_id: str, step_name: str, status: str = "success", metrics: dict[str, Any] | None = None, error_message: str = "") -> None:
+    now = utc_now()
+    conn.execute(
+        """
+        INSERT INTO task_runs (run_id, step_name, status, started_at, finished_at, metrics_json, error_message)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        (run_id, step_name, status, now, now, dumps(metrics or {}), error_message),
+    )
+
+
+def create_artifact(conn: sqlite3.Connection, *, run_id: str, artifact_type: str, path: str, sha256: str = "", bytes_size: int = 0, payload_summary: dict[str, Any] | None = None) -> None:
+    conn.execute(
+        """
+        INSERT INTO artifacts (run_id, artifact_type, path, sha256, bytes, payload_summary_json, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        (run_id, artifact_type, path, sha256, bytes_size, dumps(payload_summary or {}), utc_now()),
+    )
+
+
+def create_data_source(conn: sqlite3.Connection, *, domain: str, name: str, source_type: str, status: str = "ok", latest_at: str = "", health: str = "ok", summary: dict[str, Any] | None = None) -> None:
+    conn.execute(
+        """
+        INSERT INTO data_sources (domain, name, source_type, status, latest_at, health, summary_json, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (domain, name, source_type, status, latest_at, health, dumps(summary or {}), utc_now()),
+    )
+
+
+def create_quality_audit(conn: sqlite3.Connection, *, domain: str, audit_type: str, status: str, score: float | None = None, summary: str = "", details: dict[str, Any] | None = None) -> None:
+    conn.execute(
+        """
+        INSERT INTO quality_audits (domain, audit_type, status, score, summary, details_json, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        (domain, audit_type, status, score, summary, dumps(details or {}), utc_now()),
+    )
+
+
+def create_human_queue_item(conn: sqlite3.Connection, *, domain: str, item_id: int | None, queue_type: str, status: str = "pending", priority: int = 3, reason: str = "", assignee: str = "", payload: dict[str, Any] | None = None) -> None:
+    now = utc_now()
+    conn.execute(
+        """
+        INSERT INTO human_queue_items (domain, item_id, queue_type, status, priority, reason, assignee, payload_json, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (domain, item_id, queue_type, status, priority, reason, assignee, dumps(payload or {}), now, now),
+    )
+
+
+def list_domain_items(conn: sqlite3.Connection, domain: str, *, item_type: str | None = None, limit: int = 50, status: str | None = None) -> list[dict[str, Any]]:
+    sql = "SELECT * FROM domain_items WHERE domain = ?"
+    params: list[Any] = [domain]
+    if item_type:
+        sql += " AND item_type = ?"
+        params.append(item_type)
+    if status:
+        sql += " AND status = ?"
+        params.append(status)
+    sql += " ORDER BY COALESCE(score, 0) DESC, primary_date DESC, id DESC LIMIT ?"
+    params.append(limit)
+    return [row_to_dict(row) for row in conn.execute(sql, params).fetchall()]
+
+
+def get_domain_item(conn: sqlite3.Connection, domain: str, item_id: int) -> dict[str, Any] | None:
+    row = conn.execute("SELECT * FROM domain_items WHERE domain = ? AND id = ?", (domain, item_id)).fetchone()
+    if not row:
+        return None
+    item = row_to_dict(row)
+    item["evidence"] = list_evidence(conn, domain, item_id)
+    return item
+
+
+def list_evidence(conn: sqlite3.Connection, domain: str, item_id: int) -> list[dict[str, Any]]:
+    rows = conn.execute("SELECT * FROM evidence_items WHERE domain = ? AND domain_item_id = ? ORDER BY id", (domain, item_id)).fetchall()
+    return [row_to_dict(row) for row in rows]
+
+
+def list_table(conn: sqlite3.Connection, table: str, *, domain: str | None = None, limit: int = 50) -> list[dict[str, Any]]:
+    allowed = {"pipeline_runs", "task_runs", "artifacts", "data_sources", "quality_audits", "human_queue_items"}
+    if table not in allowed:
+        raise ValueError(f"Unsupported table: {table}")
+    if domain and table in {"pipeline_runs", "data_sources", "quality_audits", "human_queue_items"}:
+        rows = conn.execute(f"SELECT * FROM {table} WHERE domain = ? ORDER BY id DESC LIMIT ?", (domain, limit)).fetchall()
+    else:
+        rows = conn.execute(f"SELECT * FROM {table} ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
+    return [row_to_dict(row) for row in rows]
+
+
+def count_by_domain(conn: sqlite3.Connection, domain: str) -> int:
+    row = conn.execute("SELECT COUNT(*) AS count FROM domain_items WHERE domain = ?", (domain,)).fetchone()
+    return int(row["count"])
