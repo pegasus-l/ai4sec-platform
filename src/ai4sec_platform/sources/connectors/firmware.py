@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from ai4sec_platform.sources.connectors.base_file import PlaceholderConnector
+from ai4sec_platform.sources.connectors.base_file import JsonFileConnector
 
 
-class FirmwareConnector(PlaceholderConnector):
+class FirmwareConnector(JsonFileConnector):
     connector_name = "firmware"
     source_type = "firmware"
