@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>AI4SEC TMG 平台</title>
+  <link rel="stylesheet" href="/static/app.css" />
+</head>
+<body>
+  <div class="shell">
+    <header class="topbar">
+      <div class="brand">
+        <div class="logo">AI</div>
+        <div>
+          <h1>AI4SEC TMG 平台</h1>
+          <p>资讯洞察 · 能力洞察 · 威胁洞察 · 漏洞洞察</p>
+        </div>
+      </div>
+      <div class="status" id="systemStatus">连接中...</div>
+    </header>
+
+    <nav class="tabs" id="domainTabs">
+      <button data-domain="news" class="active">资讯洞察</button>
+      <button data-domain="capabilities">能力洞察</button>
+      <button data-domain="threats">威胁洞察</button>
+      <button data-domain="vulnerabilities">漏洞洞察</button>
+      <button data-domain="operations">统一运营</button>
+    </nav>
+
+    <main class="layout">
+      <aside class="sidebar">
+        <section class="panel compact">
+          <h2 id="sideTitle">平台概览</h2>
+          <p id="sideDesc">第一阶段：旧数据导入 + 页面展示；不做采集、不调模型、不写生产。</p>
+        </section>
+        <section class="panel compact">
+          <h3>全局统计</h3>
+          <div id="overviewCards" class="mini-grid"></div>
+        </section>
+        <section class="panel compact">
+          <h3>运营入口</h3>
+          <div class="ops-links">
+            <button data-ops="tasks">采集任务</button>
+            <button data-ops="sources">数据源</button>
+            <button data-ops="rules">规则配置</button>
+            <button data-ops="audits">质量审计</button>
+            <button data-ops="human-queue">人工队列</button>
+          </div>
+        </section>
+      </aside>
+
+      <section class="content">
+        <section class="panel hero">
+          <div>
+            <p class="eyebrow" id="pageEyebrow">DOMAIN</p>
+            <h2 id="pageTitle">加载中...</h2>
+            <p id="pageDesc">正在读取平台 API。</p>
+          </div>
+          <button id="refreshBtn">刷新数据</button>
+        </section>
+
+        <section class="panel">
+          <div class="panel-head">
+            <h3 id="listTitle">今日数据</h3>
+            <span id="listMeta">--</span>
+          </div>
+          <div id="itemList" class="cards"></div>
+        </section>
+      </section>
+    </main>
+  </div>
+
+  <dialog id="detailDialog">
+    <div class="dialog-head">
+      <h3 id="detailTitle">详情</h3>
+      <button id="closeDialog">关闭</button>
+    </div>
+    <div id="detailBody" class="detail-body"></div>
+  </dialog>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

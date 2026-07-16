@@ -12,6 +12,12 @@ PYTHONPATH=src python3 -m ai4sec_platform.cli.import_legacy_samples --reset
 PYTHONPATH=src uvicorn ai4sec_platform.app.main:app --reload --host 127.0.0.1 --port 8000
 ```
 
+浏览器打开：
+
+```text
+http://127.0.0.1:8000/
+```
+
 ## 核心接口
 
 ```text
@@ -40,3 +46,14 @@ AGENTS.md
 - `.env` 被 Git 忽略。
 - 输出数据库位于 `output/ai4sec_platform.db`，也被 Git 忽略。
 - 当前实现 `production_writes=false`，不写生产路径。
+
+
+## 前端页面
+
+当前已内置一个轻量前端工作台，直接由 FastAPI 提供服务。
+
+```text
+http://127.0.0.1:8000/
+```
+
+页面会调用 `/api/dashboard/overview`、四个业务域 `today` 接口和统一运营接口。首次访问前请先运行旧数据导入命令。

@@ -19,3 +19,10 @@ def test_dashboard_overview_shape() -> None:
     data = response.json()
     assert data["production_writes"] is False
     assert {item["domain"] for item in data["domains"]} == {"news", "capabilities", "threats", "vulnerabilities"}
+
+
+def test_frontend_index() -> None:
+    client = TestClient(app)
+    response = client.get("/")
+    assert response.status_code == 200
+    assert "AI4SEC TMG 平台" in response.text
