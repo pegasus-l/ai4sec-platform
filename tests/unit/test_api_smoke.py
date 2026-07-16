@@ -25,4 +25,5 @@ def test_frontend_index() -> None:
     client = TestClient(app)
     response = client.get("/")
     assert response.status_code == 200
-    assert "AI4SEC TMG 平台" in response.text
+    assert "AI4SEC TMG" in response.text
+    assert "顶部任务栏" in response.text

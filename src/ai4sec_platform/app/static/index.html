@@ -1,83 +1,752 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>AI4SEC TMG 平台</title>
-  <link rel="stylesheet" href="/static/app.css" />
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AI4SEC TMG · Demo v3</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #020617;
+      --bg-soft: #0f172a;
+      --panel: rgba(15, 23, 42, 0.86);
+      --panel-2: rgba(15, 23, 42, 0.66);
+      --panel-3: rgba(30, 41, 59, 0.56);
+      --line: rgba(148, 163, 184, 0.18);
+      --line-2: rgba(148, 163, 184, 0.28);
+      --text: #e2e8f0;
+      --muted: #94a3b8;
+      --faint: #64748b;
+      --sky: #38bdf8;
+      --blue: #60a5fa;
+      --green: #34d399;
+      --violet: #a78bfa;
+      --rose: #fb7185;
+      --amber: #f59e0b;
+      --radius: 18px;
+      --shadow: 0 22px 70px rgba(0, 0, 0, 0.34);
+    }
+
+    * { box-sizing: border-box; }
+    html, body { height: 100%; }
+    body {
+      margin: 0;
+      overflow: hidden;
+      color: var(--text);
+      background:
+        radial-gradient(circle at 18% -10%, rgba(56, 189, 248, 0.18), transparent 32%),
+        radial-gradient(circle at 86% 0%, rgba(167, 139, 250, 0.12), transparent 30%),
+        linear-gradient(145deg, #020617 0%, #07111f 52%, #020617 100%);
+      font-family: Inter, "Noto Sans SC", "Microsoft YaHei", system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+    }
+
+    body::before {
+      content: "";
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      background-image:
+        linear-gradient(rgba(148, 163, 184, 0.045) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(148, 163, 184, 0.045) 1px, transparent 1px);
+      background-size: 48px 48px;
+      mask-image: linear-gradient(to bottom, rgba(0,0,0,0.85), rgba(0,0,0,0.18));
+    }
+
+    button, input, select { font: inherit; }
+    button { color: inherit; }
+
+    .shell {
+      position: relative;
+      z-index: 1;
+      height: 100%;
+      display: grid;
+      grid-template-rows: 76px minmax(0, 1fr);
+      gap: 12px;
+      padding: 14px;
+    }
+
+    .global-bar {
+      display: grid;
+      grid-template-columns: 300px minmax(0, 1fr) auto;
+      align-items: center;
+      gap: 14px;
+      padding: 0 16px;
+      border: 1px solid var(--line);
+      border-radius: 22px;
+      background: linear-gradient(135deg, rgba(15, 23, 42, 0.92), rgba(2, 6, 23, 0.74));
+      box-shadow: var(--shadow);
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      min-width: 0;
+    }
+
+    .brand-eye {
+      display: grid;
+      place-items: center;
+      width: 42px;
+      height: 42px;
+      border: 1px solid rgba(56, 189, 248, 0.36);
+      border-radius: 14px;
+      background: rgba(56, 189, 248, 0.08);
+      color: var(--sky);
+      font-weight: 900;
+      letter-spacing: -0.05em;
+      box-shadow: inset 0 0 24px rgba(56, 189, 248, 0.08), 0 0 26px rgba(56, 189, 248, 0.12);
+    }
+
+    .brand-title { min-width: 0; }
+    .brand-title strong { display: block; font-size: 17px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .brand-title span { display: block; margin-top: 4px; color: var(--muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+    .top-tabs {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(128px, 1fr));
+      gap: 9px;
+    }
+
+    .top-tab {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      height: 42px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: rgba(15, 23, 42, 0.54);
+      color: var(--muted);
+      cursor: pointer;
+      transition: transform 0.18s, border-color 0.18s, background 0.18s, color 0.18s;
+    }
+
+    .top-tab:hover { transform: translateY(-1px); color: var(--text); border-color: var(--line-2); }
+    .top-tab.active {
+      color: var(--text);
+      border-color: var(--accent);
+      background: linear-gradient(135deg, var(--accent-bg), rgba(15, 23, 42, 0.78));
+      box-shadow: 0 0 24px var(--accent-glow);
+    }
+
+    .dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: currentColor;
+      box-shadow: 0 0 13px currentColor;
+    }
+
+    .status-pill {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      color: var(--muted);
+      font-size: 12px;
+      white-space: nowrap;
+    }
+
+    .status-pill i {
+      width: 9px;
+      height: 9px;
+      border-radius: 50%;
+      background: var(--green);
+      box-shadow: 0 0 14px var(--green);
+      animation: pulse 1.6s ease-in-out infinite;
+    }
+
+    @keyframes pulse { 50% { opacity: 0.38; transform: scale(0.75); } }
+
+    .main {
+      min-height: 0;
+      display: grid;
+      grid-template-columns: 286px minmax(0, 1fr);
+      gap: 12px;
+    }
+
+    .sidebar, .content {
+      min-height: 0;
+      overflow: hidden;
+      border: 1px solid var(--line);
+      border-radius: 22px;
+      background: linear-gradient(165deg, rgba(15, 23, 42, 0.9), rgba(2, 6, 23, 0.7));
+      box-shadow: var(--shadow);
+    }
+
+    .sidebar {
+      display: grid;
+      grid-template-rows: auto auto minmax(0, 1fr) auto;
+    }
+
+    .sidebar-head {
+      padding: 18px 16px 15px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .label {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      color: var(--sky);
+      font-size: 11px;
+      font-weight: 800;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+    }
+
+    .sidebar-head h2 { margin: 10px 0 0; font-size: 19px; }
+    .sidebar-head p { margin: 8px 0 0; color: var(--muted); font-size: 12px; line-height: 1.6; }
+
+    .domain-switcher {
+      display: grid;
+      gap: 8px;
+      padding: 12px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .domain-btn {
+      width: 100%;
+      display: grid;
+      grid-template-columns: 34px 1fr auto;
+      align-items: center;
+      gap: 9px;
+      padding: 9px;
+      border: 1px solid transparent;
+      border-radius: 13px;
+      background: transparent;
+      color: var(--muted);
+      text-align: left;
+      cursor: pointer;
+      transition: background 0.18s, border-color 0.18s, color 0.18s;
+    }
+
+    .domain-btn:hover, .domain-btn.active {
+      color: var(--text);
+      border-color: rgba(56, 189, 248, 0.34);
+      background: rgba(56, 189, 248, 0.08);
+    }
+
+    .domain-icon {
+      display: grid;
+      place-items: center;
+      width: 34px;
+      height: 34px;
+      border-radius: 12px;
+      border: 1px solid rgba(56, 189, 248, 0.24);
+      background: rgba(56, 189, 248, 0.08);
+      color: var(--sky);
+      font-weight: 900;
+      font-size: 12px;
+    }
+
+    .domain-main strong { display: block; font-size: 13px; }
+    .domain-main span { display: block; margin-top: 3px; color: var(--faint); font-size: 11px; line-height: 1.3; }
+    .domain-tag { color: var(--sky); font-size: 11px; font-weight: 800; }
+
+    .nav-scroll {
+      overflow-y: auto;
+      padding: 12px;
+    }
+
+    .nav-scroll::-webkit-scrollbar, .content-body::-webkit-scrollbar { width: 7px; }
+    .nav-scroll::-webkit-scrollbar-thumb, .content-body::-webkit-scrollbar-thumb { background: rgba(148, 163, 184, 0.22); border-radius: 999px; }
+
+    .nav-group + .nav-group { margin-top: 17px; }
+    .group-title { margin: 0 0 8px 5px; color: var(--faint); font-size: 11px; font-weight: 900; letter-spacing: 0.15em; }
+
+    .nav-item {
+      width: 100%;
+      margin-top: 7px;
+      padding: 10px 10px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      border: 1px solid transparent;
+      border-radius: 12px;
+      background: rgba(15, 23, 42, 0.34);
+      color: var(--muted);
+      text-align: left;
+      cursor: pointer;
+      transition: background 0.18s, border-color 0.18s, color 0.18s, transform 0.18s;
+    }
+
+    .nav-item:hover, .nav-item.active {
+      color: var(--text);
+      border-color: rgba(56, 189, 248, 0.28);
+      background: rgba(56, 189, 248, 0.08);
+    }
+
+    .nav-item.active { transform: translateX(2px); }
+    .nav-left { display: flex; align-items: center; gap: 9px; min-width: 0; }
+    .nav-ico { color: var(--sky); width: 18px; text-align: center; }
+    .nav-text { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .nav-meta { color: var(--faint); font-size: 10px; }
+
+    .sidebar-note {
+      margin: 0 12px 12px;
+      padding: 11px;
+      border: 1px dashed rgba(56, 189, 248, 0.28);
+      border-radius: 14px;
+      background: rgba(56, 189, 248, 0.06);
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.6;
+    }
+
+    .content {
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr);
+    }
+
+    .content-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 18px;
+      padding: 18px 20px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .crumb { display: flex; align-items: center; gap: 7px; margin-bottom: 7px; color: var(--muted); font-size: 12px; }
+    .crumb b { color: var(--sky); }
+    .title h1 { margin: 0; font-size: clamp(24px, 2.2vw, 34px); letter-spacing: -0.035em; }
+    .title p { margin: 8px 0 0; color: var(--muted); font-size: 13px; line-height: 1.55; }
+
+    .tools { display: flex; align-items: center; justify-content: flex-end; gap: 9px; flex-wrap: wrap; }
+    .search {
+      width: min(34vw, 360px);
+      min-width: 230px;
+      height: 39px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 0 12px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: rgba(2, 6, 23, 0.38);
+      color: var(--faint);
+    }
+    .search input { width: 100%; border: 0; outline: 0; background: transparent; color: var(--text); }
+    .chip { display: inline-flex; align-items: center; gap: 7px; height: 34px; padding: 0 11px; border: 1px solid var(--line); border-radius: 999px; background: rgba(15, 23, 42, 0.42); color: var(--muted); font-size: 12px; white-space: nowrap; }
+    .chip.sky { color: var(--sky); border-color: rgba(56, 189, 248, 0.32); }
+    .chip.green { color: var(--green); border-color: rgba(52, 211, 153, 0.32); }
+
+    .content-body {
+      overflow-y: auto;
+      padding: 18px 20px 22px;
+    }
+
+    .metrics {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(128px, 1fr));
+      gap: 12px;
+      margin-bottom: 14px;
+    }
+
+    .metric {
+      min-height: 104px;
+      padding: 14px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background:
+        radial-gradient(circle at 88% 18%, var(--metric-glow), transparent 34%),
+        linear-gradient(145deg, rgba(15, 23, 42, 0.78), rgba(2, 6, 23, 0.42));
+    }
+
+    .metric span { display: block; color: var(--muted); font-size: 12px; }
+    .metric strong { display: block; margin-top: 10px; font-size: 29px; letter-spacing: -0.045em; }
+    .metric small { display: block; margin-top: 4px; color: var(--faint); font-size: 12px; }
+
+    .grid-2 { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(310px, 0.65fr); gap: 14px; align-items: start; }
+    .panel { border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel-2); overflow: hidden; }
+    .panel-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 15px; border-bottom: 1px solid var(--line); }
+    .panel-head h3 { margin: 0; font-size: 15px; }
+    .panel-head span { color: var(--faint); font-size: 12px; }
+    .panel-body { padding: 15px; }
+
+    .asis-list, .timeline, .bars { display: grid; gap: 10px; }
+    .asis-card {
+      display: grid;
+      grid-template-columns: 40px 1fr auto;
+      gap: 12px;
+      align-items: center;
+      padding: 12px;
+      border: 1px solid rgba(148, 163, 184, 0.15);
+      border-radius: 14px;
+      background: rgba(2, 6, 23, 0.32);
+    }
+    .rank { display: grid; place-items: center; width: 40px; height: 40px; border-radius: 13px; background: rgba(56, 189, 248, 0.1); color: var(--sky); font-weight: 900; font-size: 13px; }
+    .asis-card h4 { margin: 0; font-size: 14px; line-height: 1.4; }
+    .asis-card p { margin: 5px 0 0; color: var(--muted); font-size: 12px; line-height: 1.55; }
+    .badges { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+    .badge { padding: 3px 7px; border: 1px solid rgba(148, 163, 184, 0.18); border-radius: 999px; color: var(--muted); font-size: 11px; }
+    .badge.sky { color: var(--sky); border-color: rgba(56, 189, 248, 0.25); }
+    .badge.amber { color: var(--amber); border-color: rgba(245, 158, 11, 0.25); }
+    .score { color: var(--green); font-weight: 900; }
+
+    .detail-box {
+      min-height: 250px;
+      padding: 17px;
+      border: 1px solid rgba(56, 189, 248, 0.22);
+      border-radius: 17px;
+      background: radial-gradient(circle at 86% 0%, rgba(56, 189, 248, 0.16), transparent 31%), rgba(2, 6, 23, 0.32);
+    }
+    .detail-box em { display: block; color: var(--amber); font-style: normal; font-size: 12px; font-weight: 900; letter-spacing: 0.12em; }
+    .detail-box h2 { margin: 12px 0 0; font-size: 22px; line-height: 1.28; }
+    .detail-box p { margin: 12px 0 0; color: var(--muted); font-size: 13px; line-height: 1.75; }
+
+    .filter-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+    .filter-card { min-height: 112px; padding: 13px; border: 1px solid rgba(148, 163, 184, 0.15); border-radius: 15px; background: rgba(2, 6, 23, 0.28); }
+    .filter-card b { display: block; font-size: 14px; }
+    .filter-card span { display: block; margin-top: 8px; color: var(--muted); font-size: 12px; line-height: 1.5; }
+
+    .bar-row { display: grid; grid-template-columns: 95px 1fr 42px; align-items: center; gap: 10px; color: var(--muted); font-size: 12px; }
+    .bar-row b { color: var(--text); overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+    .track { height: 9px; border-radius: 999px; background: rgba(148, 163, 184, 0.13); overflow: hidden; }
+    .fill { height: 100%; border-radius: inherit; background: linear-gradient(90deg, var(--sky), var(--violet)); }
+
+    .kg {
+      position: relative;
+      min-height: 360px;
+      border-radius: 17px;
+      background:
+        radial-gradient(circle at 20% 26%, rgba(56, 189, 248, 0.18), transparent 18%),
+        radial-gradient(circle at 54% 44%, rgba(167, 139, 250, 0.2), transparent 18%),
+        radial-gradient(circle at 72% 72%, rgba(52, 211, 153, 0.16), transparent 16%),
+        rgba(2, 6, 23, 0.28);
+      overflow: hidden;
+    }
+    .kg svg { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0.72; }
+    .node { position: absolute; min-width: 84px; padding: 9px 12px; border: 1px solid rgba(56, 189, 248, 0.3); border-radius: 999px; background: rgba(15, 23, 42, 0.86); color: var(--sky); font-size: 12px; font-weight: 800; text-align: center; }
+    .n1 { left: 10%; top: 22%; } .n2 { left: 43%; top: 38%; color: var(--violet); border-color: rgba(167, 139, 250, 0.38); } .n3 { left: 70%; top: 20%; color: var(--amber); border-color: rgba(245, 158, 11, 0.36); } .n4 { left: 66%; top: 70%; color: var(--green); border-color: rgba(52, 211, 153, 0.36); } .n5 { left: 20%; top: 68%; color: var(--rose); border-color: rgba(251, 113, 133, 0.36); }
+
+    .time-row { position: relative; padding-left: 16px; color: var(--muted); font-size: 12px; line-height: 1.55; }
+    .time-row::before { content: ""; position: absolute; left: 0; top: 5px; width: 8px; height: 8px; border-radius: 50%; background: var(--sky); box-shadow: 0 0 12px var(--sky); }
+    .time-row b { display: block; color: var(--text); font-size: 13px; margin-bottom: 3px; }
+
+    .note { margin-top: 14px; padding: 12px 13px; border: 1px dashed rgba(245, 158, 11, 0.34); border-radius: 14px; background: rgba(245, 158, 11, 0.07); color: #fcd34d; font-size: 12px; line-height: 1.65; }
+
+    @media (max-width: 1180px) {
+      body { overflow: auto; }
+      .shell { height: auto; min-height: 100%; }
+      .global-bar { grid-template-columns: 1fr; padding: 14px 16px; }
+      .status-pill { display: none; }
+      .main { grid-template-columns: 260px minmax(0, 1fr); }
+      .metrics { grid-template-columns: repeat(2, 1fr); }
+      .grid-2 { grid-template-columns: 1fr; }
+    }
+
+    @media (max-width: 860px) {
+      .main { grid-template-columns: 1fr; }
+      .top-tabs { grid-template-columns: repeat(2, 1fr); }
+      .content-head { flex-direction: column; align-items: flex-start; }
+      .tools { justify-content: flex-start; }
+      .search { width: 100%; }
+      .filter-grid { grid-template-columns: 1fr; }
+    }
+  </style>
 </head>
 <body>
   <div class="shell">
-    <header class="topbar">
+    <header class="global-bar">
       <div class="brand">
-        <div class="logo">AI</div>
-        <div>
-          <h1>AI4SEC TMG 平台</h1>
-          <p>资讯洞察 · 能力洞察 · 威胁洞察 · 漏洞洞察</p>
+        <div class="brand-eye">AI</div>
+        <div class="brand-title">
+          <strong>AI4SEC TMG</strong>
+          <span>Threat · Material · Capability Gateway</span>
         </div>
       </div>
-      <div class="status" id="systemStatus">连接中...</div>
+      <nav class="top-tabs" id="topTabs" aria-label="顶部任务栏"></nav>
+      <div class="status-pill"><i></i><span>AI4SEC Platform · 已连接本地 API</span></div>
     </header>
 
-    <nav class="tabs" id="domainTabs">
-      <button data-domain="news" class="active">资讯洞察</button>
-      <button data-domain="capabilities">能力洞察</button>
-      <button data-domain="threats">威胁洞察</button>
-      <button data-domain="vulnerabilities">漏洞洞察</button>
-      <button data-domain="operations">统一运营</button>
-    </nav>
-
-    <main class="layout">
+    <main class="main">
       <aside class="sidebar">
-        <section class="panel compact">
-          <h2 id="sideTitle">平台概览</h2>
-          <p id="sideDesc">第一阶段：旧数据导入 + 页面展示；不做采集、不调模型、不写生产。</p>
-        </section>
-        <section class="panel compact">
-          <h3>全局统计</h3>
-          <div id="overviewCards" class="mini-grid"></div>
-        </section>
-        <section class="panel compact">
-          <h3>运营入口</h3>
-          <div class="ops-links">
-            <button data-ops="tasks">采集任务</button>
-            <button data-ops="sources">数据源</button>
-            <button data-ops="rules">规则配置</button>
-            <button data-ops="audits">质量审计</button>
-            <button data-ops="human-queue">人工队列</button>
-          </div>
-        </section>
+        <div class="sidebar-head">
+          <div class="label"><span class="dot"></span><span id="sideLabel">资讯洞察</span></div>
+          <h2 id="sideTitle">ASIS 内容域</h2>
+          <p id="sideDesc">资讯洞察只在外层新增任务栏和 AI for SEC / AI SEC / AI 切换，阅读细分保持原 ASIS 一致。</p>
+        </div>
+        <div class="domain-switcher" id="domainSwitcher"></div>
+        <div class="nav-scroll" id="sideNav"></div>
+        <div class="sidebar-note" id="sideNote">原 ASIS 阅读菜单：精选、全部动态、日报、论文、阅读清单、专题时间线。</div>
       </aside>
 
       <section class="content">
-        <section class="panel hero">
-          <div>
-            <p class="eyebrow" id="pageEyebrow">DOMAIN</p>
-            <h2 id="pageTitle">加载中...</h2>
-            <p id="pageDesc">正在读取平台 API。</p>
+        <div class="content-head">
+          <div class="title">
+            <div class="crumb"><span>任务栏</span><span>/</span><b id="crumbTask">资讯洞察</b><span>/</span><span id="crumbDomain">AI for SEC</span><span>/</span><span id="crumbNav">全部动态</span></div>
+            <h1 id="pageTitle">AI for SEC · 全部动态</h1>
+            <p id="pageDesc">演示在不大改原 ASIS 内容的前提下，增加统一顶部任务栏和分域侧边导航。</p>
           </div>
-          <button id="refreshBtn">刷新数据</button>
-        </section>
-
-        <section class="panel">
-          <div class="panel-head">
-            <h3 id="listTitle">今日数据</h3>
-            <span id="listMeta">--</span>
+          <div class="tools">
+            <label class="search"><span>⌕</span><input id="searchInput" placeholder="搜索标题 / 技术点 / CVE / 仓库" /></label>
+            <span class="chip sky" id="modeChip">资讯洞察</span>
+            <span class="chip green">Shadow Demo</span>
           </div>
-          <div id="itemList" class="cards"></div>
-        </section>
+        </div>
+        <div class="content-body" id="contentBody"></div>
       </section>
     </main>
   </div>
 
-  <dialog id="detailDialog">
-    <div class="dialog-head">
-      <h3 id="detailTitle">详情</h3>
-      <button id="closeDialog">关闭</button>
-    </div>
-    <div id="detailBody" class="detail-body"></div>
-  </dialog>
+  <script>
+    const tasks = [
+      { id: 'news', label: '资讯洞察', hint: '原 ASIS 内容', accent: '#38bdf8', bg: 'rgba(56,189,248,0.14)', glow: 'rgba(56,189,248,0.24)' },
+      { id: 'capability', label: '能力洞察', hint: '前沿项目能力化与复现验证', accent: '#34d399', bg: 'rgba(52,211,153,0.13)', glow: 'rgba(52,211,153,0.22)' },
+      { id: 'threat', label: '威胁洞察', hint: '华为开源仓库风险与挖洞目标', accent: '#a78bfa', bg: 'rgba(167,139,250,0.13)', glow: 'rgba(167,139,250,0.22)' },
+      { id: 'vuln', label: '漏洞洞察', hint: '漏洞知识工程与以洞找洞素材', accent: '#fb7185', bg: 'rgba(251,113,133,0.12)', glow: 'rgba(251,113,133,0.20)' },
+    ];
+    const asisDomains = [
+      { id: 'ai-for-sec', label: 'AI for SEC', desc: '学术 / GitHub / 日报链路', tag: 'SEC', icon: 'A/S' },
+      { id: 'ai-sec', label: 'AI SEC', desc: 'AI 安全产业与攻防资讯', tag: 'AIS', icon: 'SEC' },
+      { id: 'ai', label: 'AI', desc: '通用 AI 技术与生态资讯', tag: 'AI', icon: 'AI' },
+    ];
+    const asisReading = [
+      ['精选', 'featured', 'Radar'], ['全部动态', 'all', 'Feed'], ['日报', 'daily', 'Daily'],
+      ['论文', 'papers', 'Paper'], ['阅读清单', 'reading-list', 'Queue'], ['专题时间线', 'topics', 'Topic'],
+    ];
+    const unifiedOps = [
+      ['采集任务', 'ops-tasks', 'Jobs'], ['数据源', 'ops-sources', 'Sources'], ['规则配置', 'ops-rules', 'Rules'],
+      ['质量审计', 'ops-quality', 'QA'], ['人工队列', 'ops-queue', 'Queue'],
+    ];
+    const asisSystem = [['更新日志', 'changelog', 'Log'], ['需求收集', 'requirements', 'Req'], ['退出', 'logout', 'Exit']];
+    const navModel = {
+      news: () => [{ title: '阅读', items: asisReading }, { title: '运营', items: unifiedOps }, { title: '系统', items: asisSystem }],
+      capability: () => [{ title: '前沿项目能力化', items: [['今日能力', 'today-capabilities', 'Today'], ['能力库', 'capability-library', 'Tech'], ['复现验证', 'repro-validation', 'Repro'], ['能力转化', 'capability-conversion', 'Track']] }, { title: '运营', items: unifiedOps }, { title: '系统', items: asisSystem }],
+      threat: () => [{ title: '开源威胁洞察', items: [['今日关注', 'today', 'Today'], ['目标库', 'targets', 'Target'], ['跟踪队列', 'tracking', 'Track']] }, { title: '运营', items: unifiedOps }, { title: '系统', items: asisSystem }],
+      vuln: () => [{ title: '漏洞知识洞察', items: [['今日素材', 'today-materials', 'Today'], ['素材库', 'materials', 'View'], ['知识提取', 'knowledge-extract', 'Text'], ['迁移队列', 'migration', 'Track']] }, { title: '运营', items: unifiedOps }, { title: '系统', items: asisSystem }],
+    };
+    const iconMap = { Radar: '⌁', Feed: '☷', Daily: '◷', Paper: '□', Queue: '▤', Topic: '◎', Jobs: '↻', Sources: '◇', Rules: '≋', QA: '◈', Log: '↧', Req: '+', Exit: '↪', Tech: '⌬', Repro: '</>', Today: '★', Target: '◎', Track: '▤', View: '◫', Text: 'T' };
+    const backendDomain = { news: 'news', capability: 'capabilities', threat: 'threats', vuln: 'vulnerabilities' };
+    const state = { task: 'news', domain: 'ai-for-sec', nav: 'all', overview: null };
+    const $ = (id) => document.getElementById(id);
+    const task = () => tasks.find((item) => item.id === state.task);
+    const domain = () => asisDomains.find((item) => item.id === state.domain) || asisDomains[0];
+    const isDomainTask = () => ['news', 'capability'].includes(state.task);
 
-  <script src="/static/app.js"></script>
+    async function api(path) {
+      const res = await fetch(path);
+      if (!res.ok) throw new Error(`${path} ${res.status}`);
+      return res.json();
+    }
+
+    async function loadOverview() {
+      state.overview = await api('/api/dashboard/overview');
+    }
+
+    function renderTopTabs() {
+      $('topTabs').innerHTML = tasks.map((item) => `
+        <button class="top-tab ${state.task === item.id ? 'active' : ''}" data-task="${item.id}" style="--accent:${item.accent};--accent-bg:${item.bg};--accent-glow:${item.glow}">
+          <span class="dot"></span><span>${item.label}</span>
+        </button>
+      `).join('');
+      document.querySelectorAll('[data-task]').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          state.task = btn.dataset.task;
+          state.nav = defaultNav(state.task);
+          renderAll();
+        });
+      });
+    }
+
+    function renderDomainSwitcher() {
+      if (!isDomainTask()) {
+        const active = task();
+        $('domainSwitcher').innerHTML = `<button class="domain-btn active" type="button"><span class="domain-icon">${state.task === 'threat' ? 'OS' : 'VU'}</span><span class="domain-main"><strong>${active.label}</strong><span>${active.hint}</span></span><span class="domain-tag">OPS</span></button>`;
+        return;
+      }
+      $('domainSwitcher').innerHTML = asisDomains.map((item) => `
+        <button class="domain-btn ${state.domain === item.id ? 'active' : ''}" data-domain="${item.id}" type="button">
+          <span class="domain-icon">${item.icon}</span><span class="domain-main"><strong>${item.label}</strong><span>${state.task === 'news' ? item.desc : capabilityDomainDesc(item.id)}</span></span><span class="domain-tag">${item.tag}</span>
+        </button>
+      `).join('');
+      document.querySelectorAll('[data-domain]').forEach((btn) => btn.addEventListener('click', () => { state.domain = btn.dataset.domain; renderAll(false); }));
+    }
+
+    function capabilityDomainDesc(id) {
+      return { 'ai-for-sec': 'AI-for-Sec 链路能力看板', 'ai-sec': 'AI 安全资讯运营能力', 'ai': '通用 AI 资讯与技术能力' }[id] || '';
+    }
+
+    function defaultNav(taskId) {
+      return { news: 'all', capability: 'today-capabilities', threat: 'today', vuln: 'today-materials' }[taskId];
+    }
+
+    function currentGroups() { return navModel[state.task](); }
+    function navLabel() {
+      for (const group of currentGroups()) {
+        const found = group.items.find((item) => item[1] === state.nav);
+        if (found) return found[0];
+      }
+      return '全部动态';
+    }
+
+    function renderSideNav() {
+      $('sideNav').innerHTML = currentGroups().map((group) => `
+        <div class="nav-group"><div class="group-title">${group.title}</div>${group.items.map(([label, id, meta]) => `
+          <button class="nav-item ${state.nav === id ? 'active' : ''}" data-nav="${id}" type="button"><span class="nav-left"><span class="nav-ico">${iconMap[meta] || '•'}</span><span class="nav-text">${label}</span></span><span class="nav-meta">${meta}</span></button>
+        `).join('')}</div>
+      `).join('');
+      document.querySelectorAll('[data-nav]').forEach((btn) => btn.addEventListener('click', () => { state.nav = btn.dataset.nav; renderAll(false); }));
+    }
+
+    function renderChrome() {
+      const activeTask = task();
+      const activeDomain = isDomainTask() ? domain().label : activeTask.hint;
+      $('sideLabel').textContent = activeTask.label;
+      $('sideTitle').textContent = sideTitle();
+      $('sideDesc').textContent = sideDesc();
+      $('sideNote').textContent = sideNote();
+      $('crumbTask').textContent = activeTask.label;
+      $('crumbDomain').textContent = activeDomain;
+      $('crumbNav').textContent = navLabel();
+      $('pageTitle').textContent = `${activeDomain} · ${navLabel()}`;
+      $('pageDesc').textContent = pageDesc();
+      $('modeChip').textContent = activeTask.label;
+    }
+
+    function sideTitle() {
+      return { news: 'ASIS 内容域', capability: '能力域与运营', threat: '开源目标与运营', vuln: '素材域与运营' }[state.task];
+    }
+    function sideDesc() {
+      return {
+        news: '资讯洞察按 AI for SEC / AI SEC / AI 分域，阅读菜单保持 ASIS 风格。',
+        capability: '能力洞察面向前沿项目能力化、复现验证和能力转化。',
+        threat: '威胁洞察面向华为开源仓库、CVE、固件和攻击面风险。',
+        vuln: '漏洞洞察面向漏洞素材、知识提取和迁移挖洞队列。',
+      }[state.task];
+    }
+    function sideNote() {
+      if (state.task === 'news') return '原 ASIS 阅读菜单：精选、全部动态、日报、论文、阅读清单、专题时间线。';
+      return '运营入口统一为：采集任务、数据源、规则配置、质量审计、人工队列。';
+    }
+    function pageDesc() {
+      return {
+        news: '当前接入 AI-for-Sec selected_entries 旧数据，展示资讯卡片和审阅证据。',
+        capability: '当前从高分且有代码地址的资讯条目生成能力候选，复现状态为第一阶段占位。',
+        threat: '当前接入华为 repo 攻击面评分结果，展示目标库和风险证据。',
+        vuln: '当前接入漏洞素材旧报告，展示高相关素材、关键发现和知识提取候选。',
+      }[state.task];
+    }
+
+    async function renderContent() {
+      if (state.nav.startsWith('ops-')) return renderOps();
+      if (['changelog', 'requirements', 'logout'].includes(state.nav)) return renderSystem();
+      if (state.task === 'news') return renderNews();
+      if (state.task === 'capability') return renderCapability();
+      if (state.task === 'threat') return renderThreat();
+      return renderVuln();
+    }
+
+    async function fetchDomainItems(taskId, navId) {
+      const endpoints = {
+        news: { all: '/api/news/items', featured: '/api/news/today', daily: '/api/news/today', papers: '/api/news/items', 'reading-list': '/api/news/today', topics: '/api/news/today' },
+        capability: { 'today-capabilities': '/api/capabilities/today', 'capability-library': '/api/capabilities/items', 'repro-validation': '/api/capabilities/repro-runs', 'capability-conversion': '/api/capabilities/conversion-queue' },
+        threat: { today: '/api/threats/today', targets: '/api/threats/targets', tracking: '/api/threats/tracking-queue' },
+        vuln: { 'today-materials': '/api/vulnerabilities/today', materials: '/api/vulnerabilities/materials', 'knowledge-extract': '/api/vulnerabilities/knowledge', migration: '/api/vulnerabilities/migration-queue' },
+      };
+      const path = endpoints[taskId][navId] || Object.values(endpoints[taskId])[0];
+      const data = await api(path);
+      return Array.isArray(data.items) ? data.items : [];
+    }
+
+    async function renderNews() {
+      const items = await fetchDomainItems('news', state.nav);
+      const sources = await api('/api/news/sources');
+      $('contentBody').innerHTML = `${metricGrid(metricsFor('news', [['ASIS 信源', sources.items.length, 'legacy sources', 'rgba(56,189,248,0.2)']]))}
+        <div class="grid-2"><section class="panel"><div class="panel-head"><h3>ASIS 风格资讯流</h3><span>${items.length} 条 · ${navLabel()}</span></div><div class="panel-body"><div class="asis-list">${itemCards(items, 'news')}</div><div class="note">复用 v3 demo 的 ASIS 信息架构，数据来自 AI-for-Sec 旧 selected_entries 导入。</div></div></section>${sidePanel('资讯详情策略', '原 ASIS 作为内容核心，只在外层增加统一任务栏。点击卡片可查看旧审阅意见和原始字段。')}</div>`;
+      bindDetailCards('news');
+    }
+
+    async function renderCapability() {
+      const items = await fetchDomainItems('capability', state.nav);
+      $('contentBody').innerHTML = `${metricGrid(metricsFor('capabilities'))}<div class="grid-2"><section class="panel"><div class="panel-head"><h3>${navLabel()}工作台</h3><span>资讯输入 → 技术评估 → 复现占位 → 能力沉淀</span></div><div class="panel-body"><div class="asis-list">${itemCards(items, 'capabilities')}</div><div class="note">第一阶段不触发复现 runner，只展示候选和待复现状态。</div></div></section>${sidePanel('能力转化看板', '能力详情从今日能力、能力库、复现验证或能力转化入口进入。')}</div>`;
+      bindDetailCards('capabilities');
+    }
+
+    async function renderThreat() {
+      const items = await fetchDomainItems('threat', state.nav);
+      $('contentBody').innerHTML = `${metricGrid(metricsFor('threats'))}<div class="grid-2"><section class="panel"><div class="panel-head"><h3>${navLabel()}工作台</h3><span>发现目标 → 判断风险 → 查看证据 → 加入跟踪</span></div><div class="panel-body"><div class="asis-list">${itemCards(items, 'threats')}</div><div class="note">当前优先目标库列表和详情，图谱后续再接。</div></div></section>${sidePanel('目标库视图切换', '图谱不丢，但服务于找目标；第一阶段先做列表、详情和跟踪队列。')}</div>`;
+      bindDetailCards('threats');
+    }
+
+    async function renderVuln() {
+      const items = await fetchDomainItems('vuln', state.nav);
+      $('contentBody').innerHTML = `${metricGrid(metricsFor('vulnerabilities'))}<div class="grid-2"><section class="panel"><div class="panel-head"><h3>${navLabel()}工作台</h3><span>外部素材 → 漏洞知识 → 迁移挖洞</span></div><div class="panel-body"><div class="asis-list">${itemCards(items, 'vulnerabilities')}</div><div class="note">漏洞洞察不是文章展示页，而是漏洞知识提取与迁移挖洞工作台。</div></div></section>${sidePanel('知识工程视图', '素材详情展示相关性理由、关键发现、知识字段和迁移操作入口。')}</div>`;
+      bindDetailCards('vulnerabilities');
+    }
+
+    async function renderOps() {
+      const map = { 'ops-tasks': ['/api/operations/tasks', '采集任务'], 'ops-sources': ['/api/operations/sources', '数据源'], 'ops-rules': ['/api/operations/rules', '规则配置'], 'ops-quality': ['/api/operations/audits', '质量审计'], 'ops-queue': ['/api/operations/human-queue', '人工队列'] };
+      const [path, label] = map[state.nav];
+      const data = await api(`${path}?domain=${backendDomain[state.task] || ''}`);
+      const items = Array.isArray(data.items) ? data.items : Object.entries(data.items || {}).flatMap(([domain, rules]) => rules.map(rule => ({ domain, ...rule })));
+      $('contentBody').innerHTML = `${metricGrid([['运营入口', '5', '四个洞察域统一', 'rgba(56,189,248,0.2)'], ['当前域', task().label, '内容按域变化', 'rgba(167,139,250,0.18)'], ['当前页面', label, '统一运营模型', 'rgba(52,211,153,0.18)'], ['记录数', String(items.length), 'API 返回', 'rgba(245,158,11,0.2)']])}<section class="panel"><div class="panel-head"><h3>${task().label} · ${label}</h3><span>同一入口，不同域内容</span></div><div class="panel-body"><div class="filter-grid">${items.map(opsCard).join('')}</div><div class="note">这五个名字在资讯、能力、开源威胁、漏洞四个域保持一致；用户不用重新学习每个域的运营菜单。</div></div></section>`;
+    }
+
+    function renderSystem() {
+      $('contentBody').innerHTML = `${metricGrid([['系统页面', '全局', '四个洞察域共用', 'rgba(56,189,248,0.2)'], ['当前项', navLabel(), '占位展示', 'rgba(167,139,250,0.18)'], ['状态', 'Shadow', '不写生产', 'rgba(52,211,153,0.18)'], ['来源', 'AI4SEC', '本地后端', 'rgba(245,158,11,0.2)']])}<section class="panel"><div class="panel-head"><h3>${navLabel()}</h3><span>System</span></div><div class="panel-body"><div class="detail-box"><em>第一阶段</em><h2>系统页暂作占位</h2><p>当前重点是四域数据展示和统一运营入口，系统页后续再接入更新日志、需求收集和退出逻辑。</p></div></div></section>`;
+    }
+
+    function metricsFor(domainId, extras = []) {
+      const card = (state.overview?.domains || []).find(d => d.domain === domainId) || { item_count: 0, queue_count: 0, audit_status: 'unknown' };
+      const labels = { news: ['今日资讯', 'AI-for-Sec 条目'], capabilities: ['今日能力', '待复现候选'], threats: ['今日关注', '高风险目标'], vulnerabilities: ['今日素材', '高相关素材'] };
+      return [[labels[domainId][0], String(card.item_count), labels[domainId][1], 'rgba(56,189,248,0.2)'], ['人工队列', String(card.queue_count), '待处理', 'rgba(245,158,11,0.2)'], ['审计状态', card.audit_status, '质量审计', 'rgba(52,211,153,0.18)'], ...extras].slice(0, 4);
+    }
+
+    function metricGrid(items) {
+      return `<div class="metrics">${items.map(([label, value, meta, bg]) => `<div class="metric" style="--metric-bg:${bg}"><span>${escapeHTML(label)}</span><strong>${escapeHTML(value)}</strong><em>${escapeHTML(meta)}</em></div>`).join('')}</div>`;
+    }
+
+    function itemCards(items, domainId) {
+      if (!items.length) return `<div class="empty">暂无数据，请先运行旧数据导入。</div>`;
+      return items.slice(0, 12).map((item, index) => {
+        const score = item.score === null || item.score === undefined ? '--' : (Number(item.score) > 1 ? Number(item.score).toFixed(0) : Number(item.score).toFixed(2));
+        return `<article class="asis-card clickable" data-detail-domain="${domainId}" data-detail-id="${item.id}"><div class="rank">${String(index + 1).padStart(2, '0')}</div><div><h4>${escapeHTML(item.title)}</h4><p>${escapeHTML(item.summary || '')}</p><div class="badges"><span class="badge sky">${escapeHTML(item.status || 'active')}</span><span class="badge amber">评分 ${score}</span>${(item.tags || []).slice(0, 2).map(t => `<span class="badge">${escapeHTML(t)}</span>`).join('')}</div></div><div class="score">${score}</div></article>`;
+      }).join('');
+    }
+
+    function opsCard(item) {
+      const title = item.pipeline_name || item.name || item.audit_type || item.queue_type || item.step_name || item.domain || '运营项';
+      const desc = item.summary || item.reason || item.description || item.status || JSON.stringify(item.summary || item.details || item.payload || item.metrics || {}).slice(0, 120);
+      return `<div class="filter-card"><b>${escapeHTML(title)}</b><span>${escapeHTML(desc || '')}</span></div>`;
+    }
+
+    function sidePanel(title, content) {
+      return `<aside class="panel"><div class="panel-head"><h3>${escapeHTML(title)}</h3><span>AI4SEC Platform</span></div><div class="panel-body"><div class="detail-box"><em>当前策略</em><h2>${escapeHTML(title)}</h2><p>${escapeHTML(content)}</p></div><div class="timeline" style="margin-top:14px"><div class="time-row"><b>第一阶段</b>旧数据导入 + 页面展示</div><div class="time-row"><b>后续阶段</b>采集 connector、模型重跑、复现执行和生产替换</div></div></div></aside>`;
+    }
+
+    function bindDetailCards(domainId) {
+      document.querySelectorAll('[data-detail-id]').forEach(el => el.addEventListener('click', async () => {
+        const id = Number(el.dataset.detailId);
+        const detailPath = { news: `/api/news/items/${id}`, capabilities: `/api/capabilities/items/${id}`, threats: `/api/threats/targets/${id}`, vulnerabilities: `/api/vulnerabilities/materials/${id}` }[domainId];
+        const item = await api(detailPath);
+        $('contentBody').insertAdjacentHTML('afterbegin', `<section class="panel" id="detailPanel"><div class="panel-head"><h3>${escapeHTML(item.title)}</h3><span>详情</span></div><div class="panel-body"><div class="detail-box"><em>${escapeHTML(item.status || '')}</em><h2>${escapeHTML(item.title)}</h2><p>${escapeHTML(item.summary || '')}</p></div><div class="timeline" style="margin-top:14px">${(item.evidence || []).map(ev => `<div class="time-row"><b>${escapeHTML(ev.title || ev.evidence_type)}</b>${escapeHTML(ev.content || '').slice(0, 500)}</div>`).join('')}</div></div></section>`);
+        document.getElementById('detailPanel')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }));
+    }
+
+    function escapeHTML(value) {
+      return String(value ?? '').replace(/[&<>'"]/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[ch]));
+    }
+
+    async function renderAll(rebuild = true) {
+      try {
+        if (!state.overview) await loadOverview();
+        renderTopTabs();
+        renderDomainSwitcher();
+        renderSideNav();
+        renderChrome();
+        await renderContent();
+      } catch (error) {
+        $('contentBody').innerHTML = `<section class="panel"><div class="panel-head"><h3>加载失败</h3><span>API Error</span></div><div class="panel-body"><div class="detail-box"><em>Error</em><h2>${escapeHTML(error.message)}</h2><p>请确认已运行导入命令并启动 FastAPI 服务。</p></div></div></section>`;
+      }
+    }
+
+    $('searchInput').addEventListener('input', () => {});
+    renderAll();
+  </script>
 </body>
 </html>
