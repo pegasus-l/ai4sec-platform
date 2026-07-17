@@ -4,6 +4,7 @@ from ai4sec_platform.domains.capabilities.scorers import score_capability_candid
 from ai4sec_platform.domains.news.classifiers import classify_news_item
 from ai4sec_platform.domains.news.scorers import score_news_item
 from ai4sec_platform.domains.threats.repo_vuln_extractors import extract_repo_vulnerability_signals
+from ai4sec_platform.domains.threats.attack_surface_scoring import score_attack_surface
 from ai4sec_platform.domains.threats.risk_scoring import score_threat_item
 from ai4sec_platform.domains.vulnerabilities.evidence_extractors import extract_material_evidence
 from ai4sec_platform.domains.vulnerabilities.material_classifiers import classify_material
@@ -40,13 +41,20 @@ def test_threat_processing_extracts_history_cves_and_scores_risk() -> None:
         "summary": "CVE-2024-12345 RCE exploit PoC",
         "risk_score": 20,
         "cves": [{"id": "CVE-2024-12345"}, {"cve": "CVE-2023-9999"}],
-        "raw": {"issues": [{"title": "security vulnerability"}]},
+        "sa_items": [{"sa_id": "OpenHarmony-SA-2025-0001", "severity": "high", "description": "security advisory"}],
+        "broad_sec_items": [{"severity": "critical", "description": "RCE crash in parser", "source_type": "project_issue"}],
+        "raw": {"issues": [{"title": "security vulnerability"}], "description": "kernel parser security permission"},
     }
     signals = extract_repo_vulnerability_signals(item)
+    attack_surface = score_attack_surface({"name": "kernel_parser", "summary": "kernel parser security permission", "stars": 80, "cve_count": 5})
     scoring = score_threat_item(item)
     assert signals["cve_count"] == 2
-    assert scoring.score >= 45
+    assert signals["sa_count"] == 1
+    assert signals["broad_sec_count"] == 1
+    assert attack_surface.grade == "A"
+    assert scoring.score >= 70
     assert scoring.signals["has_exploit_signal"] is True
+    assert "legacy_attack_surface" in scoring.breakdown
 
 
 def test_vulnerability_material_processing_judges_valid_material() -> None:

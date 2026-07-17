@@ -49,8 +49,14 @@ def normalize_cve_project(source: str, item: dict[str, Any]) -> dict[str, Any]:
         "summary": f"CVE {len(cves)} 条，安全相关线索 {item.get('total_sec_items') or 0} 条。",
         "risk_score": item.get("cve_count") or len(cves),
         "cve_count": item.get("cve_count") or len(cves),
+        "sa_count": item.get("sa_count") or len(item.get("sa_items") or []),
+        "broad_sec_count": item.get("broad_sec_count") or len(item.get("broad_sec_items") or []),
+        "total_sec_items": item.get("total_sec_items") or len(cves) + len(item.get("sa_items") or []) + len(item.get("broad_sec_items") or []),
+        "scan_mode": item.get("scan_mode") or "",
         "security_items": item.get("total_sec_items") or 0,
         "cves": cves,
+        "sa_items": item.get("sa_items") or [],
+        "broad_sec_items": item.get("broad_sec_items") or [],
         "raw": item,
     }
 
