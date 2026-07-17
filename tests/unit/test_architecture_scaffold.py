@@ -37,14 +37,13 @@ def test_pipeline_registry_has_all_domain_entries() -> None:
     assert "news.ai_for_sec_raw_pipeline" in names
     assert "news.ai_for_sec_local_raw_import" in names
     assert "capabilities.assessment_placeholder" in names
-    assert "threats.huawei_snapshot_import" in names
     assert "threats.huawei_raw_pipeline" in names
     assert "threats.huawei_local_raw_import" in names
     assert "threats.risk_reasoning_pipeline" in names
-    assert "vulnerabilities.material_snapshot_import" in names
     assert "vulnerabilities.material_raw_pipeline" in names
     assert "vulnerabilities.material_local_raw_import" in names
     assert "vulnerabilities.knowledge_extraction_pipeline" in names
+    assert "legacy.sample_import" not in names
 
 
 def test_source_registry_has_expected_connectors() -> None:

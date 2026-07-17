@@ -8,7 +8,7 @@ AI4SEC 统一洞察平台新工程目录。
 
 ```bash
 cd /mnt/d/漏洞挖掘/洞察工具/dashboard/ai4sec-platform
-PYTHONPATH=src python3 -m ai4sec_platform.cli.import_legacy_samples --reset
+PYTHONPATH=src python3 -m ai4sec_platform.cli.run_pipeline --pipeline news.ai_for_sec_local_raw_import --reset
 PYTHONPATH=src uvicorn ai4sec_platform.app.main:app --reload --host 127.0.0.1 --port 8000
 ```
 
@@ -70,21 +70,21 @@ http://127.0.0.1:8000/
 当前已支持通过 API 或 CLI 触发第一版最小 pipeline：
 
 ```bash
-PYTHONPATH=src python3 -m ai4sec_platform.cli.run_pipeline --pipeline legacy.sample_import --reset
+PYTHONPATH=src python3 -m ai4sec_platform.cli.run_pipeline --pipeline news.ai_for_sec_local_raw_import --reset
 ```
 
 或通过 HTTP：
 
 ```text
 POST /api/runs
-{"pipeline_name": "legacy.sample_import", "reset": true}
+{"pipeline_name": "news.ai_for_sec_local_raw_import", "reset": true, "params": {"date": "2026-07-10"}}
 ```
 
-该 pipeline 会创建总控 PipelineRun，执行旧数据导入 step，写入 TaskRun、Artifact 和 manifest，仍保持 `production_writes=false`。
+该 pipeline 会创建总控 PipelineRun，读取本地原始 JSON，执行标准化和领域对象构建，写入 TaskRun、Artifact 和 manifest，仍保持 `production_writes=false`。
 
 ## 本地原始数据导入说明
 
-当前保留 `legacy.sample_import` 作为临时展示导入，但正式主线已经迁移到 local raw import。这里的 `raw` 指“旧系统已经保存到磁盘的原始 JSON 文件”，不是联网采集。
+当前正式主线已经迁移到 local raw import。这里的 `raw` 指“旧系统已经保存到磁盘的原始 JSON 文件”，不是联网采集；旧的 `importers/` 兼容导入目录已经删除，避免继续依赖旧处理结果。
 
 新闻洞察本地原始数据导入：
 

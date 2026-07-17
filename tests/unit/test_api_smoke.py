@@ -33,13 +33,14 @@ def test_run_pipeline_endpoint_triggers_import() -> None:
     client = TestClient(app)
     pipelines = client.get("/api/runs/pipelines")
     assert pipelines.status_code == 200
-    assert any(item["name"] == "legacy.sample_import" for item in pipelines.json()["items"])
+    assert any(item["name"] == "news.ai_for_sec_local_raw_import" for item in pipelines.json()["items"])
+    assert not any(item["name"] == "legacy.sample_import" for item in pipelines.json()["items"])
 
-    response = client.post("/api/runs", json={"pipeline_name": "legacy.sample_import", "reset": True})
+    response = client.post("/api/runs", json={"pipeline_name": "news.ai_for_sec_local_raw_import", "reset": True, "params": {"date": "2026-07-10"}})
     assert response.status_code == 200
     data = response.json()
     assert data["status"] == "success"
-    assert data["pipeline_name"] == "legacy.sample_import"
+    assert data["pipeline_name"] == "news.ai_for_sec_local_raw_import"
 
     detail = client.get(f"/api/runs/{data['run_id']}")
     assert detail.status_code == 200

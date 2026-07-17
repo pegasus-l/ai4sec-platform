@@ -1,10 +1,19 @@
 pipelines:
-  legacy.sample_import:
-    domain: operations
-    description: 临时旧处理结果导入，用于展示和字段摸底
-  news.ai_for_sec_raw_pipeline:
+  news.ai_for_sec_local_raw_import:
     domain: news
-    description: AI-for-Sec raw 六源导入、规范化、去重、构造资讯/能力候选
-  news.ai_for_sec_shadow_import:
-    domain: news
-    description: 兼容旧 structured shadow 输出导入
+    description: AI-for-Sec 本地 raw 六源导入、规范化、去重、构造资讯/能力候选
+  threats.huawei_local_raw_import:
+    domain: threats
+    description: 华为 repo/CVE/固件/镜像本地 raw JSON 导入和目标构建
+  vulnerabilities.material_local_raw_import:
+    domain: vulnerabilities
+    description: 漏洞素材 report 本地 raw JSON 导入和素材构建
+  capabilities.from_news_pipeline:
+    domain: capabilities
+    description: 从资讯候选生成能力候选并进行 mock 评估
+  threats.risk_reasoning_pipeline:
+    domain: threats
+    description: 对威胁目标进行 mock 风险研判并进入跟踪队列
+  vulnerabilities.knowledge_extraction_pipeline:
+    domain: vulnerabilities
+    description: 对漏洞素材进行 mock 知识抽取并进入迁移复核队列

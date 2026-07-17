@@ -8,7 +8,7 @@ from ai4sec_platform.pipelines.runner import PipelineRunner
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run an AI4SEC platform pipeline")
-    parser.add_argument("--pipeline", default="legacy.sample_import")
+    parser.add_argument("--pipeline", default="news.ai_for_sec_local_raw_import")
     parser.add_argument("--reset", action="store_true")
     args = parser.parse_args()
     result = PipelineRunner().run(args.pipeline, {"reset": args.reset})
