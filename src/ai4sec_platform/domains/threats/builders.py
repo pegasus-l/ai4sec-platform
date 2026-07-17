@@ -17,7 +17,7 @@ def build_threat_items(conn: sqlite3.Connection, items: list[dict], *, run_id: s
         payload = repo.loads(item.get("normalized_json"), {}) if "normalized_json" in item else item
         item_type = "target" if payload.get("source_type") in {"repo", "repo_cve"} else "asset"
         scoring = score_threat_item(payload)
-        payload = {**payload, "scoring": scoring.as_payload(), "vulnerability_signals": scoring.signals, "legacy_attack_surface": scoring.signals.get("legacy_attack_surface")}
+        payload = {**payload, "scoring": scoring.as_payload(), "vulnerability_signals": scoring.signals, "attack_surface": scoring.signals.get("attack_surface")}
         filtered = bool(scoring.signals.get("filtered"))
         domain_id = repo.create_domain_item(
             conn,
@@ -26,11 +26,11 @@ def build_threat_items(conn: sqlite3.Connection, items: list[dict], *, run_id: s
             title=payload.get("title") or "未命名威胁对象",
             summary=payload.get("summary") or "来自威胁 raw pipeline，待风险研判。",
             score=scoring.score,
-            status="旧规则过滤" if filtered else "高风险待研判" if scoring.priority in {"critical", "high"} and item_type == "target" else "待研判" if item_type == "target" else "资产线索",
+            status="平台规则过滤" if filtered else "高风险待研判" if scoring.priority in {"critical", "high"} and item_type == "target" else "待研判" if item_type == "target" else "资产线索",
             source=payload.get("source") or "huawei_raw",
             source_url=payload.get("url") or "",
             primary_date=payload.get("primary_date") or "",
-            tags=["raw_pipeline", payload.get("source_type") or "asset", scoring.grade, scoring.signals.get("legacy_grade"), payload.get("risk_grade") or ""],
+            tags=["connector_pipeline", payload.get("source_type") or "asset", scoring.grade, scoring.signals.get("attack_surface_grade"), payload.get("risk_grade") or ""],
             metrics={"pipeline_run": run_id, "risk_score": scoring.score, "score_breakdown": scoring.breakdown, "filtered": filtered, "filtered_reason": scoring.signals.get("filtered_reason")},
             payload=payload,
         )

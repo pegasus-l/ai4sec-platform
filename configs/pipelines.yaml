@@ -2,9 +2,9 @@ pipelines:
   news.ai_for_sec_local_raw_import:
     domain: news
     description: AI-for-Sec 本地 raw 六源导入、规范化、去重、构造资讯/能力候选
-  threats.huawei_local_raw_import:
+  threats.huawei_raw_pipeline:
     domain: threats
-    description: 华为 repo/CVE/固件/镜像本地 raw JSON 导入和目标构建
+    description: 威胁 connector 获取 repo/issue/security 文件/固件/镜像数据，并生成威胁目标
   vulnerabilities.material_local_raw_import:
     domain: vulnerabilities
     description: 漏洞素材 report 本地 raw JSON 导入和素材构建

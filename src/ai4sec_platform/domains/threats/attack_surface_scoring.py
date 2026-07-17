@@ -56,9 +56,9 @@ def score_attack_surface(item: dict[str, Any]) -> ScoreResult:
         f"安全边界 {security_boundary}",
     ]
     if filter_info["filtered"]:
-        reasons.append(f"旧过滤规则命中：{filter_info['filtered_reason']}")
+        reasons.append(f"平台过滤规则命中：{filter_info['filtered_reason']}")
     elif filter_info["deprioritized"]:
-        reasons.append("旧降权规则命中：镜像/第三方/同步类项目")
+        reasons.append("平台降权规则命中：镜像/第三方/同步类项目")
     return ScoreResult(
         score=round(total, 2),
         priority=priority,

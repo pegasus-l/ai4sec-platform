@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from ai4sec_platform.domains.threats.comparators import compare_attack_surface_outputs, compare_cve_scout_outputs
 from ai4sec_platform.domains.threats.cve_scout import build_cve_scout_from_local_records
 from ai4sec_platform.domains.threats.security_file_parsers import parse_security_file
 from ai4sec_platform.domains.threats.security_repo_discovery import discover_security_repos, group_projects_by_org
@@ -39,15 +38,3 @@ def test_cve_scout_builds_old_style_org_output() -> None:
     assert result["orgs"]["openharmony"]["projects"]["kernel_linux"]["cve_count"] == 0
     assert "openharmony" in result["meta"]["orgs_with_security_repo"]
 
-
-def test_old_huawei_outputs_are_baseline_compare_only() -> None:
-    old_cve = {"meta": {"total_projects_in": 1, "total_cve_ids": 1}, "orgs": {"openharmony": {"projects": {"kernel": {"cve_count": 1}}}}}
-    new_cve = {"meta": {"total_projects_in": 1, "total_cve_ids": 0}, "orgs": {"openharmony": {"projects": {"kernel": {"cve_count": 0}}}}}
-    cve_compare = compare_cve_scout_outputs(old_cve, new_cve)
-    assert cve_compare["meta_diff"]["total_cve_ids"]["delta"] == -1
-    assert cve_compare["project_diff_count"] == 1
-
-    old_score = {"projects": [{"name": "kernel", "attack_surface_score": 87, "grade": "A", "filtered": False}]}
-    new_score = [{"name": "kernel", "attack_surface_score": 70, "grade": "A", "filtered": False}]
-    score_compare = compare_attack_surface_outputs(old_score, new_score)
-    assert score_compare["diff_count"] == 1

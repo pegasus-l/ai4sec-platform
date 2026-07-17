@@ -5,6 +5,59 @@ from fastapi.testclient import TestClient
 from ai4sec_platform.app.main import app
 
 
+def _patch_threat_connector_records(monkeypatch) -> None:
+    records = [
+        {
+            "source": "repos",
+            "path": "connector:test/repos",
+            "exists": True,
+            "mode": "connector",
+            "items": [
+                {
+                    "name": "security",
+                    "url": "https://gitcode.com/openharmony/security",
+                    "description": "security advisories CVE-2024-12345",
+                    "star_count": 20,
+                    "org": "openharmony",
+                    "platform": "gitcode",
+                    "security_files": [{"path": "security.md", "content": "| Component | ID | Severity |\n| kernel_parser | CVE-2024-12345 | Critical |"}],
+                },
+                {
+                    "name": "kernel_parser",
+                    "url": "https://gitcode.com/openharmony/kernel_parser",
+                    "description": "kernel parser security boundary RCE exploit",
+                    "star_count": 99,
+                    "org": "openharmony",
+                    "platform": "gitcode",
+                    "issues": [{"title": "CVE-2024-12345 RCE parser crash", "description": "security vulnerability PoC"}],
+                },
+            ],
+            "raw": {},
+        },
+        {
+            "source": "firmware",
+            "path": "connector:test/firmware",
+            "exists": True,
+            "mode": "connector",
+            "items": [{"productModel": "AscendFirmware", "packageCount": 5, "latestRelease": "2026-07-01"}],
+            "raw": {},
+        },
+    ]
+
+    def fake_load(settings, params):
+        return records
+
+    from ai4sec_platform.domains.threats.adapters import huawei_sources
+    from ai4sec_platform.pipelines.steps import threat_asset_import, threat_cve_scout, threat_raw, threat_score_filter
+
+    monkeypatch.setattr(huawei_sources, "load_huawei_sources", fake_load)
+    monkeypatch.setattr(huawei_sources, "load_huawei_live", lambda params: records)
+    monkeypatch.setattr(threat_raw, "load_huawei_sources", fake_load)
+    monkeypatch.setattr(threat_cve_scout, "load_huawei_sources", fake_load)
+    monkeypatch.setattr(threat_score_filter, "load_huawei_sources", fake_load)
+    monkeypatch.setattr(threat_asset_import, "load_huawei_sources", fake_load)
+
+
 def test_health_endpoint() -> None:
     client = TestClient(app)
     response = client.get("/api/health")
@@ -89,9 +142,7 @@ def test_v9_contract_endpoint_aliases_exist() -> None:
         "/api/threats/risk-assessments",
         "/api/threats/assets",
         "/api/threats/cve-scout",
-        "/api/threats/cve-compare",
         "/api/threats/attack-surface",
-        "/api/threats/attack-surface-compare",
         "/api/threats/reports",
         "/api/vulnerabilities/materials",
         "/api/vulnerabilities/knowledge",
@@ -107,10 +158,11 @@ def test_v9_contract_endpoint_aliases_exist() -> None:
         assert response.status_code == 200, path
 
 
-def test_threat_and_vulnerability_raw_pipelines_run() -> None:
+def test_threat_and_vulnerability_raw_pipelines_run(monkeypatch) -> None:
+    _patch_threat_connector_records(monkeypatch)
     client = TestClient(app)
     cases = [
-        ("threats.huawei_local_raw_import", {"limit": 20}, "/api/threats/today"),
+        ("threats.huawei_raw_pipeline", {"limit": 20}, "/api/threats/today"),
         ("vulnerabilities.material_local_raw_import", {"report_limit": 2, "item_limit": 20}, "/api/vulnerabilities/today"),
     ]
     for pipeline_name, params, check_path in cases:
@@ -163,9 +215,10 @@ def test_vulnerability_knowledge_pipeline_extracts_candidates() -> None:
     assert queue["items"]
 
 
-def test_threat_risk_pipeline_reasons_targets() -> None:
+def test_threat_risk_pipeline_reasons_targets(monkeypatch) -> None:
+    _patch_threat_connector_records(monkeypatch)
     client = TestClient(app)
-    raw_run = client.post("/api/runs", json={"pipeline_name": "threats.huawei_local_raw_import", "reset": True, "params": {"limit": 30}})
+    raw_run = client.post("/api/runs", json={"pipeline_name": "threats.huawei_raw_pipeline", "reset": True, "params": {"limit": 30}})
     assert raw_run.status_code == 200
     response = client.post("/api/runs", json={"pipeline_name": "threats.risk_reasoning_pipeline", "params": {"limit": 8}})
     assert response.status_code == 200
@@ -178,7 +231,8 @@ def test_threat_risk_pipeline_reasons_targets() -> None:
     assert calls["items"]
 
 
-def test_huawei_full_migration_pipeline_runs_and_exposes_reports() -> None:
+def test_huawei_full_migration_pipeline_runs_and_exposes_reports(monkeypatch) -> None:
+    _patch_threat_connector_records(monkeypatch)
     client = TestClient(app)
     response = client.post("/api/runs", json={"pipeline_name": "threats.huawei_full_migration_pipeline", "reset": True, "params": {"limit": 5, "top_n": 5}})
     assert response.status_code == 200
@@ -189,17 +243,18 @@ def test_huawei_full_migration_pipeline_runs_and_exposes_reports() -> None:
     assert "huawei_attack_surface_score" in step_names
     assert "build_huawei_threat_report" in step_names
     assert client.get("/api/threats/cve-scout").json()["status"] == "ok"
-    assert client.get("/api/threats/cve-compare").json()["status"] == "ok"
+    assert client.get("/api/threats/cve-compare").status_code == 404
     assert client.get("/api/threats/attack-surface").json()["status"] == "ok"
-    assert client.get("/api/threats/attack-surface-compare").json()["status"] == "ok"
+    assert client.get("/api/threats/attack-surface-compare").status_code == 404
     assert client.get("/api/threats/reports").json()["status"] == "ok"
 
 
-def test_frontend_v9_contract_returns_all_page_blocks() -> None:
+def test_frontend_v9_contract_returns_all_page_blocks(monkeypatch) -> None:
+    _patch_threat_connector_records(monkeypatch)
     client = TestClient(app)
     client.post("/api/runs", json={"pipeline_name": "news.ai_for_sec_local_raw_import", "reset": True, "params": {"date": "2026-07-10"}})
     client.post("/api/runs", json={"pipeline_name": "capabilities.from_news_pipeline", "params": {"limit": 3}})
-    client.post("/api/runs", json={"pipeline_name": "threats.huawei_local_raw_import", "params": {"limit": 10}})
+    client.post("/api/runs", json={"pipeline_name": "threats.huawei_raw_pipeline", "params": {"limit": 10}})
     client.post("/api/runs", json={"pipeline_name": "vulnerabilities.material_local_raw_import", "params": {"report_limit": 1, "item_limit": 10}})
     response = client.get("/api/frontend/v9")
     assert response.status_code == 200

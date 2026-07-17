@@ -74,19 +74,9 @@ def cve_scout(conn: sqlite3.Connection = Depends(get_db)) -> dict:
     return threat_service.latest_artifact_preview(conn, "huawei_cve_scout")
 
 
-@router.get("/cve-compare")
-def cve_compare(conn: sqlite3.Connection = Depends(get_db)) -> dict:
-    return threat_service.latest_artifact_preview(conn, "huawei_cve_compare")
-
-
 @router.get("/attack-surface")
 def attack_surface(conn: sqlite3.Connection = Depends(get_db)) -> dict:
     return threat_service.latest_artifact_preview(conn, "huawei_attack_surface")
-
-
-@router.get("/attack-surface-compare")
-def attack_surface_compare(conn: sqlite3.Connection = Depends(get_db)) -> dict:
-    return threat_service.latest_artifact_preview(conn, "huawei_attack_surface_compare")
 
 
 @router.get("/reports")

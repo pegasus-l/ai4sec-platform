@@ -115,22 +115,22 @@ POST /api/runs {"pipeline_name": "news.ai_for_sec_local_raw_import", "reset": tr
 app / core / db / schemas / sources / artifacts / pipelines / domains / agents / models / ops / cli
 ```
 
-其中三条 local raw import 已可运行；其他业务域继续在标准目录、service/pipeline/adapter/builder/audit 文件边界内填实逻辑，不再新增散乱脚本。
+其中资讯、漏洞素材的本地 raw 导入与威胁 connector pipeline 已可运行；其他业务域继续在标准目录、service/pipeline/adapter/builder/audit 文件边界内填实逻辑，不再新增散乱脚本。
 
-## 已实现本地原始数据导入 Pipelines
+## 已实现核心 Pipelines
 
-当前已实现三条本地原始数据导入 pipeline，兼容旧 `*_raw_pipeline` 名称，但建议使用 `*_local_raw_import`：
+当前已实现资讯、威胁、漏洞三条核心输入处理 pipeline：
 
 ```bash
 PYTHONPATH=src python3 -m ai4sec_platform.cli.run_pipeline --pipeline news.ai_for_sec_local_raw_import --reset
-PYTHONPATH=src python3 -m ai4sec_platform.cli.run_pipeline --pipeline threats.huawei_local_raw_import --reset
+PYTHONPATH=src python3 -m ai4sec_platform.cli.run_pipeline --pipeline threats.huawei_raw_pipeline --reset
 PYTHONPATH=src python3 -m ai4sec_platform.cli.run_pipeline --pipeline vulnerabilities.material_local_raw_import --reset
 ```
 
 说明：
 
 - `news.ai_for_sec_local_raw_import` 从 AI-for-Sec 六类本地 raw 文件导入。
-- `threats.huawei_local_raw_import` 从华为 repo/CVE/固件/镜像本地 raw JSON 导入。
+- `threats.huawei_raw_pipeline` 通过威胁 connector 获取华为 repo、issue/security 文件、固件和镜像数据并生成威胁目标。
 - `vulnerabilities.material_local_raw_import` 从漏洞素材 report 本地 JSON 导入。
 - 三者都会写 `raw_artifacts`、`normalized_items`、`domain_items`、`evidence_items`、`pipeline_runs`、`task_runs` 和 manifest。
 - 所有 pipeline 仍保持 `production_writes=false` 和 `live_source_fetch_enabled=false`。
@@ -154,23 +154,9 @@ PYTHONPATH=src python3 -m ai4sec_platform.cli.run_pipeline --pipeline vulnerabil
 PYTHONPATH=src python3 -m ai4sec_platform.cli.run_pipeline --pipeline threats.huawei_full_migration_pipeline --reset
 ```
 
-包含：security repo 发现、CVE/SA/broad security 侦察、旧攻击面评分/过滤、固件/AscendHub/镜像资产导入、LLM 语义复核、迁移报告 artifact。
+包含：security repo 发现、CVE/SA/broad security 侦察、平台攻击面评分/过滤、固件/AscendHub/镜像资产导入、LLM 语义复核、迁移报告 artifact。
 
-同一条 pipeline 支持两种输入模式：
-
-```text
-mode=local_raw  # 默认：读取 repo-info/huawei/data/*.json，作为稳定回归基准
-mode=live       # 使用 sources/connectors/threats/* 重新抓取，受 live_source_fetch_enabled 控制
-```
-
-`mode=local_raw` 下只有 `huawei_repos.json`、firmware、AscendHub、mirror 等 raw/资产文件参与生成；旧处理结果 `huawei_repos_cves.json` 和 `huawei_repos_scored.json` 只作为 baseline 生成 compare artifact，不再作为新结果输入。
-
-对比输出：
-
-```text
-GET /api/threats/cve-compare
-GET /api/threats/attack-surface-compare
-```
+威胁洞察生产链路不读取旧 processed 输出，不生成 baseline/compare artifact。CVE scout、攻击面评分和报告都由 connector 获取的数据在当前 pipeline 内生成。
 
 示例：
 
@@ -181,8 +167,7 @@ PYTHONPATH=src python3 -m ai4sec_platform.cli.run_pipeline \
 
 PYTHONPATH=src python3 -m ai4sec_platform.cli.run_pipeline \
   --pipeline threats.huawei_full_migration_pipeline \
-  --reset \
-  # API 参数传 {"mode": "live"} 时启用 connector 输入
+  --reset
 ```
 
 ## 能力洞察 Pipeline

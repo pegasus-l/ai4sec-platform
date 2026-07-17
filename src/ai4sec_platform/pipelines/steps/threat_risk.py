@@ -153,7 +153,7 @@ def _build_assessment(target: dict[str, Any], output: dict[str, Any]) -> dict[st
             "cve_count": payload.get("cve_count"),
             "sa_count": payload.get("sa_count"),
             "broad_sec_count": payload.get("broad_sec_count"),
-            "legacy_attack_surface": payload.get("legacy_attack_surface"),
+            "attack_surface": payload.get("attack_surface"),
             "vulnerability_signals": payload.get("vulnerability_signals"),
             "firmware_refs": payload.get("firmware_refs") or [],
             "mirror_refs": payload.get("mirror_refs") or [],
@@ -169,10 +169,10 @@ def _semantic_review_prompt() -> str:
     return """
 你是威胁情报分析员，需要复核华为开源仓库/组件的威胁价值。请只输出 JSON。
 
-你需要完成旧 huawei-vuln-scout / huawei-vuln-filter 中靠人工或 OpenCode Agent 理解完成的判断：
+你需要基于当前平台 connector 获取到的仓库、issue、安全文件、CVE/SA、固件和镜像线索完成判断：
 1. 判断 broad_sec_items / issue 标题是否是真安全问题，还是普通 bug/误报。
 2. 解释该项目的主要攻击面，例如 kernel、driver、network protocol、parser/codec、sandbox、security boundary。
-3. 根据 CVE/SA、security repo 来源、项目自身 issue、旧攻击面评分和仓库描述，给出漏洞挖掘价值判断。
+3. 根据 CVE/SA、security repo 来源、项目自身 issue、平台攻击面评分和仓库描述，给出漏洞挖掘价值判断。
 4. 给出下一步动作：跟踪、人工复核、补充 GitHub 搜索、验证高危 CVE 是否已修复、关注 security 仓库。
 
 输出 JSON schema：
@@ -200,7 +200,7 @@ def _semantic_review_payload(target: dict[str, Any]) -> dict[str, Any]:
         "score": target.get("score"),
         "status": target.get("status"),
         "source_url": target.get("source_url"),
-        "legacy_attack_surface": payload.get("legacy_attack_surface"),
+        "attack_surface": payload.get("attack_surface"),
         "scoring": payload.get("scoring"),
         "vulnerability_signals": signals,
         "cves": _compact_list(payload.get("cves") or [], 8),

@@ -55,7 +55,7 @@ def score_threat_item(item: dict[str, Any]) -> ScoreResult:
         priority=priority,
         grade=grade,
         breakdown={
-            "legacy_attack_surface": attack_surface.score,
+            "attack_surface": attack_surface.score,
             "cve": cve_score,
             "security_advisory": sa_score,
             "broad_security": broad_score,
@@ -68,8 +68,8 @@ def score_threat_item(item: dict[str, Any]) -> ScoreResult:
         signals={
             **signals,
             "source_type": source_type,
-            "legacy_attack_surface": attack_surface.as_payload(),
-            "legacy_grade": attack_surface.grade,
+            "attack_surface": attack_surface.as_payload(),
+            "attack_surface_grade": attack_surface.grade,
             "filtered": attack_surface.signals.get("filtered", False),
             "filtered_reason": attack_surface.signals.get("filtered_reason", ""),
             "deprioritized": attack_surface.signals.get("deprioritized", False),

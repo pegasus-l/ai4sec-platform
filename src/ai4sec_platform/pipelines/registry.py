@@ -35,7 +35,6 @@ def default_registry() -> PipelineRegistry:
     registry.register(capability_from_news_pipeline())
     huawei_raw = huawei_raw_pipeline()
     registry.register(huawei_raw)
-    registry.register_alias("threats.huawei_local_raw_import", huawei_raw)
     registry.register(huawei_cve_scout_pipeline())
     registry.register(huawei_attack_surface_pipeline())
     registry.register(huawei_asset_pipeline())

@@ -34,7 +34,7 @@ class LiveJsonConnector(JsonFileConnector):
             raw = self.get_json(url)
         except Exception as exc:
             return SourceFetchResult(source_name=request.source_name, connector_name=self.connector_name, metadata={"url": url}, errors=[str(exc)])
-        return SourceFetchResult(source_name=request.source_name, connector_name=self.connector_name, items=self.extract_items(raw), metadata={"url": url, "raw_type": type(raw).__name__})
+        return SourceFetchResult(source_name=request.source_name, connector_name=self.connector_name, items=self.extract_items(raw), raw_text=self.extract_text(raw), metadata={"url": url, "raw_type": type(raw).__name__})
 
     def build_url(self, request: SourceFetchRequest) -> str:
         return self.base_url

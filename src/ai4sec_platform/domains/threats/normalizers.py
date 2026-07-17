@@ -5,9 +5,9 @@ from typing import Any
 
 
 def normalize_huawei_item(source: str, item: dict[str, Any]) -> dict[str, Any]:
-    if source in {"repos", "scored_repos"}:
+    if source == "repos":
         return normalize_repo(source, item)
-    if source == "repo_cves":
+    if source == "cve_findings":
         return normalize_cve_project(source, item)
     if source == "firmware":
         return normalize_firmware(source, item)

@@ -20,8 +20,7 @@ class ImportHuaweiThreatAssetsStep:
     def run(self, context: PipelineContext) -> StepResult:
         all_records = context.outputs.get("huawei_source_records") or load_huawei_sources(context.settings, context.params)
         context.outputs["huawei_source_records"] = all_records
-        mode = str(context.params.get("mode") or "local_raw")
-        records = [record for record in all_records if record.get("source") in ASSET_SOURCES and not record.get("baseline_only")]
+        records = [record for record in all_records if record.get("source") in ASSET_SOURCES]
         normalized_records = []
         artifacts = []
         for record in records:
@@ -34,4 +33,4 @@ class ImportHuaweiThreatAssetsStep:
                 normalized_records.append({"normalized_json": repo.dumps(normalized), **normalized})
         counts = build_threat_items(context.conn, normalized_records, run_id=context.run_id)
         repo.create_quality_audit(context.conn, domain="threats", audit_type="huawei_asset_import", status="pass" if counts["items"] else "warn", score=1.0 if counts["items"] else 0.2, summary=f"华为固件/镜像/资产导入 {counts['items']} 个对象。", details={"run_id": context.run_id, "sources": [r["source"] for r in records]})
-        return StepResult(metrics={"mode": mode, "sources": len(records), "normalized": len(normalized_records), **counts}, artifacts=artifacts)
+        return StepResult(metrics={"sources": len(records), "normalized": len(normalized_records), **counts}, artifacts=artifacts)

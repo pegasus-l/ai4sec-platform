@@ -42,7 +42,7 @@ def test_pipeline_registry_has_all_domain_entries() -> None:
     assert "news.ai_for_sec_local_raw_import" in names
     assert "capabilities.assessment_placeholder" not in names
     assert "threats.huawei_raw_pipeline" in names
-    assert "threats.huawei_local_raw_import" in names
+    assert "threats.huawei_local_raw_import" not in names
     assert "threats.huawei_cve_scout_pipeline" in names
     assert "threats.huawei_attack_surface_pipeline" in names
     assert "threats.huawei_asset_pipeline" in names

@@ -54,7 +54,7 @@ def test_threat_processing_extracts_history_cves_and_scores_risk() -> None:
     assert attack_surface.grade == "A"
     assert scoring.score >= 70
     assert scoring.signals["has_exploit_signal"] is True
-    assert "legacy_attack_surface" in scoring.breakdown
+    assert "attack_surface" in scoring.breakdown
 
 
 def test_vulnerability_material_processing_judges_valid_material() -> None:

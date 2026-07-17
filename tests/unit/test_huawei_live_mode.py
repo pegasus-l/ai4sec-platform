@@ -38,7 +38,7 @@ def test_huawei_sources_live_mode_can_feed_existing_pipeline(monkeypatch, tmp_pa
                 "raw": {"projects": []},
                 "mode": "live",
             },
-            {"source": "repo_cves", "path": "live:repo_cves", "exists": True, "items": [], "raw": {"orgs": {}}, "mode": "live"},
+            {"source": "cve_findings", "path": "generated:huawei_cve_scout", "exists": True, "items": [], "raw": {"orgs": {}}, "mode": "generated"},
         ]
 
     monkeypatch.setattr(huawei_sources, "load_huawei_live", fake_live)
@@ -54,7 +54,7 @@ def test_huawei_sources_live_mode_can_feed_existing_pipeline(monkeypatch, tmp_pa
     NormalizeHuaweiRawStep().run(context)
     build_result = BuildHuaweiThreatItemsStep().run(context)
 
-    assert import_result.metrics["mode"] == "live"
+    assert import_result.metrics["sources"] >= 1
     assert build_result.metrics["items"] >= 1
     item = conn.execute("SELECT * FROM domain_items WHERE domain = 'threats' AND item_type = 'target'").fetchone()
     assert item is not None
