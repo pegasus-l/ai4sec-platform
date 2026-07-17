@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import base64
 import urllib.parse
 import urllib.request
 from typing import Any
@@ -52,6 +53,17 @@ class LiveJsonConnector(JsonFileConnector):
                 if isinstance(value, list):
                     return [item for item in value if isinstance(item, dict)]
         return []
+
+    def extract_text(self, raw: Any) -> str:
+        if not isinstance(raw, dict):
+            return ""
+        content = raw.get("content") or ""
+        if not content:
+            return ""
+        try:
+            return base64.b64decode(content).decode("utf-8", errors="replace")
+        except Exception:
+            return ""
 
 
 def with_query(base: str, params: dict[str, Any]) -> str:

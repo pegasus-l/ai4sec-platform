@@ -1,10 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from pathlib import Path
 
 from ai4sec_platform.db import repositories as repo
-from ai4sec_platform.domains.threats.adapters.huawei_raw import load_huawei_raw
+from ai4sec_platform.domains.threats.adapters.huawei_sources import load_huawei_sources
 from ai4sec_platform.domains.threats.builders import build_threat_items
 from ai4sec_platform.domains.threats.normalizers import normalize_huawei_item
 from ai4sec_platform.pipelines.context import PipelineContext
@@ -17,8 +16,9 @@ class ImportHuaweiRawStep:
     step_type: str = "raw_import"
 
     def run(self, context: PipelineContext) -> StepResult:
-        root = Path(context.settings.legacy_sources.get("huawei_dir", ""))
-        sources = load_huawei_raw(root)
+        sources = context.outputs.get("huawei_source_records") or load_huawei_sources(context.settings, context.params)
+        context.outputs["huawei_source_records"] = sources
+        mode = str(context.params.get("mode") or "local_raw")
         artifacts = []
         raw_records = []
         for source in sources:
@@ -38,11 +38,11 @@ class ImportHuaweiRawStep:
                 source_type="huawei_raw",
                 source_path=source["path"],
                 item_count=len(source["items"]),
-                payload={"exists": source["exists"], "artifact": artifact},
+                payload={"exists": source["exists"], "artifact": artifact, "mode": source.get("mode") or mode},
             )
             raw_records.append({"id": raw_id, **source})
         context.outputs["huawei_raw_sources"] = raw_records
-        return StepResult(metrics={"sources": len(sources), "items": sum(len(item["items"]) for item in sources)}, artifacts=artifacts)
+        return StepResult(metrics={"mode": mode, "sources": len(sources), "items": sum(len(item["items"]) for item in sources)}, artifacts=artifacts)
 
 
 @dataclass

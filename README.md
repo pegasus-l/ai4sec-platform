@@ -156,6 +156,26 @@ PYTHONPATH=src python3 -m ai4sec_platform.cli.run_pipeline --pipeline threats.hu
 
 包含：security repo 发现、CVE/SA/broad security 侦察、旧攻击面评分/过滤、固件/AscendHub/镜像资产导入、LLM 语义复核、迁移报告 artifact。
 
+同一条 pipeline 支持两种输入模式：
+
+```text
+mode=local_raw  # 默认：读取 repo-info/huawei/data/*.json，作为稳定回归基准
+mode=live       # 使用 sources/connectors/threats/* 重新抓取，受 live_source_fetch_enabled 控制
+```
+
+示例：
+
+```bash
+PYTHONPATH=src python3 -m ai4sec_platform.cli.run_pipeline \
+  --pipeline threats.huawei_full_migration_pipeline \
+  --reset
+
+PYTHONPATH=src python3 -m ai4sec_platform.cli.run_pipeline \
+  --pipeline threats.huawei_full_migration_pipeline \
+  --reset \
+  # API 参数传 {"mode": "live"} 时启用 connector 输入
+```
+
 ## 能力洞察 Pipeline
 
 在 `news.ai_for_sec_local_raw_import` 运行后，可以继续运行：

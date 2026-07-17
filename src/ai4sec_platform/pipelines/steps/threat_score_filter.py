@@ -1,9 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from pathlib import Path
 
-from ai4sec_platform.domains.threats.adapters.huawei_raw import load_huawei_raw
+from ai4sec_platform.domains.threats.adapters.huawei_sources import load_huawei_sources
 from ai4sec_platform.domains.threats.attack_surface_scoring import score_attack_surface
 from ai4sec_platform.domains.threats.reports import build_attack_surface_report
 from ai4sec_platform.pipelines.context import PipelineContext
@@ -17,8 +16,9 @@ class HuaweiAttackSurfaceScoreStep:
 
     def run(self, context: PipelineContext) -> StepResult:
         top_n = int(context.params.get("top_n", 50))
-        root = Path(context.settings.legacy_sources.get("huawei_dir", ""))
-        records = load_huawei_raw(root)
+        records = context.outputs.get("huawei_source_records") or load_huawei_sources(context.settings, context.params)
+        context.outputs["huawei_source_records"] = records
+        mode = str(context.params.get("mode") or "local_raw")
         projects = _items(records, "scored_repos") or _items(records, "repos")
         scored = []
         for project in projects:
@@ -44,7 +44,7 @@ class HuaweiAttackSurfaceScoreStep:
         report = build_attack_surface_report(scored)
         artifact = context.artifact_store.write_json(context.conn, run_id=context.run_id, artifact_type="huawei_attack_surface", name="threats/huawei_attack_surface.json", data={"projects": scored, "report": report})
         context.outputs["huawei_attack_surface_projects"] = scored
-        return StepResult(metrics={"projects": len(scored), "top_ab": len(ab), "total_kept": report["total_kept"], "total_dropped": report["total_dropped"]}, artifacts=[artifact])
+        return StepResult(metrics={"mode": mode, "projects": len(scored), "top_ab": len(ab), "total_kept": report["total_kept"], "total_dropped": report["total_dropped"]}, artifacts=[artifact])
 
 
 def _items(records: list[dict], source: str) -> list[dict]:

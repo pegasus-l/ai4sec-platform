@@ -1,10 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from pathlib import Path
 
 from ai4sec_platform.db import repositories as repo
-from ai4sec_platform.domains.threats.adapters.huawei_raw import load_huawei_raw
+from ai4sec_platform.domains.threats.adapters.huawei_sources import load_huawei_sources
 from ai4sec_platform.domains.threats.builders import build_threat_items
 from ai4sec_platform.domains.threats.normalizers import normalize_huawei_item
 from ai4sec_platform.pipelines.context import PipelineContext
@@ -19,8 +18,10 @@ class ImportHuaweiThreatAssetsStep:
     step_type: str = "asset_import"
 
     def run(self, context: PipelineContext) -> StepResult:
-        root = Path(context.settings.legacy_sources.get("huawei_dir", ""))
-        records = [record for record in load_huawei_raw(root) if record.get("source") in ASSET_SOURCES]
+        all_records = context.outputs.get("huawei_source_records") or load_huawei_sources(context.settings, context.params)
+        context.outputs["huawei_source_records"] = all_records
+        mode = str(context.params.get("mode") or "local_raw")
+        records = [record for record in all_records if record.get("source") in ASSET_SOURCES]
         normalized_records = []
         artifacts = []
         for record in records:
@@ -33,4 +34,4 @@ class ImportHuaweiThreatAssetsStep:
                 normalized_records.append({"normalized_json": repo.dumps(normalized), **normalized})
         counts = build_threat_items(context.conn, normalized_records, run_id=context.run_id)
         repo.create_quality_audit(context.conn, domain="threats", audit_type="huawei_asset_import", status="pass" if counts["items"] else "warn", score=1.0 if counts["items"] else 0.2, summary=f"华为固件/镜像/资产导入 {counts['items']} 个对象。", details={"run_id": context.run_id, "sources": [r["source"] for r in records]})
-        return StepResult(metrics={"sources": len(records), "normalized": len(normalized_records), **counts}, artifacts=artifacts)
+        return StepResult(metrics={"mode": mode, "sources": len(records), "normalized": len(normalized_records), **counts}, artifacts=artifacts)
