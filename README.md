@@ -163,6 +163,15 @@ mode=local_raw  # 默认：读取 repo-info/huawei/data/*.json，作为稳定回
 mode=live       # 使用 sources/connectors/threats/* 重新抓取，受 live_source_fetch_enabled 控制
 ```
 
+`mode=local_raw` 下只有 `huawei_repos.json`、firmware、AscendHub、mirror 等 raw/资产文件参与生成；旧处理结果 `huawei_repos_cves.json` 和 `huawei_repos_scored.json` 只作为 baseline 生成 compare artifact，不再作为新结果输入。
+
+对比输出：
+
+```text
+GET /api/threats/cve-compare
+GET /api/threats/attack-surface-compare
+```
+
 示例：
 
 ```bash

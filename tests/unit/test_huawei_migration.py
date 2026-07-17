@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from ai4sec_platform.domains.threats.comparators import compare_attack_surface_outputs, compare_cve_scout_outputs
 from ai4sec_platform.domains.threats.cve_scout import build_cve_scout_from_local_records
 from ai4sec_platform.domains.threats.security_file_parsers import parse_security_file
 from ai4sec_platform.domains.threats.security_repo_discovery import discover_security_repos, group_projects_by_org
@@ -33,8 +34,20 @@ def test_cve_scout_builds_old_style_org_output() -> None:
         {"org": "openharmony", "name": "security", "url": "https://gitcode.com/openharmony/security", "description": "security", "star_count": 10},
         {"org": "openharmony", "name": "kernel_linux", "url": "https://gitcode.com/openharmony/kernel_linux", "description": "kernel", "star_count": 30},
     ]
-    existing = {"openharmony": {"projects": {"kernel_linux": {"scan_mode": "from_pool", "cve_count": 1, "cves": [{"cve_id": "CVE-2024-12345", "severity": "critical"}]}}}}
-    result = build_cve_scout_from_local_records(projects, existing)
+    result = build_cve_scout_from_local_records(projects, None)
     assert result["meta"]["total_projects_in"] == 2
-    assert result["orgs"]["openharmony"]["projects"]["kernel_linux"]["cve_count"] == 1
+    assert result["orgs"]["openharmony"]["projects"]["kernel_linux"]["cve_count"] == 0
     assert "openharmony" in result["meta"]["orgs_with_security_repo"]
+
+
+def test_old_huawei_outputs_are_baseline_compare_only() -> None:
+    old_cve = {"meta": {"total_projects_in": 1, "total_cve_ids": 1}, "orgs": {"openharmony": {"projects": {"kernel": {"cve_count": 1}}}}}
+    new_cve = {"meta": {"total_projects_in": 1, "total_cve_ids": 0}, "orgs": {"openharmony": {"projects": {"kernel": {"cve_count": 0}}}}}
+    cve_compare = compare_cve_scout_outputs(old_cve, new_cve)
+    assert cve_compare["meta_diff"]["total_cve_ids"]["delta"] == -1
+    assert cve_compare["project_diff_count"] == 1
+
+    old_score = {"projects": [{"name": "kernel", "attack_surface_score": 87, "grade": "A", "filtered": False}]}
+    new_score = [{"name": "kernel", "attack_surface_score": 70, "grade": "A", "filtered": False}]
+    score_compare = compare_attack_surface_outputs(old_score, new_score)
+    assert score_compare["diff_count"] == 1

@@ -77,4 +77,6 @@ def _preview_data(artifact_type: str, data: Any) -> Any:
             "cve_scout_report": data.get("cve_scout_report", {}),
             "attack_surface_report": data.get("attack_surface_report", {}),
         }
+    if artifact_type in {"huawei_cve_compare", "huawei_attack_surface_compare"}:
+        return data
     return data

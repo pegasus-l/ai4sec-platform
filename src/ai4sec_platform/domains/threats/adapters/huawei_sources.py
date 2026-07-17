@@ -32,8 +32,6 @@ def load_huawei_live(params: dict[str, Any]) -> list[dict[str, Any]]:
     assets = _collect_live_assets(registry, params)
     records = [
         {"source": "repos", "path": "live:repos", "exists": True, "items": repos, "raw": {"projects": repos, "mode": "live"}, "mode": "live"},
-        {"source": "scored_repos", "path": "live:scored_repos", "exists": True, "items": [], "raw": {"projects": [], "mode": "live"}, "mode": "live"},
-        {"source": "repo_cves", "path": "live:repo_cves", "exists": True, "items": [], "raw": {"orgs": {}, "mode": "live"}, "mode": "live"},
     ]
     records.extend(assets)
     return records

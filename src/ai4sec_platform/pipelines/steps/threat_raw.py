@@ -17,11 +17,16 @@ class ImportHuaweiRawStep:
 
     def run(self, context: PipelineContext) -> StepResult:
         sources = context.outputs.get("huawei_source_records") or load_huawei_sources(context.settings, context.params)
+        generated_cve_record = context.outputs.get("huawei_generated_cve_record")
+        if generated_cve_record:
+            sources = [record for record in sources if record.get("source") != "repo_cves"] + [generated_cve_record]
         context.outputs["huawei_source_records"] = sources
         mode = str(context.params.get("mode") or "local_raw")
         artifacts = []
         raw_records = []
         for source in sources:
+            if source.get("baseline_only"):
+                continue
             artifact = context.artifact_store.write_json(
                 context.conn,
                 run_id=context.run_id,
@@ -42,7 +47,8 @@ class ImportHuaweiRawStep:
             )
             raw_records.append({"id": raw_id, **source})
         context.outputs["huawei_raw_sources"] = raw_records
-        return StepResult(metrics={"mode": mode, "sources": len(sources), "items": sum(len(item["items"]) for item in sources)}, artifacts=artifacts)
+        active_sources = [source for source in sources if not source.get("baseline_only")]
+        return StepResult(metrics={"mode": mode, "sources": len(active_sources), "items": sum(len(item["items"]) for item in active_sources), "baseline_skipped": len(sources) - len(active_sources)}, artifacts=artifacts)
 
 
 @dataclass

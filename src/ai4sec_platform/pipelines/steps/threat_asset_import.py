@@ -21,7 +21,7 @@ class ImportHuaweiThreatAssetsStep:
         all_records = context.outputs.get("huawei_source_records") or load_huawei_sources(context.settings, context.params)
         context.outputs["huawei_source_records"] = all_records
         mode = str(context.params.get("mode") or "local_raw")
-        records = [record for record in all_records if record.get("source") in ASSET_SOURCES]
+        records = [record for record in all_records if record.get("source") in ASSET_SOURCES and not record.get("baseline_only")]
         normalized_records = []
         artifacts = []
         for record in records:

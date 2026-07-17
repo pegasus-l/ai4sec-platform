@@ -19,10 +19,10 @@ def load_huawei_raw(root: Path) -> list[dict[str, Any]]:
     for source, rel in RAW_FILES.items():
         path = root / rel
         if not path.exists():
-            records.append({"source": source, "path": str(path), "exists": False, "items": [], "raw": None})
+            records.append({"source": source, "path": str(path), "exists": False, "items": [], "raw": None, "baseline_only": source in {"scored_repos", "repo_cves"}})
             continue
         raw = _read_json(path)
-        records.append({"source": source, "path": str(path), "exists": True, "items": extract_items(source, raw), "raw": raw})
+        records.append({"source": source, "path": str(path), "exists": True, "items": extract_items(source, raw), "raw": raw, "baseline_only": source in {"scored_repos", "repo_cves"}})
     return records
 
 

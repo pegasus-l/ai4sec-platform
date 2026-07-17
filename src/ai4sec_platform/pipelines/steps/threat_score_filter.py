@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from ai4sec_platform.domains.threats.adapters.huawei_sources import load_huawei_sources
+from ai4sec_platform.domains.threats.comparators import compare_attack_surface_outputs
 from ai4sec_platform.domains.threats.attack_surface_scoring import score_attack_surface
 from ai4sec_platform.domains.threats.reports import build_attack_surface_report
 from ai4sec_platform.pipelines.context import PipelineContext
@@ -19,7 +20,8 @@ class HuaweiAttackSurfaceScoreStep:
         records = context.outputs.get("huawei_source_records") or load_huawei_sources(context.settings, context.params)
         context.outputs["huawei_source_records"] = records
         mode = str(context.params.get("mode") or "local_raw")
-        projects = _items(records, "scored_repos") or _items(records, "repos")
+        projects = _items(records, "repos")
+        baseline_scored = _raw(records, "scored_repos") or {}
         scored = []
         for project in projects:
             result = score_attack_surface(project)
@@ -42,9 +44,12 @@ class HuaweiAttackSurfaceScoreStep:
                 item["_enrich_source"] = "ai4sec_attack_surface_score"
                 item["_enrich_note"] = "Migrated from repo-info/huawei vuln_filter_pipeline.py semantics"
         report = build_attack_surface_report(scored)
+        compare = compare_attack_surface_outputs(baseline_scored if isinstance(baseline_scored, dict) else {}, scored)
         artifact = context.artifact_store.write_json(context.conn, run_id=context.run_id, artifact_type="huawei_attack_surface", name="threats/huawei_attack_surface.json", data={"projects": scored, "report": report})
+        compare_artifact = context.artifact_store.write_json(context.conn, run_id=context.run_id, artifact_type="huawei_attack_surface_compare", name="threats/huawei_attack_surface_compare.json", data=compare)
         context.outputs["huawei_attack_surface_projects"] = scored
-        return StepResult(metrics={"mode": mode, "projects": len(scored), "top_ab": len(ab), "total_kept": report["total_kept"], "total_dropped": report["total_dropped"]}, artifacts=[artifact])
+        context.outputs["huawei_attack_surface_compare"] = compare
+        return StepResult(metrics={"mode": mode, "projects": len(scored), "top_ab": len(ab), "total_kept": report["total_kept"], "total_dropped": report["total_dropped"], "compare_diff_count": compare.get("diff_count", 0)}, artifacts=[artifact, compare_artifact])
 
 
 def _items(records: list[dict], source: str) -> list[dict]:
@@ -52,3 +57,10 @@ def _items(records: list[dict], source: str) -> list[dict]:
         if record.get("source") == source:
             return record.get("items") or []
     return []
+
+
+def _raw(records: list[dict], source: str):
+    for record in records:
+        if record.get("source") == source:
+            return record.get("raw")
+    return None

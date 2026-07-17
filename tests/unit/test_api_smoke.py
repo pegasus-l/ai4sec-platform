@@ -89,7 +89,9 @@ def test_v9_contract_endpoint_aliases_exist() -> None:
         "/api/threats/risk-assessments",
         "/api/threats/assets",
         "/api/threats/cve-scout",
+        "/api/threats/cve-compare",
         "/api/threats/attack-surface",
+        "/api/threats/attack-surface-compare",
         "/api/threats/reports",
         "/api/vulnerabilities/materials",
         "/api/vulnerabilities/knowledge",
@@ -187,7 +189,9 @@ def test_huawei_full_migration_pipeline_runs_and_exposes_reports() -> None:
     assert "huawei_attack_surface_score" in step_names
     assert "build_huawei_threat_report" in step_names
     assert client.get("/api/threats/cve-scout").json()["status"] == "ok"
+    assert client.get("/api/threats/cve-compare").json()["status"] == "ok"
     assert client.get("/api/threats/attack-surface").json()["status"] == "ok"
+    assert client.get("/api/threats/attack-surface-compare").json()["status"] == "ok"
     assert client.get("/api/threats/reports").json()["status"] == "ok"
 
 
