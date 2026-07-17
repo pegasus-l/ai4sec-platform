@@ -1,7 +1,13 @@
 providers:
+  configured_model:
+    type: openai_compatible
+    source: .env
   local_rules:
     type: local_rules
 model_profiles:
+  configured_model:
+    provider: configured_model
+    fallback: local_rules
   local_rules:
     provider: local_rules
     model: offline-rule-engine

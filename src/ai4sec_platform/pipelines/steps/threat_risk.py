@@ -35,7 +35,7 @@ class SelectThreatRiskCandidatesStep:
 class ReasonThreatRiskStep:
     name: str = "reason_threat_risk"
     step_type: str = "llm_review"
-    model_profile: str = "local_rules"
+    model_profile: str = "configured_model"
 
     def run(self, context: PipelineContext) -> StepResult:
         ids = context.outputs.get("threat_risk_candidate_ids") or []
@@ -54,7 +54,7 @@ class ReasonThreatRiskStep:
                 run_id=context.run_id,
                 agent_name="risk_reasoning",
                 model_profile=self.model_profile,
-                provider=output.get("provider", "local_rules"),
+                provider=output.get("provider", self.model_profile),
                 status="success",
                 input_payload={"item": target, "prompt": prompt},
                 output_payload=output,

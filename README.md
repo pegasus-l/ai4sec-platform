@@ -53,6 +53,7 @@ AGENTS.md
 - 输出数据库位于 `output/ai4sec_platform.db`，也被 Git 忽略。
 - 当前实现 `production_writes=false`，不写生产路径。
 - 当前实现 `live_source_fetch_enabled=false`，所有 source connector 只能读本地 JSON 原始文件；HTTP/HTTPS 路径会被拒绝。
+- 模型配置从 `.env` 自动读取，优先使用 DeepSeek / DashScope / Local LLM 这类 OpenAI-compatible 配置；测试环境默认回退到 `local_rules`，避免单测触发真实模型费用。
 
 
 ## 前端页面
@@ -138,7 +139,7 @@ PYTHONPATH=src python3 -m ai4sec_platform.cli.run_pipeline --pipeline vulnerabil
 PYTHONPATH=src python3 -m ai4sec_platform.cli.run_pipeline --pipeline capabilities.from_news_pipeline
 ```
 
-该 pipeline 会复用或生成能力候选，使用本地规则引擎完成能力评估，并写入 `model_calls`。
+该 pipeline 会复用或生成能力候选，优先使用 `.env` 中配置的真实模型完成能力评估；如未配置模型则回退到本地规则引擎，并写入 `model_calls`。
 
 ## 前端 v9 数据契约
 

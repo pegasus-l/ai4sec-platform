@@ -13,7 +13,7 @@ class LlmReviewStep:
     step_type: str = "llm_review"
     input_key: str = "content_items"
     output_key: str = "reviewed_items"
-    model_profile: str = "local_rules"
+    model_profile: str = "configured_model"
     prompt: str = "请对输入内容进行结构化本地规则处理。"
 
     def run(self, context: PipelineContext) -> StepResult:

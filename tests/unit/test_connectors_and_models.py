@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from ai4sec_platform.core.env import load_env_file
 from ai4sec_platform.agents.capability_assess import CapabilityAssessAgent
 from ai4sec_platform.agents.knowledge_extract import KnowledgeExtractAgent
 from ai4sec_platform.agents.risk_reasoning import RiskReasoningAgent
@@ -36,6 +37,14 @@ def test_llm_router_defaults_to_local_rule_provider() -> None:
     assert result["provider"] == "local_rules"
     assert result["status"] == "success"
     assert result["result"]["recommended_status"] == "待复现验证"
+
+
+def test_llm_router_reads_env_model_config_without_exposing_key() -> None:
+    loaded = load_env_file()
+    config = LLMRouter().active_config()
+    assert "api_key" not in config
+    if loaded or config["configured"]:
+        assert config["provider"] in {"deepseek", "dashscope", "local_llm", "ai4sec_openai", "local_rules"}
 
 
 def test_agents_return_rule_results() -> None:

@@ -50,7 +50,7 @@ class BuildCapabilitiesFromNewsStep:
 class AssessCapabilitiesStep:
     name: str = "assess_capabilities"
     step_type: str = "llm_review"
-    model_profile: str = "local_rules"
+    model_profile: str = "configured_model"
 
     def run(self, context: PipelineContext) -> StepResult:
         ids = context.outputs.get("capability_candidate_ids") or []
@@ -68,7 +68,7 @@ class AssessCapabilitiesStep:
                 run_id=context.run_id,
                 agent_name="capability_assess",
                 model_profile=self.model_profile,
-                provider=output.get("provider", "local_rules"),
+                provider=output.get("provider", self.model_profile),
                 status="success",
                 input_payload={"item": item_data, "prompt": prompt},
                 output_payload=output,
