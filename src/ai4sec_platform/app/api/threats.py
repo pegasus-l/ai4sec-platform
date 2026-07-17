@@ -4,7 +4,7 @@ import sqlite3
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from ai4sec_platform.app.dependencies import get_db
-from ai4sec_platform.db import repositories as repo
+from ai4sec_platform.domains.threats import service as threat_service
 from ai4sec_platform.services import domain_items
 from ai4sec_platform.services import operations
 
@@ -71,17 +71,17 @@ def assets(limit: int = Query(100, ge=1, le=300), conn: sqlite3.Connection = Dep
 
 @router.get("/cve-scout")
 def cve_scout(conn: sqlite3.Connection = Depends(get_db)) -> dict:
-    return _latest_artifact_summary(conn, "huawei_cve_scout")
+    return threat_service.latest_artifact_preview(conn, "huawei_cve_scout")
 
 
 @router.get("/attack-surface")
 def attack_surface(conn: sqlite3.Connection = Depends(get_db)) -> dict:
-    return _latest_artifact_summary(conn, "huawei_attack_surface")
+    return threat_service.latest_artifact_preview(conn, "huawei_attack_surface")
 
 
 @router.get("/reports")
 def reports(conn: sqlite3.Connection = Depends(get_db)) -> dict:
-    return _latest_artifact_summary(conn, "huawei_threat_report")
+    return threat_service.latest_artifact_preview(conn, "huawei_threat_report")
 
 
 @router.get("/graph")
@@ -93,9 +93,3 @@ def graph(conn: sqlite3.Connection = Depends(get_db)) -> dict:
     ]
     return {"domain": DOMAIN, "nodes": nodes, "edges": [], "status": "partial", "note": "第一阶段仅返回目标节点，CVE/固件/镜像关系待后续 threat raw pipeline 补齐。"}
 
-
-def _latest_artifact_summary(conn: sqlite3.Connection, artifact_type: str) -> dict:
-    row = conn.execute("SELECT * FROM artifacts WHERE artifact_type = ? ORDER BY id DESC LIMIT 1", (artifact_type,)).fetchone()
-    if not row:
-        return {"domain": DOMAIN, "artifact_type": artifact_type, "items": [], "status": "missing"}
-    return {"domain": DOMAIN, "artifact_type": artifact_type, "status": "ok", "artifact": repo.row_to_dict(row)}

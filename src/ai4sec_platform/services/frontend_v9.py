@@ -6,6 +6,7 @@ from typing import Any
 from ai4sec_platform.core.config import load_settings
 from ai4sec_platform.core.time import utc_now
 from ai4sec_platform.db import repositories as repo
+from ai4sec_platform.domains.threats.service import latest_artifact_preview
 from ai4sec_platform.services import domain_items, operations
 
 
@@ -35,9 +36,9 @@ def page_contract(conn: sqlite3.Connection) -> dict[str, Any]:
             "tracking": operations.human_queue(conn, "threats")["items"],
             "graph": _threat_graph(threat_targets),
             "riskAssessments": [_risk_assessment(item) for item in threat_targets if (item.get("payload") or {}).get("risk_assessment")],
-            "cveScout": _latest_artifact(conn, "huawei_cve_scout"),
-            "attackSurface": _latest_artifact(conn, "huawei_attack_surface"),
-            "reports": _latest_artifact(conn, "huawei_threat_report"),
+            "cveScout": latest_artifact_preview(conn, "huawei_cve_scout"),
+            "attackSurface": latest_artifact_preview(conn, "huawei_attack_surface"),
+            "reports": latest_artifact_preview(conn, "huawei_threat_report"),
         },
         "vuln": {
             "today": [_vuln_material(item) for item in vuln_materials[:30]],
@@ -90,11 +91,6 @@ def static_file_contract(conn: sqlite3.Connection, path: str) -> Any:
 
 def _items(result: dict[str, Any]) -> list[dict[str, Any]]:
     return list(result.get("items") or [])
-
-
-def _latest_artifact(conn: sqlite3.Connection, artifact_type: str) -> dict[str, Any]:
-    row = conn.execute("SELECT * FROM artifacts WHERE artifact_type = ? ORDER BY id DESC LIMIT 1", (artifact_type,)).fetchone()
-    return repo.row_to_dict(row) if row else {}
 
 
 def _manifest(conn: sqlite3.Connection) -> dict[str, Any]:
