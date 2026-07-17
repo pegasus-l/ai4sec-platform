@@ -18,7 +18,7 @@ class SourceRegistry:
             {
                 "connector_name": key,
                 "source_type": value.source_type,
-                "mode": "local_raw_file_only",
+                "mode": "connector_pipeline",
             }
             for key, value in sorted(self._connectors.items())
         ]

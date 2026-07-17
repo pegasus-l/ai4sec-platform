@@ -2,7 +2,6 @@ app:
   name: AI4SEC Platform
   environment: local
   production_writes: false
-  live_source_fetch_enabled: false
 paths:
   output_dir: output
   database_path: output/ai4sec_platform.db

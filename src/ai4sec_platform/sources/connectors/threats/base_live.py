@@ -6,7 +6,6 @@ import urllib.parse
 import urllib.request
 from typing import Any
 
-from ai4sec_platform.core.config import load_settings
 from ai4sec_platform.schemas.sources import SourceFetchRequest, SourceHealth
 from ai4sec_platform.sources.connectors.base_file import JsonFileConnector
 from ai4sec_platform.sources.result import SourceFetchResult
@@ -18,20 +17,14 @@ class LiveJsonConnector(JsonFileConnector):
     base_url = ""
 
     def health_check(self, config: dict) -> SourceHealth:
-        settings = load_settings()
-        if not settings.live_source_fetch_enabled:
-            return SourceHealth(status="disabled", message="live_source_fetch_enabled=false")
         return SourceHealth(status="ok", message=self.base_url)
 
     def fetch(self, request: SourceFetchRequest) -> SourceFetchResult:
         if request.config.get("path") or request.params.get("path"):
             return super().fetch(request)
-        settings = load_settings()
-        if not settings.live_source_fetch_enabled:
-            return SourceFetchResult(source_name=request.source_name, connector_name=self.connector_name, metadata={"live_source_fetch_enabled": False}, errors=["live_source_fetch_disabled"])
         url = self.build_url(request)
         try:
-            raw = self.get_json(url)
+            raw = self.get_json(url, timeout=int(request.params.get("timeout_seconds") or request.config.get("timeout_seconds") or 30))
         except Exception as exc:
             return SourceFetchResult(source_name=request.source_name, connector_name=self.connector_name, metadata={"url": url}, errors=[str(exc)])
         return SourceFetchResult(source_name=request.source_name, connector_name=self.connector_name, items=self.extract_items(raw), raw_text=self.extract_text(raw), metadata={"url": url, "raw_type": type(raw).__name__})
@@ -39,9 +32,9 @@ class LiveJsonConnector(JsonFileConnector):
     def build_url(self, request: SourceFetchRequest) -> str:
         return self.base_url
 
-    def get_json(self, url: str) -> Any:
+    def get_json(self, url: str, *, timeout: int = 30) -> Any:
         req = urllib.request.Request(url, headers={"User-Agent": "ai4sec-platform/0.1", "Accept": "application/json"})
-        with urllib.request.urlopen(req, timeout=30) as resp:  # noqa: S310 - explicit configured source
+        with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310 - explicit configured source
             return json.loads(resp.read().decode("utf-8"))
 
     def extract_items(self, raw: Any) -> list[dict[str, Any]]:

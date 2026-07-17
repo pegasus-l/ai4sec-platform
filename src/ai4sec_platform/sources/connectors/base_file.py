@@ -5,7 +5,6 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
-from ai4sec_platform.core.config import load_settings
 from ai4sec_platform.schemas.sources import SourceFetchRequest, SourceHealth
 from ai4sec_platform.sources.result import SourceFetchResult
 
@@ -27,8 +26,8 @@ class JsonFileConnector:
             return SourceFetchResult(
                 source_name=request.source_name,
                 connector_name=self.connector_name,
-                metadata={"path": raw_path, "live_source_fetch_enabled": load_settings().live_source_fetch_enabled},
-                errors=["live_source_fetch_disabled"],
+                metadata={"path": raw_path},
+                errors=["http_path_not_supported_by_json_file_connector"],
             )
         path = Path(raw_path)
         if not path.exists():

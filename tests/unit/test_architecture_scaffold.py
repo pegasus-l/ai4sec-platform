@@ -58,4 +58,4 @@ def test_source_registry_has_expected_connectors() -> None:
     registry_items = SourceRegistry().list()
     names = {item["connector_name"] for item in registry_items}
     assert {"arxiv", "github", "rss", "anysearch", "huawei_repo", "cve", "firmware", "gitcode", "atomgit", "hiascend", "huawei_mirror", "openx_huawei"}.issubset(names)
-    assert {item["mode"] for item in registry_items} == {"local_raw_file_only"}
+    assert {item["mode"] for item in registry_items} == {"connector_pipeline"}

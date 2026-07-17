@@ -259,8 +259,7 @@ def test_frontend_v9_contract_returns_all_page_blocks(monkeypatch) -> None:
     response = client.get("/api/frontend/v9")
     assert response.status_code == 200
     data = response.json()
-    assert data["manifest"]["data_mode"] == "local_raw_file_only"
-    assert data["manifest"]["live_source_fetch_enabled"] is False
+    assert data["manifest"]["data_mode"] == "connector_pipeline"
     assert data["news"]["items"]
     assert data["capability"]["today"]
     assert data["threat"]["targets"]
@@ -272,7 +271,7 @@ def test_frontend_v9_file_contract_aliases_sample_json_paths() -> None:
     client = TestClient(app)
     response = client.get("/api/frontend/v9/files/manifest.json")
     assert response.status_code == 200
-    assert response.json()["data_mode"] == "local_raw_file_only"
+    assert response.json()["data_mode"] == "connector_pipeline"
     news_items = client.get("/api/frontend/v9/files/news/items.json")
     assert news_items.status_code == 200
     assert isinstance(news_items.json(), list)

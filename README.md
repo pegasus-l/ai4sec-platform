@@ -56,7 +56,7 @@ AGENTS.md
 - `.env` 被 Git 忽略。
 - 输出数据库位于 `output/ai4sec_platform.db`，也被 Git 忽略。
 - 当前实现 `production_writes=false`，不写生产路径。
-- 当前实现 `live_source_fetch_enabled=false`，所有 source connector 只能读本地 JSON 原始文件；HTTP/HTTPS 路径会被拒绝。
+- 威胁洞察 connector 默认直接获取外部数据；资讯/漏洞当前仍按既定范围读取本地 raw 输入。
 - 模型配置从 `.env` 自动读取，优先使用 DeepSeek / DashScope / Local LLM 这类 OpenAI-compatible 配置；测试环境默认回退到 `local_rules`，避免单测触发真实模型费用。
 
 
@@ -133,7 +133,7 @@ PYTHONPATH=src python3 -m ai4sec_platform.cli.run_pipeline --pipeline vulnerabil
 - `threats.huawei_raw_pipeline` 通过威胁 connector 获取华为 repo、issue/security 文件、固件和镜像数据并生成威胁目标。
 - `vulnerabilities.material_local_raw_import` 从漏洞素材 report 本地 JSON 导入。
 - 三者都会写 `raw_artifacts`、`normalized_items`、`domain_items`、`evidence_items`、`pipeline_runs`、`task_runs` 和 manifest。
-- 所有 pipeline 仍保持 `production_writes=false` 和 `live_source_fetch_enabled=false`。
+- 所有 pipeline 仍保持 `production_writes=false`，不写生产路径。
 
 ## 核心数据处理逻辑
 

@@ -99,9 +99,8 @@ def _manifest(conn: sqlite3.Connection) -> dict[str, Any]:
         "name": "AI4SEC TMG",
         "version": "v9-backend-contract",
         "generated_at": utc_now(),
-        "data_mode": "local_raw_file_only",
+        "data_mode": "connector_pipeline",
         "production_writes": settings.production_writes,
-        "live_source_fetch_enabled": settings.live_source_fetch_enabled,
         "counts": {
             "news": repo.count_by_domain(conn, "news"),
             "capabilities": repo.count_by_domain(conn, "capabilities"),
@@ -128,7 +127,7 @@ def _news_sources(conn: sqlite3.Connection, items: list[dict[str, Any]]) -> list
     if not counts:
         for source in operations.sources(conn, "news")["items"]:
             counts[source.get("name") or source.get("source_type") or "unknown"] = 0
-    return [{"id": key, "name": key, "count": value, "status": "local_raw_import"} for key, value in sorted(counts.items())]
+    return [{"id": key, "name": key, "count": value, "status": "connector_pipeline"} for key, value in sorted(counts.items())]
 
 
 def _news_item(item: dict[str, Any]) -> dict[str, Any]:

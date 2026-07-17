@@ -7,9 +7,31 @@ from ai4sec_platform.schemas.sources import SourceFetchRequest
 from ai4sec_platform.sources.registry import SourceRegistry
 
 DEFAULT_LIVE_ORGS = [
-    {"platform": "gitcode", "org": "openharmony"},
-    {"platform": "gitcode", "org": "openharmony-sig"},
+    {"platform": "gitcode", "org": "Ascend"},
+    {"platform": "gitcode", "org": "Cangjie"},
+    {"platform": "gitcode", "org": "Cantian"},
+    {"platform": "gitcode", "org": "DevCloudFE"},
+    {"platform": "gitcode", "org": "ModelEngine"},
+    {"platform": "gitcode", "org": "arkui-x"},
+    {"platform": "gitcode", "org": "cann"},
+    {"platform": "gitcode", "org": "eBackup"},
+    {"platform": "gitcode", "org": "huaweicloud"},
+    {"platform": "gitcode", "org": "kappital"},
+    {"platform": "gitcode", "org": "kunpengcompute"},
+    {"platform": "atomgit", "org": "mindspore"},
+    {"platform": "gitcode", "org": "openFuyao"},
+    {"platform": "gitcode", "org": "openHiTLS"},
+    {"platform": "gitcode", "org": "openInula"},
+    {"platform": "gitcode", "org": "openJiuwen"},
+    {"platform": "gitcode", "org": "openUBMC"},
     {"platform": "atomgit", "org": "openeuler"},
+    {"platform": "gitcode", "org": "opengauss"},
+    {"platform": "gitcode", "org": "openharmony-sig"},
+    {"platform": "gitcode", "org": "openharmony-tpc"},
+    {"platform": "gitcode", "org": "openharmony"},
+    {"platform": "gitcode", "org": "openkylin"},
+    {"platform": "gitcode", "org": "openlookeng"},
+    {"platform": "gitcode", "org": "opentiny"},
 ]
 SECURITY_FILE_SUFFIXES = (".md", ".markdown", ".yml", ".yaml", ".json")
 SECURITY_FILE_TERMS = ["security", "advisory", "cve", "vulnerability", "vuln", "漏洞", "安全公告", "安全披露"]
@@ -31,7 +53,7 @@ def load_huawei_live(params: dict[str, Any]) -> list[dict[str, Any]]:
 
 def _collect_live_repos(registry: SourceRegistry, params: dict[str, Any]) -> list[dict[str, Any]]:
     orgs = params.get("orgs") or DEFAULT_LIVE_ORGS
-    page_limit = int(params.get("page_limit", 1))
+    page_limit = int(params.get("page_limit", 2))
     per_page = int(params.get("per_page", 100))
     repos: list[dict[str, Any]] = []
     for entry in orgs:
@@ -42,7 +64,7 @@ def _collect_live_repos(registry: SourceRegistry, params: dict[str, Any]) -> lis
             org = str(entry.get("org") or "")
         connector = registry.get(platform)
         for page in range(1, page_limit + 1):
-            result = connector.fetch(SourceFetchRequest(source_name=f"{platform}:{org}:repos", params={"resource": "repos", "org": org, "page": page, "per_page": per_page}))
+            result = connector.fetch(SourceFetchRequest(source_name=f"{platform}:{org}:repos", params={"resource": "repos", "org": org, "page": page, "per_page": per_page, "timeout_seconds": params.get("timeout_seconds", 20)}))
             if result.errors:
                 break
             batch = [_normalize_repo_item(item, org=org, platform=platform) for item in result.items]
@@ -58,10 +80,11 @@ def _enrich_security_repos(registry: SourceRegistry, repos: list[dict[str, Any]]
     grouped = group_projects_by_org(repos)
     security = discover_security_repos(grouped)
     issue_pages = int(params.get("security_issue_pages", 1))
-    max_files = int(params.get("security_file_limit", 30))
+    max_files = int(params.get("security_file_limit", 8))
+    max_security_repos = int(params.get("security_repo_limit", 8))
     by_key = {(repo.get("platform"), repo.get("org"), repo.get("name")): repo for repo in repos}
     for org, sec_data in security.items():
-        for sec_repo in sec_data.get("security_repos") or []:
+        for sec_repo in (sec_data.get("security_repos") or [])[:max_security_repos]:
             platform = sec_repo.get("platform") or _platform_from_url(sec_repo.get("url") or "")
             owner = sec_repo.get("org") or org
             repo_name = sec_repo.get("name") or ""
@@ -70,7 +93,7 @@ def _enrich_security_repos(registry: SourceRegistry, repos: list[dict[str, Any]]
                 continue
             issues = []
             for page in range(1, issue_pages + 1):
-                result = connector.fetch(SourceFetchRequest(source_name=f"{platform}:{owner}/{repo_name}:issues", params={"resource": "issues", "owner": owner, "repo": repo_name, "page": page, "per_page": 100}))
+                result = connector.fetch(SourceFetchRequest(source_name=f"{platform}:{owner}/{repo_name}:issues", params={"resource": "issues", "owner": owner, "repo": repo_name, "page": page, "per_page": 100, "timeout_seconds": params.get("timeout_seconds", 20)}))
                 if result.errors or not result.items:
                     break
                 issues.extend(result.items)
@@ -85,7 +108,7 @@ def _enrich_security_repos(registry: SourceRegistry, repos: list[dict[str, Any]]
 
 
 def _fetch_security_files(connector, platform: str, owner: str, repo_name: str, *, max_files: int) -> list[dict[str, Any]]:
-    contents = connector.fetch(SourceFetchRequest(source_name=f"{platform}:{owner}/{repo_name}:contents", params={"resource": "contents", "owner": owner, "repo": repo_name}))
+    contents = connector.fetch(SourceFetchRequest(source_name=f"{platform}:{owner}/{repo_name}:contents", params={"resource": "contents", "owner": owner, "repo": repo_name, "timeout_seconds": 15}))
     if contents.errors:
         return []
     candidates = []
@@ -101,7 +124,7 @@ def _fetch_security_files(connector, platform: str, owner: str, repo_name: str, 
         candidates.append(path)
     files = []
     for path in candidates[:max_files]:
-        result = connector.fetch(SourceFetchRequest(source_name=f"{platform}:{owner}/{repo_name}:file", params={"resource": "file", "owner": owner, "repo": repo_name, "path": path}))
+        result = connector.fetch(SourceFetchRequest(source_name=f"{platform}:{owner}/{repo_name}:file", params={"resource": "file", "owner": owner, "repo": repo_name, "path": path, "timeout_seconds": 15}))
         if result.errors:
             continue
         files.append({"path": path, "content": result.raw_text, "source_url": f"{_web_base(platform)}/{owner}/{repo_name}/blob/master/{path}"})

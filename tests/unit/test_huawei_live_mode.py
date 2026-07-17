@@ -12,11 +12,11 @@ from ai4sec_platform.schemas.sources import SourceFetchRequest
 import sqlite3
 
 
-def test_live_connectors_are_disabled_by_default() -> None:
+def test_threat_connectors_build_live_requests() -> None:
     connector = SourceRegistry().get("gitcode")
-    result = connector.fetch(SourceFetchRequest(source_name="gitcode:test", params={"resource": "repos", "org": "openharmony"}))
-    assert result.items == []
-    assert result.errors == ["live_source_fetch_disabled"]
+    url = connector.build_url(SourceFetchRequest(source_name="gitcode:test", params={"resource": "repos", "org": "openharmony", "page": 1, "per_page": 10}))
+    assert "orgs/openharmony/repos" in url
+    assert "per_page=10" in url
 
 
 def test_huawei_sources_live_mode_can_feed_existing_pipeline(monkeypatch, tmp_path) -> None:

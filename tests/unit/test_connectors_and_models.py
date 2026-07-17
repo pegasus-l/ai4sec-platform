@@ -29,7 +29,7 @@ def test_json_source_connector_rejects_live_http_fetch_by_default() -> None:
         )
     )
     assert result.items == []
-    assert result.errors == ["live_source_fetch_disabled"]
+    assert result.errors == ["http_path_not_supported_by_json_file_connector"]
 
 
 def test_llm_router_defaults_to_local_rule_provider() -> None:
