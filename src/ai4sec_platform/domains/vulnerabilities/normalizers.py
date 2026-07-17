@@ -20,5 +20,6 @@ def normalize_material(item: dict) -> dict:
         "category": item.get("category") or ("高相关" if item.get("is_relevant") else "待复核"),
         "markdown_length": crawl_info.get("markdown_length"),
         "key_findings": item.get("key_findings") or [],
+        "content_quality": "rich" if (crawl_info.get("markdown_length") or 0) >= 3000 else "usable" if (crawl_info.get("markdown_length") or 0) >= 800 else "thin",
         "raw": item,
     }

@@ -4,6 +4,7 @@ from dataclasses import dataclass
 
 from ai4sec_platform.db import repositories as repo
 from ai4sec_platform.domains.capabilities.adapters.from_news import capability_candidates_from_news
+from ai4sec_platform.domains.capabilities.scorers import score_capability_candidate
 from ai4sec_platform.models.router import LLMRouter
 from ai4sec_platform.pipelines.context import PipelineContext
 from ai4sec_platform.pipelines.results import StepResult
@@ -63,6 +64,9 @@ class AssessCapabilitiesStep:
             item_data = repo.row_to_dict(item)
             prompt = "评估该论文或项目是否值得复现和能力转化，输出结构化建议。"
             output = router.complete_json(profile=self.model_profile, prompt=prompt, payload=item_data)
+            scoring = score_capability_candidate(item_data)
+            model_result = output.get("result") or output.get("parsed") or {}
+            recommended_status = model_result.get("recommended_status") or ("待复现验证" if scoring.priority in {"high", "medium"} else "待资料补齐")
             repo.create_model_call(
                 context.conn,
                 run_id=context.run_id,
@@ -76,10 +80,10 @@ class AssessCapabilitiesStep:
             repo.update_domain_item(
                 context.conn,
                 item_id=item_id,
-                status="待复现验证",
-                score=item_data.get("score") if item_data.get("score") is not None else 0.5,
-                metrics={"assessment_status": "rule_assessed"},
-                payload={"assessment": output},
+                status=recommended_status,
+                score=scoring.score,
+                metrics={"assessment_status": "model_assessed", "score_breakdown": scoring.breakdown},
+                payload={"assessment": output, "capability_scoring": scoring.as_payload()},
             )
             assessed += 1
         artifact = context.artifact_store.write_json(context.conn, run_id=context.run_id, artifact_type="capability_assessments", name="capabilities/assessments.json", data={"assessed": assessed, "model_profile": self.model_profile})

@@ -131,6 +131,17 @@ PYTHONPATH=src python3 -m ai4sec_platform.cli.run_pipeline --pipeline vulnerabil
 - 三者都会写 `raw_artifacts`、`normalized_items`、`domain_items`、`evidence_items`、`pipeline_runs`、`task_runs` 和 manifest。
 - 所有 pipeline 仍保持 `production_writes=false` 和 `live_source_fetch_enabled=false`。
 
+## 核心数据处理逻辑
+
+当前已实现第一版真实处理逻辑，不再只是字段搬运：
+
+- 资讯：按 AI 安全、Agent 安全、漏洞攻防、代码仓库线索分类，并按相关性、代码线索、影响力和新鲜度评分。
+- 能力：从资讯候选中识别可复现代码/论文线索，按复现性、研究价值和安全价值评分。
+- 威胁：从 repo/CVE/固件/镜像 raw 中抽 CVE、security issue、advisory、exploit/PoC、暴露面信号，并输出可解释风险分。
+- 漏洞素材：从搜索/报告 raw 中判断 PoC/Exploit、深度技术分析、漏洞公告、影响范围线索，抽取 CVE、影响版本、PoC 和修复线索，并计算素材有效性分。
+
+公共结构位于 `schemas/classification.py` 和 `schemas/scoring.py`；公共编排位于 `pipelines/steps/classify.py` 和 `pipelines/steps/score.py`；领域规则继续放在 `domains/*/` 下。
+
 ## 能力洞察 Pipeline
 
 在 `news.ai_for_sec_local_raw_import` 运行后，可以继续运行：

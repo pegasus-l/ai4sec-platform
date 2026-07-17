@@ -29,6 +29,8 @@ def normalize_repo(source: str, item: dict[str, Any]) -> dict[str, Any]:
         "risk_score": item.get("attack_surface_score") or item.get("risk_score") or item.get("score"),
         "risk_grade": item.get("grade") or item.get("risk_grade") or "",
         "attack_surface": item.get("primary_attack_surface") or item.get("attack_surface") or "",
+        "stars": item.get("stars") or item.get("star_count") or item.get("stargazers_count"),
+        "cve_count": item.get("cve_count"),
         "raw": item,
     }
 
@@ -46,6 +48,8 @@ def normalize_cve_project(source: str, item: dict[str, Any]) -> dict[str, Any]:
         "url": item.get("url") or "",
         "summary": f"CVE {len(cves)} 条，安全相关线索 {item.get('total_sec_items') or 0} 条。",
         "risk_score": item.get("cve_count") or len(cves),
+        "cve_count": item.get("cve_count") or len(cves),
+        "security_items": item.get("total_sec_items") or 0,
         "cves": cves,
         "raw": item,
     }
