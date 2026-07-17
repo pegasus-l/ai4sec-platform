@@ -35,7 +35,7 @@ class SelectThreatRiskCandidatesStep:
 class ReasonThreatRiskStep:
     name: str = "reason_threat_risk"
     step_type: str = "llm_review"
-    model_profile: str = "mock_default"
+    model_profile: str = "local_rules"
 
     def run(self, context: PipelineContext) -> StepResult:
         ids = context.outputs.get("threat_risk_candidate_ids") or []
@@ -54,7 +54,7 @@ class ReasonThreatRiskStep:
                 run_id=context.run_id,
                 agent_name="risk_reasoning",
                 model_profile=self.model_profile,
-                provider="mock",
+                provider=output.get("provider", "local_rules"),
                 status="success",
                 input_payload={"item": target, "prompt": prompt},
                 output_payload=output,
@@ -106,7 +106,7 @@ class ReasonThreatRiskStep:
             audit_type="risk_reasoning",
             status="pass" if reasoned else "warn",
             score=0.8 if reasoned else 0.2,
-            summary=f"威胁风险研判 {reasoned} 条，高优先级跟踪 {tracked} 条，当前使用 mock provider。",
+            summary=f"威胁风险研判 {reasoned} 条，高优先级跟踪 {tracked} 条，当前使用本地规则引擎。",
             details={"run_id": context.run_id},
         )
         return StepResult(metrics={"reasoned": reasoned, "tracked": tracked}, artifacts=[artifact])

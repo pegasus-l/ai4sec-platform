@@ -243,7 +243,7 @@ def create_model_call(
     run_id: str,
     agent_name: str,
     model_profile: str,
-    provider: str = "mock",
+    provider: str = "local_rules",
     status: str = "success",
     input_payload: dict[str, Any] | None = None,
     output_payload: dict[str, Any] | None = None,

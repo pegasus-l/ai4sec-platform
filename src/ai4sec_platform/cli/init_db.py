@@ -9,7 +9,7 @@ from ai4sec_platform.db.session import connect
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Initialize AI4SEC platform SQLite database")
-    parser.add_argument("--reset", action="store_true", help="Drop and recreate first-stage tables")
+    parser.add_argument("--reset", action="store_true", help="Drop and recreate platform tables")
     args = parser.parse_args()
     settings = load_settings()
     with connect(settings) as conn:

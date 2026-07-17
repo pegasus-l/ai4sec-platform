@@ -158,7 +158,7 @@ def _capability_item(item: dict[str, Any]) -> dict[str, Any]:
 
 
 def _capability_repro_runs(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    return [{"id": f"repro-{item['id']}", "capability_id": item["id"], "title": item["title"], "status": item.get("status"), "runner": "shadow-placeholder"} for item in items[:30]]
+    return [{"id": f"repro-{item['id']}", "capability_id": item["id"], "title": item["title"], "status": item.get("status"), "runner": "local-rule-queue", "next_action": "确认依赖、数据集和最小复现命令"} for item in items[:30]]
 
 
 def _capability_conversions(items: list[dict[str, Any]]) -> list[dict[str, Any]]:

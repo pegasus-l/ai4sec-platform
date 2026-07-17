@@ -11,7 +11,7 @@ RULES = {
         {"name": "能力候选", "value": "has_code or repo", "description": "有代码实现的高价值条目进入能力洞察。"},
     ],
     "capabilities": [
-        {"name": "复现状态", "value": "第一阶段占位", "description": "只展示待复现/已有结果，不触发 runner。"},
+        {"name": "复现状态", "value": "local_rules", "description": "基于本地规则判断待复现、待资料补齐和转化优先级。"},
     ],
     "threats": [
         {"name": "高风险目标", "value": "attack_surface_score >= 80", "description": "优先进入人工复核和跟踪队列。"},

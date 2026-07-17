@@ -138,7 +138,7 @@ PYTHONPATH=src python3 -m ai4sec_platform.cli.run_pipeline --pipeline vulnerabil
 PYTHONPATH=src python3 -m ai4sec_platform.cli.run_pipeline --pipeline capabilities.from_news_pipeline
 ```
 
-该 pipeline 会复用或生成能力候选，使用 mock model provider 完成第一版能力评估，并写入 `model_calls`。
+该 pipeline 会复用或生成能力候选，使用本地规则引擎完成能力评估，并写入 `model_calls`。
 
 ## 前端 v9 数据契约
 

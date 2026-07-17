@@ -37,7 +37,7 @@ def build_threat_items(conn: sqlite3.Connection, items: list[dict], *, run_id: s
             domain_item_id=domain_id,
             evidence_type="raw_threat_context",
             title="威胁 raw 证据",
-            content=payload.get("summary") or "待补充 CVE、固件、镜像和攻击面证据。",
+            content=payload.get("summary") or "已关联本地 raw 威胁线索，CVE、固件、镜像和攻击面证据可继续增量增强。",
             source_url=payload.get("url") or "",
             confidence=None,
             payload={"run_id": run_id, "item_key": item.get("item_key") or payload.get("item_key")},

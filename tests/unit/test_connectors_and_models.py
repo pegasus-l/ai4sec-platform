@@ -2,6 +2,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from ai4sec_platform.agents.capability_assess import CapabilityAssessAgent
+from ai4sec_platform.agents.knowledge_extract import KnowledgeExtractAgent
+from ai4sec_platform.agents.risk_reasoning import RiskReasoningAgent
 from ai4sec_platform.models.router import LLMRouter
 from ai4sec_platform.schemas.sources import SourceFetchRequest
 from ai4sec_platform.sources.registry import SourceRegistry
@@ -28,7 +31,14 @@ def test_json_source_connector_rejects_live_http_fetch_by_default() -> None:
     assert result.errors == ["live_source_fetch_disabled"]
 
 
-def test_llm_router_defaults_to_mock_provider() -> None:
-    result = LLMRouter().complete_json(prompt="return json", payload={"hello": "world"})
-    assert result["status"] == "mock"
-    assert result["payload"] == {"hello": "world"}
+def test_llm_router_defaults_to_local_rule_provider() -> None:
+    result = LLMRouter().complete_json(prompt="能力评估", payload={"domain": "capabilities", "title": "test github.com/example/repo"})
+    assert result["provider"] == "local_rules"
+    assert result["status"] == "success"
+    assert result["result"]["recommended_status"] == "待复现验证"
+
+
+def test_agents_return_rule_results() -> None:
+    assert CapabilityAssessAgent().run({"domain": "capabilities", "title": "repo github.com/a/b"})["status"] == "success"
+    assert RiskReasoningAgent().run({"domain": "threats", "score": 90})["result"]["recommended_status"] == "高风险跟踪"
+    assert KnowledgeExtractAgent().run({"domain": "vulnerabilities", "summary": "CVE 分析"})["result"]["migration_status"] == "待人工确认"

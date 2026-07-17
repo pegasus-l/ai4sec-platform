@@ -40,11 +40,6 @@ class JsonFileConnector:
         return SourceFetchResult(source_name=request.source_name, connector_name=self.connector_name, items=extract_items(raw), metadata={"path": str(path), "raw_type": type(raw).__name__})
 
 
-class PlaceholderConnector(JsonFileConnector):
-    connector_name = "placeholder"
-    source_type = "placeholder"
-
-
 def extract_items(raw: Any) -> list[dict[str, Any]]:
     if isinstance(raw, list):
         return [item for item in raw if isinstance(item, dict)]

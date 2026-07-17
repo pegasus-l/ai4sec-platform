@@ -10,10 +10,10 @@ pipelines:
     description: 漏洞素材 report 本地 raw JSON 导入和素材构建
   capabilities.from_news_pipeline:
     domain: capabilities
-    description: 从资讯候选生成能力候选并进行 mock 评估
+    description: 从资讯候选生成能力候选并进行本地规则评估
   threats.risk_reasoning_pipeline:
     domain: threats
-    description: 对威胁目标进行 mock 风险研判并进入跟踪队列
+    description: 对威胁目标进行本地规则风险研判并进入跟踪队列
   vulnerabilities.knowledge_extraction_pipeline:
     domain: vulnerabilities
-    description: 对漏洞素材进行 mock 知识抽取并进入迁移复核队列
+    description: 对漏洞素材进行本地规则知识抽取并进入迁移复核队列

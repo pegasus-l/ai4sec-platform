@@ -1,7 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Any
+from dataclasses import dataclass
 
 from ai4sec_platform.pipelines.context import PipelineContext
 from ai4sec_platform.pipelines.results import StepResult
@@ -11,8 +10,9 @@ from ai4sec_platform.pipelines.results import StepResult
 class SummarizeStep:
     name: str = "summarize"
     step_type: str = "summarize"
-    note: str = "planned"
-    metrics: dict[str, Any] = field(default_factory=dict)
+    output_key: str = "summary"
 
     def run(self, context: PipelineContext) -> StepResult:
-        return StepResult(metrics={"status": self.note, **self.metrics})
+        summary = {key: len(value) if isinstance(value, list) else type(value).__name__ for key, value in context.outputs.items()}
+        context.outputs[self.output_key] = summary
+        return StepResult(metrics=summary)

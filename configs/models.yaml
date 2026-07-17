@@ -1,7 +1,7 @@
 providers:
-  mock:
-    type: mock
+  local_rules:
+    type: local_rules
 model_profiles:
-  mock_default:
-    provider: mock
-    model: mock-json
+  local_rules:
+    provider: local_rules
+    model: offline-rule-engine

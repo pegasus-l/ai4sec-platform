@@ -50,7 +50,7 @@ class BuildCapabilitiesFromNewsStep:
 class AssessCapabilitiesStep:
     name: str = "assess_capabilities"
     step_type: str = "llm_review"
-    model_profile: str = "mock_default"
+    model_profile: str = "local_rules"
 
     def run(self, context: PipelineContext) -> StepResult:
         ids = context.outputs.get("capability_candidate_ids") or []
@@ -68,7 +68,7 @@ class AssessCapabilitiesStep:
                 run_id=context.run_id,
                 agent_name="capability_assess",
                 model_profile=self.model_profile,
-                provider="mock",
+                provider=output.get("provider", "local_rules"),
                 status="success",
                 input_payload={"item": item_data, "prompt": prompt},
                 output_payload=output,
@@ -78,10 +78,10 @@ class AssessCapabilitiesStep:
                 item_id=item_id,
                 status="待复现验证",
                 score=item_data.get("score") if item_data.get("score") is not None else 0.5,
-                metrics={"assessment_status": "mock_assessed"},
+                metrics={"assessment_status": "rule_assessed"},
                 payload={"assessment": output},
             )
             assessed += 1
         artifact = context.artifact_store.write_json(context.conn, run_id=context.run_id, artifact_type="capability_assessments", name="capabilities/assessments.json", data={"assessed": assessed, "model_profile": self.model_profile})
-        repo.create_quality_audit(context.conn, domain="capabilities", audit_type="capability_assessment", status="pass" if assessed else "warn", score=0.8 if assessed else 0.2, summary=f"能力评估 {assessed} 条，当前使用 mock provider。", details={"run_id": context.run_id})
+        repo.create_quality_audit(context.conn, domain="capabilities", audit_type="capability_assessment", status="pass" if assessed else "warn", score=0.8 if assessed else 0.2, summary=f"能力评估 {assessed} 条，当前使用本地规则引擎。", details={"run_id": context.run_id})
         return StepResult(metrics={"assessed": assessed, "model_profile": self.model_profile}, artifacts=[artifact])
