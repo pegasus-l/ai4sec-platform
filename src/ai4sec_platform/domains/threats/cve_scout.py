@@ -1,0 +1,156 @@
+from __future__ import annotations
+
+from collections import Counter
+from typing import Any
+
+from ai4sec_platform.domains.threats.issue_extractors import extract_security_items_from_issues, extract_security_items_from_pull_requests
+from ai4sec_platform.domains.threats.security_file_parsers import dedupe_security_items, parse_security_file, parse_security_json
+from ai4sec_platform.domains.threats.security_repo_discovery import discover_security_repos, group_projects_by_org
+
+STAR_SCAN_THRESHOLD = 10
+
+
+def build_cve_scout_from_local_records(projects: list[dict[str, Any]], existing_cve_orgs: dict[str, Any] | None = None) -> dict[str, Any]:
+    grouped = group_projects_by_org(projects)
+    security = discover_security_repos(grouped)
+    orgs_output: dict[str, Any] = {}
+    source_stats: Counter[str] = Counter()
+    scan_mode_stats: Counter[str] = Counter()
+    total_projects_with_data = 0
+    total_cve = 0
+    total_sa = 0
+    total_broad = 0
+    existing_cve_orgs = existing_cve_orgs or {}
+    for org, org_projects in grouped.items():
+        existing_projects = ((existing_cve_orgs.get(org) or {}).get("projects") or {}) if isinstance(existing_cve_orgs.get(org), dict) else {}
+        org_data = {
+            "has_security_repo": bool(security.get(org, {}).get("has_security_repo")),
+            "security_repo_name": (security.get(org, {}).get("primary_repo") or {}).get("name", ""),
+            "security_repo_url": (security.get(org, {}).get("primary_repo") or {}).get("url", ""),
+            "total_projects": len(org_projects),
+            "projects": {},
+        }
+        org_projects_with_data = 0
+        security_pool = _security_pool_from_existing(existing_projects)
+        for project in org_projects:
+            name = str(project.get("name") or "")
+            existing = existing_projects.get(name) if isinstance(existing_projects, dict) else None
+            if isinstance(existing, dict):
+                pdata = _normalize_existing_project_cve(project, existing)
+                scan_mode = pdata.get("scan_mode") or "from_existing"
+            else:
+                pool_items = _match_pool(name, security_pool)
+                fallback_items = []
+                scan_mode = "from_pool"
+                if not pool_items and int(project.get("star_count") or 0) >= STAR_SCAN_THRESHOLD:
+                    fallback_items = extract_security_items_from_issues(project.get("issues") or [], source_type="project_issue")
+                    fallback_items.extend(extract_security_items_from_pull_requests(project.get("pull_requests") or project.get("prs") or []))
+                    scan_mode = "scanned_local_issues" if fallback_items else "scanned_no_hits"
+                elif not pool_items:
+                    scan_mode = "not_scanned"
+                pdata = _project_cve_payload(project, dedupe_security_items([*pool_items, *fallback_items]), scan_mode)
+            org_data["projects"][name] = pdata
+            scan_mode_stats[pdata.get("scan_mode", "unknown")] += 1
+            for item in [*pdata.get("cves", []), *pdata.get("sa_items", []), *pdata.get("broad_sec_items", [])]:
+                source_stats[item.get("source_type", "unknown")] += 1
+            total_cve += pdata.get("cve_count", 0)
+            total_sa += pdata.get("sa_count", 0)
+            total_broad += pdata.get("broad_sec_count", 0)
+            if pdata.get("total_sec_items", 0):
+                org_projects_with_data += 1
+                total_projects_with_data += 1
+        org_data["projects_with_sec_data"] = org_projects_with_data
+        orgs_output[org] = org_data
+    unique_cves = sorted({item.get("cve_id") for org in orgs_output.values() for project in org["projects"].values() for item in project.get("cves", []) if item.get("cve_id")})
+    unique_sas = sorted({item.get("sa_id") for org in orgs_output.values() for project in org["projects"].values() for item in project.get("sa_items", []) if item.get("sa_id")})
+    return {
+        "meta": {
+            "total_projects_in": len(projects),
+            "total_orgs": len(grouped),
+            "projects_with_sec_data": total_projects_with_data,
+            "total_cve_ids": total_cve,
+            "unique_cve_ids": len(unique_cves),
+            "total_sa_ids": total_sa,
+            "unique_sa_ids": len(unique_sas),
+            "total_broad_sec_items": total_broad,
+            "total_sec_items": total_cve + total_sa + total_broad,
+            "source_stats": dict(source_stats),
+            "scan_mode_stats": dict(scan_mode_stats),
+            "orgs_with_security_repo": sorted([org for org, data in security.items() if data.get("has_security_repo")]),
+            "orgs_without_security_repo": sorted([org for org, data in security.items() if not data.get("has_security_repo")]),
+            "star_scan_threshold": STAR_SCAN_THRESHOLD,
+        },
+        "security_repo_discovery": security,
+        "orgs": orgs_output,
+    }
+
+
+def parse_security_repo_materials(materials: list[dict[str, Any]], repo_names: list[str] | None = None) -> list[dict[str, Any]]:
+    parsed: list[dict[str, Any]] = []
+    for material in materials:
+        if not isinstance(material, dict):
+            continue
+        content = material.get("content") or material.get("text") or material.get("body") or ""
+        source_path = material.get("path") or material.get("source_path") or ""
+        source_url = material.get("url") or material.get("source_url") or ""
+        if material.get("raw_json") is not None:
+            parsed.extend(parse_security_json(material.get("raw_json"), source_path=source_path, source_url=source_url, repo_names=repo_names))
+        else:
+            parsed.extend(parse_security_file(str(content), source_path=source_path, source_url=source_url, repo_names=repo_names))
+    return dedupe_security_items(parsed)
+
+
+def _security_pool_from_existing(projects: dict[str, Any]) -> list[dict[str, Any]]:
+    pool: list[dict[str, Any]] = []
+    for name, pdata in (projects or {}).items():
+        if not isinstance(pdata, dict):
+            continue
+        for key in ["cves", "sa_items", "broad_sec_items"]:
+            for item in pdata.get(key) or []:
+                if isinstance(item, dict):
+                    pool.append({**item, "project_hints": list(set([name, *item.get("project_hints", [])]))})
+    return pool
+
+
+def _match_pool(project_name: str, pool: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    lowered = project_name.lower()
+    matched = []
+    for item in pool:
+        hints = [str(hint).lower() for hint in item.get("project_hints") or []]
+        description = str(item.get("description") or "").lower()
+        if lowered in hints or (lowered and lowered in description):
+            matched.append(item)
+    return dedupe_security_items(matched)
+
+
+def _normalize_existing_project_cve(project: dict[str, Any], existing: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "url": existing.get("url") or project.get("url") or "",
+        "star_count": existing.get("star_count") if existing.get("star_count") is not None else project.get("star_count", 0),
+        "scan_mode": existing.get("scan_mode") or "from_existing",
+        "cve_count": int(existing.get("cve_count") or len(existing.get("cves") or [])),
+        "sa_count": int(existing.get("sa_count") or len(existing.get("sa_items") or [])),
+        "broad_sec_count": int(existing.get("broad_sec_count") or len(existing.get("broad_sec_items") or [])),
+        "total_sec_items": int(existing.get("total_sec_items") or 0) or len(existing.get("cves") or []) + len(existing.get("sa_items") or []) + len(existing.get("broad_sec_items") or []),
+        "cves": existing.get("cves") or [],
+        "sa_items": existing.get("sa_items") or [],
+        "broad_sec_items": existing.get("broad_sec_items") or [],
+    }
+
+
+def _project_cve_payload(project: dict[str, Any], items: list[dict[str, Any]], scan_mode: str) -> dict[str, Any]:
+    cves = [item for item in items if item.get("cve_id")]
+    sas = [item for item in items if item.get("sa_id") or item.get("is_sa")]
+    broad = [item for item in items if not item.get("cve_id") and not item.get("sa_id")]
+    return {
+        "url": project.get("url") or "",
+        "star_count": project.get("star_count") or 0,
+        "scan_mode": scan_mode,
+        "cve_count": len(cves),
+        "sa_count": len(sas),
+        "broad_sec_count": len(broad),
+        "total_sec_items": len(items),
+        "cves": cves,
+        "sa_items": sas,
+        "broad_sec_items": broad,
+    }

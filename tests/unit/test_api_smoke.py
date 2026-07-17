@@ -87,6 +87,10 @@ def test_v9_contract_endpoint_aliases_exist() -> None:
         "/api/threats/tracking",
         "/api/threats/graph",
         "/api/threats/risk-assessments",
+        "/api/threats/assets",
+        "/api/threats/cve-scout",
+        "/api/threats/attack-surface",
+        "/api/threats/reports",
         "/api/vulnerabilities/materials",
         "/api/vulnerabilities/knowledge",
         "/api/vulnerabilities/migration-queue",
@@ -170,6 +174,21 @@ def test_threat_risk_pipeline_reasons_targets() -> None:
     assert assessments["items"]
     calls = client.get("/api/operations/model-calls?domain=threats").json()
     assert calls["items"]
+
+
+def test_huawei_full_migration_pipeline_runs_and_exposes_reports() -> None:
+    client = TestClient(app)
+    response = client.post("/api/runs", json={"pipeline_name": "threats.huawei_full_migration_pipeline", "reset": True, "params": {"limit": 5, "top_n": 5}})
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "success"
+    step_names = [step["name"] for step in data["summary"]["steps"]]
+    assert "huawei_cve_scout" in step_names
+    assert "huawei_attack_surface_score" in step_names
+    assert "build_huawei_threat_report" in step_names
+    assert client.get("/api/threats/cve-scout").json()["status"] == "ok"
+    assert client.get("/api/threats/attack-surface").json()["status"] == "ok"
+    assert client.get("/api/threats/reports").json()["status"] == "ok"
 
 
 def test_frontend_v9_contract_returns_all_page_blocks() -> None:

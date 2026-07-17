@@ -31,9 +31,13 @@ def page_contract(conn: sqlite3.Connection) -> dict[str, Any]:
         "threat": {
             "today": [_threat_item(item) for item in threat_targets[:30]],
             "targets": [_threat_item(item) for item in threat_targets],
+            "assets": [_threat_item(item) for item in _items(domain_items.list_items(conn, "threats", item_type="asset", limit=100))],
             "tracking": operations.human_queue(conn, "threats")["items"],
             "graph": _threat_graph(threat_targets),
             "riskAssessments": [_risk_assessment(item) for item in threat_targets if (item.get("payload") or {}).get("risk_assessment")],
+            "cveScout": _latest_artifact(conn, "huawei_cve_scout"),
+            "attackSurface": _latest_artifact(conn, "huawei_attack_surface"),
+            "reports": _latest_artifact(conn, "huawei_threat_report"),
         },
         "vuln": {
             "today": [_vuln_material(item) for item in vuln_materials[:30]],
@@ -65,8 +69,12 @@ def static_file_contract(conn: sqlite3.Connection, path: str) -> Any:
         "capability/conversions.json": data["capability"]["conversions"],
         "threat/today.json": data["threat"]["today"],
         "threat/targets.json": data["threat"]["targets"],
+        "threat/assets.json": data["threat"]["assets"],
         "threat/tracking.json": data["threat"]["tracking"],
         "threat/graph.json": data["threat"]["graph"],
+        "threat/cve_scout.json": data["threat"]["cveScout"],
+        "threat/attack_surface.json": data["threat"]["attackSurface"],
+        "threat/reports.json": data["threat"]["reports"],
         "vuln/today_materials.json": data["vuln"]["today"],
         "vuln/materials.json": data["vuln"]["materials"],
         "vuln/knowledge_items.json": data["vuln"]["knowledge"],
@@ -82,6 +90,11 @@ def static_file_contract(conn: sqlite3.Connection, path: str) -> Any:
 
 def _items(result: dict[str, Any]) -> list[dict[str, Any]]:
     return list(result.get("items") or [])
+
+
+def _latest_artifact(conn: sqlite3.Connection, artifact_type: str) -> dict[str, Any]:
+    row = conn.execute("SELECT * FROM artifacts WHERE artifact_type = ? ORDER BY id DESC LIMIT 1", (artifact_type,)).fetchone()
+    return repo.row_to_dict(row) if row else {}
 
 
 def _manifest(conn: sqlite3.Connection) -> dict[str, Any]:

@@ -30,6 +30,10 @@ GET /api/runs/{run_id}
 GET /api/news/today
 GET /api/capabilities/today
 GET /api/threats/today
+GET /api/threats/cve-scout
+GET /api/threats/attack-surface
+GET /api/threats/assets
+GET /api/threats/reports
 GET /api/vulnerabilities/today
 GET /api/operations/tasks
 GET /api/operations/sources
@@ -141,6 +145,16 @@ PYTHONPATH=src python3 -m ai4sec_platform.cli.run_pipeline --pipeline vulnerabil
 - 漏洞素材：从搜索/报告 raw 中判断 PoC/Exploit、深度技术分析、漏洞公告、影响范围线索，抽取 CVE、影响版本、PoC 和修复线索，并计算素材有效性分。
 
 公共结构位于 `schemas/classification.py` 和 `schemas/scoring.py`；公共编排位于 `pipelines/steps/classify.py` 和 `pipelines/steps/score.py`；领域规则继续放在 `domains/*/` 下。
+
+## 华为威胁完整迁移 Pipeline
+
+旧 `/repo-info/huawei` 的核心逻辑已迁入当前架构：
+
+```bash
+PYTHONPATH=src python3 -m ai4sec_platform.cli.run_pipeline --pipeline threats.huawei_full_migration_pipeline --reset
+```
+
+包含：security repo 发现、CVE/SA/broad security 侦察、旧攻击面评分/过滤、固件/AscendHub/镜像资产导入、LLM 语义复核、迁移报告 artifact。
 
 ## 能力洞察 Pipeline
 
