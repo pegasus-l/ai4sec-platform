@@ -6,6 +6,7 @@ from ai4sec_platform.domains.threats.security_repo_discovery import discover_sec
 from ai4sec_platform.schemas.sources import SourceFetchRequest
 from ai4sec_platform.sources.registry import SourceRegistry
 
+CVE_DIR_TERMS = ["security-disclosure", "advisory", "cve", "vulnerability", "vuln", "漏洞", "安全公告", "安全披露"]
 DEFAULT_LIVE_ORGS = [
     {"platform": "gitcode", "org": "Ascend"},
     {"platform": "gitcode", "org": "Cangjie"},
@@ -80,10 +81,14 @@ def _enrich_security_repos(registry: SourceRegistry, repos: list[dict[str, Any]]
     grouped = group_projects_by_org(repos)
     security = discover_security_repos(grouped)
     issue_pages = int(params.get("security_issue_pages", 2 if _full_scan(params) else 1))
+    pr_pages = int(params.get("security_pr_pages", 1 if _full_scan(params) else 0))
     max_files = int(params.get("security_file_limit", 20 if _full_scan(params) else 3))
     max_security_repos = int(params.get("security_repo_limit", 20 if _full_scan(params) else 2))
+    max_content_dirs = int(params.get("security_content_dir_limit", 80 if _full_scan(params) else 20))
     by_key = {(repo.get("platform"), repo.get("org"), repo.get("name")): repo for repo in repos}
     for org, sec_data in security.items():
+        repo_names = [str(repo.get("name") or "") for repo in grouped.get(org, []) if repo.get("name")]
+        org_security_materials: list[dict[str, Any]] = []
         for sec_repo in (sec_data.get("security_repos") or [])[:max_security_repos]:
             platform = sec_repo.get("platform") or _platform_from_url(sec_repo.get("url") or "")
             owner = sec_repo.get("org") or org
@@ -99,29 +104,31 @@ def _enrich_security_repos(registry: SourceRegistry, repos: list[dict[str, Any]]
                 issues.extend(result.items)
                 if len(result.items) < 100:
                     break
-            security_files = _fetch_security_files(connector, platform, owner, repo_name, max_files=max_files)
+            pull_requests = []
+            for page in range(1, pr_pages + 1):
+                result = connector.fetch(SourceFetchRequest(source_name=f"{platform}:{owner}/{repo_name}:prs", params={"resource": "pull_requests", "owner": owner, "repo": repo_name, "page": page, "per_page": 100, "timeout_seconds": params.get("timeout_seconds", 15)}))
+                if result.errors or not result.items:
+                    break
+                pull_requests.extend(result.items)
+                if len(result.items) < 100:
+                    break
+            security_files = _fetch_security_files(connector, platform, owner, repo_name, max_files=max_files, max_dirs=max_content_dirs)
+            org_security_materials.extend(security_files)
             key = (platform, owner, repo_name)
             target = by_key.get(key) or sec_repo
             target["issues"] = issues
+            target["pull_requests"] = pull_requests
             target["security_files"] = security_files
+            target["is_security_repo"] = True
+        if org_security_materials:
+            for repo in grouped.get(org, []):
+                repo["org_security_materials"] = org_security_materials
+                repo["org_security_repo_count"] = len(sec_data.get("security_repos") or [])
     return repos
 
 
-def _fetch_security_files(connector, platform: str, owner: str, repo_name: str, *, max_files: int) -> list[dict[str, Any]]:
-    contents = connector.fetch(SourceFetchRequest(source_name=f"{platform}:{owner}/{repo_name}:contents", params={"resource": "contents", "owner": owner, "repo": repo_name, "timeout_seconds": 15}))
-    if contents.errors:
-        return []
-    candidates = []
-    for item in contents.items:
-        path = item.get("path") or item.get("name") or ""
-        lowered = path.lower()
-        if item.get("type") in {"dir", "tree"}:
-            continue
-        if not lowered.endswith(SECURITY_FILE_SUFFIXES):
-            continue
-        if not any(term.lower() in lowered for term in SECURITY_FILE_TERMS):
-            continue
-        candidates.append(path)
+def _fetch_security_files(connector, platform: str, owner: str, repo_name: str, *, max_files: int, max_dirs: int) -> list[dict[str, Any]]:
+    candidates = _discover_security_file_paths(connector, platform, owner, repo_name, max_files=max_files, max_dirs=max_dirs)
     files = []
     for path in candidates[:max_files]:
         result = connector.fetch(SourceFetchRequest(source_name=f"{platform}:{owner}/{repo_name}:file", params={"resource": "file", "owner": owner, "repo": repo_name, "path": path, "timeout_seconds": 15}))
@@ -129,6 +136,46 @@ def _fetch_security_files(connector, platform: str, owner: str, repo_name: str, 
             continue
         files.append({"path": path, "content": result.raw_text, "source_url": f"{_web_base(platform)}/{owner}/{repo_name}/blob/master/{path}"})
     return files
+
+
+def _discover_security_file_paths(connector, platform: str, owner: str, repo_name: str, *, max_files: int, max_dirs: int) -> list[str]:
+    candidates: list[str] = []
+    visited: set[str] = set()
+    queue: list[tuple[str, int, bool]] = [("", 0, False)]
+    while queue and len(visited) < max_dirs and len(candidates) < max_files:
+        path, depth, under_security = queue.pop(0)
+        if path in visited or depth > 4:
+            continue
+        visited.add(path)
+        contents = connector.fetch(SourceFetchRequest(source_name=f"{platform}:{owner}/{repo_name}:contents:{path or 'root'}", params={"resource": "contents", "owner": owner, "repo": repo_name, "path": path, "timeout_seconds": 15}))
+        if contents.errors:
+            continue
+        for item in contents.items:
+            item_path = item.get("path") or item.get("name") or ""
+            name = item.get("name") or item_path.rsplit("/", 1)[-1]
+            lowered = item_path.lower()
+            item_type = item.get("type") or ""
+            if item_type in {"dir", "tree"}:
+                security_dir = under_security or _is_security_path(name) or _is_security_path(item_path) or _is_year_dir(name)
+                if security_dir or (depth < 2 and not under_security):
+                    queue.append((item_path, depth + 1, security_dir))
+                continue
+            if not under_security and not _is_security_path(item_path):
+                continue
+            if lowered.endswith(SECURITY_FILE_SUFFIXES):
+                candidates.append(item_path)
+                if len(candidates) >= max_files:
+                    break
+    return candidates
+
+
+def _is_security_path(value: str) -> bool:
+    lowered = (value or "").lower()
+    return any(term.lower() in lowered for term in [*SECURITY_FILE_TERMS, *CVE_DIR_TERMS])
+
+
+def _is_year_dir(value: str) -> bool:
+    return bool(value and value.isdigit() and len(value) == 4)
 
 
 def _collect_live_assets(registry: SourceRegistry, params: dict[str, Any]) -> list[dict[str, Any]]:

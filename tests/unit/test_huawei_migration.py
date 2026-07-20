@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from ai4sec_platform.domains.threats.cve_scout import build_cve_scout_from_local_records
+from ai4sec_platform.pipelines.steps.threat_cve_scout import _coverage_audit
 from ai4sec_platform.domains.threats.security_file_parsers import parse_security_file
 from ai4sec_platform.domains.threats.security_repo_discovery import discover_security_repos, group_projects_by_org
 
@@ -38,3 +39,33 @@ def test_cve_scout_builds_old_style_org_output() -> None:
     assert result["orgs"]["openharmony"]["projects"]["kernel_linux"]["cve_count"] == 0
     assert "openharmony" in result["meta"]["orgs_with_security_repo"]
 
+
+def test_cve_scout_matches_security_repo_file_pool_to_project() -> None:
+    projects = [
+        {
+            "org": "openharmony",
+            "name": "security",
+            "url": "https://gitcode.com/openharmony/security",
+            "description": "security disclosure",
+            "star_count": 10,
+            "security_files": [
+                {
+                    "path": "zh/security-disclosure/2026-07.md",
+                    "content": "| Component | ID | Severity |\n| kernel_linux | CVE-2026-12345 | Critical |",
+                    "source_url": "https://gitcode.com/openharmony/security/blob/master/zh/security-disclosure/2026-07.md",
+                }
+            ],
+        },
+        {"org": "openharmony", "name": "kernel_linux", "url": "https://gitcode.com/openharmony/kernel_linux", "description": "kernel", "star_count": 30},
+    ]
+    result = build_cve_scout_from_local_records(projects, None)
+    kernel = result["orgs"]["openharmony"]["projects"]["kernel_linux"]
+    assert kernel["cve_count"] == 1
+    assert kernel["cves"][0]["cve_id"] == "CVE-2026-12345"
+    assert result["meta"]["total_cve_ids"] == 1
+
+
+def test_cve_coverage_audit_warns_when_security_repo_has_no_cve() -> None:
+    audit = _coverage_audit({"meta": {"total_projects_in": 100, "total_sec_items": 0, "total_cve_ids": 0, "orgs_with_security_repo": ["openharmony"]}})
+    assert audit["status"] == "warn"
+    assert "未提取到明确 CVE" in audit["summary"]

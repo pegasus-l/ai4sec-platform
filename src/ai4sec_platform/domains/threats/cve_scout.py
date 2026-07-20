@@ -32,6 +32,7 @@ def build_cve_scout_from_local_records(projects: list[dict[str, Any]], existing_
         }
         org_projects_with_data = 0
         security_pool = _security_pool_from_existing(existing_projects)
+        security_pool.extend(_security_pool_from_connector_materials(org_projects))
         for project in org_projects:
             name = str(project.get("name") or "")
             existing = existing_projects.get(name) if isinstance(existing_projects, dict) else None
@@ -39,16 +40,17 @@ def build_cve_scout_from_local_records(projects: list[dict[str, Any]], existing_
                 pdata = _normalize_existing_project_cve(project, existing)
                 scan_mode = pdata.get("scan_mode") or "from_existing"
             else:
+                project_items = _project_local_security_items(project)
                 pool_items = _match_pool(name, security_pool)
                 fallback_items = []
-                scan_mode = "from_pool"
-                if not pool_items and int(project.get("star_count") or 0) >= STAR_SCAN_THRESHOLD:
+                scan_mode = "from_pool" if pool_items else "not_scanned"
+                if project_items:
+                    scan_mode = "scanned_local_materials"
+                if not pool_items and not project_items and int(project.get("star_count") or 0) >= STAR_SCAN_THRESHOLD:
                     fallback_items = extract_security_items_from_issues(project.get("issues") or [], source_type="project_issue")
                     fallback_items.extend(extract_security_items_from_pull_requests(project.get("pull_requests") or project.get("prs") or []))
                     scan_mode = "scanned_local_issues" if fallback_items else "scanned_no_hits"
-                elif not pool_items:
-                    scan_mode = "not_scanned"
-                pdata = _project_cve_payload(project, dedupe_security_items([*pool_items, *fallback_items]), scan_mode)
+                pdata = _project_cve_payload(project, dedupe_security_items([*project_items, *pool_items, *fallback_items]), scan_mode)
             org_data["projects"][name] = pdata
             scan_mode_stats[pdata.get("scan_mode", "unknown")] += 1
             for item in [*pdata.get("cves", []), *pdata.get("sa_items", []), *pdata.get("broad_sec_items", [])]:
@@ -110,6 +112,43 @@ def _security_pool_from_existing(projects: dict[str, Any]) -> list[dict[str, Any
                 if isinstance(item, dict):
                     pool.append({**item, "project_hints": list(set([name, *item.get("project_hints", [])]))})
     return pool
+
+
+def _security_pool_from_connector_materials(projects: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    repo_names = [str(project.get("name") or "") for project in projects if project.get("name")]
+    pool: list[dict[str, Any]] = []
+    seen_material_ids: set[int] = set()
+    for project in projects:
+        for material in project.get("security_files") or []:
+            if isinstance(material, dict):
+                pool.extend(parse_security_repo_materials([material], repo_names=repo_names))
+        pool.extend(extract_security_items_from_issues(project.get("issues") or [], source_type="security_repo_issue"))
+        pool.extend(extract_security_items_from_pull_requests(project.get("pull_requests") or project.get("prs") or []))
+        for material in project.get("org_security_materials") or []:
+            if not isinstance(material, dict):
+                continue
+            material_id = id(material)
+            if material_id in seen_material_ids:
+                continue
+            seen_material_ids.add(material_id)
+            pool.extend(parse_security_repo_materials([material], repo_names=repo_names))
+    return dedupe_security_items(pool)
+
+
+def _project_local_security_items(project: dict[str, Any]) -> list[dict[str, Any]]:
+    if _is_security_repo_project(project):
+        return []
+    repo_names = [str(project.get("name") or "")]
+    items: list[dict[str, Any]] = []
+    items.extend(parse_security_repo_materials(project.get("security_files") or [], repo_names=repo_names))
+    items.extend(extract_security_items_from_issues(project.get("issues") or [], source_type="project_issue"))
+    items.extend(extract_security_items_from_pull_requests(project.get("pull_requests") or project.get("prs") or []))
+    return dedupe_security_items(items)
+
+
+def _is_security_repo_project(project: dict[str, Any]) -> bool:
+    name = str(project.get("name") or "").lower()
+    return bool(project.get("is_security_repo") or name in {"security", "advisory", "cve-manager", "cve-ease"} or any(token in name for token in ["security", "advisory", "cve", "vuln", "漏洞", "安全"]))
 
 
 def _match_pool(project_name: str, pool: list[dict[str, Any]]) -> list[dict[str, Any]]:

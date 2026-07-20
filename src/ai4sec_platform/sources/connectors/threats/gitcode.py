@@ -22,6 +22,8 @@ class GitCodeConnector(LiveJsonConnector):
             return with_query(f"{self.api_base}/orgs/{org}/repos", {"type": "all", "page": page, "per_page": per_page})
         if resource == "issues":
             return with_query(f"{self.api_base}/repos/{owner}/{repo}/issues", {"state": "all", "page": page, "per_page": per_page})
+        if resource in {"pull_requests", "prs"}:
+            return with_query(f"{self.api_base}/repos/{owner}/{repo}/pull_requests", {"state": "all", "page": page, "per_page": per_page})
         if resource == "contents":
             suffix = f"/{path}" if path else ""
             return f"{self.api_base}/repos/{owner}/{repo}/contents{suffix}"
