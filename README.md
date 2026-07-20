@@ -177,6 +177,15 @@ refresh_sources=["repos"]              # 只刷新 repos，其他 source 读缓�
 use_source_cache=true                   # 显式启用缓存复用
 ```
 
+性能相关参数：
+
+```text
+max_workers=4          # repo 按组织并发抓取
+issue_max_workers=4    # 普通项目 issue/PR 并发抓取
+asset_max_workers=2    # firmware/AscendHub/mirror/OpenX 并发抓取
+timeout_seconds=15     # 单请求超时
+```
+
 包含：security repo 发现、CVE/SA/broad security 侦察、平台攻击面评分/过滤、固件/AscendHub/镜像资产导入、LLM 语义复核、迁移报告 artifact。
 
 威胁洞察生产链路不读取旧 processed 输出，不生成 baseline/compare artifact。CVE scout、攻击面评分和报告都由 connector 获取的数据在当前 pipeline 内生成。

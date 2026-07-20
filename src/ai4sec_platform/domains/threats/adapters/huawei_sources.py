@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from ai4sec_platform.core.concurrency import bounded_map
 from ai4sec_platform.domains.threats.security_repo_discovery import discover_security_repos, group_projects_by_org
 from ai4sec_platform.schemas.sources import SourceFetchRequest
 from ai4sec_platform.sources.registry import SourceRegistry
@@ -249,22 +250,27 @@ def _collect_live_repos(registry: SourceRegistry, params: dict[str, Any]) -> lis
     orgs = params.get("orgs") or DEFAULT_LIVE_ORGS
     page_limit = int(params.get("page_limit", 3 if _full_scan(params) else 1))
     per_page = int(params.get("per_page", 100 if _full_scan(params) else 50))
+    max_workers = int(params.get("max_workers", 6 if _full_scan(params) else 4))
+    chunks = bounded_map(orgs, lambda entry: _collect_org_repos(registry, entry, params, page_limit=page_limit, per_page=per_page), max_workers=max_workers)
+    return [repo for chunk in chunks for repo in chunk]
+
+
+def _collect_org_repos(registry: SourceRegistry, entry: Any, params: dict[str, Any], *, page_limit: int, per_page: int) -> list[dict[str, Any]]:
     repos: list[dict[str, Any]] = []
-    for entry in orgs:
-        if isinstance(entry, str):
-            platform, org = _split_platform_org(entry)
-        else:
-            platform = str(entry.get("platform") or "gitcode")
-            org = str(entry.get("org") or "")
-        connector = registry.get(platform)
-        for page in range(1, page_limit + 1):
-            result = connector.fetch(SourceFetchRequest(source_name=f"{platform}:{org}:repos", params={"resource": "repos", "org": org, "page": page, "per_page": per_page, "timeout_seconds": params.get("timeout_seconds", 15)}))
-            if result.errors:
-                break
-            batch = [_normalize_repo_item(item, org=org, platform=platform) for item in result.items]
-            repos.extend(batch)
-            if len(batch) < per_page:
-                break
+    if isinstance(entry, str):
+        platform, org = _split_platform_org(entry)
+    else:
+        platform = str(entry.get("platform") or "gitcode")
+        org = str(entry.get("org") or "")
+    connector = registry.get(platform)
+    for page in range(1, page_limit + 1):
+        result = connector.fetch(SourceFetchRequest(source_name=f"{platform}:{org}:repos", params={"resource": "repos", "org": org, "page": page, "per_page": per_page, "timeout_seconds": params.get("timeout_seconds", 15)}))
+        if result.errors:
+            break
+        batch = [_normalize_repo_item(item, org=org, platform=platform) for item in result.items]
+        repos.extend(batch)
+        if len(batch) < per_page:
+            break
     return repos
 
 
@@ -277,17 +283,21 @@ def _enrich_project_issues(registry: SourceRegistry, repos: list[dict[str, Any]]
     repo_limit = int(params.get("project_issue_repo_limit", 300 if _full_scan(params) else 30))
     candidates = [repo for repo in repos if int(repo.get("star_count") or 0) >= star_threshold and not repo.get("is_security_repo")]
     candidates.sort(key=lambda item: (-(int(item.get("star_count") or 0)), str(item.get("org") or ""), str(item.get("name") or "")))
-    for repo in candidates[:repo_limit]:
+    def enrich_repo(repo: dict[str, Any]) -> dict[str, Any]:
         platform = str(repo.get("platform") or _platform_from_url(repo.get("url") or ""))
         owner = str(repo.get("org") or "")
         repo_name = str(repo.get("name") or "")
         if not platform or not owner or not repo_name:
-            continue
+            return repo
         connector = registry.get(platform)
         repo["issues"] = _fetch_paginated_repo_items(connector, platform, owner, repo_name, resource="issues", pages=issue_pages, timeout=int(params.get("timeout_seconds", 15)))
         if pr_pages:
             repo["pull_requests"] = _fetch_paginated_repo_items(connector, platform, owner, repo_name, resource="pull_requests", pages=pr_pages, timeout=int(params.get("timeout_seconds", 15)))
         repo["project_issue_scanned"] = True
+        return repo
+
+    max_workers = int(params.get("issue_max_workers", params.get("max_workers", 6 if _full_scan(params) else 4)))
+    bounded_map(candidates[:repo_limit], enrich_repo, max_workers=max_workers)
     return repos
 
 
@@ -410,16 +420,16 @@ def _collect_live_assets(registry: SourceRegistry, params: dict[str, Any], reque
     if not params.get("include_assets", True):
         return []
     requested = requested_sources or _requested_sources(params)
-    records = []
+    collectors = []
     if "firmware" in requested:
-        records.append(_collect_firmware_assets(registry, params))
+        collectors.append(lambda: _collect_firmware_assets(registry, params))
     if "ascendhub" in requested:
-        records.append(_collect_ascendhub_assets(registry, params))
+        collectors.append(lambda: _collect_ascendhub_assets(registry, params))
     if "mirrors" in requested:
-        records.append(_collect_single_asset_source(registry, "mirrors", "huawei_mirror", {"catalog": params.get("mirror_catalog", ""), "timeout_seconds": params.get("timeout_seconds", 20)}))
+        collectors.append(lambda: _collect_single_asset_source(registry, "mirrors", "huawei_mirror", {"catalog": params.get("mirror_catalog", ""), "timeout_seconds": params.get("timeout_seconds", 20)}))
     if "openx_huawei" in requested:
-        records.append(_collect_openx_huawei_assets(registry, params))
-    return records
+        collectors.append(lambda: _collect_openx_huawei_assets(registry, params))
+    return bounded_map(collectors, lambda collector: collector(), max_workers=int(params.get("asset_max_workers", 4 if _full_scan(params) else 2)))
 
 
 def _collect_firmware_assets(registry: SourceRegistry, params: dict[str, Any]) -> dict[str, Any]:
