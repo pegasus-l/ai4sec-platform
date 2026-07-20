@@ -65,6 +65,24 @@ def test_cve_scout_matches_security_repo_file_pool_to_project() -> None:
     assert result["meta"]["total_cve_ids"] == 1
 
 
+def test_cve_scout_reads_project_issue_items() -> None:
+    projects = [
+        {
+            "org": "openharmony",
+            "name": "kernel_linux",
+            "url": "https://gitcode.com/openharmony/kernel_linux",
+            "description": "kernel",
+            "star_count": 30,
+            "issues": [{"title": "CVE-2026-99999 kernel RCE", "description": "critical vulnerability"}],
+        }
+    ]
+    result = build_cve_scout_from_local_records(projects, None)
+    kernel = result["orgs"]["openharmony"]["projects"]["kernel_linux"]
+    assert kernel["scan_mode"] == "scanned_local_materials"
+    assert kernel["cve_count"] == 1
+    assert kernel["cves"][0]["source_type"] == "project_issue"
+
+
 def test_cve_coverage_audit_warns_when_security_repo_has_no_cve() -> None:
     audit = _coverage_audit({"meta": {"total_projects_in": 100, "total_sec_items": 0, "total_cve_ids": 0, "orgs_with_security_repo": ["openharmony"]}})
     assert audit["status"] == "warn"

@@ -46,6 +46,7 @@ def load_huawei_live(params: dict[str, Any]) -> list[dict[str, Any]]:
     registry = SourceRegistry()
     repos = _collect_live_repos(registry, params)
     repos = _enrich_security_repos(registry, repos, params)
+    repos = _enrich_project_issues(registry, repos, params)
     assets = _collect_live_assets(registry, params)
     records = [{"source": "repos", "path": "connector:repos", "exists": True, "items": repos, "raw": {"projects": repos, "mode": "live"}, "mode": "live"}]
     records.extend(assets)
@@ -73,6 +74,41 @@ def _collect_live_repos(registry: SourceRegistry, params: dict[str, Any]) -> lis
             if len(batch) < per_page:
                 break
     return repos
+
+
+def _enrich_project_issues(registry: SourceRegistry, repos: list[dict[str, Any]], params: dict[str, Any]) -> list[dict[str, Any]]:
+    if not repos or not params.get("fetch_project_issues", True):
+        return repos
+    star_threshold = int(params.get("project_issue_star_threshold", 10))
+    issue_pages = int(params.get("project_issue_pages", 2 if _full_scan(params) else 1))
+    pr_pages = int(params.get("project_pr_pages", 1 if _full_scan(params) else 0))
+    repo_limit = int(params.get("project_issue_repo_limit", 300 if _full_scan(params) else 80))
+    candidates = [repo for repo in repos if int(repo.get("star_count") or 0) >= star_threshold and not repo.get("is_security_repo")]
+    candidates.sort(key=lambda item: (-(int(item.get("star_count") or 0)), str(item.get("org") or ""), str(item.get("name") or "")))
+    for repo in candidates[:repo_limit]:
+        platform = str(repo.get("platform") or _platform_from_url(repo.get("url") or ""))
+        owner = str(repo.get("org") or "")
+        repo_name = str(repo.get("name") or "")
+        if not platform or not owner or not repo_name:
+            continue
+        connector = registry.get(platform)
+        repo["issues"] = _fetch_paginated_repo_items(connector, platform, owner, repo_name, resource="issues", pages=issue_pages, timeout=int(params.get("timeout_seconds", 15)))
+        if pr_pages:
+            repo["pull_requests"] = _fetch_paginated_repo_items(connector, platform, owner, repo_name, resource="pull_requests", pages=pr_pages, timeout=int(params.get("timeout_seconds", 15)))
+        repo["project_issue_scanned"] = True
+    return repos
+
+
+def _fetch_paginated_repo_items(connector, platform: str, owner: str, repo_name: str, *, resource: str, pages: int, timeout: int) -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = []
+    for page in range(1, pages + 1):
+        result = connector.fetch(SourceFetchRequest(source_name=f"{platform}:{owner}/{repo_name}:{resource}", params={"resource": resource, "owner": owner, "repo": repo_name, "page": page, "per_page": 100, "timeout_seconds": timeout}))
+        if result.errors or not result.items:
+            break
+        items.extend(result.items)
+        if len(result.items) < 100:
+            break
+    return items
 
 
 def _enrich_security_repos(registry: SourceRegistry, repos: list[dict[str, Any]], params: dict[str, Any]) -> list[dict[str, Any]]:
