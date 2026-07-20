@@ -36,6 +36,13 @@ DEFAULT_LIVE_ORGS = [
 ]
 SECURITY_FILE_SUFFIXES = (".md", ".markdown", ".yml", ".yaml", ".json")
 SECURITY_FILE_TERMS = ["security", "advisory", "cve", "vulnerability", "vuln", "漏洞", "安全公告", "安全披露"]
+DEFAULT_ASCENDHUB_TARGETS = [
+    {"hub_id": "af85b724a7e5469ebd7ea13c3439d48f", "name": "mindie"},
+    {"hub_id": "f1690465f39847a8b0a1f9e5b36a03c4", "name": "mindie-motor"},
+    {"hub_id": "4ad248a439a44b4bb72e0534bfda8e2a", "name": "mindspeed-core"},
+    {"hub_id": "e26da9266559438b93354792f25b2f4a", "name": "mindspeed-llm"},
+    {"hub_id": "39730c7af872464ba25be1c2ce15915f", "name": "ascend-pytorch"},
+]
 
 
 def load_huawei_sources(settings, params: dict[str, Any]) -> list[dict[str, Any]]:
@@ -217,18 +224,57 @@ def _is_year_dir(value: str) -> bool:
 def _collect_live_assets(registry: SourceRegistry, params: dict[str, Any]) -> list[dict[str, Any]]:
     if not params.get("include_assets", True):
         return []
-    sources = [
-        ("firmware", "hiascend", {"endpoint": "softwareCenter/queryResourceProductList", "lang": "zh", "type": "community"}),
-        ("ascendhub", "hiascend", {"endpoint": "ascendHub/repositories/detail", "lang": "zh"}),
-        ("mirrors", "huawei_mirror", {"catalog": params.get("mirror_catalog", "")}),
-        ("openx_huawei", "openx_huawei", {}),
+    return [
+        _collect_firmware_assets(registry, params),
+        _collect_ascendhub_assets(registry, params),
+        _collect_single_asset_source(registry, "mirrors", "huawei_mirror", {"catalog": params.get("mirror_catalog", ""), "timeout_seconds": params.get("timeout_seconds", 20)}),
+        _collect_single_asset_source(registry, "openx_huawei", "openx_huawei", {"timeout_seconds": params.get("timeout_seconds", 20)}),
     ]
-    records = []
-    for source, connector_name, connector_params in sources:
-        connector = registry.get(connector_name)
-        result = connector.fetch(SourceFetchRequest(source_name=f"{connector_name}:{source}", params=connector_params))
-        records.append({"source": source, "path": f"connector:{connector_name}", "exists": not bool(result.errors), "items": result.items, "raw": {"metadata": result.metadata, "errors": result.errors, "mode": "live"}, "mode": "live"})
-    return records
+
+
+def _collect_firmware_assets(registry: SourceRegistry, params: dict[str, Any]) -> dict[str, Any]:
+    connector = registry.get("hiascend")
+    products = connector.fetch(SourceFetchRequest(source_name="hiascend:firmware_products", params={"endpoint": "softwareCenter/queryResourceProductList", "lang": "zh", "type": "community", "timeout_seconds": params.get("timeout_seconds", 20)}))
+    items = []
+    errors = list(products.errors)
+    product_limit = int(params.get("firmware_product_limit", 20 if _full_scan(params) else 6))
+    for product in products.items[:product_limit]:
+        product_id = product.get("productId") or product.get("id")
+        if not product_id:
+            items.append({**product, "source_type": "firmware_product"})
+            continue
+        models = connector.fetch(SourceFetchRequest(source_name=f"hiascend:firmware_models:{product_id}", params={"endpoint": "softwareCenter/queryProductModelList", "lang": "zh", "type": "community", "productId": product_id, "timeout_seconds": params.get("timeout_seconds", 20)}))
+        errors.extend(models.errors)
+        if models.items:
+            for model in models.items:
+                items.append({**model, "productId": product_id, "productName": product.get("productName"), "source_type": "firmware_model"})
+        else:
+            items.append({**product, "source_type": "firmware_product"})
+    return {"source": "firmware", "path": "connector:hiascend", "exists": not bool(errors), "items": items, "raw": {"metadata": products.metadata, "errors": errors, "mode": "live"}, "mode": "live"}
+
+
+def _collect_ascendhub_assets(registry: SourceRegistry, params: dict[str, Any]) -> dict[str, Any]:
+    connector = registry.get("hiascend")
+    targets = params.get("ascendhub_targets") or DEFAULT_ASCENDHUB_TARGETS
+    limit = int(params.get("ascendhub_limit", len(targets) if _full_scan(params) else min(5, len(targets))))
+    items = []
+    errors = []
+    for target in targets[:limit]:
+        hub_id = target.get("hub_id") or target.get("id")
+        if not hub_id:
+            continue
+        detail = connector.fetch(SourceFetchRequest(source_name=f"hiascend:ascendhub:{hub_id}", params={"endpoint": "ascendHub/repositories/detail", "id": hub_id, "lang": "zh", "timeout_seconds": params.get("timeout_seconds", 20)}))
+        errors.extend(detail.errors)
+        if detail.items:
+            for item in detail.items:
+                items.append({**item, "hub_id": hub_id, "name": item.get("name") or target.get("name"), "source_type": "ascendhub"})
+    return {"source": "ascendhub", "path": "connector:hiascend", "exists": not bool(errors), "items": items, "raw": {"errors": errors, "mode": "live"}, "mode": "live"}
+
+
+def _collect_single_asset_source(registry: SourceRegistry, source: str, connector_name: str, connector_params: dict[str, Any]) -> dict[str, Any]:
+    connector = registry.get(connector_name)
+    result = connector.fetch(SourceFetchRequest(source_name=f"{connector_name}:{source}", params=connector_params))
+    return {"source": source, "path": f"connector:{connector_name}", "exists": not bool(result.errors), "items": result.items, "raw": {"metadata": result.metadata, "errors": result.errors, "mode": "live"}, "mode": "live"}
 
 
 def _full_scan(params: dict[str, Any]) -> bool:

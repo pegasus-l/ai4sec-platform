@@ -33,9 +33,17 @@ class LiveJsonConnector(JsonFileConnector):
         return self.base_url
 
     def get_json(self, url: str, *, timeout: int = 30) -> Any:
-        req = urllib.request.Request(url, headers={"User-Agent": "ai4sec-platform/0.1", "Accept": "application/json"})
+        req = urllib.request.Request(url, headers=self.request_headers())
         with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310 - explicit configured source
             return json.loads(resp.read().decode("utf-8"))
+
+    def get_text(self, url: str, *, timeout: int = 30) -> str:
+        req = urllib.request.Request(url, headers={"User-Agent": "ai4sec-platform/0.1", "Accept": "text/html,*/*"})
+        with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310 - explicit configured source
+            return resp.read().decode("utf-8", errors="replace")
+
+    def request_headers(self) -> dict[str, str]:
+        return {"User-Agent": "ai4sec-platform/0.1", "Accept": "application/json"}
 
     def extract_items(self, raw: Any) -> list[dict[str, Any]]:
         if isinstance(raw, list):

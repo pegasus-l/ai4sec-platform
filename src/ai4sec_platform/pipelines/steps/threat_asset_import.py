@@ -9,7 +9,7 @@ from ai4sec_platform.domains.threats.normalizers import normalize_huawei_item
 from ai4sec_platform.pipelines.context import PipelineContext
 from ai4sec_platform.pipelines.results import StepResult
 
-ASSET_SOURCES = {"firmware", "ascendhub", "mirrors"}
+ASSET_SOURCES = {"firmware", "ascendhub", "mirrors", "openx_huawei"}
 
 
 @dataclass

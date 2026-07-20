@@ -11,3 +11,10 @@ class HuaweiMirrorConnector(LiveJsonConnector):
 
     def build_url(self, request: SourceFetchRequest) -> str:
         return with_query(self.base_url, {"catalog": request.params.get("catalog") or request.config.get("catalog") or ""})
+
+    def extract_items(self, raw):
+        if isinstance(raw, dict):
+            result = raw.get("result")
+            if isinstance(result, dict) and isinstance(result.get("repolist"), list):
+                return [item for item in result["repolist"] if isinstance(item, dict)]
+        return super().extract_items(raw)

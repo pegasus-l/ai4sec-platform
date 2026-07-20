@@ -66,29 +66,29 @@ def normalize_cve_project(source: str, item: dict[str, Any]) -> dict[str, Any]:
 
 
 def normalize_firmware(source: str, item: dict[str, Any]) -> dict[str, Any]:
-    model = item.get("productModel") or item.get("name") or "unknown"
+    model = item.get("productModel") or item.get("modelName") or item.get("name") or item.get("productName") or "unknown"
     return {
         "item_key": f"firmware:{model}".lower(),
         "source": source,
         "source_type": "firmware",
         "title": model,
         "url": "",
-        "summary": f"固件包 {item.get('packageCount') or 0} 个，最新发布 {item.get('latestRelease') or ''}。",
-        "risk_score": item.get("packageCount") or 0,
+        "summary": item.get("description") or item.get("softwareExplain") or f"固件/型号线索：{model}。",
+        "risk_score": item.get("packageCount") or item.get("downloadCount") or 0,
         "raw": item,
     }
 
 
 def normalize_asset(source: str, item: dict[str, Any]) -> dict[str, Any]:
-    title = item.get("title") or item.get("name") or item.get("productModel") or source
+    title = item.get("title") or item.get("displayName") or item.get("name") or item.get("repoName") or item.get("productModel") or source
     return {
         "item_key": f"asset:{source}:{hashlib.sha1(repr(item).encode('utf-8')).hexdigest()[:16]}",
         "source": source,
         "source_type": "asset",
         "title": title,
-        "url": item.get("url") or item.get("href") or "",
-        "summary": item.get("description") or item.get("summary") or "",
-        "risk_score": None,
+        "url": item.get("url") or item.get("href") or item.get("webUrl") or "",
+        "summary": item.get("description") or item.get("summary") or item.get("msg") or item.get("source_type") or "",
+        "risk_score": item.get("packageCount") or item.get("downloadCount"),
         "raw": item,
     }
 

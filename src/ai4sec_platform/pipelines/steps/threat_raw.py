@@ -9,6 +9,8 @@ from ai4sec_platform.domains.threats.normalizers import normalize_huawei_item
 from ai4sec_platform.pipelines.context import PipelineContext
 from ai4sec_platform.pipelines.results import StepResult
 
+TARGET_SOURCES = {"repos", "cve_findings"}
+
 
 @dataclass
 class ImportHuaweiRawStep:
@@ -57,6 +59,8 @@ class NormalizeHuaweiRawStep:
         limit = int(context.params.get("limit", 300))
         normalized_count = 0
         for raw in raw_sources:
+            if raw.get("source") not in TARGET_SOURCES:
+                continue
             for item in (raw.get("items") or [])[:limit]:
                 normalized = normalize_huawei_item(raw["source"], item)
                 repo.create_normalized_item(
@@ -76,7 +80,7 @@ class NormalizeHuaweiRawStep:
         items = repo.list_normalized_items(context.conn, run_id=context.run_id, domain="threats", limit=10000)
         artifact = context.artifact_store.write_json(context.conn, run_id=context.run_id, artifact_type="normalized_threat_items", name="normalized/threat_items.json", data=items)
         context.outputs["normalized_threat_items"] = items
-        return StepResult(metrics={"normalized_items": normalized_count, "per_source_limit": limit}, artifacts=[artifact])
+        return StepResult(metrics={"normalized_items": normalized_count, "per_source_limit": limit, "sources": sorted(TARGET_SOURCES)}, artifacts=[artifact])
 
 
 @dataclass
