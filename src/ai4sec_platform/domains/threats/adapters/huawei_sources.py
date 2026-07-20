@@ -89,7 +89,7 @@ def _enrich_project_issues(registry: SourceRegistry, repos: list[dict[str, Any]]
     star_threshold = int(params.get("project_issue_star_threshold", 10))
     issue_pages = int(params.get("project_issue_pages", 2 if _full_scan(params) else 1))
     pr_pages = int(params.get("project_pr_pages", 1 if _full_scan(params) else 0))
-    repo_limit = int(params.get("project_issue_repo_limit", 300 if _full_scan(params) else 80))
+    repo_limit = int(params.get("project_issue_repo_limit", 300 if _full_scan(params) else 30))
     candidates = [repo for repo in repos if int(repo.get("star_count") or 0) >= star_threshold and not repo.get("is_security_repo")]
     candidates.sort(key=lambda item: (-(int(item.get("star_count") or 0)), str(item.get("org") or ""), str(item.get("name") or "")))
     for repo in candidates[:repo_limit]:
@@ -228,7 +228,7 @@ def _collect_live_assets(registry: SourceRegistry, params: dict[str, Any]) -> li
         _collect_firmware_assets(registry, params),
         _collect_ascendhub_assets(registry, params),
         _collect_single_asset_source(registry, "mirrors", "huawei_mirror", {"catalog": params.get("mirror_catalog", ""), "timeout_seconds": params.get("timeout_seconds", 20)}),
-        _collect_single_asset_source(registry, "openx_huawei", "openx_huawei", {"timeout_seconds": params.get("timeout_seconds", 20)}),
+        _collect_openx_huawei_assets(registry, params),
     ]
 
 
@@ -237,7 +237,10 @@ def _collect_firmware_assets(registry: SourceRegistry, params: dict[str, Any]) -
     products = connector.fetch(SourceFetchRequest(source_name="hiascend:firmware_products", params={"endpoint": "softwareCenter/queryResourceProductList", "lang": "zh", "type": "community", "timeout_seconds": params.get("timeout_seconds", 20)}))
     items = []
     errors = list(products.errors)
-    product_limit = int(params.get("firmware_product_limit", 20 if _full_scan(params) else 6))
+    product_limit = int(params.get("firmware_product_limit", 20 if _full_scan(params) else 2))
+    model_limit = int(params.get("firmware_model_limit", 200 if _full_scan(params) else 5))
+    cann_limit = int(params.get("firmware_cann_limit", 10 if _full_scan(params) else 1))
+    package_limit = int(params.get("firmware_package_limit", 50 if _full_scan(params) else 3))
     for product in products.items[:product_limit]:
         product_id = product.get("productId") or product.get("id")
         if not product_id:
@@ -245,18 +248,34 @@ def _collect_firmware_assets(registry: SourceRegistry, params: dict[str, Any]) -
             continue
         models = connector.fetch(SourceFetchRequest(source_name=f"hiascend:firmware_models:{product_id}", params={"endpoint": "softwareCenter/queryProductModelList", "lang": "zh", "type": "community", "productId": product_id, "timeout_seconds": params.get("timeout_seconds", 20)}))
         errors.extend(models.errors)
-        if models.items:
-            for model in models.items:
-                items.append({**model, "productId": product_id, "productName": product.get("productName"), "source_type": "firmware_model"})
-        else:
+        if not models.items:
             items.append({**product, "source_type": "firmware_product"})
+            continue
+        for model in models.items[:model_limit]:
+            model_id = model.get("modelId") or model.get("id")
+            base_model = {**model, "productId": product_id, "productName": product.get("productName"), "source_type": "firmware_model"}
+            items.append(base_model)
+            if not model_id:
+                continue
+            cann_versions = connector.fetch(SourceFetchRequest(source_name=f"hiascend:cann:{model_id}", params={"endpoint": "softwareCenter/getCannVersion", "lang": "zh", "type": "community", "modelId": model_id, "timeout_seconds": params.get("timeout_seconds", 20)}))
+            errors.extend(cann_versions.errors)
+            for cann in cann_versions.items[:cann_limit]:
+                cann_id = cann.get("cannId") or cann.get("id")
+                cann_version = cann.get("cannVersion") or cann.get("version") or ""
+                items.append({**base_model, **cann, "cannId": cann_id, "cannVersion": cann_version, "source_type": "firmware_cann"})
+                if not cann_id:
+                    continue
+                packages = connector.fetch(SourceFetchRequest(source_name=f"hiascend:firmware_packages:{model_id}:{cann_id}", params={"endpoint": "softwareCenter/getFirmwareVersion", "lang": "zh", "type": "community", "modelId": model_id, "cannId": cann_id, "timeout_seconds": params.get("timeout_seconds", 20)}))
+                errors.extend(packages.errors)
+                for package in packages.items[:package_limit]:
+                    items.append({**base_model, **package, "cannId": cann_id, "cannVersion": cann_version, "source_type": "firmware_package"})
     return {"source": "firmware", "path": "connector:hiascend", "exists": not bool(errors), "items": items, "raw": {"metadata": products.metadata, "errors": errors, "mode": "live"}, "mode": "live"}
 
 
 def _collect_ascendhub_assets(registry: SourceRegistry, params: dict[str, Any]) -> dict[str, Any]:
     connector = registry.get("hiascend")
     targets = params.get("ascendhub_targets") or DEFAULT_ASCENDHUB_TARGETS
-    limit = int(params.get("ascendhub_limit", len(targets) if _full_scan(params) else min(5, len(targets))))
+    limit = int(params.get("ascendhub_limit", len(targets) if _full_scan(params) else min(2, len(targets))))
     items = []
     errors = []
     for target in targets[:limit]:
@@ -268,6 +287,15 @@ def _collect_ascendhub_assets(registry: SourceRegistry, params: dict[str, Any]) 
         if detail.items:
             for item in detail.items:
                 items.append({**item, "hub_id": hub_id, "name": item.get("name") or target.get("name"), "source_type": "ascendhub"})
+        tag_pages = int(params.get("ascendhub_tag_pages", 2 if _full_scan(params) else 1))
+        tag_page_size = int(params.get("ascendhub_tag_page_size", 50 if _full_scan(params) else 10))
+        for page in range(1, tag_pages + 1):
+            tags = connector.fetch(SourceFetchRequest(source_name=f"hiascend:ascendhub_tags:{hub_id}:{page}", params={"endpoint": "ascendHub/repositories/tags", "id": hub_id, "lang": "zh", "pageNo": page, "pageSize": tag_page_size, "timeout_seconds": params.get("timeout_seconds", 20)}))
+            errors.extend(tags.errors)
+            for tag in tags.items:
+                items.append({**tag, "hub_id": hub_id, "hub_name": target.get("name"), "source_type": "ascendhub_tag"})
+            if len(tags.items) < tag_page_size:
+                break
     return {"source": "ascendhub", "path": "connector:hiascend", "exists": not bool(errors), "items": items, "raw": {"errors": errors, "mode": "live"}, "mode": "live"}
 
 
@@ -275,6 +303,34 @@ def _collect_single_asset_source(registry: SourceRegistry, source: str, connecto
     connector = registry.get(connector_name)
     result = connector.fetch(SourceFetchRequest(source_name=f"{connector_name}:{source}", params=connector_params))
     return {"source": source, "path": f"connector:{connector_name}", "exists": not bool(result.errors), "items": result.items, "raw": {"metadata": result.metadata, "errors": result.errors, "mode": "live"}, "mode": "live"}
+
+
+def _collect_openx_huawei_assets(registry: SourceRegistry, params: dict[str, Any]) -> dict[str, Any]:
+    connector = registry.get("openx_huawei")
+    root = connector.fetch(SourceFetchRequest(source_name="openx_huawei:root", params={"timeout_seconds": params.get("timeout_seconds", 20)}))
+    errors = list(root.errors)
+    items: list[dict[str, Any]] = []
+    max_depth = int(params.get("openx_depth", 4 if _full_scan(params) else 1))
+    max_dirs = int(params.get("openx_dir_limit", 200 if _full_scan(params) else 8))
+    max_files = int(params.get("openx_file_limit", 500 if _full_scan(params) else 30))
+    queue = [(item, 0, item.get("name") or "") for item in root.items if item.get("is_dir")]
+    visited = 0
+    while queue and visited < max_dirs and len(items) < max_files:
+        node, depth, category = queue.pop(0)
+        if depth >= max_depth:
+            continue
+        visited += 1
+        result = connector.fetch(SourceFetchRequest(source_name=f"openx_huawei:{node.get('url')}", params={"url": node.get("url"), "timeout_seconds": params.get("timeout_seconds", 20)}))
+        errors.extend(result.errors)
+        for child in result.items:
+            child = {**child, "category": category, "source_type": "openx_huawei"}
+            if child.get("is_dir"):
+                queue.append((child, depth + 1, category))
+            else:
+                items.append(child)
+                if len(items) >= max_files:
+                    break
+    return {"source": "openx_huawei", "path": "connector:openx_huawei", "exists": not bool(errors), "items": items, "raw": {"metadata": root.metadata, "errors": errors, "mode": "live", "visited_dirs": visited}, "mode": "live"}
 
 
 def _full_scan(params: dict[str, Any]) -> bool:
