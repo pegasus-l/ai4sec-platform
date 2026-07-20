@@ -136,16 +136,9 @@ def load_huawei_sources(settings, params: dict[str, Any]) -> list[dict[str, Any]
     explicit = _load_source_records_from_path(params)
     if explicit is not None:
         return explicit
-    cache_path = _source_cache_path(settings, params)
-    use_cache = bool(params.get("use_source_cache", False))
-    refresh = bool(params.get("refresh_source_cache", False))
-    if use_cache and not refresh and cache_path.exists():
-        return _read_source_records(cache_path)
-    records = load_huawei_live(params)
-    if use_cache:
-        cache_path.parent.mkdir(parents=True, exist_ok=True)
-        cache_path.write_text(json.dumps({"records": records, "params": _cache_signature_payload(params)}, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
-    return records
+    if bool(params.get("use_source_cache", False)) or params.get("refresh_sources") or params.get("sources"):
+        return _load_huawei_sources_with_source_cache(settings, params)
+    return load_huawei_live(params)
 
 
 def _load_source_records_from_run(settings, params: dict[str, Any]) -> list[dict[str, Any]] | None:
@@ -180,20 +173,76 @@ def _source_cache_path(settings, params: dict[str, Any]) -> Path:
     return settings.output_dir / "cache" / "threats" / "huawei_sources" / f"{digest}.json"
 
 
+def _source_record_cache_path(settings, source: str, params: dict[str, Any]) -> Path:
+    signature = json.dumps(_cache_signature_payload({**params, "source": source}), ensure_ascii=False, sort_keys=True, default=str)
+    digest = hashlib.sha256(signature.encode("utf-8")).hexdigest()[:16]
+    return settings.output_dir / "cache" / "threats" / "huawei_sources" / source / f"{digest}.json"
+
+
 def _cache_signature_payload(params: dict[str, Any]) -> dict[str, Any]:
-    excluded = {"reset", "refresh_source_cache", "use_source_cache", "resume_from_run_id", "source_run_id", "source_records_path"}
+    excluded = {"reset", "refresh_source_cache", "refresh_sources", "use_source_cache", "sources", "resume_from_run_id", "source_run_id", "source_records_path"}
     return {key: value for key, value in sorted(params.items()) if key not in excluded}
 
 
 def load_huawei_live(params: dict[str, Any]) -> list[dict[str, Any]]:
     registry = SourceRegistry()
+    records = []
+    requested = _requested_sources(params)
+    if "repos" in requested:
+        records.append(_collect_repo_record(registry, params))
+    records.extend(_collect_live_assets(registry, params, requested_sources=requested))
+    return records
+
+
+def _load_huawei_sources_with_source_cache(settings, params: dict[str, Any]) -> list[dict[str, Any]]:
+    registry = SourceRegistry()
+    requested = _requested_sources(params)
+    refresh_sources = _as_source_set(params.get("refresh_sources"))
+    refresh_all = bool(params.get("refresh_source_cache", False))
+    records = []
+    collectors = {
+        "repos": lambda: _collect_repo_record(registry, params),
+        "firmware": lambda: _collect_firmware_assets(registry, params),
+        "ascendhub": lambda: _collect_ascendhub_assets(registry, params),
+        "mirrors": lambda: _collect_single_asset_source(registry, "mirrors", "huawei_mirror", {"catalog": params.get("mirror_catalog", ""), "timeout_seconds": params.get("timeout_seconds", 20)}),
+        "openx_huawei": lambda: _collect_openx_huawei_assets(registry, params),
+    }
+    for source in ["repos", "firmware", "ascendhub", "mirrors", "openx_huawei"]:
+        if source not in requested:
+            continue
+        cache_path = _source_record_cache_path(settings, source, params)
+        if not refresh_all and source not in refresh_sources and cache_path.exists():
+            records.extend(_read_source_records(cache_path))
+            continue
+        record = collectors[source]()
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        cache_path.write_text(json.dumps({"records": [record], "params": _cache_signature_payload(params)}, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+        records.append(record)
+    return records
+
+
+def _collect_repo_record(registry: SourceRegistry, params: dict[str, Any]) -> dict[str, Any]:
     repos = _collect_live_repos(registry, params)
     repos = _enrich_security_repos(registry, repos, params)
     repos = _enrich_project_issues(registry, repos, params)
-    assets = _collect_live_assets(registry, params)
-    records = [{"source": "repos", "path": "connector:repos", "exists": True, "items": repos, "raw": {"projects": repos, "mode": "live"}, "mode": "live"}]
-    records.extend(assets)
-    return records
+    return {"source": "repos", "path": "connector:repos", "exists": True, "items": repos, "raw": {"projects": repos, "mode": "live"}, "mode": "live"}
+
+
+def _requested_sources(params: dict[str, Any]) -> set[str]:
+    requested = _as_source_set(params.get("sources")) or {"repos", "firmware", "ascendhub", "mirrors", "openx_huawei"}
+    if not params.get("include_assets", True):
+        requested -= {"firmware", "ascendhub", "mirrors", "openx_huawei"}
+    return requested
+
+
+def _as_source_set(value: Any) -> set[str]:
+    if not value:
+        return set()
+    if isinstance(value, str):
+        return {item.strip() for item in value.split(",") if item.strip()}
+    if isinstance(value, list):
+        return {str(item).strip() for item in value if str(item).strip()}
+    return set()
 
 
 def _collect_live_repos(registry: SourceRegistry, params: dict[str, Any]) -> list[dict[str, Any]]:
@@ -357,15 +406,20 @@ def _is_year_dir(value: str) -> bool:
     return bool(value and value.isdigit() and len(value) == 4)
 
 
-def _collect_live_assets(registry: SourceRegistry, params: dict[str, Any]) -> list[dict[str, Any]]:
+def _collect_live_assets(registry: SourceRegistry, params: dict[str, Any], requested_sources: set[str] | None = None) -> list[dict[str, Any]]:
     if not params.get("include_assets", True):
         return []
-    return [
-        _collect_firmware_assets(registry, params),
-        _collect_ascendhub_assets(registry, params),
-        _collect_single_asset_source(registry, "mirrors", "huawei_mirror", {"catalog": params.get("mirror_catalog", ""), "timeout_seconds": params.get("timeout_seconds", 20)}),
-        _collect_openx_huawei_assets(registry, params),
-    ]
+    requested = requested_sources or _requested_sources(params)
+    records = []
+    if "firmware" in requested:
+        records.append(_collect_firmware_assets(registry, params))
+    if "ascendhub" in requested:
+        records.append(_collect_ascendhub_assets(registry, params))
+    if "mirrors" in requested:
+        records.append(_collect_single_asset_source(registry, "mirrors", "huawei_mirror", {"catalog": params.get("mirror_catalog", ""), "timeout_seconds": params.get("timeout_seconds", 20)}))
+    if "openx_huawei" in requested:
+        records.append(_collect_openx_huawei_assets(registry, params))
+    return records
 
 
 def _collect_firmware_assets(registry: SourceRegistry, params: dict[str, Any]) -> dict[str, Any]:

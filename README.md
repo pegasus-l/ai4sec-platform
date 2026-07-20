@@ -169,6 +169,14 @@ PYTHONPATH=src python3 -m ai4sec_platform.cli.run_pipeline \
 
 也可以用 `source_records_path` 指向 `output/shadow_runs/{run_id}/threats/huawei_source_records.json`。默认不启用缓存；如需复用相同参数的 connector 输出，可传 `use_source_cache=true`，强制刷新传 `refresh_source_cache=true`。
 
+source 级缓存也支持选择性采集和刷新：
+
+```text
+sources=["repos", "firmware"]          # 只采集指定 source
+refresh_sources=["repos"]              # 只刷新 repos，其他 source 读缓存
+use_source_cache=true                   # 显式启用缓存复用
+```
+
 包含：security repo 发现、CVE/SA/broad security 侦察、平台攻击面评分/过滤、固件/AscendHub/镜像资产导入、LLM 语义复核、迁移报告 artifact。
 
 威胁洞察生产链路不读取旧 processed 输出，不生成 baseline/compare artifact。CVE scout、攻击面评分和报告都由 connector 获取的数据在当前 pipeline 内生成。
