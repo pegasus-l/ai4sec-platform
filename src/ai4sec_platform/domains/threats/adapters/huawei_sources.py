@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import hashlib
+import json
+from pathlib import Path
 from typing import Any
 
 from ai4sec_platform.domains.threats.security_repo_discovery import discover_security_repos, group_projects_by_org
@@ -127,7 +130,59 @@ DEFAULT_ASCENDHUB_TARGETS = [
 
 
 def load_huawei_sources(settings, params: dict[str, Any]) -> list[dict[str, Any]]:
-    return load_huawei_live(params)
+    resumed = _load_source_records_from_run(settings, params)
+    if resumed is not None:
+        return resumed
+    explicit = _load_source_records_from_path(params)
+    if explicit is not None:
+        return explicit
+    cache_path = _source_cache_path(settings, params)
+    use_cache = bool(params.get("use_source_cache", False))
+    refresh = bool(params.get("refresh_source_cache", False))
+    if use_cache and not refresh and cache_path.exists():
+        return _read_source_records(cache_path)
+    records = load_huawei_live(params)
+    if use_cache:
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        cache_path.write_text(json.dumps({"records": records, "params": _cache_signature_payload(params)}, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+    return records
+
+
+def _load_source_records_from_run(settings, params: dict[str, Any]) -> list[dict[str, Any]] | None:
+    run_id = params.get("resume_from_run_id") or params.get("source_run_id")
+    if not run_id:
+        return None
+    path = settings.output_dir / "shadow_runs" / str(run_id) / "threats" / "huawei_source_records.json"
+    if not path.exists():
+        return None
+    return _read_source_records(path)
+
+
+def _load_source_records_from_path(params: dict[str, Any]) -> list[dict[str, Any]] | None:
+    raw_path = params.get("source_records_path")
+    if not raw_path:
+        return None
+    path = Path(str(raw_path))
+    if not path.exists():
+        return None
+    return _read_source_records(path)
+
+
+def _read_source_records(path: Path) -> list[dict[str, Any]]:
+    data = json.loads(path.read_text(encoding="utf-8"))
+    records = data.get("records") if isinstance(data, dict) else data
+    return [record for record in records or [] if isinstance(record, dict)]
+
+
+def _source_cache_path(settings, params: dict[str, Any]) -> Path:
+    signature = json.dumps(_cache_signature_payload(params), ensure_ascii=False, sort_keys=True, default=str)
+    digest = hashlib.sha256(signature.encode("utf-8")).hexdigest()[:16]
+    return settings.output_dir / "cache" / "threats" / "huawei_sources" / f"{digest}.json"
+
+
+def _cache_signature_payload(params: dict[str, Any]) -> dict[str, Any]:
+    excluded = {"reset", "refresh_source_cache", "use_source_cache", "resume_from_run_id", "source_run_id", "source_records_path"}
+    return {key: value for key, value in sorted(params.items()) if key not in excluded}
 
 
 def load_huawei_live(params: dict[str, Any]) -> list[dict[str, Any]]:

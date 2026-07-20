@@ -43,6 +43,7 @@ def test_huawei_sources_live_mode_can_feed_existing_pipeline(monkeypatch, tmp_pa
 
     monkeypatch.setattr(huawei_sources, "load_huawei_live", fake_live)
     settings = load_settings()
+    settings = settings.model_copy(update={"output_dir": tmp_path})
     conn = sqlite3.connect(":memory:")
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
@@ -58,3 +59,46 @@ def test_huawei_sources_live_mode_can_feed_existing_pipeline(monkeypatch, tmp_pa
     assert build_result.metrics["items"] >= 1
     item = conn.execute("SELECT * FROM domain_items WHERE domain = 'threats' AND item_type = 'target'").fetchone()
     assert item is not None
+
+
+def test_huawei_source_records_can_resume_downstream_pipeline(monkeypatch, tmp_path) -> None:
+    records = [
+        {
+            "source": "repos",
+            "path": "connector:test/repos",
+            "exists": True,
+            "items": [{"name": "kernel_parser", "url": "https://gitcode.com/openharmony/kernel_parser", "description": "kernel parser security", "star_count": 10, "org": "openharmony", "platform": "gitcode"}],
+            "raw": {},
+            "mode": "live",
+        },
+        {"source": "cve_findings", "path": "generated:test", "exists": True, "items": [], "raw": {}, "mode": "generated"},
+    ]
+
+    calls = {"count": 0}
+
+    def fake_live(params):
+        calls["count"] += 1
+        return records
+
+    monkeypatch.setattr(huawei_sources, "load_huawei_live", fake_live)
+    settings = load_settings()
+    settings = settings.model_copy(update={"output_dir": tmp_path})
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys = ON")
+    init_db(conn)
+    repo.create_pipeline_run(conn, run_id="source_run", domain="threats", pipeline_name="test.sources")
+    source_context = PipelineContext(run_id="source_run", pipeline_name="test.sources", domain="threats", settings=settings, conn=conn, artifact_store=ArtifactStore(tmp_path), params={})
+
+    from ai4sec_platform.pipelines.steps.threat_sources import CollectHuaweiSourcesStep
+
+    CollectHuaweiSourcesStep().run(source_context)
+    assert calls["count"] == 1
+
+    def fail_live(params):
+        raise AssertionError("live loader should not be called when resuming from source run")
+
+    monkeypatch.setattr(huawei_sources, "load_huawei_live", fail_live)
+    resumed = huawei_sources.load_huawei_sources(settings, {"resume_from_run_id": "source_run"})
+    assert resumed[0]["source"] == "repos"
+    assert resumed[0]["items"][0]["name"] == "kernel_parser"
