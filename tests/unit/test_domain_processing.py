@@ -5,6 +5,7 @@ from ai4sec_platform.domains.news.classifiers import classify_news_item
 from ai4sec_platform.domains.news.scorers import score_news_item
 from ai4sec_platform.domains.threats.repo_vuln_extractors import extract_repo_vulnerability_signals
 from ai4sec_platform.domains.threats.attack_surface_scoring import score_attack_surface
+from ai4sec_platform.domains.threats.normalizers import normalize_huawei_item
 from ai4sec_platform.domains.threats.risk_scoring import score_threat_item
 from ai4sec_platform.domains.vulnerabilities.evidence_extractors import extract_material_evidence
 from ai4sec_platform.domains.vulnerabilities.material_classifiers import classify_material
@@ -55,6 +56,13 @@ def test_threat_processing_extracts_history_cves_and_scores_risk() -> None:
     assert scoring.score >= 70
     assert scoring.signals["has_exploit_signal"] is True
     assert "attack_surface" in scoring.breakdown
+
+
+def test_threat_cve_finding_title_does_not_claim_cve_when_none_found() -> None:
+    item = {"org": "Ascend", "name": "kernel_launcher", "url": "https://gitcode.com/Ascend/kernel_launcher", "cve_count": 0, "sa_count": 0, "broad_sec_count": 0, "total_sec_items": 0}
+    normalized = normalize_huawei_item("cve_findings", item)
+    assert normalized["title"] == "Ascend/kernel_launcher 攻击面线索"
+    assert "CVE 线索" not in normalized["title"]
 
 
 def test_vulnerability_material_processing_judges_valid_material() -> None:

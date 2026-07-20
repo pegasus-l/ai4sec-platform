@@ -39,19 +39,23 @@ def normalize_cve_project(source: str, item: dict[str, Any]) -> dict[str, Any]:
     org = item.get("org") or _org_from_url(item.get("url", ""))
     name = item.get("name") or item.get("repo") or "unknown"
     cves = item.get("cves") or []
+    cve_count = item.get("cve_count") or len(cves)
+    sa_count = item.get("sa_count") or len(item.get("sa_items") or [])
+    broad_sec_count = item.get("broad_sec_count") or len(item.get("broad_sec_items") or [])
+    total_sec_items = item.get("total_sec_items") or cve_count + sa_count + broad_sec_count
     key = f"repo-cves:{org}/{name}".lower()
     return {
         "item_key": key,
         "source": source,
         "source_type": "repo_cve",
-        "title": f"{org}/{name} CVE 线索",
+        "title": _security_finding_title(org, name, cve_count=cve_count, sa_count=sa_count, broad_sec_count=broad_sec_count),
         "url": item.get("url") or "",
-        "summary": f"CVE {len(cves)} 条，安全相关线索 {item.get('total_sec_items') or 0} 条。",
-        "risk_score": item.get("cve_count") or len(cves),
-        "cve_count": item.get("cve_count") or len(cves),
-        "sa_count": item.get("sa_count") or len(item.get("sa_items") or []),
-        "broad_sec_count": item.get("broad_sec_count") or len(item.get("broad_sec_items") or []),
-        "total_sec_items": item.get("total_sec_items") or len(cves) + len(item.get("sa_items") or []) + len(item.get("broad_sec_items") or []),
+        "summary": _security_finding_summary(cve_count=cve_count, sa_count=sa_count, broad_sec_count=broad_sec_count, total_sec_items=total_sec_items),
+        "risk_score": cve_count or sa_count or broad_sec_count,
+        "cve_count": cve_count,
+        "sa_count": sa_count,
+        "broad_sec_count": broad_sec_count,
+        "total_sec_items": total_sec_items,
         "scan_mode": item.get("scan_mode") or "",
         "security_items": item.get("total_sec_items") or 0,
         "cves": cves,
@@ -94,3 +98,20 @@ def _org_from_url(value: str) -> str:
     if len(parts) >= 2:
         return parts[-2]
     return ""
+
+
+def _security_finding_title(org: str, name: str, *, cve_count: int, sa_count: int, broad_sec_count: int) -> str:
+    prefix = f"{org}/{name}" if org else name
+    if cve_count:
+        return f"{prefix} CVE 线索"
+    if sa_count:
+        return f"{prefix} 安全公告线索"
+    if broad_sec_count:
+        return f"{prefix} 安全 issue 线索"
+    return f"{prefix} 攻击面线索"
+
+
+def _security_finding_summary(*, cve_count: int, sa_count: int, broad_sec_count: int, total_sec_items: int) -> str:
+    if total_sec_items:
+        return f"CVE {cve_count} 条，安全公告 {sa_count} 条，安全 issue {broad_sec_count} 条。"
+    return "未发现明确 CVE/SA，按攻击面和仓库特征保留为潜在威胁目标。"
