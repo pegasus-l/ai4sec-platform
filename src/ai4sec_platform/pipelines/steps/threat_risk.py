@@ -15,7 +15,7 @@ class SelectThreatRiskCandidatesStep:
     step_type: str = "select"
 
     def run(self, context: PipelineContext) -> StepResult:
-        limit = int(context.params.get("limit", 50))
+        limit = int(context.params.get("risk_review_limit", context.params.get("review_limit", 5)))
         rows = context.conn.execute(
             """
             SELECT * FROM domain_items

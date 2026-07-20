@@ -158,6 +158,8 @@ PYTHONPATH=src python3 -m ai4sec_platform.cli.run_pipeline --pipeline threats.hu
 
 威胁洞察生产链路不读取旧 processed 输出，不生成 baseline/compare artifact。CVE scout、攻击面评分和报告都由 connector 获取的数据在当前 pipeline 内生成。
 
+默认威胁扫描覆盖旧实现同一批 25 个组织，但为了避免一次运行阻塞，默认每个组织抓取 1 页、每页 50 个 repo，security 深挖限制为少量仓库/文件，风险语义复核默认 Top 5。需要放大时通过 API/CLI 参数传 `scan_profile=full` 或显式设置 `page_limit`、`per_page`、`security_repo_limit`、`security_file_limit`、`risk_review_limit`。
+
 示例：
 
 ```bash

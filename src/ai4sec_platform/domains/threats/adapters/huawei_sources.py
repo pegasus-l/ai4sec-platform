@@ -53,8 +53,8 @@ def load_huawei_live(params: dict[str, Any]) -> list[dict[str, Any]]:
 
 def _collect_live_repos(registry: SourceRegistry, params: dict[str, Any]) -> list[dict[str, Any]]:
     orgs = params.get("orgs") or DEFAULT_LIVE_ORGS
-    page_limit = int(params.get("page_limit", 2))
-    per_page = int(params.get("per_page", 100))
+    page_limit = int(params.get("page_limit", 3 if _full_scan(params) else 1))
+    per_page = int(params.get("per_page", 100 if _full_scan(params) else 50))
     repos: list[dict[str, Any]] = []
     for entry in orgs:
         if isinstance(entry, str):
@@ -64,7 +64,7 @@ def _collect_live_repos(registry: SourceRegistry, params: dict[str, Any]) -> lis
             org = str(entry.get("org") or "")
         connector = registry.get(platform)
         for page in range(1, page_limit + 1):
-            result = connector.fetch(SourceFetchRequest(source_name=f"{platform}:{org}:repos", params={"resource": "repos", "org": org, "page": page, "per_page": per_page, "timeout_seconds": params.get("timeout_seconds", 20)}))
+            result = connector.fetch(SourceFetchRequest(source_name=f"{platform}:{org}:repos", params={"resource": "repos", "org": org, "page": page, "per_page": per_page, "timeout_seconds": params.get("timeout_seconds", 15)}))
             if result.errors:
                 break
             batch = [_normalize_repo_item(item, org=org, platform=platform) for item in result.items]
@@ -79,9 +79,9 @@ def _enrich_security_repos(registry: SourceRegistry, repos: list[dict[str, Any]]
         return repos
     grouped = group_projects_by_org(repos)
     security = discover_security_repos(grouped)
-    issue_pages = int(params.get("security_issue_pages", 1))
-    max_files = int(params.get("security_file_limit", 8))
-    max_security_repos = int(params.get("security_repo_limit", 8))
+    issue_pages = int(params.get("security_issue_pages", 2 if _full_scan(params) else 1))
+    max_files = int(params.get("security_file_limit", 20 if _full_scan(params) else 3))
+    max_security_repos = int(params.get("security_repo_limit", 20 if _full_scan(params) else 2))
     by_key = {(repo.get("platform"), repo.get("org"), repo.get("name")): repo for repo in repos}
     for org, sec_data in security.items():
         for sec_repo in (sec_data.get("security_repos") or [])[:max_security_repos]:
@@ -93,7 +93,7 @@ def _enrich_security_repos(registry: SourceRegistry, repos: list[dict[str, Any]]
                 continue
             issues = []
             for page in range(1, issue_pages + 1):
-                result = connector.fetch(SourceFetchRequest(source_name=f"{platform}:{owner}/{repo_name}:issues", params={"resource": "issues", "owner": owner, "repo": repo_name, "page": page, "per_page": 100, "timeout_seconds": params.get("timeout_seconds", 20)}))
+                result = connector.fetch(SourceFetchRequest(source_name=f"{platform}:{owner}/{repo_name}:issues", params={"resource": "issues", "owner": owner, "repo": repo_name, "page": page, "per_page": 100, "timeout_seconds": params.get("timeout_seconds", 15)}))
                 if result.errors or not result.items:
                     break
                 issues.extend(result.items)
@@ -146,6 +146,10 @@ def _collect_live_assets(registry: SourceRegistry, params: dict[str, Any]) -> li
         result = connector.fetch(SourceFetchRequest(source_name=f"{connector_name}:{source}", params=connector_params))
         records.append({"source": source, "path": f"connector:{connector_name}", "exists": not bool(result.errors), "items": result.items, "raw": {"metadata": result.metadata, "errors": result.errors, "mode": "live"}, "mode": "live"})
     return records
+
+
+def _full_scan(params: dict[str, Any]) -> bool:
+    return str(params.get("scan_profile") or "").lower() in {"full", "full_scan", "deep"} or bool(params.get("full_scan"))
 
 
 def _split_platform_org(value: str) -> tuple[str, str]:
