@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from ai4sec_platform.domains.threats.cve_scout import build_cve_scout_from_local_records
+from ai4sec_platform.domains.threats.adapters.huawei_sources import DEFAULT_ASCENDHUB_TARGETS
 from ai4sec_platform.pipelines.steps.threat_cve_scout import _coverage_audit
 from ai4sec_platform.domains.threats.security_file_parsers import parse_security_file
 from ai4sec_platform.domains.threats.security_repo_discovery import discover_security_repos, group_projects_by_org
@@ -87,3 +88,9 @@ def test_cve_coverage_audit_warns_when_security_repo_has_no_cve() -> None:
     audit = _coverage_audit({"meta": {"total_projects_in": 100, "total_sec_items": 0, "total_cve_ids": 0, "orgs_with_security_repo": ["openharmony"]}})
     assert audit["status"] == "warn"
     assert "未提取到明确 CVE" in audit["summary"]
+
+
+def test_ascendhub_targets_cover_old_known_hub_list() -> None:
+    assert len(DEFAULT_ASCENDHUB_TARGETS) == 86
+    names = {item["name"] for item in DEFAULT_ASCENDHUB_TARGETS}
+    assert {"mindie", "mindie-motor", "ascend-pytorch", "qwen3-32b"}.issubset(names)
