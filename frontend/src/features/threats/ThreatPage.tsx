@@ -42,6 +42,8 @@ export function ThreatPage() {
 
   const visibleRepos = useMemo(() => filterRepos(model?.repos ?? [], filters), [model, filters]);
   const activeTitle = navGroups.flatMap(group => group.items).find(item => item.id === view)?.title ?? '威胁洞察';
+  const repoGrades = model ? unique(model.repos.map(repo => repo.grade).filter(Boolean)) : [];
+  const repoSurfaces = model ? unique(model.repos.map(repo => repo.surface).filter(Boolean)) : [];
 
   return <main className="main">
     <aside className="sidebar">
@@ -55,9 +57,9 @@ export function ThreatPage() {
       <div className="side-foot">说明：固件/镜像到代码仓的关系默认按置信度展示，不做无证据强关联。</div>
     </aside>
     <section className="content">
-      <section className="hero">
-        <div><span className="label">{activeTitle}</span><h1>{heroTitle(view)}</h1><p>{heroCopy(view)}</p></div>
-        <div className="hero-actions"><button onClick={() => location.reload()}>刷新数据</button><a href="/api/threats/reports" target="_blank">查看报告 API</a></div>
+      <section className="content-head">
+        <div className="content-title"><span className="label">{activeTitle}</span><h1>{heroTitle(view)}</h1><p>{heroCopy(view)}</p></div>
+        <div className="head-actions">{view === 'repos' && model ? <FiltersBar filters={filters} setFilters={setFilters} grades={repoGrades} surfaces={repoSurfaces} /> : <><button className="btn primary" onClick={() => location.reload()}>刷新数据</button><a className="btn" href="/api/threats/reports" target="_blank">查看报告 API</a></>}</div>
       </section>
       <div className="view">
         {isLoading && <EmptyState title="正在加载威胁洞察数据" description="从 /api/frontend/v9 拉取统一契约。" />}
@@ -104,10 +106,7 @@ function ThreatToday({ model, openRepo }: { model: ThreatViewModel; openRepo: (r
 }
 
 function ThreatRepos({ model, repos, filters, setFilters, openRepo }: { model: ThreatViewModel; repos: ThreatRepo[]; filters: FilterState; setFilters: (filters: FilterState) => void; openRepo: (repo: ThreatRepo) => void }) {
-  const grades = unique(model.repos.map(repo => repo.grade).filter(Boolean));
-  const surfaces = unique(model.repos.map(repo => repo.surface).filter(Boolean));
   return <div className="grid">
-    <FiltersBar filters={filters} setFilters={setFilters} grades={grades} surfaces={surfaces} />
     <div className="table-card"><RepoTable repos={repos} openRepo={openRepo} /></div>
   </div>;
 }
@@ -191,11 +190,11 @@ function AssetDrawer({ asset, onClose }: { asset: ThreatAsset | null; onClose: (
 }
 
 function FiltersBar({ filters, setFilters, grades, surfaces }: { filters: FilterState; setFilters: (filters: FilterState) => void; grades: string[]; surfaces: string[] }) {
-  return <div className="filters"><input value={filters.search} onChange={event => setFilters({ ...filters, search: event.target.value })} placeholder="搜索组织 / 仓库 / 攻击面 / CVE" /><select value={filters.grade} onChange={event => setFilters({ ...filters, grade: event.target.value })}><option value="all">全部等级</option>{grades.map(grade => <option key={grade}>{grade}</option>)}</select><select value={filters.surface} onChange={event => setFilters({ ...filters, surface: event.target.value })}><option value="all">全部攻击面</option>{surfaces.map(surface => <option key={surface}>{surface}</option>)}</select><label><input type="checkbox" checked={filters.onlyCve} onChange={event => setFilters({ ...filters, onlyCve: event.target.checked })} /> 有 CVE</label><label><input type="checkbox" checked={filters.onlyHigh} onChange={event => setFilters({ ...filters, onlyHigh: event.target.checked })} /> 高风险</label></div>;
+  return <div className="filters"><input className="search" value={filters.search} onChange={event => setFilters({ ...filters, search: event.target.value })} placeholder="搜索组织/仓库/描述" /><select className="select" value={filters.grade} onChange={event => setFilters({ ...filters, grade: event.target.value })}><option value="all">全部等级</option>{grades.map(grade => <option key={grade}>{grade}</option>)}</select><select className="select" value={filters.surface} onChange={event => setFilters({ ...filters, surface: event.target.value })}><option value="all">全部攻击面</option>{surfaces.map(surface => <option key={surface}>{surface}</option>)}</select></div>;
 }
 
 function ScoreBreakdown({ breakdown, mini = false }: { breakdown: Record<string, number>; mini?: boolean }) {
-  const entries = Object.entries(breakdown ?? {});
+  const entries = Object.entries(breakdown ?? {}).slice(0, mini ? 5 : undefined);
   if (!entries.length) return <EmptyState title="暂无评分拆解" />;
   return <div className={mini ? 'breakdown mini' : 'breakdown'}>{entries.map(([key, value]) => <div className="break-row" key={key}><span title={key}>{scoreLabel(key)}</span><span className="bar"><i style={{ width: `${Math.min(100, Number(value) * 4)}%` }} /></span><b>{Number(value).toFixed(0)}</b></div>)}</div>;
 }

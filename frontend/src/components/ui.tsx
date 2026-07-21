@@ -18,13 +18,15 @@ export function EmptyState({ title, description }: { title: string; description?
 
 export function Drawer({ open, title, subtitle, onClose, children }: PropsWithChildren<{ open: boolean; title: string; subtitle?: string; onClose: () => void }>) {
   return <>
-    <div className={`drawer-mask ${open ? 'show' : ''}`} onClick={onClose} />
-    <aside className={`drawer ${open ? 'show' : ''}`}>
-      <div className="drawer-head">
-        <div><span className="label">DETAIL</span><h2>{title}</h2>{subtitle && <p>{subtitle}</p>}</div>
-        <button className="icon-button" onClick={onClose}>×</button>
+    <div className={`drawer-mask ${open ? 'open' : ''}`} onClick={onClose} />
+    <aside className={`drawer ${open ? 'open' : ''}`}>
+      <div className="drawer-panel">
+        <div className="drawer-head">
+          <div><span className="label">DETAIL</span><h2>{title}</h2>{subtitle && <p>{subtitle}</p>}</div>
+          <button className="close" onClick={onClose}>×</button>
+        </div>
+        <div className="drawer-body">{children}</div>
       </div>
-      <div className="drawer-body">{children}</div>
     </aside>
   </>;
 }
