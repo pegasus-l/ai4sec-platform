@@ -47,21 +47,20 @@ export function ThreatPage() {
 
   return <main className="main">
     <aside className="sidebar">
-      <div className="side-head"><div className="label">THREAT INTELLIGENCE</div><h2>开源威胁洞察</h2><p>主线是开源代码仓，资产库和关联图谱用于补足固件、镜像、软件源侧的攻击面。</p></div>
-      <div className="data-basis">
-        <div className="mini-stat"><span>目标仓库</span><strong>{model?.summary.totalRepos ?? '—'}</strong></div>
-        <div className="mini-stat"><span>CVE / SA</span><strong>{model ? `${model.summary.uniqueCve}/${model.summary.totalSa}` : '—'}</strong></div>
-        <div className="mini-stat"><span>资产条目</span><strong>{model?.summary.assets ?? '—'}</strong></div>
+      <div className="sidebar-head"><div className="label"><span className="dot" /><span>威胁洞察</span></div><h2>开源目标与运营</h2><p>开源威胁洞察围绕“发现目标、判断风险、查看证据、加入跟踪”的挖洞动线组织。</p></div>
+      <div className="domain-switcher">
+        <button className="domain-btn active" type="button"><span className="domain-icon">OS</span><span className="domain-main"><strong>威胁洞察</strong><span>华为开源仓库风险与挖洞目标</span></span><span className="domain-tag">OPS</span></button>
       </div>
-      <nav className="nav">{navGroups.map(group => <div className="nav-group" key={group.title}><div className="group-title">{group.title}</div>{group.items.map(item => <button key={item.id} className={`nav-btn ${view === item.id ? 'active' : ''}`} onClick={() => setView(item.id)}><span className="nav-left"><span className="nav-icon">{item.icon}</span><span className="nav-title">{item.title}</span></span><span className="nav-count">{navCount(item.id, model)}</span></button>)}</div>)}</nav>
-      <div className="side-foot">说明：固件/镜像到代码仓的关系默认按置信度展示，不做无证据强关联。</div>
+      <div className="data-basis"><div className="mini-stat"><span>目标仓库</span><strong>{model?.summary.totalRepos ?? '—'}</strong></div><div className="mini-stat"><span>CVE / SA</span><strong>{model ? `${model.summary.uniqueCve}/${model.summary.totalSa}` : '—'}</strong></div><div className="mini-stat"><span>资产条目</span><strong>{model?.summary.assets ?? '—'}</strong></div></div>
+      <nav className="nav-scroll">{navGroups.map(group => <div className="nav-group" key={group.title}><div className="group-title">{group.title}</div>{group.items.map(item => <button key={item.id} className={`nav-item ${view === item.id ? 'active' : ''}`} onClick={() => setView(item.id)}><span className="nav-left"><span className="nav-ico">{item.icon}</span><span className="nav-text"><b>{item.title}</b><small>{navMeta(item.id)}</small></span></span><span className="nav-meta">{navCount(item.id, model)}</span></button>)}</div>)}</nav>
+      <div className="sidebar-note">目标详情不是单独页签；从今日关注、代码仓、关联图谱或跟踪队列点击对象后打开。资产关系默认按置信度展示，不做无证据强关联。</div>
     </aside>
     <section className="content">
       <section className="content-head">
         <div className="content-title"><span className="label">{activeTitle}</span><h1>{heroTitle(view)}</h1><p>{heroCopy(view)}</p></div>
         <div className="head-actions">{view === 'repos' && model ? <FiltersBar filters={filters} setFilters={setFilters} grades={repoGrades} surfaces={repoSurfaces} /> : <><button className="btn primary" onClick={() => location.reload()}>刷新数据</button><a className="btn" href="/api/threats/reports" target="_blank">查看报告 API</a></>}</div>
       </section>
-      <div className="view">
+      <div className="content-body view">
         {isLoading && <EmptyState title="正在加载威胁洞察数据" description="从 /api/frontend/v9 拉取统一契约。" />}
         {error && <EmptyState title="加载失败" description={(error as Error).message} />}
         {model && renderView(view, model, visibleRepos, filters, setFilters, setSelectedRepo, setSelectedAsset)}
@@ -249,6 +248,10 @@ function navCount(view: ViewId, model: ThreatViewModel | null): string {
     'ops-sources': String(Object.keys(model.summary.sourceStats).length),
     'ops-quality': String(Object.keys(model.summary.scanModes).length)
   } as Record<ViewId, string>)[view];
+}
+
+function navMeta(view: ViewId): string {
+  return ({ today: 'Today', repos: 'Repo', surface: 'Surface', assets: 'Asset', graph: 'Graph', queue: 'Track', 'ops-tasks': 'Jobs', 'ops-sources': 'Sources', 'ops-quality': 'QA' } as Record<ViewId, string>)[view];
 }
 
 function unique(values: string[]): string[] { return Array.from(new Set(values)).filter(Boolean).sort(); }
