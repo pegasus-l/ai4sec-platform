@@ -9,7 +9,7 @@ export function Badge({ children, tone = 'slate' }: PropsWithChildren<{ tone?: '
 }
 
 export function MetricCard({ label, value, hint, tone = 'sky' }: { label: string; value: ReactNode; hint?: string; tone?: 'sky' | 'green' | 'amber' | 'red' | 'violet' }) {
-  return <Card className={`metric metric-${tone}`}><span>{label}</span><strong>{value}</strong>{hint && <em>{hint}</em>}</Card>;
+  return <Card className={`kpi metric-${tone}`}><span>{label}</span><strong>{value}</strong>{hint && <p>{hint}</p>}</Card>;
 }
 
 export function EmptyState({ title, description }: { title: string; description?: string }) {
