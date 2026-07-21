@@ -62,13 +62,28 @@ AGENTS.md
 
 ## 前端页面
 
-当前已内置前端工作台，页面壳会继续向 `/mnt/d/漏洞挖掘/洞察工具/dashboard/demo/index-v9.html` 的信息架构迁移，并由 FastAPI 直接提供服务。
+当前前端已重建为 React + Vite + TypeScript 工程，威胁洞察参考 `/mnt/d/漏洞挖掘/洞察工具/dashboard/demo/index-v10.html` 的功能布局，并沿用 v9 的深色视觉风格。FastAPI 会直接提供 `frontend/dist` 构建产物。
 
 ```text
 http://127.0.0.1:8000/
 ```
 
 页面会调用 `/api/dashboard/overview`、四个业务域接口和统一运营接口。首次访问前请先运行本地原始数据导入 pipeline。
+
+前端开发：
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+前端构建：
+
+```bash
+cd frontend
+npm run build
+```
 
 ## 后端任务触发
 

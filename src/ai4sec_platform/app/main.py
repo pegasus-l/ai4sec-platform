@@ -2,14 +2,15 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from ai4sec_platform.app.api.router import api_router
 
-STATIC_DIR = Path(__file__).resolve().parent / "static"
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
+FRONTEND_DIST = PROJECT_ROOT / "frontend" / "dist"
 
 
 def create_app() -> FastAPI:
@@ -22,11 +23,21 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
     app.include_router(api_router)
-    app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+    if (FRONTEND_DIST / "assets").exists():
+        app.mount("/assets", StaticFiles(directory=FRONTEND_DIST / "assets"), name="assets")
 
     @app.get("/", include_in_schema=False)
     def index() -> FileResponse:
-        return FileResponse(STATIC_DIR / "index.html")
+        return FileResponse(FRONTEND_DIST / "index.html")
+
+    @app.get("/{path:path}", include_in_schema=False)
+    def frontend_fallback(path: str) -> FileResponse:
+        if path.startswith("api/"):
+            raise HTTPException(status_code=404, detail="API route not found")
+        target = FRONTEND_DIST / path
+        if target.exists() and target.is_file():
+            return FileResponse(target)
+        return FileResponse(FRONTEND_DIST / "index.html")
 
     return app
 

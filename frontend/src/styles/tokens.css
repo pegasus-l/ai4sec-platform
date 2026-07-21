@@ -1,0 +1,21 @@
+:root {
+  color-scheme: dark;
+  --bg: #020617;
+  --bg-2: #07111f;
+  --panel: rgba(15, 23, 42, 0.84);
+  --panel-2: rgba(30, 41, 59, 0.62);
+  --line: rgba(148, 163, 184, 0.18);
+  --line-strong: rgba(148, 163, 184, 0.32);
+  --text: #e2e8f0;
+  --muted: #94a3b8;
+  --faint: #64748b;
+  --sky: #38bdf8;
+  --green: #34d399;
+  --amber: #f59e0b;
+  --red: #fb7185;
+  --violet: #a78bfa;
+  --slate: #64748b;
+  --shadow: 0 24px 80px rgba(0, 0, 0, 0.42);
+  --radius: 20px;
+  --radius-sm: 12px;
+}
