@@ -10,9 +10,9 @@ const topTabs = [
 export function Shell({ children }: PropsWithChildren) {
   return <div className="shell">
     <header className="topbar">
-      <div className="brand"><span className="brand-mark">AI4</span><div><strong>AI4SEC TMG</strong><em>统一安全洞察工作台</em></div></div>
-      <nav className="top-tabs">{topTabs.map(tab => <button key={tab.id} className={tab.id === 'threat' ? 'active' : ''}>{tab.label}</button>)}</nav>
-      <div className="top-actions"><span>Connector Pipeline</span><span>V10 React</span></div>
+      <div className="brand"><span className="brand-mark">TMG</span><div><strong>AI4SEC TMG</strong><span>威胁洞察：代码仓主干 + 固件/镜像资产 + 关联图谱</span></div></div>
+      <nav className="top-tabs">{topTabs.map(tab => <button key={tab.id} className={`top-tab ${tab.id === 'threat' ? 'active' : ''}`}><span className="dot" />{tab.label}</button>)}</nav>
+      <div className="status"><i /> Connector Pipeline · React V10</div>
     </header>
     {children}
   </div>;

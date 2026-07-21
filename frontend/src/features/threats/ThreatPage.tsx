@@ -43,23 +43,31 @@ export function ThreatPage() {
   const visibleRepos = useMemo(() => filterRepos(model?.repos ?? [], filters), [model, filters]);
   const activeTitle = navGroups.flatMap(group => group.items).find(item => item.id === view)?.title ?? '威胁洞察';
 
-  return <div className="workspace">
+  return <main className="main">
     <aside className="sidebar">
-      <div className="domain-card"><span className="label">THREAT INTEL</span><strong>开源威胁洞察</strong><p>从代码仓、CVE/SA、攻击面和资产关系中筛选值得挖的目标。</p></div>
-      {navGroups.map(group => <div className="nav-group" key={group.title}><h4>{group.title}</h4>{group.items.map(item => <button key={item.id} className={view === item.id ? 'active' : ''} onClick={() => setView(item.id)}><span>{item.icon}</span>{item.title}</button>)}</div>)}
+      <div className="side-head"><div className="label">THREAT INTELLIGENCE</div><h2>开源威胁洞察</h2><p>主线是开源代码仓，资产库和关联图谱用于补足固件、镜像、软件源侧的攻击面。</p></div>
+      <div className="data-basis">
+        <div className="mini-stat"><span>目标仓库</span><strong>{model?.summary.totalRepos ?? '—'}</strong></div>
+        <div className="mini-stat"><span>CVE / SA</span><strong>{model ? `${model.summary.uniqueCve}/${model.summary.totalSa}` : '—'}</strong></div>
+        <div className="mini-stat"><span>资产条目</span><strong>{model?.summary.assets ?? '—'}</strong></div>
+      </div>
+      <nav className="nav">{navGroups.map(group => <div className="nav-group" key={group.title}><div className="group-title">{group.title}</div>{group.items.map(item => <button key={item.id} className={`nav-btn ${view === item.id ? 'active' : ''}`} onClick={() => setView(item.id)}><span className="nav-left"><span className="nav-icon">{item.icon}</span><span className="nav-title">{item.title}</span></span><span className="nav-count">{navCount(item.id, model)}</span></button>)}</div>)}</nav>
+      <div className="side-foot">说明：固件/镜像到代码仓的关系默认按置信度展示，不做无证据强关联。</div>
     </aside>
-    <main className="content">
+    <section className="content">
       <section className="hero">
         <div><span className="label">{activeTitle}</span><h1>{heroTitle(view)}</h1><p>{heroCopy(view)}</p></div>
         <div className="hero-actions"><button onClick={() => location.reload()}>刷新数据</button><a href="/api/threats/reports" target="_blank">查看报告 API</a></div>
       </section>
-      {isLoading && <EmptyState title="正在加载威胁洞察数据" description="从 /api/frontend/v9 拉取统一契约。" />}
-      {error && <EmptyState title="加载失败" description={(error as Error).message} />}
-      {model && renderView(view, model, visibleRepos, filters, setFilters, setSelectedRepo, setSelectedAsset)}
-    </main>
+      <div className="view">
+        {isLoading && <EmptyState title="正在加载威胁洞察数据" description="从 /api/frontend/v9 拉取统一契约。" />}
+        {error && <EmptyState title="加载失败" description={(error as Error).message} />}
+        {model && renderView(view, model, visibleRepos, filters, setFilters, setSelectedRepo, setSelectedAsset)}
+      </div>
+    </section>
     <RepoDrawer repo={selectedRepo} onClose={() => setSelectedRepo(null)} />
     <AssetDrawer asset={selectedAsset} onClose={() => setSelectedAsset(null)} />
-  </div>;
+  </main>;
 }
 
 function renderView(view: ViewId, model: ThreatViewModel, repos: ThreatRepo[], filters: FilterState, setFilters: (filters: FilterState) => void, openRepo: (repo: ThreatRepo) => void, openAsset: (asset: ThreatAsset) => void) {
@@ -190,6 +198,21 @@ function heroTitle(view: ViewId): string {
 
 function heroCopy(view: ViewId): string {
   return ({ today: '优先呈现高风险目标、CVE/SA/security issue 和推荐挖洞方向。', repos: '搜索、过滤、排序所有华为开源仓，并查看证据链。', surface: '按语言、输入面、历史漏洞、复杂度和安全边界拆分评分。', assets: '查看 firmware、AscendHub、mirror、OpenX Huawei 等资产线索。', graph: '用轻量关系图查看组织、仓库、CVE、攻击面和资产。', queue: '承接待研判、待代码审计、持续跟踪等行动项。', 'ops-tasks': '查看威胁 pipeline 运行结果和报告 artifact。', 'ops-sources': '查看 CVE scout、攻击面和报告数据源。', 'ops-quality': '查看质量审计与覆盖率提示。' } as Record<ViewId, string>)[view];
+}
+
+function navCount(view: ViewId, model: ThreatViewModel | null): string {
+  if (!model) return '—';
+  return ({
+    today: String(model.today.length),
+    repos: String(model.summary.totalRepos || model.repos.length),
+    surface: String(Object.keys(groupBy(model.repos, repo => repo.surface || 'unknown')).length),
+    assets: String(model.assets.length),
+    graph: String(model.graph.nodes.length),
+    queue: String(model.queue.length),
+    'ops-tasks': String(model.summary.totalRepos),
+    'ops-sources': String(Object.keys(model.summary.sourceStats).length),
+    'ops-quality': String(Object.keys(model.summary.scanModes).length)
+  } as Record<ViewId, string>)[view];
 }
 
 function unique(values: string[]): string[] { return Array.from(new Set(values)).filter(Boolean).sort(); }
