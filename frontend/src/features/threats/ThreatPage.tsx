@@ -9,6 +9,7 @@ import { opsTasks, opsSources } from './threatStaticData';
 import { ThreatGraphView } from './graph/ThreatGraphView';
 import { RepoDrawerContent } from './RepoDrawer';
 import { useDrawerStack } from '../../components/DrawerStack';
+import { v12MockThreatModel } from './v12Mock';
 
 type ViewId = 'today' | 'repos' | 'surface' | 'assets' | 'graph' | 'queue' | 'ops-tasks' | 'ops-sources' | 'ops-rules' | 'ops-quality' | 'ops-queue';
 
@@ -43,8 +44,8 @@ export function ThreatPage() {
   const [filters, setFilters] = useState<FilterState>({ search: '', grade: 'all', surface: 'all', onlyCve: false, onlyHigh: false });
   const [selectedAsset, setSelectedAsset] = useState<ThreatAsset | null>(null);
   const { push } = useDrawerStack();
-  const { data, isLoading, error } = useQuery({ queryKey: ['frontend-contract'], queryFn: fetchFrontendContract });
-  const model = useMemo(() => data ? adaptThreatContract(data) : null, [data]);
+  const { data, isLoading, error } = useQuery({ queryKey: ['frontend-contract'], queryFn: fetchFrontendContract, enabled: false });
+  const model = useMemo(() => data ? adaptThreatContract(data) : v12MockThreatModel, [data]);
 
   const openRepo = (repo: ThreatRepo) => {
     push({
@@ -97,7 +98,7 @@ function ThreatToday({ model, openRepo, setView, setFilters }: { model: ThreatVi
   const { summary } = model;
   const focus = [
     { type: '高风险仓库', kind: 'repo' as const, repo: model.repos[0], why: 'A 级高风险目标，适合优先进入代码审计和漏洞假设验证。' },
-    { type: '安全线索仓库', kind: 'repo' as const, repo: model.repos.find((repo) => repo.cve > 0 || repo.sec > 0) ?? model.repos[1], why: '命中过 CVE / SA / security issue，适合做公告与依赖复核。' },
+    { type: '安全线索仓库', kind: 'repo' as const, repo: model.repos.find((repo) => repo.id === 'repo-opengauss-sec') ?? model.repos.find((repo) => repo.cve > 20 || repo.sec > 20) ?? model.repos[1], why: '命中过 CVE / SA / security issue，适合做公告与依赖复核。' },
     { type: '资产变化', kind: 'asset' as const, asset: model.assets[0], why: '固件 / 镜像 / Hub 资产有版本或规模变化，建议关联代码仓复核。' },
     { type: '待复核关联', kind: 'asset' as const, asset: model.assets[1] ?? model.assets[0], why: '资产到代码仓关系为 inferred / weak，需要 SBOM 或命名证据确认。' }
   ].filter((item) => item.kind === 'repo' ? Boolean(item.repo) : Boolean(item.asset));
