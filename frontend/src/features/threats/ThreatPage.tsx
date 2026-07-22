@@ -174,7 +174,42 @@ function ThreatAssets({ model, openAsset }: { model: ThreatViewModel; openAsset:
       <select className="select" value={confidence} onChange={e => setConfidence(e.target.value)}><option value="all">全部置信度</option><option value="direct">direct</option><option value="inferred">inferred</option><option value="weak">weak</option><option value="unknown">unknown</option></select>
       <span className="muted small">共 {filtered.length} 个资产{assetType !== 'all' ? ` · ${assetType}` : ''}{confidence !== 'all' ? ` · ${confidence}` : ''}</span>
     </div>
-    <div className="grid cols-2">{filtered.map(asset => <AssetCard key={asset.id} asset={asset} onClick={() => openAsset(asset)} />)}</div>
+    <div className="grid cols-2">
+      {(() => {
+        const openxAssets = filtered.filter(a => a.type === 'openx_firmware');
+        const otherAssets = filtered.filter(a => a.type !== 'openx_firmware');
+        const groups = new Map<string, ThreatAsset[]>();
+        openxAssets.forEach(a => { const key = a.deviceModel || a.category || '未知设备'; if (!groups.has(key)) groups.set(key, []); groups.get(key)!.push(a); });
+        return <>
+          {Array.from(groups.entries()).map(([model, files]) => <OpenxGroupCard key={model} deviceModel={model} files={files} onClick={openAsset} />)}
+          {otherAssets.map(asset => <AssetCard key={asset.id} asset={asset} onClick={() => openAsset(asset)} />)}
+        </>;
+      })()}
+    </div>
+  </div>;
+}
+
+function OpenxGroupCard({ deviceModel, files, onClick }: { deviceModel: string; files: ThreatAsset[]; onClick: (a: ThreatAsset) => void }) {
+  const [expanded, setExpanded] = useState(false);
+  const latest = files.reduce((max, f) => (f.latest || '') > max ? (f.latest || '') : max, '');
+  return <div className="card asset-card" onClick={() => setExpanded(!expanded)}>
+    <div className="row-title"><span className="badge">OpenX固件</span><span className="badge">{files.length} 个固件</span></div>
+    <h3>{deviceModel}</h3>
+    <div className="asset-meta">
+      <div><b>{files[0]?.category || '-'}</b><span>设备分类</span></div>
+      <div><b>{files.length}</b><span>固件包数</span></div>
+      <div><b>{latest || '-'}</b><span>最新修改</span></div>
+    </div>
+    {expanded ? (
+      <div className="timeline" style={{ marginTop: 10 }}>
+        {files.map((f, i) => (
+          <div key={i} className="timeline-item clickable" onClick={(e) => { e.stopPropagation(); onClick(f); }}>
+            <div className="row-title"><b>{f.softwareVersion || f.version || '-'}</b><span className="badge">{f.fileType || '-'}</span></div>
+            <span className="muted small">{f.link || f.url || '-'}</span>
+          </div>
+        ))}
+      </div>
+    ) : <p className="muted small" style={{ marginTop: 8 }}>点击展开 {files.length} 个固件文件</p>}
   </div>;
 }
 
