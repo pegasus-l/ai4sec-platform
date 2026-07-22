@@ -169,7 +169,17 @@ function ThreatAssets({ model, openAsset }: { model: ThreatViewModel; openAsset:
 }
 
 function ThreatQueue({ model }: { model: ThreatViewModel }) {
-  return <Card><PanelTitle icon={<Workflow />} title="跟踪队列" hint="人工复核 / 持续跟踪" /> {model.queue.length ? <table className="data-table"><thead><tr><th>类型</th><th>优先级</th><th>状态</th><th>原因</th></tr></thead><tbody>{model.queue.map((item, index) => <tr key={index}><td>{String(item.queue_type ?? item.name ?? '-')}</td><td>{String(item.priority ?? '-')}</td><td>{String(item.status ?? '-')}</td><td>{String(item.reason ?? '-')}</td></tr>)}</tbody></table> : <EmptyState title="暂无跟踪队列" />}</Card>;
+  const [items, setItems] = useState(model.queue);
+  const advance = (index: number) => {
+    setItems(prev => prev.map((item, i) => {
+      if (i !== index) return item;
+      const status = String(item.status ?? '');
+      const newStatus = status.includes('待') ? '持续跟踪' : '已关闭';
+      return { ...item, status: newStatus };
+    }));
+  };
+  if (!items.length) return <EmptyState title="暂无跟踪队列" />;
+  return <div className="table-card"><table><thead><tr><th>对象</th><th>类型</th><th>优先级</th><th>状态</th><th>负责人</th><th>原因</th><th>操作</th></tr></thead><tbody>{items.map((item, index) => <tr key={index} className="clickable"><td><div className="repo-name">{String(item.name ?? item.title ?? '-')}</div></td><td>{String(item.queue_type ?? item.type ?? '-')}</td><td><span className={`badge ${String(item.priority) === 'P0' ? 'A' : 'B'}`}>{String(item.priority ?? '-')}</span></td><td>{String(item.status ?? '-')}</td><td>{String(item.assignee ?? item.owner ?? '-')}</td><td>{String(item.reason ?? '-')}</td><td><button className="btn" onClick={() => advance(index)}>推进</button></td></tr>)}</tbody></table></div>;
 }
 
 function ThreatOps({ model, kind }: { model: ThreatViewModel; kind: ViewId }) {
