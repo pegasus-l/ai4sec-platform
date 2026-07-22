@@ -95,7 +95,12 @@ function renderView(view: ViewId, model: ThreatViewModel, repos: ThreatRepo[], f
 
 function ThreatToday({ model, openRepo, setView, setFilters }: { model: ThreatViewModel; openRepo: (repo: ThreatRepo) => void; setView: (view: ViewId) => void; setFilters: (filters: FilterState) => void }) {
   const { summary } = model;
-  const focus = model.today.slice(0, 4);
+  const focus = [
+    { type: '高风险仓库', kind: 'repo' as const, repo: model.repos[0], why: 'A 级高风险目标，适合优先进入代码审计和漏洞假设验证。' },
+    { type: '安全线索仓库', kind: 'repo' as const, repo: model.repos.find((repo) => repo.cve > 0 || repo.sec > 0) ?? model.repos[1], why: '命中过 CVE / SA / security issue，适合做公告与依赖复核。' },
+    { type: '资产变化', kind: 'asset' as const, asset: model.assets[0], why: '固件 / 镜像 / Hub 资产有版本或规模变化，建议关联代码仓复核。' },
+    { type: '待复核关联', kind: 'asset' as const, asset: model.assets[1] ?? model.assets[0], why: '资产到代码仓关系为 inferred / weak，需要 SBOM 或命名证据确认。' }
+  ].filter((item) => item.kind === 'repo' ? Boolean(item.repo) : Boolean(item.asset));
   const kpiJump = (type: 'gradeA' | 'securitySignals' | 'assetChanges' | 'weakRelations') => {
     if (type === 'gradeA') { setFilters({ search: '', grade: 'A', surface: 'all', onlyCve: false, onlyHigh: false }); setView('repos'); return; }
     if (type === 'securitySignals') { setFilters({ search: '', grade: 'all', surface: 'all', onlyCve: false, onlyHigh: false }); setView('repos'); return; }
@@ -110,14 +115,19 @@ function ThreatToday({ model, openRepo, setView, setFilters }: { model: ThreatVi
       <MetricCard label="待复核关联" value={summary.highRisk} hint="inferred / weak 的仓库-资产关系；点击进入关联图谱查看弱关联。" tone="violet" onClick={() => kpiJump('weakRelations')} />
     </div>
     <div className="grid cols-2">
-      {focus.map((repo) => <div className="focus-card" key={repo.id} onClick={() => openRepo(repo)}>
-        <div className="row-title"><Badge tone={repo.score >= 75 ? 'red' : 'amber'}>{repo.status}</Badge><span className="muted small">点击钻取</span></div>
-        <h3>{repo.org}/{repo.name}</h3>
-        <p>{repo.summary || repo.reasons[0] || '高价值威胁目标，建议进入研判。'}</p>
-        <div className="split"><span className="badge A">Grade {repo.grade}</span><span className="badge">{repo.surface}</span><span className="badge">score {Math.round(repo.score)}</span></div>
-        <div className="split"><button className="btn primary" onClick={(event) => { event.stopPropagation(); openRepo(repo); }}>查看详情</button><button className="btn" onClick={(event) => event.stopPropagation()}>加入跟踪</button></div>
+      {focus.map((item) => item.kind === 'repo' ? <div className="focus-card" key={`${item.type}-${item.repo.id}`} onClick={() => openRepo(item.repo)}>
+        <div className="row-title"><span className={`badge ${item.repo.grade}`}>{item.type}</span><span className="muted small">点击钻取</span></div>
+        <h3>{item.repo.org}/{item.repo.name}</h3>
+        <p>{item.why}</p>
+        <div className="split"><span className={`badge ${item.repo.grade}`}>Grade {item.repo.grade}</span><span className="badge">{item.repo.surface}</span><span className="badge">score {Math.round(item.repo.score)}</span></div>
+        <div className="split"><button className="btn primary" onClick={(event) => { event.stopPropagation(); openRepo(item.repo); }}>查看详情</button><button className="btn" onClick={(event) => event.stopPropagation()}>加入跟踪</button></div>
+      </div> : <div className="focus-card" key={`${item.type}-${item.asset.id}`} onClick={() => setView('assets')}>
+        <div className="row-title"><span className="badge B">{item.type}</span><span className="muted small">点击钻取</span></div>
+        <h3>{item.asset.title}</h3>
+        <p>{item.why}</p>
+        <div className="split"><span className="badge B">{item.asset.source}</span><span className="badge">{item.asset.sourceType}</span><span className="badge">score {Math.round(item.asset.score)}</span></div>
+        <div className="split"><button className="btn primary" onClick={(event) => { event.stopPropagation(); setView('assets'); }}>查看详情</button><button className="btn" onClick={(event) => event.stopPropagation()}>加入跟踪</button></div>
       </div>)}
-      <Card><PanelTitle icon={<ShieldCheck />} title="CVE Scout 概览" hint="安全线索来源" /> <StatsGrid data={{ ...summary.sourceStats, ...summary.scanModes }} /></Card>
     </div>
   </div>;
 }

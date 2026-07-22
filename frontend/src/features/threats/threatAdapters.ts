@@ -355,7 +355,10 @@ function buildGraph(
 export function adaptThreatContract(contract: FrontendContract): ThreatViewModel {
   const threat = asRecord(contract.threat);
   const repoItems = asArray<Record<string, unknown>>(threat.targets);
-  const repos = repoItems.map(repoFromItem).sort((a, b) => b.score - a.score);
+  const reposUnsorted = repoItems.map(repoFromItem);
+  // Build vulnDetails BEFORE sorting — index must match repoItems
+  const vulnDetails = buildVulnDetails(reposUnsorted, repoItems);
+  const repos = reposUnsorted.sort((a, b) => b.score - a.score);
   const todayItems = asArray<Record<string, unknown>>(threat.today);
   const today = todayItems.map(repoFromItem).sort((a, b) => b.score - a.score);
   const realAssets = asArray<Record<string, unknown>>(threat.assets)
@@ -368,9 +371,6 @@ export function adaptThreatContract(contract: FrontendContract): ThreatViewModel
   const cveScout = asRecord(threat.cveScout);
   const attackSurface = asRecord(threat.attackSurface);
   const reports = asRecord(threat.reports);
-
-  // W1.6: Build vulnDetails from contract's cves/sa_items/broad_sec_items
-  const vulnDetails = buildVulnDetails(repos, repoItems);
 
   return {
     summary: buildSummary(repos, assets, cveScout, attackSurface),
