@@ -14,6 +14,10 @@ export async function postJson<T>(path: string): Promise<T> {
   return response.json() as Promise<T>;
 }
 
+export async function fetchAssets(): Promise<{ items: Record<string, unknown>[]; count: number }> {
+  return getJson('/api/threats/assets?limit=9999');
+}
+
 export interface AiReviewResult {
   item_id: number;
   status: 'success' | 'cached';

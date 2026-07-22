@@ -69,7 +69,7 @@ def risk_assessments(limit: int = Query(50, ge=1, le=200), conn: sqlite3.Connect
 
 
 @router.get("/assets")
-def assets(limit: int = Query(100, ge=1, le=300), conn: sqlite3.Connection = Depends(get_db)) -> dict:
+def assets(limit: int = Query(9999, ge=1, le=99999), conn: sqlite3.Connection = Depends(get_db)) -> dict:
     return domain_items.list_items(conn, DOMAIN, item_type="asset", limit=limit)
 
 

@@ -250,7 +250,7 @@ function inferAssetConfidence(raw: Record<string, unknown>): 'direct' | 'inferre
   return 'unknown';
 }
 
-function assetFromItem(item: Record<string, unknown>): ThreatAsset {
+export function assetFromItem(item: Record<string, unknown>): ThreatAsset {
   const payload = payloadOf(item);
   const raw = asRecord(payload.raw);
   const source = asString(item.source ?? payload.source, 'asset');

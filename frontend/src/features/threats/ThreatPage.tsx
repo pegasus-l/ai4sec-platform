@@ -2,9 +2,10 @@ import { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { AlertTriangle, Boxes, GitBranch, GitFork, Network, Radar, ShieldCheck, Target, Workflow } from 'lucide-react';
 import { fetchFrontendContract } from '../../api/frontendContract';
+import { fetchAssets } from '../../api/client';
 import { Badge, Card, Drawer, EmptyState, MetricCard } from '../../components/ui';
 import type { ThreatAsset, ThreatRepo, ThreatViewModel } from '../../types/threat';
-import { adaptThreatContract } from './threatAdapters';
+import { adaptThreatContract, assetFromItem } from './threatAdapters';
 import { opsTasks, opsSources } from './threatStaticData';
 import { ThreatGraphView } from './graph/ThreatGraphView';
 import { RepoDrawerContent } from './RepoDrawer';
@@ -87,7 +88,7 @@ function renderView(view: ViewId, model: ThreatViewModel, repos: ThreatRepo[], f
   if (view === 'today') return <ThreatToday model={model} openRepo={openRepo} setView={setView} setFilters={setFilters} />;
   if (view === 'repos') return <ThreatRepos model={model} repos={repos} filters={filters} setFilters={setFilters} openRepo={openRepo} />;
   if (view === 'surface') return <ThreatSurface model={model} openRepo={openRepo} setFilters={setFilters} setView={setView} />;
-  if (view === 'assets') return <ThreatAssets model={model} openAsset={openAsset} />;
+  if (view === 'assets') return <ThreatAssets openAsset={openAsset} />;
   if (view === 'graph') return <ThreatGraphView model={model} openRepo={openRepo} openAsset={openAsset} />;
   if (view === 'queue') return <ThreatQueue model={model} />;
   return <ThreatOps model={model} kind={view} />;
@@ -164,10 +165,12 @@ function ThreatSurface({ model, openRepo, setFilters, setView }: { model: Threat
   </div>;
 }
 
-function ThreatAssets({ model, openAsset }: { model: ThreatViewModel; openAsset: (asset: ThreatAsset) => void }) {
+function ThreatAssets({ openAsset }: { openAsset: (asset: ThreatAsset) => void }) {
+  const { data: assetData } = useQuery({ queryKey: ['threats-assets'], queryFn: fetchAssets });
+  const assets = useMemo(() => (assetData?.items || []).map(assetFromItem), [assetData]);
   const [assetType, setAssetType] = useState('all');
   const [confidence, setConfidence] = useState('all');
-  const filtered = model.assets.filter(a => (assetType === 'all' || a.type === assetType) && (confidence === 'all' || a.confidence === confidence));
+  const filtered = assets.filter(a => (assetType === 'all' || a.type === assetType) && (confidence === 'all' || a.confidence === confidence));
   return <div className="grid">
     <div className="split">
       <select className="select" value={assetType} onChange={e => setAssetType(e.target.value)}><option value="all">全部资产</option><option value="firmware">固件</option><option value="image">镜像</option><option value="mirror">软件源</option><option value="openx_firmware">OpenX固件</option></select>
@@ -319,8 +322,47 @@ function AssetCard({ asset, onClick }: { asset: ThreatAsset; onClick: () => void
 }
 
 function AssetDrawer({ asset, onClose }: { asset: ThreatAsset | null; onClose: () => void }) {
-  return <Drawer open={Boolean(asset)} title={asset?.title ?? ''} subtitle={asset ? `${asset.source} · ${asset.sourceType}` : ''} onClose={onClose}>{asset && <>
-    <div className="grid cols-2"><div className="detail-card card"><h3>资产概览</h3><p>{asset.summary || '暂无摘要。'}</p><div className="asset-meta"><div><b>{asset.raw.modelName as string || asset.title}</b><span>型号/名称</span></div><div><b>{asset.raw.tag as string || asset.raw.firmwareVersion as string || '-'}</b><span>版本/tag</span></div><div><b>{asset.raw.packageCount as string || asset.raw.downloadCount as string || '-'}</b><span>规模</span></div><div><b>{asset.raw.updateTime as string || asset.raw.latestRelease as string || '-'}</b><span>更新时间</span></div></div></div><div className="detail-card card"><h3>推断关联仓库（待复核）</h3><p className="muted small">资产到代码仓关系来自命名、产品线和生态推断，需要人工复核。</p><p>当前无显式源码仓证据。</p></div></div>
+  const typeLabel = asset?.type === 'firmware' ? '固件' : asset?.type === 'image' ? '镜像' : asset?.type === 'mirror' ? '软件源' : asset?.type === 'openx_firmware' ? 'OpenX固件' : asset?.type || '未知';
+  return <Drawer open={Boolean(asset)} title={asset?.title ?? ''} subtitle={asset ? `${typeLabel} · ${asset.source}` : ''} onClose={onClose}>{asset && <>
+    <div className="detail-card card"><h3>资产概览</h3><p>{asset.evidence || asset.summary || '暂无摘要。'}</p></div>
+    <div className="detail-card card"><h3>详细信息</h3>
+      {asset.type === 'mirror' ? (
+        <div className="asset-meta">
+          <div><b>{asset.catalog?.join(', ') || '-'}</b><span>分类</span></div>
+          <div><b>{asset.syncState || '-'}</b><span>同步状态</span></div>
+          <div><b>{asset.count || '-'}</b><span>包数量</span></div>
+          <div><b>{asset.downloadCount ? formatNum(asset.downloadCount) : '-'}</b><span>下载量</span></div>
+          <div><b>{asset.latest || '-'}</b><span>最后同步</span></div>
+          <div><b>{asset.upstreamUrl || '-'}</b><span>上游源</span></div>
+          <div><b>{asset.mirrorPath || '-'}</b><span>镜像路径</span></div>
+        </div>
+      ) : asset.type === 'image' ? (
+        <div className="asset-meta">
+          <div><b>{asset.publisher || '-'}</b><span>发布者</span></div>
+          <div><b>{asset.version || '-'}</b><span>版本</span></div>
+          <div><b>{asset.size || '-'}</b><span>大小</span></div>
+          <div><b>{asset.downloadCount ?? '-'}</b><span>下载次数</span></div>
+          <div><b>{asset.latest || '-'}</b><span>更新时间</span></div>
+          <div><b>{asset.labelNames?.join(', ') || '-'}</b><span>标签</span></div>
+        </div>
+      ) : asset.type === 'firmware' ? (
+        <div className="asset-meta">
+          <div><b>{asset.model || '-'}</b><span>型号</span></div>
+          <div><b>{asset.meta || '-'}</b><span>产品类型</span></div>
+          {asset.cannVersion && <div><b>{asset.cannVersion}</b><span>CANN版本</span></div>}
+          <div><b>{asset.latest || '-'}</b><span>更新</span></div>
+        </div>
+      ) : asset.type === 'openx_firmware' ? (
+        <div className="asset-meta">
+          <div><b>{asset.deviceModel || asset.model || '-'}</b><span>设备型号</span></div>
+          <div><b>{asset.softwareVersion || asset.version || '-'}</b><span>软件版本</span></div>
+          <div><b>{asset.fileType || '-'}</b><span>文件类型</span></div>
+          <div><b>{asset.category || '-'}</b><span>设备分类</span></div>
+          <div><b>{asset.link || asset.url || '-'}</b><span>下载链接</span></div>
+        </div>
+      ) : <p className="muted">暂无详细信息。</p>}
+    </div>
+    <div className="detail-card card"><h3>推断关联仓库（待复核）</h3><p className="muted small">资产到代码仓关系来自命名、产品线和生态推断，需要人工复核。</p>{asset.repos?.length ? <div className="timeline">{asset.repos.map((r, i) => <div key={i} className="timeline-item">{r}</div>)}</div> : <p>当前无显式源码仓证据。</p>}</div>
     <div className="detail-card card"><h3>建议动作</h3><div className="split"><button className="btn primary">加入跟踪</button><button className="btn">加入解包</button><button className="btn">加入 SBOM</button><button className="btn warn">标记关联待复核</button></div></div>
   </>}</Drawer>;
 }

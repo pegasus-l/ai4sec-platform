@@ -157,11 +157,11 @@
     .search input { width: 180px; min-width: 0; border: 0; outline: 0; background: transparent; color: var(--text); }
     .search input::placeholder { color: var(--faint); }
     .select { border-radius: 12px; color: var(--muted); }
-    .view { padding: 16px 18px 22px; min-height: 0; overflow: auto; }
+    .view { padding: 16px 18px 48px; min-height: 0; overflow: auto; }
     .grid { display: grid; gap: 12px; }
     .grid.cols-4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
     .grid.cols-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-    .grid.cols-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .grid.cols-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; }
     .card, .table-card, .detail-card {
       border: 1px solid var(--line); border-radius: var(--radius); background: rgba(15, 23, 42, 0.56); box-shadow: inset 0 1px 0 rgba(255,255,255,0.03);
     }
