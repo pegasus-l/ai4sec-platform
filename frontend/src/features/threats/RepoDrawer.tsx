@@ -68,6 +68,7 @@ export function RepoDrawerContent({ repo: initialRepo, onViewGraph, onOpenAsset 
   };
 
   const handleOpenVulnList = () => {
+    if (!model) return;
     push({
       title: '漏洞 / 安全线索',
       subtitle: `${repo.org}/${repo.name}`,
@@ -76,6 +77,7 @@ export function RepoDrawerContent({ repo: initialRepo, onViewGraph, onOpenAsset 
   };
 
   const handleOpenVulnDetail = (vulnId: string) => {
+    if (!model) return;
     push({
       title: '漏洞详情',
       subtitle: vulnId,
