@@ -136,6 +136,18 @@ function buildVulnDetails(repos: ThreatRepo[], repoItems: Array<Record<string, u
 // repoFromItem — flatten attack_surface nested object into ThreatRepo
 // ============================================================================
 
+/** Infer attack surface from org/name/summary when contract's primary_attack_surface is empty. */
+function inferSurface(org: string, name: string, summary: string): string {
+  const text = `${org} ${name} ${summary}`.toLowerCase();
+  if (text.includes('kernel') || text.includes('linux')) return 'kernel';
+  if (text.includes('curl') || text.includes('http') || text.includes('network') || text.includes('protocol') || text.includes('tls')) return 'network protocol';
+  if (text.includes('gauss') || text.includes('database') || text.includes('sql')) return 'database';
+  if (text.includes('driver') || text.includes('deploy') || text.includes('ascend') || text.includes('firmware')) return 'driver';
+  if (text.includes('parser') || text.includes('codec') || text.includes('graph') || text.includes('onnx') || text.includes('cann')) return 'parser/codec';
+  if (text.includes('account') || text.includes('access') || text.includes('token') || text.includes('permission') || text.includes('bmc')) return 'exec/permission';
+  return 'unknown';
+}
+
 function repoFromItem(item: Record<string, unknown>): ThreatRepo {
   const payload = payloadOf(item);
   const scoring = scoringOf(payload);
@@ -176,12 +188,7 @@ function repoFromItem(item: Record<string, unknown>): ThreatRepo {
     // Prefer attack_surface.grade (v12 nested: "B"), fall back to scoring.grade, then risk_grade
     grade: asString(attackSurface.grade ?? scoring.grade ?? item.risk_grade ?? payload.risk_grade ?? ''),
     status: asString(item.status, 'active'),
-    surface: asString(
-      attackSurface.primary_attack_surface ??
-        asRecord(attackSurface.signals).primary_attack_surface ??
-        payload.attack_surface ??
-        'unknown',
-    ),
+    surface: (asString(attackSurface.primary_attack_surface) || asString(asRecord(attackSurface.signals).primary_attack_surface)) || inferSurface(inferredOrg, inferredName, asString(item.summary ?? payload.summary)),
     stars: asNumber(raw.star_count ?? raw.stargazers_count ?? payload.stars),
     cve,
     sa,

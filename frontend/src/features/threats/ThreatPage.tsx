@@ -9,7 +9,6 @@ import { opsTasks, opsSources } from './threatStaticData';
 import { ThreatGraphView } from './graph/ThreatGraphView';
 import { RepoDrawerContent } from './RepoDrawer';
 import { useDrawerStack } from '../../components/DrawerStack';
-import { v12MockThreatModel } from './v12Mock';
 
 type ViewId = 'today' | 'repos' | 'surface' | 'assets' | 'graph' | 'queue' | 'ops-tasks' | 'ops-sources' | 'ops-rules' | 'ops-quality' | 'ops-queue';
 
@@ -44,13 +43,13 @@ export function ThreatPage() {
   const [filters, setFilters] = useState<FilterState>({ search: '', grade: 'all', surface: 'all', onlyCve: false, onlyHigh: false });
   const [selectedAsset, setSelectedAsset] = useState<ThreatAsset | null>(null);
   const { push } = useDrawerStack();
-  const { data, isLoading, error } = useQuery({ queryKey: ['frontend-contract'], queryFn: fetchFrontendContract, enabled: false });
-  const model = useMemo(() => data ? adaptThreatContract(data) : v12MockThreatModel, [data]);
+  const { data, isLoading, error } = useQuery({ queryKey: ['frontend-contract'], queryFn: fetchFrontendContract });
+  const model = useMemo(() => data ? adaptThreatContract(data) : null, [data]);
 
   const openRepo = (repo: ThreatRepo) => {
     push({
-      title: '仓库详情',
-      subtitle: `${repo.org}/${repo.name}`,
+      title: `${repo.org}/${repo.name}`,
+      subtitle: repo.url,
       render: () => model ? <RepoDrawerContent repo={repo} model={model} onViewGraph={() => setView('graph')} onOpenAsset={setSelectedAsset} /> : null,
     });
   };
@@ -66,8 +65,7 @@ export function ThreatPage() {
       <div className="domain-switcher">
         <button className="domain-btn active" type="button"><span className="domain-icon">OS</span><span className="domain-main"><strong>威胁洞察</strong><span>华为开源仓库风险与挖洞目标</span></span><span className="domain-tag">OPS</span></button>
       </div>
-      <div className="data-basis"><div className="mini-stat"><span>目标仓库</span><strong>{model?.summary.totalRepos ?? '—'}</strong></div><div className="mini-stat"><span>CVE / SA</span><strong>{model ? `${model.summary.uniqueCve}/${model.summary.totalSa}` : '—'}</strong></div><div className="mini-stat"><span>资产条目</span><strong>{model?.summary.assets ?? '—'}</strong></div></div>
-      <nav className="nav-scroll">{navGroups.map(group => <div className="nav-group" key={group.title}><div className="group-title">{group.title}</div>{group.items.map(item => <button key={item.id} className={`nav-item ${view === item.id ? 'active' : ''}`} onClick={() => setView(item.id)}><span className="nav-left"><span className="nav-ico">{item.icon}</span><span className="nav-text"><b>{item.title}</b><small>{navMeta(item.id)}</small></span></span><span className="nav-meta">{navCount(item.id, model)}</span></button>)}</div>)}</nav>
+      <nav className="nav-scroll">{navGroups.map(group => <div className="nav-group" key={group.title}><div className="group-title">{group.title}</div>{group.items.map(item => <button key={item.id} className={`nav-item ${view === item.id ? 'active' : ''}`} onClick={() => setView(item.id)}><span className="nav-left"><span className="nav-ico">{item.icon}</span><span className="nav-text"><b>{item.title}</b></span></span><span className="nav-meta">{navCount(item.id, model)}</span></button>)}</div>)}</nav>
       <div className="sidebar-note">目标详情不是单独页签；从今日关注、代码仓、关联图谱或跟踪队列点击对象后打开。资产关系默认按置信度展示，不做无证据强关联。</div>
     </aside>
     <section className="content">
@@ -112,13 +110,13 @@ function ThreatToday({ model, openRepo, setView, setFilters }: { model: ThreatVi
       <MetricCard label="待复核关联" value={summary.highRisk} hint="inferred / weak 的仓库-资产关系；点击进入关联图谱查看弱关联。" tone="violet" onClick={() => kpiJump('weakRelations')} />
     </div>
     <div className="grid cols-2">
-      {focus.map((repo) => <button className="focus-card" key={repo.id} onClick={() => openRepo(repo)}>
+      {focus.map((repo) => <div className="focus-card" key={repo.id} onClick={() => openRepo(repo)}>
         <div className="row-title"><Badge tone={repo.score >= 75 ? 'red' : 'amber'}>{repo.status}</Badge><span className="muted small">点击钻取</span></div>
         <h3>{repo.org}/{repo.name}</h3>
         <p>{repo.summary || repo.reasons[0] || '高价值威胁目标，建议进入研判。'}</p>
         <div className="split"><span className="badge A">Grade {repo.grade}</span><span className="badge">{repo.surface}</span><span className="badge">score {Math.round(repo.score)}</span></div>
         <div className="split"><button className="btn primary" onClick={(event) => { event.stopPropagation(); openRepo(repo); }}>查看详情</button><button className="btn" onClick={(event) => event.stopPropagation()}>加入跟踪</button></div>
-      </button>)}
+      </div>)}
       <Card><PanelTitle icon={<ShieldCheck />} title="CVE Scout 概览" hint="安全线索来源" /> <StatsGrid data={{ ...summary.sourceStats, ...summary.scanModes }} /></Card>
     </div>
   </div>;
