@@ -23,6 +23,7 @@
 .table-card td { padding-top: 12px; padding-bottom: 12px; }
 .table-card .repo-name { font-size: 13px; }
 .table-card .repo-url { font-size: 11px; margin-top: 4px; }
+.drawer-grid { display: grid; gap: 12px; }
 
 /* === reactflow overrides for threat graph (W2.4) === */
 
