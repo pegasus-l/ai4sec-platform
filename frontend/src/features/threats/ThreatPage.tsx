@@ -166,11 +166,12 @@ function ThreatSurface({ model, openRepo, setFilters, setView }: { model: Threat
 }
 
 function ThreatAssets({ openAsset }: { openAsset: (asset: ThreatAsset) => void }) {
-  const { data: assetData } = useQuery({ queryKey: ['threats-assets'], queryFn: fetchAssets });
+  const { data: assetData, isLoading } = useQuery({ queryKey: ['threats-assets'], queryFn: fetchAssets });
   const assets = useMemo(() => (assetData?.items || []).map(assetFromItem), [assetData]);
   const [assetType, setAssetType] = useState('all');
   const [confidence, setConfidence] = useState('all');
   const filtered = assets.filter(a => (assetType === 'all' || a.type === assetType) && (confidence === 'all' || a.confidence === confidence));
+  if (isLoading) return <EmptyState title="资产加载中..." />;
   return <div className="grid">
     <div className="split">
       <select className="select" value={assetType} onChange={e => setAssetType(e.target.value)}><option value="all">全部资产</option><option value="firmware">固件</option><option value="image">镜像</option><option value="mirror">软件源</option><option value="openx_firmware">OpenX固件</option></select>
