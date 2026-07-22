@@ -130,6 +130,29 @@ def test_huawei_source_cache_refreshes_selected_sources(monkeypatch, tmp_path) -
     assert [record["items"][0]["name"] for record in refreshed] == ["repo-2", "fw-1"]
 
 
+def test_full_scan_repo_collection_uses_deep_page_limit() -> None:
+    requested_pages = []
+
+    class FakeConnector:
+        def fetch(self, request):
+            page = request.params["page"]
+            requested_pages.append(page)
+            if page <= 4:
+                items = [{"name": f"repo-{page}-{idx}", "web_url": f"https://gitcode.com/openharmony/repo-{page}-{idx}", "star_count": idx} for idx in range(100)]
+            else:
+                items = []
+            return type("Result", (), {"errors": [], "items": items})()
+
+    class FakeRegistry:
+        def get(self, platform):
+            return FakeConnector()
+
+    repos = huawei_sources._collect_live_repos(FakeRegistry(), {"scan_profile": "full", "orgs": ["gitcode:openharmony"], "max_workers": 1})
+
+    assert len(repos) == 400
+    assert max(requested_pages) == 5
+
+
 def test_security_materials_are_org_level_not_project_copies(monkeypatch) -> None:
     fetches = []
 

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from ai4sec_platform.domains.threats.cve_scout import build_cve_scout_from_local_records
+from ai4sec_platform.domains.threats.cve_scout import _security_pool_from_connector_materials, build_cve_scout_from_local_records
 from ai4sec_platform.domains.threats.adapters.huawei_sources import DEFAULT_ASCENDHUB_TARGETS
 from ai4sec_platform.pipelines.steps.threat_cve_scout import _coverage_audit
 from ai4sec_platform.domains.threats.security_file_parsers import infer_severity, parse_security_file
@@ -15,6 +15,17 @@ def test_security_repo_discovery_finds_primary_repo() -> None:
     result = discover_security_repos(group_projects_by_org(projects))
     assert result["openharmony"]["has_security_repo"] is True
     assert result["openharmony"]["primary_repo"]["name"] == "security"
+
+
+def test_security_repo_discovery_prefers_name_match_over_metadata_noise() -> None:
+    projects = [
+        {"org": "openharmony", "name": "high_star_docs", "url": "https://gitcode.com/openharmony/high_star_docs", "description": "security documentation", "star_count": 999},
+        {"org": "openharmony", "name": "vuln_center", "url": "https://gitcode.com/openharmony/vuln_center", "description": "reports", "star_count": 1},
+    ]
+    result = discover_security_repos(group_projects_by_org(projects))
+    repos = result["openharmony"]["security_repos"]
+    assert repos[0]["name"] == "vuln_center"
+    assert repos[0]["discovery_reason"] == "name_keyword"
 
 
 def test_parse_security_markdown_extracts_cve_and_sa() -> None:
@@ -34,6 +45,7 @@ def test_security_parser_aligns_old_severity_and_cvss_rules() -> None:
     assert infer_severity("kernel_linux 高危 vulnerability") == "high"
     assert infer_severity("CANN package version 8.1 release note") == "unknown"
     assert infer_severity("CVSS v3.1 base score 9.8") == "critical"
+    assert infer_severity("| CVE-2026-11111 | 7.5 | CVSS v3.1 | telephony_sms_mms |") == "high"
     broad_items = parse_security_file("telephony_sms_mms 存在信息泄露风险", repo_names=["telephony_sms_mms"])
     assert broad_items[0]["is_broad_sec"] is True
     assert "信息泄露" in broad_items[0]["matched_keywords"]
@@ -97,6 +109,22 @@ def test_cve_scout_uses_org_level_security_material_pool() -> None:
     assert telephony["scan_mode"] == "from_pool"
     assert telephony["cves"][0]["severity"] == "high"
     assert result["meta"]["org_security_materials"] == 1
+
+
+def test_cve_scout_skips_security_repo_reparse_when_org_materials_present() -> None:
+    projects = [
+        {
+            "org": "openharmony",
+            "name": "security",
+            "url": "https://gitcode.com/openharmony/security",
+            "description": "security disclosure",
+            "star_count": 10,
+            "is_security_repo": True,
+            "security_files": [{"content": "kernel_linux CVE-2026-00001", "source_url": "https://example.com/security.md"}],
+        }
+    ]
+    assert _security_pool_from_connector_materials(projects, include_security_repo_projects=True)
+    assert _security_pool_from_connector_materials(projects, include_security_repo_projects=False) == []
 
 
 def test_cve_scout_matches_pool_source_repo_when_hints_missing() -> None:

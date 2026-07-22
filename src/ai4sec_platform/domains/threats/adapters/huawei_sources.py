@@ -224,10 +224,6 @@ def _load_huawei_sources_with_source_cache(settings, params: dict[str, Any]) -> 
     return records
 
 
-def _collect_repo_record(registry: SourceRegistry, params: dict[str, Any]) -> dict[str, Any]:
-    return _collect_repo_records(registry, params)[0]
-
-
 def _collect_repo_records(registry: SourceRegistry, params: dict[str, Any]) -> list[dict[str, Any]]:
     repos = _collect_live_repos(registry, params)
     repos, org_security_materials = _enrich_security_repos(registry, repos, params)
@@ -257,7 +253,7 @@ def _as_source_set(value: Any) -> set[str]:
 
 def _collect_live_repos(registry: SourceRegistry, params: dict[str, Any]) -> list[dict[str, Any]]:
     orgs = params.get("orgs") or DEFAULT_LIVE_ORGS
-    page_limit = int(params.get("page_limit", 3 if _full_scan(params) else 1))
+    page_limit = int(params.get("page_limit", 20 if _full_scan(params) else 1))
     per_page = int(params.get("per_page", 100 if _full_scan(params) else 50))
     max_workers = int(params.get("max_workers", 6 if _full_scan(params) else 4))
     chunks = bounded_map(orgs, lambda entry: _collect_org_repos(registry, entry, params, page_limit=page_limit, per_page=per_page), max_workers=max_workers)

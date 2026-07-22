@@ -36,9 +36,10 @@ def build_cve_scout_from_local_records(
             "projects": {},
         }
         org_projects_with_data = 0
+        org_materials = materials_by_org.get(org, [])
         security_pool = _security_pool_from_existing(existing_projects)
-        security_pool.extend(_security_pool_from_org_materials(materials_by_org.get(org, []), org_projects))
-        security_pool.extend(_security_pool_from_connector_materials(org_projects))
+        security_pool.extend(_security_pool_from_org_materials(org_materials, org_projects))
+        security_pool.extend(_security_pool_from_connector_materials(org_projects, include_security_repo_projects=not bool(org_materials)))
         security_pool = dedupe_security_items(security_pool)
         for project in org_projects:
             name = str(project.get("name") or "")
@@ -127,12 +128,10 @@ def _security_pool_from_org_materials(materials: list[dict[str, Any]], projects:
     for material in materials or []:
         material_type = str(material.get("material_type") or material.get("source_type") or "")
         if material_type in {"security_repo_issue", "issue"}:
-            raw_issue = material.get("item") if isinstance(material.get("item"), dict) else material
-            pool.extend(_with_material_metadata(extract_security_items_from_issues([raw_issue], source_type="security_repo_issue"), material))
+            pool.extend(_with_material_metadata(extract_security_items_from_issues([material], source_type="security_repo_issue"), material))
             continue
         if material_type in {"security_repo_pr", "pull_request", "pr"}:
-            raw_pr = material.get("item") if isinstance(material.get("item"), dict) else material
-            pool.extend(_with_material_metadata(extract_security_items_from_issues([raw_pr], source_type="security_repo_pr"), material))
+            pool.extend(_with_material_metadata(extract_security_items_from_issues([material], source_type="security_repo_pr"), material))
             continue
         pool.extend(parse_security_repo_materials([material], repo_names=repo_names))
     return dedupe_security_items(pool)
@@ -164,7 +163,7 @@ def _security_pool_from_existing(projects: dict[str, Any]) -> list[dict[str, Any
     return pool
 
 
-def _security_pool_from_connector_materials(projects: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _security_pool_from_connector_materials(projects: list[dict[str, Any]], *, include_security_repo_projects: bool = True) -> list[dict[str, Any]]:
     repo_names = [str(project.get("name") or "") for project in projects if project.get("name")]
     pool: list[dict[str, Any]] = []
     seen_material_ids: set[int] = set()
@@ -179,11 +178,14 @@ def _security_pool_from_connector_materials(projects: list[dict[str, Any]]) -> l
                 seen_material_ids.add(material_id)
                 pool.extend(parse_security_repo_materials([material], repo_names=repo_names))
             continue
+        if not include_security_repo_projects:
+            continue
+        metadata = _project_security_material_metadata(project)
         for material in project.get("security_files") or []:
             if isinstance(material, dict):
-                pool.extend(parse_security_repo_materials([material], repo_names=repo_names))
-        pool.extend(extract_security_items_from_issues(project.get("issues") or [], source_type="security_repo_issue"))
-        pool.extend(extract_security_items_from_pull_requests(project.get("pull_requests") or project.get("prs") or []))
+                pool.extend(parse_security_repo_materials([{**material, **metadata}], repo_names=repo_names))
+        pool.extend(_with_material_metadata(extract_security_items_from_issues(project.get("issues") or [], source_type="security_repo_issue"), metadata))
+        pool.extend(_with_material_metadata(extract_security_items_from_issues(project.get("pull_requests") or project.get("prs") or [], source_type="security_repo_pr"), {**metadata, "material_type": "security_repo_pr"}))
         for material in project.get("org_security_materials") or []:
             if not isinstance(material, dict):
                 continue
@@ -191,8 +193,16 @@ def _security_pool_from_connector_materials(projects: list[dict[str, Any]]) -> l
             if material_id in seen_material_ids:
                 continue
             seen_material_ids.add(material_id)
-            pool.extend(parse_security_repo_materials([material], repo_names=repo_names))
+            pool.extend(parse_security_repo_materials([{**material, **metadata}], repo_names=repo_names))
     return dedupe_security_items(pool)
+
+
+def _project_security_material_metadata(project: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "platform": project.get("platform") or "",
+        "org": project.get("org") or "",
+        "repo": project.get("name") or project.get("repo") or "",
+    }
 
 
 def _project_local_security_items(project: dict[str, Any]) -> list[dict[str, Any]]:

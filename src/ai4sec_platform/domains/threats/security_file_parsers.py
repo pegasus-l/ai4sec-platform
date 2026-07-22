@@ -6,7 +6,7 @@ from typing import Any
 
 CVE_RE = re.compile(r"CVE-\d{4}-\d{4,7}", re.I)
 SA_RE = re.compile(r"(?:OpenHarmony-SA|openEuler-SA|openGauss-SA|opengauss-SA|Huawei-SA|SA)-\d{4}-\d{4,7}", re.I)
-CVSS_CONTEXT_RE = re.compile(r"\bcvss\b[^\n\r]{0,120}", re.I)
+CVSS_CONTEXT_RE = re.compile(r"[^\n\r]{0,60}\bcvss\b[^\n\r]{0,120}", re.I)
 CVSS_SCORE_RE = re.compile(r"\b(10(?:\.0)?|[0-9](?:\.\d)?)\b")
 SEVERITY_TERMS = {
     "critical": ["critical", "紧急", "严重", "致命", "rce", "remote code execution", "远程代码执行"],
