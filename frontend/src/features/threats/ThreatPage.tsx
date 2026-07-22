@@ -5,11 +5,12 @@ import { fetchFrontendContract } from '../../api/frontendContract';
 import { Badge, Card, Drawer, EmptyState, MetricCard } from '../../components/ui';
 import type { ThreatAsset, ThreatRepo, ThreatViewModel } from '../../types/threat';
 import { adaptThreatContract } from './threatAdapters';
+import { opsTasks, opsSources } from './threatStaticData';
 import { ThreatGraphView } from './graph/ThreatGraphView';
 import { RepoDrawerContent } from './RepoDrawer';
 import { useDrawerStack } from '../../components/DrawerStack';
 
-type ViewId = 'today' | 'repos' | 'surface' | 'assets' | 'graph' | 'queue' | 'ops-tasks' | 'ops-sources' | 'ops-quality';
+type ViewId = 'today' | 'repos' | 'surface' | 'assets' | 'graph' | 'queue' | 'ops-tasks' | 'ops-sources' | 'ops-rules' | 'ops-quality' | 'ops-queue';
 
 const navGroups: Array<{ title: string; items: Array<{ id: ViewId; icon: string; title: string }> }> = [
   { title: '开源威胁洞察', items: [
@@ -23,7 +24,9 @@ const navGroups: Array<{ title: string; items: Array<{ id: ViewId; icon: string;
   { title: '运营', items: [
     { id: 'ops-tasks', icon: '↻', title: '采集任务' },
     { id: 'ops-sources', icon: '◇', title: '数据源' },
-    { id: 'ops-quality', icon: '◈', title: '质量审计' }
+    { id: 'ops-rules', icon: '≋', title: '规则配置' },
+    { id: 'ops-quality', icon: '◈', title: '质量审计' },
+    { id: 'ops-queue', icon: '▤', title: '人工队列' }
   ]}
 ];
 
@@ -170,8 +173,30 @@ function ThreatQueue({ model }: { model: ThreatViewModel }) {
 }
 
 function ThreatOps({ model, kind }: { model: ThreatViewModel; kind: ViewId }) {
-  const data = kind === 'ops-quality' ? model.cveScout : kind === 'ops-sources' ? model.attackSurface : model.reports;
-  return <Card><PanelTitle icon={<Boxes />} title="运营数据" hint={kind} /><pre className="json-preview">{JSON.stringify(data, null, 2).slice(0, 6000)}</pre></Card>;
+  if (kind === 'ops-tasks') {
+    return <div className="table-card"><table><thead><tr><th>任务</th><th>状态</th><th>触发</th><th>范围</th><th>数量</th><th>说明</th></tr></thead><tbody>{opsTasks.map(t => <tr key={t.id} className="clickable"><td><div className="repo-name">{t.name}</div></td><td><span className={`badge ${t.status === '成功' ? 'A' : t.status === '运行中' ? 'B' : 'C'}`}>{t.status}</span></td><td>{t.trigger}</td><td>{t.scope}</td><td>{t.count}</td><td>{t.note}</td></tr>)}</tbody></table></div>;
+  }
+  if (kind === 'ops-sources') {
+    return <div className="table-card"><table><thead><tr><th>数据源</th><th>类型</th><th>状态</th><th>覆盖</th><th>最近成功</th><th>说明</th></tr></thead><tbody>{opsSources.map(s => <tr key={s.id} className="clickable"><td><div className="repo-name">{s.name}</div></td><td>{s.type}</td><td><span className={`badge ${s.status === 'enabled' ? 'A' : s.status === 'cooldown' ? 'B' : 'C'}`}>{s.status}</span></td><td>{s.coverage}</td><td>{s.last}</td><td>{s.note}</td></tr>)}</tbody></table></div>;
+  }
+  if (kind === 'ops-rules') {
+    const rules = model.opsRules ?? [];
+    return <div className="grid cols-2">{rules.map(r => <Card key={r.id} className="clickable"><div className="row-title"><span className={`badge ${r.status === 'active' ? 'A' : r.status === 'caution' ? 'B' : 'C'}`}>{r.status}</span><span className="badge">{r.owner}</span></div><h3>{r.name}</h3><p>{r.note}</p></Card>)}</div>;
+  }
+  if (kind === 'ops-quality') {
+    const qualityItems = [
+      { id: 'qa-preselector-fn', severity: 'warn', title: 'PreSelector false-negative 偏高', target: '2026-06-15', note: '旧入选误拒 108/242，不能 hard reject。' },
+      { id: 'qa-weak-relation', severity: 'warn', title: 'MindIE ↔ CANN/GE 弱关联', target: 'asset-mindie', note: '需要 SBOM 或 release note 证据确认。' },
+      { id: 'qa-source-gap', severity: 'info', title: 'SourceAvailabilityCheck 未接入', target: 'daily shadow', note: '下一步补 6 源存在性和数量检查。' },
+      { id: 'qa-cve-dup', severity: 'info', title: 'CVE 聚合可能重复', target: 'opengauss/security', note: '同一 CVE 在 issue/公告中重复出现，需要归一。' },
+    ];
+    return <div className="table-card"><table><thead><tr><th>质量项</th><th>级别</th><th>对象</th><th>说明</th><th>操作</th></tr></thead><tbody>{qualityItems.map(q => <tr key={q.id} className="clickable"><td><div className="repo-name">{q.title}</div></td><td><span className={`badge ${q.severity === 'warn' ? 'B' : 'C'}`}>{q.severity}</span></td><td>{q.target}</td><td>{q.note}</td><td><button className="btn">复核</button></td></tr>)}</tbody></table></div>;
+  }
+  if (kind === 'ops-queue') {
+    const items = model.opsManualQueue ?? [];
+    return <div className="table-card"><table><thead><tr><th>事项</th><th>类型</th><th>优先级</th><th>状态</th><th>操作</th></tr></thead><tbody>{items.map(q => <tr key={q.id} className="clickable"><td><div className="repo-name">{q.title}</div></td><td>{q.type}</td><td><span className={`badge ${q.priority === 'P0' ? 'A' : q.priority === 'P1' ? 'B' : 'C'}`}>{q.priority}</span></td><td>{q.status}</td><td><button className="btn">标记处理</button></td></tr>)}</tbody></table></div>;
+  }
+  return <EmptyState title="未知运营页面" />;
 }
 
 function RepoTable({ repos, openRepo }: { repos: ThreatRepo[]; openRepo: (repo: ThreatRepo) => void }) {
