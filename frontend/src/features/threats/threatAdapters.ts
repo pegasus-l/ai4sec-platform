@@ -13,6 +13,7 @@ import {
   surfaces as staticSurfaces,
   opsRules as staticOpsRules,
   opsManualQueue as staticOpsManualQueue,
+  staticDemoAssets,
 } from './threatStaticData';
 
 // ============================================================================
@@ -357,9 +358,13 @@ export function adaptThreatContract(contract: FrontendContract): ThreatViewModel
   const repos = repoItems.map(repoFromItem).sort((a, b) => b.score - a.score);
   const todayItems = asArray<Record<string, unknown>>(threat.today);
   const today = todayItems.map(repoFromItem).sort((a, b) => b.score - a.score);
-  const assets = asArray<Record<string, unknown>>(threat.assets)
+  const realAssets = asArray<Record<string, unknown>>(threat.assets)
     .map(assetFromItem)
     .sort((a, b) => b.score - a.score);
+  // v12 static fallback — supplement missing asset types (firmware/image/openx) with demo data
+  const realAssetTypes = new Set(realAssets.map(a => a.type));
+  const supplementalAssets = staticDemoAssets.filter(a => !realAssetTypes.has(a.type));
+  const assets = [...realAssets, ...supplementalAssets];
   const cveScout = asRecord(threat.cveScout);
   const attackSurface = asRecord(threat.attackSurface);
   const reports = asRecord(threat.reports);
