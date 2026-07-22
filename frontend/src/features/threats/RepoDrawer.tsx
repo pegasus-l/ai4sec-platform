@@ -20,6 +20,7 @@ import { VulnDetailDrawer } from './VulnDetailDrawer';
 import { severityBadgeClass } from './severityBadge';
 import { Card, MetricCard } from '../../components/ui';
 import { useState, useEffect } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { postJson, getJson, type AiReviewResult } from '../../api/client';
 
 interface RepoDrawerContentProps {
@@ -37,6 +38,7 @@ export function RepoDrawerContent({ repo, model, onViewGraph, onOpenAsset }: Rep
   const [aiReview, setAiReview] = useState<AiReviewResult | null>(null);
   const [aiLoading, setAiLoading] = useState(false);
   const [aiError, setAiError] = useState<string | null>(null);
+  const queryClient = useQueryClient();
 
   // On mount, try to fetch cached AI review (GET, no LLM trigger)
   useEffect(() => {
@@ -51,6 +53,7 @@ export function RepoDrawerContent({ repo, model, onViewGraph, onOpenAsset }: Rep
     try {
       const result = await postJson<AiReviewResult>(`/api/threats/${repo.id}/ai-review`);
       setAiReview(result);
+      queryClient.invalidateQueries({ queryKey: ['frontend-contract'] });
     } catch (e) {
       setAiError(String(e));
     } finally {

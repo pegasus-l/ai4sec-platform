@@ -393,6 +393,39 @@ export function adaptThreatContract(contract: FrontendContract): ThreatViewModel
   const attackSurface = asRecord(threat.attackSurface);
   const reports = asRecord(threat.reports);
 
+  // Dynamic surfaces: aggregate from repos, merge with static (AI-calibrated surfaces like "crypto" appear here)
+  const repoSurfaceMap = new Map<string, { count: number; cves: number; gradeA: number; maxScore: number }>();
+  repos.forEach((r) => {
+    const s = r.surface || 'unknown';
+    if (!repoSurfaceMap.has(s)) repoSurfaceMap.set(s, { count: 0, cves: 0, gradeA: 0, maxScore: 0 });
+    const entry = repoSurfaceMap.get(s)!;
+    entry.count++;
+    entry.cves += r.cve;
+    if (r.grade === 'A') entry.gradeA++;
+    entry.maxScore = Math.max(entry.maxScore, r.score);
+  });
+  const dynamicSurfaces = Array.from(repoSurfaceMap.entries())
+    .filter(([id]) => !staticSurfaces.find((s) => s.id === id))
+    .map(([id, data]) => ({
+      id,
+      title: id,
+      count: data.count,
+      demoCount: 0,
+      top: '',
+      score: data.maxScore,
+      cves: data.cves,
+      secItems: 0,
+      gradeA: data.gradeA,
+      assets: 0,
+      icon: '?',
+      desc: 'AI 校准或规则推断的攻击面',
+      purpose: '',
+      paths: [],
+      evidence: [],
+      hypotheses: [],
+    }));
+  const surfaces = [...staticSurfaces, ...dynamicSurfaces];
+
   return {
     summary: buildSummary(repos, assets, cveScout, attackSurface),
     repos,
@@ -403,9 +436,9 @@ export function adaptThreatContract(contract: FrontendContract): ThreatViewModel
     attackSurface,
     reports,
     graph: buildGraph(repos, assets),
-    // v12 additions — static fallback (contract doesn't provide these)
+    // v12 additions — merged static + dynamic surfaces
     vulnDetails,
-    surfaces: staticSurfaces, // v12 static fallback — demo v12 surface matrix
+    surfaces,
     activeSurface: staticSurfaces[0]?.id ?? 'kernel',
     opsRules: staticOpsRules, // v12 static fallback — contract ops.rules is dict, not list
     opsManualQueue: staticOpsManualQueue, // v12 static fallback — contract ops.queue has different structure
