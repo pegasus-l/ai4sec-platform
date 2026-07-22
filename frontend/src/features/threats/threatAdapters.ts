@@ -177,8 +177,8 @@ function repoFromItem(item: Record<string, unknown>): ThreatRepo {
   const cve = asNumber(payload.cve_count);
   const sa = asNumber(payload.sa_count);
   const broad = asNumber(payload.broad_sec_count);
-  // Prefer attack_surface.score (v12 nested), fall back to scoring.score, then item.score
-  const score = asNumber(item.score ?? attackSurface.score ?? scoring.score);
+  // Use attack_surface score + grade (same scoring system, consistent A/B/C)
+  const score = asNumber(attackSurface.score ?? item.score ?? scoring.score);
   // Prefer attack_surface.reasons (v12 nested), fall back to scoring.reasons
   const reasons = asArray<string>(attackSurface.reasons ?? scoring.reasons).slice(0, 8);
   const evidence = [
@@ -198,8 +198,8 @@ function repoFromItem(item: Record<string, unknown>): ThreatRepo {
     url: sourceUrl,
     summary: asString(item.summary ?? payload.summary),
     score,
-    // Prefer attack_surface.grade (v12 nested: "B"), fall back to scoring.grade, then risk_grade
-    grade: asString(attackSurface.grade ?? scoring.grade ?? item.risk_grade ?? payload.risk_grade ?? ''),
+    // Use attack_surface grade only (scoring.grade is Chinese text like "严重", not A/B/C)
+    grade: asString(attackSurface.grade ?? item.risk_grade ?? payload.risk_grade ?? ''),
     status: asString(item.status, 'active'),
     surface: (asString(attackSurface.primary_attack_surface) || asString(asRecord(attackSurface.signals).primary_attack_surface)) || inferSurface(inferredOrg, inferredName, asString(item.summary ?? payload.summary)),
     stars: asNumber(raw.star_count ?? raw.stargazers_count ?? payload.stars),
