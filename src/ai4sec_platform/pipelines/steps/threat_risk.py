@@ -179,7 +179,7 @@ def _semantic_review_prompt() -> str:
 
 输出 JSON：
 {
-  "calibrated_surface": "校准后的攻击面（简洁名，如 kernel/network protocol/sandbox/exec/permission/database/driver/parser/codec/unknown）",
+  "calibrated_surface": "从以下选项中选择一个：kernel / network protocol / database / driver / parser/codec / exec/permission / sandbox / wireless / peripheral / media / browser engine / unknown",
   "calibrated_score": 75,
   "attack_surface_calibration": "规则说 XX，实际应该是 YY，因为...",
   "rule_score_assessment": "规则评分偏高/偏低/合理，因为...",
