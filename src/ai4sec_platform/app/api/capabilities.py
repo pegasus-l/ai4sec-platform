@@ -106,7 +106,7 @@ def conversions(conn: sqlite3.Connection = Depends(get_db)) -> dict:
                 "next_action": (it.get("payload") or {}).get("next_action", ""),
                 "notes": (it.get("payload") or {}).get("notes", ""),
             }
-            for it in items["items"]
+            for it in items
         ],
     }
 
@@ -238,13 +238,9 @@ async def stream_repro_logs(task_id: int, request: Request, conn: sqlite3.Connec
         while not await request.is_disconnected():
             # 重新查 task（因为 conn 可能被其他线程修改，这里每次新建查询）
             # 注意: Depends(get_db) 的 conn 在 async 生成器里可能已关闭，
-            #       改为直接用 sqlite3 连接
-            import sqlite3 as _sqlite3
-            from ai4sec_platform.core.config import get_settings
-            settings = get_settings()
-            db_path = str(settings.db_path)
-            local_conn = _sqlite3.connect(db_path)
-            local_conn.row_factory = _sqlite3.Row
+            #       改为直接用 session.connect 新建连接
+            from ai4sec_platform.db.session import connect as db_connect
+            local_conn = db_connect()
             try:
                 row = local_conn.execute("SELECT * FROM capability_repro_tasks WHERE id = ?", (task_id,)).fetchone()
             finally:
@@ -341,7 +337,7 @@ def classify_batch_endpoint(limit: int = 50, conn: sqlite3.Connection = Depends(
     # 选未分类的 item
     items = repo.list_domain_items(conn, DOMAIN, item_type="capability", limit=limit * 3)
     candidates = [
-        it for it in items["items"]
+        it for it in items
         if not (it.get("payload") or {}).get("web_classify_ts")
         and (
             (it.get("payload") or {}).get("code_url")
@@ -360,7 +356,7 @@ def classify_batch_endpoint(limit: int = 50, conn: sqlite3.Connection = Depends(
 def classify_stats(conn: sqlite3.Connection = Depends(get_db)) -> dict:
     """Web 分类统计（迁自旧 /api/classify/stats）"""
     items = repo.list_domain_items(conn, DOMAIN, item_type="capability", limit=10000)
-    all_items = items["items"]
+    all_items = items
     repo_filter = [
         it for it in all_items
         if (it.get("payload") or {}).get("code_url") or "github.com" in (it.get("source_url") or "")
