@@ -20,6 +20,7 @@
 .breakdown.mini { gap: 1px; }
 .graph-node { position: absolute; max-width: 150px; transform: translate(-50%, -50%); }
 .table-card tbody tr { height: 126px; }
+.table-card { overflow: auto; max-height: calc(100vh - 180px); }
 .table-card td { padding-top: 12px; padding-bottom: 12px; }
 .table-card .repo-name { font-size: 13px; }
 .table-card .repo-url { font-size: 11px; margin-top: 4px; }
