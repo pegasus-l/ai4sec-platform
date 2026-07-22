@@ -108,15 +108,15 @@ def test_huawei_source_cache_refreshes_selected_sources(monkeypatch, tmp_path) -
     settings = load_settings().model_copy(update={"output_dir": tmp_path})
     calls = {"repos": 0, "firmware": 0}
 
-    def fake_repo_record(registry, params):
+    def fake_repo_records(registry, params):
         calls["repos"] += 1
-        return {"source": "repos", "path": "fake:repos", "exists": True, "items": [{"name": f"repo-{calls['repos']}", "org": "o", "url": "https://gitcode.com/o/repo"}], "raw": {}, "mode": "live"}
+        return [{"source": "repos", "path": "fake:repos", "exists": True, "items": [{"name": f"repo-{calls['repos']}", "org": "o", "url": "https://gitcode.com/o/repo"}], "raw": {}, "mode": "live"}]
 
     def fake_firmware(registry, params):
         calls["firmware"] += 1
         return {"source": "firmware", "path": "fake:firmware", "exists": True, "items": [{"name": f"fw-{calls['firmware']}"}], "raw": {}, "mode": "live"}
 
-    monkeypatch.setattr(huawei_sources, "_collect_repo_record", fake_repo_record)
+    monkeypatch.setattr(huawei_sources, "_collect_repo_records", fake_repo_records)
     monkeypatch.setattr(huawei_sources, "_collect_firmware_assets", fake_firmware)
 
     params = {"use_source_cache": True, "sources": ["repos", "firmware"]}
