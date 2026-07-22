@@ -10,6 +10,8 @@ class LocalRuleProvider:
         agent = _agent_name(prompt, payload)
         if agent == "capability_assess":
             result = _assess_capability(payload)
+        elif agent == "repo_summary":
+            result = _repo_summary(payload)
         elif agent == "risk_reasoning":
             result = _reason_risk(payload)
         elif agent == "knowledge_extract":
@@ -21,6 +23,8 @@ class LocalRuleProvider:
 
 def _agent_name(prompt: str, payload: dict) -> str:
     value = f"{prompt} {payload.get('item_type', '')} {payload.get('domain', '')}".lower()
+    if "代码仓摘要" in prompt or "repo_summary" in value:
+        return "repo_summary"
     if "威胁" in prompt or "风险" in prompt or "risk" in value or payload.get("domain") == "threats":
         return "risk_reasoning"
     if "漏洞" in prompt or "知识" in prompt or payload.get("domain") == "vulnerabilities":
@@ -65,6 +69,18 @@ def _reason_risk(payload: dict) -> dict[str, Any]:
         "recommended_actions": ["核对资产归属", "确认 CVE 影响版本", "检查固件/镜像暴露面", "进入人工跟踪队列" if score >= 80 else "定期刷新"],
         "reason": "基于本地 raw 归一化后的风险分、CVE/固件/镜像线索进行规则研判。",
     }
+
+
+def _repo_summary(payload: dict) -> dict[str, Any]:
+    repo_key = str(payload.get("title") or payload.get("repo_key") or "代码仓")
+    label = repo_key.removeprefix("repo:")
+    description = " ".join(str(payload.get("description_original") or "").split())
+    if description:
+        summary = f"{label} 代码仓：{description}"
+    else:
+        security = payload.get("security_summary") or "待补充仓库描述"
+        summary = f"{label} 代码仓，{security}"
+    return {"summary_zh": summary[:120], "confidence": 0.55, "notes": "本地规则摘要，未调用外部模型。"}
 
 
 def _extract_knowledge(payload: dict) -> dict[str, Any]:

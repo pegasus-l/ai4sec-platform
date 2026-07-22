@@ -1,15 +1,20 @@
 from __future__ import annotations
 
+import sqlite3
+
 from ai4sec_platform.domains.capabilities.scorers import score_capability_candidate
 from ai4sec_platform.domains.news.classifiers import classify_news_item
 from ai4sec_platform.domains.news.scorers import score_news_item
-from ai4sec_platform.domains.threats.repo_vuln_extractors import extract_repo_vulnerability_signals
 from ai4sec_platform.domains.threats.attack_surface_scoring import score_attack_surface
+from ai4sec_platform.domains.threats.builders import build_threat_items
 from ai4sec_platform.domains.threats.normalizers import normalize_huawei_item
+from ai4sec_platform.domains.threats.repo_vuln_extractors import extract_repo_vulnerability_signals
 from ai4sec_platform.domains.threats.risk_scoring import score_threat_item
 from ai4sec_platform.domains.vulnerabilities.evidence_extractors import extract_material_evidence
 from ai4sec_platform.domains.vulnerabilities.material_classifiers import classify_material
 from ai4sec_platform.domains.vulnerabilities.relevance_scorers import score_material
+from ai4sec_platform.db import repositories as repo
+from ai4sec_platform.db.models import init_db
 
 
 def test_news_processing_classifies_and_scores_security_repo() -> None:
@@ -61,8 +66,51 @@ def test_threat_processing_extracts_history_cves_and_scores_risk() -> None:
 def test_threat_cve_finding_title_does_not_claim_cve_when_none_found() -> None:
     item = {"org": "Ascend", "name": "kernel_launcher", "url": "https://gitcode.com/Ascend/kernel_launcher", "cve_count": 0, "sa_count": 0, "broad_sec_count": 0, "total_sec_items": 0}
     normalized = normalize_huawei_item("cve_findings", item)
-    assert normalized["title"] == "Ascend/kernel_launcher 攻击面线索"
-    assert "CVE 线索" not in normalized["title"]
+    assert normalized["title"] == "Ascend/kernel_launcher"
+    assert normalized["security_title"] == "Ascend/kernel_launcher 攻击面线索"
+    assert "CVE 线索" not in normalized["security_title"]
+
+
+def test_threat_repo_and_cve_findings_merge_to_single_target(tmp_path) -> None:
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    init_db(conn)
+    repo_item = normalize_huawei_item(
+        "repos",
+        {
+            "org": "Cangjie",
+            "name": "cangjie_stdx",
+            "url": "https://gitcode.com/Cangjie/cangjie_stdx",
+            "description": "Cangjie standard extension modules for networking and crypto",
+            "star_count": 88,
+        },
+    )
+    cve_item = normalize_huawei_item(
+        "cve_findings",
+        {
+            "org": "Cangjie",
+            "name": "cangjie_stdx",
+            "url": "https://gitcode.com/Cangjie/cangjie_stdx",
+            "cve_count": 2,
+            "sa_count": 1,
+            "broad_sec_count": 0,
+            "total_sec_items": 3,
+            "cves": [{"cve_id": "CVE-2026-12345", "severity": "high", "source_type": "security_repo_file"}],
+        },
+    )
+
+    counts = build_threat_items(conn, [repo_item, cve_item], run_id="merge_test", enrich_repo_summaries=True, repo_summary_limit=5, repo_summary_cache_dir=tmp_path)
+    rows = conn.execute("SELECT * FROM domain_items WHERE domain = 'threats' AND item_type = 'target'").fetchall()
+    payload = repo.loads(rows[0]["payload_json"], {})
+
+    assert counts["items"] == 1
+    assert len(rows) == 1
+    assert rows[0]["summary"].startswith("Cangjie/cangjie_stdx 代码仓")
+    assert payload["description_original"].startswith("Cangjie standard")
+    assert payload["security_summary"] == "CVE 2 条，安全公告 1 条，安全 issue 0 条。"
+    assert payload["cve_count"] == 2
+    assert payload["summary_zh"]
+    assert payload["summary_source"] in {"model_translation", "local_rule_summary", "repo_description"}
 
 
 def test_vulnerability_material_processing_judges_valid_material() -> None:
