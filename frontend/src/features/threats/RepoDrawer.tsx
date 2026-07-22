@@ -19,24 +19,28 @@ import { VulnListDrawer } from './VulnListDrawer';
 import { VulnDetailDrawer } from './VulnDetailDrawer';
 import { severityBadgeClass } from './severityBadge';
 import { Card, MetricCard } from '../../components/ui';
-import { useState, useEffect } from 'react';
-import { useQueryClient } from '@tanstack/react-query';
+import { useState, useEffect, useMemo } from 'react';
+import { useQueryClient, useQuery } from '@tanstack/react-query';
 import { postJson, getJson, type AiReviewResult } from '../../api/client';
+import { fetchFrontendContract } from '../../api/frontendContract';
+import { adaptThreatContract } from './threatAdapters';
 
 interface RepoDrawerContentProps {
   repo: ThreatRepo;
-  model: ThreatViewModel;
   /** Navigate to graph view (wired by ThreatPage). */
   onViewGraph?: () => void;
   /** Open asset detail (currently uses old AssetDrawer — will be refactored in W3.3). */
   onOpenAsset?: (asset: ThreatAsset) => void;
 }
 
-export function RepoDrawerContent({ repo: initialRepo, model, onViewGraph, onOpenAsset }: RepoDrawerContentProps) {
+export function RepoDrawerContent({ repo: initialRepo, onViewGraph, onOpenAsset }: RepoDrawerContentProps) {
   const { push } = useDrawerStack();
-  // Always use latest repo from model (updates after AI calibration via invalidateQueries)
-  const repo = model.repos.find(r => r.id === initialRepo.id) ?? initialRepo;
-  const vulns = model.vulnDetails?.[repo.id] ?? [];
+  // Self-fetch model via useQuery — re-renders automatically when cache updates (invalidateQueries)
+  const { data } = useQuery({ queryKey: ['frontend-contract'], queryFn: fetchFrontendContract });
+  const model = useMemo(() => data ? adaptThreatContract(data) : null, [data]);
+  // Always use latest repo from model (updates after AI calibration)
+  const repo = model?.repos.find(r => r.id === initialRepo.id) ?? initialRepo;
+  const vulns = model?.vulnDetails?.[repo.id] ?? [];
   const [aiReview, setAiReview] = useState<AiReviewResult | null>(null);
   const [aiLoading, setAiLoading] = useState(false);
   const [aiError, setAiError] = useState<string | null>(null);
@@ -80,7 +84,7 @@ export function RepoDrawerContent({ repo: initialRepo, model, onViewGraph, onOpe
   };
 
   // Find linked assets by repo.id in asset.repos array
-  const linkedAssets = model.assets.filter(
+  const linkedAssets = (model?.assets ?? []).filter(
     (a) => a.repos?.includes(repo.id) || a.repos?.includes(repo.name),
   );
 

@@ -50,7 +50,7 @@ export function ThreatPage() {
     push({
       title: `${repo.org}/${repo.name}`,
       subtitle: repo.url,
-      render: () => model ? <RepoDrawerContent repo={repo} model={model} onViewGraph={() => setView('graph')} onOpenAsset={setSelectedAsset} /> : null,
+      render: () => <RepoDrawerContent repo={repo} onViewGraph={() => setView('graph')} onOpenAsset={setSelectedAsset} />,
     });
   };
 
