@@ -179,6 +179,8 @@ def _semantic_review_prompt() -> str:
 
 输出 JSON：
 {
+  "calibrated_surface": "校准后的攻击面（简洁名，如 kernel/network protocol/sandbox/exec/permission/database/driver/parser/codec/unknown）",
+  "calibrated_score": 75,
   "attack_surface_calibration": "规则说 XX，实际应该是 YY，因为...",
   "rule_score_assessment": "规则评分偏高/偏低/合理，因为...",
   "cve_priority": [{"cve_id": "CVE-xxx", "value": "high|medium|low", "reason": "..."}],
@@ -238,6 +240,8 @@ def _normalize_semantic_review(value: Any) -> dict[str, Any]:
         result = {}
     return {
         "summary": result.get("summary") or "已完成语义复核。",
+        "calibrated_surface": result.get("calibrated_surface") or "",
+        "calibrated_score": result.get("calibrated_score"),
         "attack_surface_calibration": result.get("attack_surface_calibration") or "",
         "rule_score_assessment": result.get("rule_score_assessment") or "",
         "cve_priority": result.get("cve_priority") if isinstance(result.get("cve_priority"), list) else [],

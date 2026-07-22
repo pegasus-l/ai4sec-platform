@@ -154,6 +154,8 @@ def ai_review(item_id: int, conn: sqlite3.Connection = Depends(get_db)) -> dict:
     semantic = assessment.get("semantic_review") or {}
     existing_payload["ai_calibration"] = {
         "calibrated_attack_surface": semantic.get("attack_surface_calibration", ""),
+        "calibrated_surface": semantic.get("calibrated_surface", ""),
+        "calibrated_score": semantic.get("calibrated_score"),
         "score_assessment": semantic.get("rule_score_assessment", ""),
         "hypotheses": semantic.get("hypotheses", []),
         "cve_priority": semantic.get("cve_priority", []),

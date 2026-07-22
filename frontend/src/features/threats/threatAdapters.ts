@@ -177,8 +177,13 @@ function repoFromItem(item: Record<string, unknown>): ThreatRepo {
   const cve = asNumber(payload.cve_count);
   const sa = asNumber(payload.sa_count);
   const broad = asNumber(payload.broad_sec_count);
+  // AI calibration overrides original rule scores if present
+  const aiCal = asRecord(payload.ai_calibration);
+  const calibratedSurface = asString(aiCal.calibrated_surface);
+  const calibratedScore = aiCal.calibrated_score != null ? asNumber(aiCal.calibrated_score) : undefined;
   // Use attack_surface score + grade (same scoring system, consistent A/B/C)
-  const score = asNumber(attackSurface.score ?? item.score ?? scoring.score);
+  // If AI calibrated score exists, use it instead
+  const score = calibratedScore ?? asNumber(attackSurface.score ?? item.score ?? scoring.score);
   // Prefer attack_surface.reasons (v12 nested), fall back to scoring.reasons
   const reasons = asArray<string>(attackSurface.reasons ?? scoring.reasons).slice(0, 8);
   const evidence = [
@@ -198,10 +203,13 @@ function repoFromItem(item: Record<string, unknown>): ThreatRepo {
     url: sourceUrl,
     summary: asString(item.summary ?? payload.summary),
     score,
-    // Use attack_surface grade only (scoring.grade is Chinese text like "严重", not A/B/C)
-    grade: asString(attackSurface.grade ?? item.risk_grade ?? payload.risk_grade ?? ''),
+    // If AI calibrated score exists, recompute grade from it
+    grade: calibratedScore != null
+      ? (calibratedScore >= 70 ? 'A' : calibratedScore >= 50 ? 'B' : calibratedScore >= 30 ? 'C' : 'D')
+      : asString(attackSurface.grade ?? item.risk_grade ?? payload.risk_grade ?? ''),
     status: asString(item.status, 'active'),
-    surface: (asString(attackSurface.primary_attack_surface) || asString(asRecord(attackSurface.signals).primary_attack_surface)) || inferSurface(inferredOrg, inferredName, asString(item.summary ?? payload.summary)),
+    // AI calibrated surface takes priority over rule-based surface
+    surface: calibratedSurface || (asString(attackSurface.primary_attack_surface) || asString(asRecord(attackSurface.signals).primary_attack_surface)) || inferSurface(inferredOrg, inferredName, asString(item.summary ?? payload.summary)),
     stars: asNumber(raw.star_count ?? raw.stargazers_count ?? payload.stars),
     cve,
     sa,
@@ -216,7 +224,7 @@ function repoFromItem(item: Record<string, unknown>): ThreatRepo {
     evidence,
     assets: asArray<string>(payload.assets),
     riskAssessment: asRecord(payload.risk_assessment),
-    aiCalibrated: Boolean(asRecord(payload.ai_calibration)?.calibrated_attack_surface),
+    aiCalibrated: Boolean(calibratedSurface || aiCal.calibrated_attack_surface || aiCal.calibrated_score != null),
     raw: payload,
   };
 }
