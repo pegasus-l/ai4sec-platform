@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from ai4sec_platform.app.dependencies import get_db
@@ -144,5 +145,21 @@ def ai_review(item_id: int, conn: sqlite3.Connection = Depends(get_db)) -> dict:
         confidence=assessment.get("semantic_review", {}).get("confidence"),
         payload=assessment,
     )
+
+    # Write ai_calibration into domain_items payload (merge, not overwrite)
+    existing_payload = target.get("payload") or {}
+    if isinstance(existing_payload, str):
+        import json as _json
+        existing_payload = _json.loads(existing_payload)
+    semantic = assessment.get("semantic_review") or {}
+    existing_payload["ai_calibration"] = {
+        "calibrated_attack_surface": semantic.get("attack_surface_calibration", ""),
+        "score_assessment": semantic.get("rule_score_assessment", ""),
+        "hypotheses": semantic.get("hypotheses", []),
+        "cve_priority": semantic.get("cve_priority", []),
+        "false_positives": semantic.get("false_positives", []),
+        "reviewed_at": datetime.now().isoformat(),
+    }
+    repo.update_domain_item(conn, item_id=item_id, payload=existing_payload)
 
     return {"item_id": item_id, "status": "success", "assessment": assessment}

@@ -216,6 +216,7 @@ function repoFromItem(item: Record<string, unknown>): ThreatRepo {
     evidence,
     assets: asArray<string>(payload.assets),
     riskAssessment: asRecord(payload.risk_assessment),
+    aiCalibrated: Boolean(asRecord(payload.ai_calibration)?.calibrated_attack_surface),
     raw: payload,
   };
 }

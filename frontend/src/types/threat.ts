@@ -27,6 +27,7 @@ export interface ThreatRepo {
   evidence: string[];
   assets: string[];
   riskAssessment?: Record<string, unknown>;
+  aiCalibrated?: boolean;
   raw: Record<string, unknown>;
 }
 
