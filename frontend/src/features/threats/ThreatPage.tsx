@@ -169,13 +169,30 @@ function ThreatAssets({ openAsset }: { openAsset: (asset: ThreatAsset) => void }
   const { data: assetData, isLoading } = useQuery({ queryKey: ['threats-assets'], queryFn: fetchAssets });
   const assets = useMemo(() => {
     const all = (assetData?.items || []).map(assetFromItem);
-    // Filter out ascendhub entries without name (tag lists, not actual images)
-    const filtered = all.filter(a => !(a.source === 'ascendhub' && (a.model === '-' || !a.model)));
+    // Merge ascendhub: combine detail items (with name/publisher) and tags items (with versionTags) by hubId
+    const ascendhubMap = new Map<string, ThreatAsset>();
+    const result: ThreatAsset[] = [];
     // Dedupe firmware by modelName, merge cannVersion from cann entries
     const firmwareMap = new Map<string, ThreatAsset>();
-    const result: ThreatAsset[] = [];
-    filtered.forEach(a => {
-      if (a.source === 'firmware') {
+    all.forEach(a => {
+      if (a.source === 'ascendhub' && a.hubId) {
+        if (ascendhubMap.has(a.hubId)) {
+          const existing = ascendhubMap.get(a.hubId)!;
+          // Merge versionTags from tags response into detail item
+          if (a.versionTags?.length && !existing.versionTags?.length) {
+            existing.versionTags = a.versionTags;
+          }
+          // Merge detail fields from detail response into tags-only item
+          if (a.publisher && !existing.publisher) existing.publisher = a.publisher;
+          if (a.size && !existing.size) existing.size = a.size;
+          if (a.labelNames?.length && !existing.labelNames?.length) existing.labelNames = a.labelNames;
+          if (a.fullDescription && !existing.fullDescription) existing.fullDescription = a.fullDescription;
+          if (a.downloadCount != null && existing.downloadCount == null) existing.downloadCount = a.downloadCount;
+        } else {
+          ascendhubMap.set(a.hubId, a);
+          result.push(a);
+        }
+      } else if (a.source === 'firmware') {
         const key = a.model || a.title;
         if (firmwareMap.has(key)) {
           const existing = firmwareMap.get(key)!;
@@ -327,6 +344,17 @@ function AssetCard({ asset, onClick }: { asset: ThreatAsset; onClick: () => void
       </div>
       {asset.labelNames?.length ? <div className="split" style={{ marginTop: 6 }}>{asset.labelNames.map((l, i) => <span key={i} className="badge">{l}</span>)}</div> : null}
       {asset.fullDescription && asset.fullDescription !== asset.evidence && <p className="muted small" style={{ marginTop: 6 }}>{asset.fullDescription.slice(0, 200)}{asset.fullDescription.length > 200 ? '...' : ''}</p>}
+      {asset.versionTags?.length ? (
+        <div className="timeline" style={{ marginTop: 8 }}>
+          {asset.versionTags.slice(0, 3).map((t, i) => (
+            <div key={i} className="timeline-item">
+              <div className="row-title"><b>{t.tag}</b><span className="badge">{t.size || '-'}</span></div>
+              <span className="muted small">{t.update_time || '-'} | {t.architectures?.join(', ') || '-'}</span>
+            </div>
+          ))}
+          {asset.versionTags.length > 3 && <p className="muted small">+{asset.versionTags.length - 3} 更多版本</p>}
+        </div>
+      ) : null}
       </>
     ) : asset.type === 'firmware' ? (
       <div className="asset-meta">

@@ -78,6 +78,8 @@ export interface ThreatAsset {
   deviceModel?: string;
   softwareVersion?: string;
   fileType?: string;
+  hubId?: string;
+  versionTags?: Array<{ tag: string; size: string; update_time: string; architectures: string[] }>;
 }
 
 // ============================================================================

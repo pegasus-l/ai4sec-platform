@@ -174,6 +174,28 @@ def normalize_asset(source: str, item: dict[str, Any]) -> dict[str, Any]:
         if isinstance(catalog, list) and catalog:
             result["os"] = _infer_os_from_catalog(catalog, item.get("msg", ""))
             result["category_display"] = ", ".join(catalog)
+    if source == "ascendhub":
+        # Tags response items have tags.list with version tags — extract them
+        tags_obj = item.get("tags")
+        if isinstance(tags_obj, dict) and isinstance(tags_obj.get("list"), list):
+            version_tags = []
+            for tag_item in tags_obj["list"]:
+                if isinstance(tag_item, dict):
+                    version_tags.append({
+                        "tag": tag_item.get("tag", ""),
+                        "size": tag_item.get("size", ""),
+                        "update_time": tag_item.get("updateTime", ""),
+                        "architectures": tag_item.get("architectures", []),
+                    })
+            result["version_tags"] = version_tags
+            result["hub_id"] = item.get("hub_id", "")
+            result["hub_name"] = item.get("hub_name", "")
+            if item.get("hub_name"):
+                result["title"] = item["hub_name"]
+            result["source_type"] = "ascendhub_version_tags"
+        else:
+            # Detail response — add hub_id for frontend merging
+            result["hub_id"] = item.get("hub_id", "")
     return result
 
 

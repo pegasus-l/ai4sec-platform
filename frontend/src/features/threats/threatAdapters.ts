@@ -327,6 +327,11 @@ export function assetFromItem(item: Record<string, unknown>): ThreatAsset {
     deviceModel: isOpenx ? asString(payload.device_model) : (isFirmware ? asString(raw.modelName) : ''),
     softwareVersion: isOpenx ? asString(payload.software_version) : '',
     fileType: isOpenx ? asString(payload.file_type) : '',
+    hubId: isAscendhub ? asString(payload.hub_id ?? raw.hub_id) : '',
+    versionTags: isAscendhub ? asArray<Record<string, unknown>>(payload.version_tags).map((t) => ({
+      tag: asString(t.tag), size: asString(t.size), update_time: asString(t.update_time),
+      architectures: asArray<string>(t.architectures),
+    })) : [],
   };
 }
 
