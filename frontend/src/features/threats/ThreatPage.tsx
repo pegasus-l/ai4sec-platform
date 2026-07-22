@@ -9,6 +9,7 @@ import { opsTasks, opsSources } from './threatStaticData';
 import { ThreatGraphView } from './graph/ThreatGraphView';
 import { RepoDrawerContent } from './RepoDrawer';
 import { useDrawerStack } from '../../components/DrawerStack';
+import { v12MockThreatModel } from './v12Mock';
 
 type ViewId = 'today' | 'repos' | 'surface' | 'assets' | 'graph' | 'queue' | 'ops-tasks' | 'ops-sources' | 'ops-rules' | 'ops-quality' | 'ops-queue';
 
@@ -43,8 +44,8 @@ export function ThreatPage() {
   const [filters, setFilters] = useState<FilterState>({ search: '', grade: 'all', surface: 'all', onlyCve: false, onlyHigh: false });
   const [selectedAsset, setSelectedAsset] = useState<ThreatAsset | null>(null);
   const { push } = useDrawerStack();
-  const { data, isLoading, error } = useQuery({ queryKey: ['frontend-contract'], queryFn: fetchFrontendContract });
-  const model = useMemo(() => data ? adaptThreatContract(data) : null, [data]);
+  const { data, isLoading, error } = useQuery({ queryKey: ['frontend-contract'], queryFn: fetchFrontendContract, enabled: false });
+  const model = useMemo(() => data ? adaptThreatContract(data) : v12MockThreatModel, [data]);
 
   const openRepo = (repo: ThreatRepo) => {
     push({
