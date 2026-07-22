@@ -116,10 +116,10 @@ function ThreatToday({ model, openRepo, setView, setFilters }: { model: ThreatVi
     </div>
     <div className="grid cols-2">
       {focus.map((item) => item.kind === 'repo' ? <div className="focus-card" key={`${item.type}-${item.repo.id}`} onClick={() => openRepo(item.repo)}>
-        <div className="row-title"><span className={`badge ${item.repo.grade}`}>{item.type}</span><span className="muted small">点击钻取</span></div>
+        <div className="row-title"><span className={`badge ${item.repo.grade || 'C'}`}>{item.type}</span><span className="muted small">点击钻取</span></div>
         <h3>{item.repo.org}/{item.repo.name}</h3>
         <p>{item.why}</p>
-        <div className="split"><span className={`badge ${item.repo.grade}`}>Grade {item.repo.grade}</span><span className="badge">{item.repo.surface}</span><span className="badge">score {Math.round(item.repo.score)}</span></div>
+        <div className="split"><span className={`badge ${item.repo.grade || 'C'}`}>Grade {item.repo.grade}</span><span className="badge">{item.repo.surface}</span><span className="badge">score {Math.round(item.repo.score)}</span></div>
         <div className="split"><button className="btn primary" onClick={(event) => { event.stopPropagation(); openRepo(item.repo); }}>查看详情</button><button className="btn" onClick={(event) => event.stopPropagation()}>加入跟踪</button></div>
       </div> : <div className="focus-card" key={`${item.type}-${item.asset.id}`} onClick={() => setView('assets')}>
         <div className="row-title"><span className="badge B">{item.type}</span><span className="muted small">点击钻取</span></div>
@@ -220,11 +220,11 @@ function ThreatOps({ model, kind }: { model: ThreatViewModel; kind: ViewId }) {
 
 function RepoTable({ repos, openRepo }: { repos: ThreatRepo[]; openRepo: (repo: ThreatRepo) => void }) {
   return <table><thead><tr><th>目标</th><th>风险</th><th>攻击面</th><th>安全线索</th><th>评分拆解</th><th>操作</th></tr></thead><tbody>{repos.map(repo => <tr className="clickable" key={repo.id} onClick={() => openRepo(repo)}>
-    <td><div className="repo-name">{repo.org}/{repo.name}</div><div className="repo-url">{repo.url}</div><div className="muted small">{repo.summary}</div></td>
-    <td><span className={`badge ${repo.score >= 75 ? 'A' : repo.score >= 50 ? 'B' : 'C'}`}>Grade {repo.grade}</span><div style={{ height: 7 }} /><div className="score-bar"><i style={{ width: `${Math.min(100, repo.score)}%` }} /></div><div className="small muted">{Math.round(repo.score)}</div></td>
+    <td style={{ maxWidth: 320 }}><div className="repo-name">{repo.org}/{repo.name}</div><div className="repo-url">{repo.url}</div><div className="muted small" style={{ maxHeight: '2.6em', overflow: 'hidden' }}>{repo.summary}</div></td>
+    <td><span className={`badge ${repo.grade || 'C'}`}>Grade {repo.grade || '?'}</span><div style={{ height: 7 }} /><div className="score-bar"><i style={{ width: `${Math.min(100, repo.score)}%` }} /></div><div className="small muted">{Math.round(repo.score)}</div></td>
     <td><span className="badge">{repo.surface}</span></td>
     <td>CVE {repo.cve}<br />SA {repo.sa}<br />Sec items {repo.sec}<div style={{ height: 7 }} />{repo.evidence.length ? <button className="btn" onClick={(event) => { event.stopPropagation(); openRepo(repo); }}>{repo.evidence.length} 条详情</button> : <span className="muted small">暂无详情</span>}</td>
-    <td><ScoreBreakdown breakdown={repo.breakdown} mini /></td>
+    <td style={{ minWidth: 150 }}><ScoreBreakdown breakdown={repo.breakdown} mini /></td>
     <td><button className="btn primary" onClick={(event) => { event.stopPropagation(); openRepo(repo); }}>详情</button><button className="btn" onClick={(event) => event.stopPropagation()}>跟踪</button></td>
   </tr>)}</tbody></table>;
 }
