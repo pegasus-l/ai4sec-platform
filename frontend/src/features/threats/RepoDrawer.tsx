@@ -181,43 +181,55 @@ export function RepoDrawerContent({ repo, model, onViewGraph, onOpenAsset }: Rep
         <h3>AI 研判</h3>
         {aiReview ? (
           <div>
-            <p>{aiReview.assessment?.summary}</p>
-            {aiReview.assessment?.semantic_review?.vulnerability_hypotheses?.length ? (
+            <p>{aiReview.assessment?.semantic_review?.summary || aiReview.assessment?.summary}</p>
+            {aiReview.assessment?.semantic_review?.attack_surface_calibration && (
               <div style={{ marginTop: 10 }}>
-                <b>漏洞研究方向假设：</b>
+                <b>攻击面校准</b>
+                <p className="muted small" style={{ marginTop: 4 }}>{aiReview.assessment.semantic_review.attack_surface_calibration}</p>
+              </div>
+            )}
+            {aiReview.assessment?.semantic_review?.rule_score_assessment && (
+              <div style={{ marginTop: 10 }}>
+                <b>规则评分评估</b>
+                <p className="muted small" style={{ marginTop: 4 }}>{aiReview.assessment.semantic_review.rule_score_assessment}</p>
+              </div>
+            )}
+            {aiReview.assessment?.semantic_review?.cve_priority?.length ? (
+              <div style={{ marginTop: 10 }}>
+                <b>CVE 优先级</b>
                 <div className="timeline" style={{ marginTop: 6 }}>
-                  {aiReview.assessment.semantic_review.vulnerability_hypotheses.map((h, i) => (
-                    <div key={i} className="timeline-item">{h}</div>
+                  {aiReview.assessment.semantic_review.cve_priority.map((c, i) => (
+                    <div key={i} className="timeline-item">
+                      <div className="row-title">
+                        <b>{c.cve_id}</b>
+                        <span className={`badge ${c.value === 'high' ? 'A' : c.value === 'medium' ? 'B' : 'C'}`}>{c.value}</span>
+                      </div>
+                      <span className="muted small">{c.reason}</span>
+                    </div>
                   ))}
                 </div>
               </div>
             ) : null}
-            {aiReview.assessment?.semantic_review?.recommended_actions?.length ? (
+            {aiReview.assessment?.semantic_review?.false_positives?.length ? (
               <div style={{ marginTop: 10 }}>
-                <b>推荐下一步动作：</b>
+                <b>误报风险</b>
                 <div className="timeline" style={{ marginTop: 6 }}>
-                  {aiReview.assessment.semantic_review.recommended_actions.map((a, i) => (
-                    <div key={i} className="timeline-item">{a}</div>
-                  ))}
-                </div>
-              </div>
-            ) : null}
-            {aiReview.assessment?.semantic_review?.false_positive_risks?.length ? (
-              <div style={{ marginTop: 10 }}>
-                <b>误报风险：</b>
-                <div className="timeline" style={{ marginTop: 6 }}>
-                  {aiReview.assessment.semantic_review.false_positive_risks.map((r, i) => (
+                  {aiReview.assessment.semantic_review.false_positives.map((r, i) => (
                     <div key={i} className="timeline-item">{r}</div>
                   ))}
                 </div>
               </div>
             ) : null}
-            {aiReview.assessment?.semantic_review?.attack_surface_summary && (
+            {aiReview.assessment?.semantic_review?.hypotheses?.length ? (
               <div style={{ marginTop: 10 }}>
-                <b>攻击面解释：</b>
-                <p className="muted small" style={{ marginTop: 4 }}>{aiReview.assessment.semantic_review.attack_surface_summary}</p>
+                <b>挖洞建议</b>
+                <div className="timeline" style={{ marginTop: 6 }}>
+                  {aiReview.assessment.semantic_review.hypotheses.map((h, i) => (
+                    <div key={i} className="timeline-item">{h}</div>
+                  ))}
+                </div>
               </div>
-            )}
+            ) : null}
             <div className="split" style={{ marginTop: 10 }}>
               <span className={`badge ${aiReview.assessment?.semantic_review?.confidence && aiReview.assessment.semantic_review.confidence >= 0.7 ? 'A' : 'B'}`}>
                 置信度 {Math.round((aiReview.assessment?.semantic_review?.confidence ?? 0) * 100)}%
@@ -226,7 +238,7 @@ export function RepoDrawerContent({ repo, model, onViewGraph, onOpenAsset }: Rep
             </div>
           </div>
         ) : aiLoading ? (
-          <p className="muted">AI 研判中，请稍候...</p>
+          <p className="muted">AI 研判中，请稍候 3-10 秒...</p>
         ) : aiError ? (
           <p className="muted small">研判失败: {aiError}</p>
         ) : (

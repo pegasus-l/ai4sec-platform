@@ -23,13 +23,11 @@ export interface AiReviewResult {
     risk_grade: string;
     semantic_review?: {
       summary: string;
-      is_real_security_target: boolean;
-      valid_security_findings: string[];
-      false_positive_risks: string[];
-      attack_surface_summary: string;
-      vulnerability_hypotheses: string[];
-      recommended_tracking_level: string;
-      recommended_actions: string[];
+      attack_surface_calibration: string;
+      rule_score_assessment: string;
+      cve_priority: Array<{ cve_id: string; value: string; reason: string }>;
+      false_positives: string[];
+      hypotheses: string[];
       confidence: number;
     };
     recommended_actions: string[];
