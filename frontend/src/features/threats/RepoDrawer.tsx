@@ -19,6 +19,8 @@ import { VulnListDrawer } from './VulnListDrawer';
 import { VulnDetailDrawer } from './VulnDetailDrawer';
 import { severityBadgeClass } from './severityBadge';
 import { Card, MetricCard } from '../../components/ui';
+import { useState } from 'react';
+import { postJson, type AiReviewResult } from '../../api/client';
 
 interface RepoDrawerContentProps {
   repo: ThreatRepo;
@@ -32,6 +34,22 @@ interface RepoDrawerContentProps {
 export function RepoDrawerContent({ repo, model, onViewGraph, onOpenAsset }: RepoDrawerContentProps) {
   const { push } = useDrawerStack();
   const vulns = model.vulnDetails?.[repo.id] ?? [];
+  const [aiReview, setAiReview] = useState<AiReviewResult | null>(null);
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiError, setAiError] = useState<string | null>(null);
+
+  const handleAiReview = async () => {
+    setAiLoading(true);
+    setAiError(null);
+    try {
+      const result = await postJson<AiReviewResult>(`/api/threats/${repo.id}/ai-review`);
+      setAiReview(result);
+    } catch (e) {
+      setAiError(String(e));
+    } finally {
+      setAiLoading(false);
+    }
+  };
 
   const handleOpenVulnList = () => {
     push({
@@ -158,6 +176,63 @@ export function RepoDrawerContent({ repo, model, onViewGraph, onOpenAsset }: Rep
           </div>
         </Card>
       </div>
+      {/* 6. AI 研判 */}
+      <Card>
+        <h3>AI 研判</h3>
+        {aiReview ? (
+          <div>
+            <p>{aiReview.assessment?.summary}</p>
+            {aiReview.assessment?.semantic_review?.vulnerability_hypotheses?.length ? (
+              <div style={{ marginTop: 10 }}>
+                <b>漏洞研究方向假设：</b>
+                <div className="timeline" style={{ marginTop: 6 }}>
+                  {aiReview.assessment.semantic_review.vulnerability_hypotheses.map((h, i) => (
+                    <div key={i} className="timeline-item">{h}</div>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+            {aiReview.assessment?.semantic_review?.recommended_actions?.length ? (
+              <div style={{ marginTop: 10 }}>
+                <b>推荐下一步动作：</b>
+                <div className="timeline" style={{ marginTop: 6 }}>
+                  {aiReview.assessment.semantic_review.recommended_actions.map((a, i) => (
+                    <div key={i} className="timeline-item">{a}</div>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+            {aiReview.assessment?.semantic_review?.false_positive_risks?.length ? (
+              <div style={{ marginTop: 10 }}>
+                <b>误报风险：</b>
+                <div className="timeline" style={{ marginTop: 6 }}>
+                  {aiReview.assessment.semantic_review.false_positive_risks.map((r, i) => (
+                    <div key={i} className="timeline-item">{r}</div>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+            {aiReview.assessment?.semantic_review?.attack_surface_summary && (
+              <div style={{ marginTop: 10 }}>
+                <b>攻击面解释：</b>
+                <p className="muted small" style={{ marginTop: 4 }}>{aiReview.assessment.semantic_review.attack_surface_summary}</p>
+              </div>
+            )}
+            <div className="split" style={{ marginTop: 10 }}>
+              <span className={`badge ${aiReview.assessment?.semantic_review?.confidence && aiReview.assessment.semantic_review.confidence >= 0.7 ? 'A' : 'B'}`}>
+                置信度 {Math.round((aiReview.assessment?.semantic_review?.confidence ?? 0) * 100)}%
+              </span>
+              <span className="badge">{aiReview.status === 'cached' ? '已缓存' : '新研判'}</span>
+            </div>
+          </div>
+        ) : aiLoading ? (
+          <p className="muted">AI 研判中，请稍候...</p>
+        ) : aiError ? (
+          <p className="muted small">研判失败: {aiError}</p>
+        ) : (
+          <button className="btn primary" onClick={handleAiReview}>开始 AI 研判</button>
+        )}
+      </Card>
     </div>
   );
 }

@@ -7,6 +7,9 @@ from ai4sec_platform.app.dependencies import get_db
 from ai4sec_platform.domains.threats import service as threat_service
 from ai4sec_platform.services import domain_items
 from ai4sec_platform.services import operations
+from ai4sec_platform.db import repositories as repo
+from ai4sec_platform.models.router import LLMRouter
+from ai4sec_platform.pipelines.steps.threat_risk import _semantic_review_prompt, _semantic_review_payload, _build_assessment
 
 router = APIRouter(prefix="/threats", tags=["threats"])
 DOMAIN = "threats"
@@ -92,3 +95,54 @@ def graph(conn: sqlite3.Connection = Depends(get_db)) -> dict:
         for item in targets_data["items"]
     ]
     return {"domain": DOMAIN, "nodes": nodes, "edges": [], "status": "partial", "note": "第一阶段仅返回目标节点，CVE/固件/镜像关系待后续 threat raw pipeline 补齐。"}
+
+
+@router.post("/{item_id}/ai-review")
+def ai_review(item_id: int, conn: sqlite3.Connection = Depends(get_db)) -> dict:
+    """On-demand AI risk review for a single threat target.
+
+    Reads the domain_item payload, calls LLM (or local_rules fallback),
+    writes evidence, and returns the assessment JSON.
+    If an existing risk_assessment evidence is found, returns cached result.
+    """
+    row = conn.execute(
+        "SELECT * FROM domain_items WHERE id = ? AND domain = ?",
+        (item_id, DOMAIN),
+    ).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="target not found")
+    target = repo.row_to_dict(row)
+
+    # Check for cached AI review
+    existing = conn.execute(
+        "SELECT * FROM evidence_items WHERE domain_item_id = ? AND evidence_type = 'risk_assessment' ORDER BY id DESC LIMIT 1",
+        (item_id,),
+    ).fetchone()
+    if existing:
+        existing_data = repo.row_to_dict(existing)
+        return {"item_id": item_id, "status": "cached", "assessment": existing_data.get("payload", {})}
+
+    # Call LLM
+    prompt = _semantic_review_prompt()
+    review_payload = _semantic_review_payload(target)
+    router = LLMRouter()
+    output = router.complete_json(profile="configured_model", prompt=prompt, payload=review_payload)
+
+    # Build assessment
+    assessment = _build_assessment(target, output)
+
+    # Persist to evidence_items
+    score = float(target.get("score") or 0)
+    repo.create_evidence(
+        conn,
+        domain=DOMAIN,
+        domain_item_id=item_id,
+        evidence_type="risk_assessment",
+        title="AI 研判结果",
+        content=assessment.get("summary", ""),
+        source_url=target.get("source_url") or "",
+        confidence=assessment.get("semantic_review", {}).get("confidence"),
+        payload=assessment,
+    )
+
+    return {"item_id": item_id, "status": "success", "assessment": assessment}
