@@ -161,5 +161,19 @@ def ai_review(item_id: int, conn: sqlite3.Connection = Depends(get_db)) -> dict:
         "reviewed_at": datetime.now().isoformat(),
     }
     repo.update_domain_item(conn, item_id=item_id, payload=existing_payload)
+    conn.commit()
 
     return {"item_id": item_id, "status": "success", "assessment": assessment}
+
+
+@router.get("/{item_id}/ai-review")
+def get_ai_review(item_id: int, conn: sqlite3.Connection = Depends(get_db)) -> dict:
+    """Get cached AI review without triggering LLM. Returns 404 if not cached."""
+    row = conn.execute(
+        "SELECT * FROM evidence_items WHERE domain_item_id = ? AND evidence_type = 'risk_assessment' ORDER BY id DESC LIMIT 1",
+        (item_id,),
+    ).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="no cached review")
+    data = repo.row_to_dict(row)
+    return {"item_id": item_id, "status": "cached", "assessment": data.get("payload", {})}

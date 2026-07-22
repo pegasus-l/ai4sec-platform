@@ -19,8 +19,8 @@ import { VulnListDrawer } from './VulnListDrawer';
 import { VulnDetailDrawer } from './VulnDetailDrawer';
 import { severityBadgeClass } from './severityBadge';
 import { Card, MetricCard } from '../../components/ui';
-import { useState } from 'react';
-import { postJson, type AiReviewResult } from '../../api/client';
+import { useState, useEffect } from 'react';
+import { postJson, getJson, type AiReviewResult } from '../../api/client';
 
 interface RepoDrawerContentProps {
   repo: ThreatRepo;
@@ -37,6 +37,13 @@ export function RepoDrawerContent({ repo, model, onViewGraph, onOpenAsset }: Rep
   const [aiReview, setAiReview] = useState<AiReviewResult | null>(null);
   const [aiLoading, setAiLoading] = useState(false);
   const [aiError, setAiError] = useState<string | null>(null);
+
+  // On mount, try to fetch cached AI review (GET, no LLM trigger)
+  useEffect(() => {
+    getJson<AiReviewResult>(`/api/threats/${repo.id}/ai-review`)
+      .then(setAiReview)
+      .catch(() => {});  // 404 = no cached review, show button
+  }, [repo.id]);
 
   const handleAiReview = async () => {
     setAiLoading(true);
