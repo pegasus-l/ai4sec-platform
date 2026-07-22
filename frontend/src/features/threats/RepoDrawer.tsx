@@ -16,6 +16,8 @@
 import type { ThreatViewModel, ThreatRepo, ThreatAsset } from '../../types/threat';
 import { useDrawerStack } from '../../components/DrawerStack';
 import { VulnListDrawer } from './VulnListDrawer';
+import { VulnDetailDrawer } from './VulnDetailDrawer';
+import { severityBadgeClass } from './severityBadge';
 import { Card, MetricCard } from '../../components/ui';
 
 interface RepoDrawerContentProps {
@@ -36,6 +38,14 @@ export function RepoDrawerContent({ repo, model, onViewGraph, onOpenAsset }: Rep
       title: '漏洞 / 安全线索',
       subtitle: `${repo.org}/${repo.name}`,
       render: () => <VulnListDrawer repoId={repo.id} model={model} />,
+    });
+  };
+
+  const handleOpenVulnDetail = (vulnId: string) => {
+    push({
+      title: '漏洞详情',
+      subtitle: vulnId,
+      render: () => <VulnDetailDrawer repoId={repo.id} vulnId={vulnId} model={model} />,
     });
   };
 
@@ -66,16 +76,36 @@ export function RepoDrawerContent({ repo, model, onViewGraph, onOpenAsset }: Rep
         )}
       </Card>
 
-      {/* 2. Vuln / security线索 */}
+      {/* 2. Vuln / security线索 — inline timeline like demo v12 renderVulnList */}
       <Card>
         <h3>漏洞 / 安全线索</h3>
         <p>CVE {repo.cve} · SA {repo.sa} · Sec items {repo.sec}</p>
         {vulns.length > 0 ? (
-          <div className="split" style={{ marginTop: 10 }}>
-            <button className="btn primary" onClick={handleOpenVulnList}>
-              查看全部漏洞 ({vulns.length} 条)
-            </button>
-          </div>
+          <>
+            <div className="timeline" style={{ marginTop: 10 }}>
+              {vulns.slice(0, 5).map((vuln) => (
+                <div
+                  key={vuln.id}
+                  className="timeline-item clickable"
+                  onClick={() => handleOpenVulnDetail(vuln.id)}
+                >
+                  <div className="row-title">
+                    <span><b>{vuln.id}</b> · {vuln.kind}</span>
+                    <span className={`badge ${severityBadgeClass(vuln.severity)}`}>{vuln.severity}</span>
+                  </div>
+                  <div className="muted small">{vuln.title}</div>
+                  <div className="muted small">{vuln.source_type}{vuln.published_date ? ` · ${vuln.published_date}` : ''}</div>
+                </div>
+              ))}
+            </div>
+            {vulns.length > 5 && (
+              <div className="split" style={{ marginTop: 10 }}>
+                <button className="btn primary" onClick={handleOpenVulnList}>
+                  查看全部漏洞 ({vulns.length} 条)
+                </button>
+              </div>
+            )}
+          </>
         ) : (
           <p className="muted small">暂无可点击漏洞详情。</p>
         )}
