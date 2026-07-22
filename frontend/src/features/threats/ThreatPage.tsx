@@ -235,8 +235,50 @@ function RepoList({ repos, openRepo, compact = false }: { repos: ThreatRepo[]; o
   return <div className={compact ? 'mini-list' : 'repo-list'}>{repos.map(repo => <button key={repo.id} onClick={() => openRepo(repo)}><strong>{repo.title}</strong><span>{repo.surface} · CVE {repo.cve} · Sec {repo.sec}</span><em>{Math.round(repo.score)}</em></button>)}</div>;
 }
 
+function formatNum(n: number): string {
+  if (n >= 1e9) return (n / 1e9).toFixed(1) + 'B';
+  if (n >= 1e6) return (n / 1e6).toFixed(1) + 'M';
+  if (n >= 1e3) return (n / 1e3).toFixed(1) + 'K';
+  return String(n);
+}
+
 function AssetCard({ asset, onClick }: { asset: ThreatAsset; onClick: () => void }) {
-  return <div className="card asset-card" onClick={onClick}><div className="row-title"><span className="badge">{asset.type === 'firmware' ? '固件' : asset.type === 'image' ? '镜像' : asset.type === 'mirror' ? '软件源' : asset.type === 'openx_firmware' ? 'OpenX固件' : asset.type || '未知'}</span><span className={`badge ${asset.confidence || 'C'}`}>{asset.confidence || 'unknown'}</span></div><h3>{asset.title}</h3><p>{asset.evidence || asset.summary}</p><div className="asset-meta"><div><b>{asset.model || '-'}</b><span>型号/名称</span></div><div><b>{asset.version || '-'}</b><span>版本/tag</span></div><div><b>{asset.count || '-'}</b><span>包数量/下载量</span></div><div><b>{asset.latest || '-'}</b><span>最近更新</span></div></div><div className="split"><button className="btn primary" onClick={(e) => { e.stopPropagation(); onClick(); }}>资产详情</button><button className="btn" onClick={(e) => e.stopPropagation()}>加入跟踪</button></div></div>;
+  const typeLabel = asset.type === 'firmware' ? '固件' : asset.type === 'image' ? '镜像' : asset.type === 'mirror' ? '软件源' : asset.type === 'openx_firmware' ? 'OpenX固件' : asset.type || '未知';
+  return <div className="card asset-card" onClick={onClick}>
+    <div className="row-title"><span className="badge">{typeLabel}</span>{asset.official && <span className="badge A">官方</span>}<span className={`badge ${asset.confidence || 'C'}`}>{asset.confidence || 'unknown'}</span></div>
+    <h3>{asset.title}</h3>
+    <p>{asset.evidence || asset.summary}</p>
+    {asset.type === 'mirror' ? (
+      <div className="asset-meta">
+        <div><b>{asset.catalog?.join(', ') || '-'}</b><span>分类</span></div>
+        <div><b>{asset.syncState || '-'}</b><span>同步状态</span></div>
+        <div><b>{asset.count || '-'}</b><span>包数量</span></div>
+        <div><b>{asset.downloadCount ? formatNum(asset.downloadCount) : '-'}</b><span>下载量</span></div>
+      </div>
+    ) : asset.type === 'image' ? (
+      <div className="asset-meta">
+        <div><b>{asset.publisher || '-'}</b><span>发布者</span></div>
+        <div><b>{asset.version || '-'}</b><span>版本</span></div>
+        <div><b>{asset.size || '-'}</b><span>大小</span></div>
+        <div><b>{asset.downloadCount ?? '-'}</b><span>下载次数</span></div>
+      </div>
+    ) : asset.type === 'firmware' ? (
+      <div className="asset-meta">
+        <div><b>{asset.model || '-'}</b><span>型号</span></div>
+        <div><b>{asset.meta || '-'}</b><span>产品类型</span></div>
+        {asset.cannVersion && <div><b>{asset.cannVersion}</b><span>CANN版本</span></div>}
+        <div><b>{asset.latest || '-'}</b><span>更新</span></div>
+      </div>
+    ) : asset.type === 'openx_firmware' ? (
+      <div className="asset-meta">
+        <div><b>{asset.category || '-'}</b><span>分类</span></div>
+        <div><b>{asset.link ? '有' : '无'}</b><span>下载链接</span></div>
+      </div>
+    ) : (
+      <div className="asset-meta"><div><b>{asset.model || '-'}</b><span>型号/名称</span></div><div><b>{asset.version || '-'}</b><span>版本</span></div><div><b>{asset.count || '-'}</b><span>数量</span></div><div><b>{asset.latest || '-'}</b><span>更新</span></div></div>
+    )}
+    <div className="split"><button className="btn primary" onClick={(e) => { e.stopPropagation(); onClick(); }}>资产详情</button><button className="btn" onClick={(e) => e.stopPropagation()}>加入跟踪</button></div>
+  </div>;
 }
 
 function AssetDrawer({ asset, onClose }: { asset: ThreatAsset | null; onClose: () => void }) {

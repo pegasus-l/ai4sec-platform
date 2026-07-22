@@ -310,6 +310,19 @@ function assetFromItem(item: Record<string, unknown>): ThreatAsset {
     confidence: inferAssetConfidence(raw),
     repos: asArray<string>(raw.repos),
     evidence: asString(raw.msg ?? raw.description ?? payload.summary),
+    // Per-source rich fields
+    catalog: isMirror ? asArray<string>(raw.catalog) : isAscendhub ? asArray<string>(raw.labelNames) : [],
+    syncState: isMirror ? asString(raw.syncState) : '',
+    upstreamUrl: isMirror ? asString(asArray<Record<string, unknown>>(raw.sources)[0]?.webUrl) : '',
+    mirrorPath: isMirror ? asString(raw.mirrorPath) : '',
+    publisher: isAscendhub ? asString(raw.publisher) : '',
+    labelNames: isAscendhub ? asArray<string>(raw.labelNames) : [],
+    size: isAscendhub ? asString(raw.size) : '',
+    fullDescription: isAscendhub ? asString(raw.fullDescription ?? raw.description) : '',
+    cannVersion: isFirmware ? asString(raw.cannVersion) : '',
+    online: isMirror ? Boolean(raw.online) : isAscendhub ? Boolean(raw.open) : undefined,
+    official: isMirror ? Boolean(raw.official) : undefined,
+    downloadCount: isMirror ? (asNumber(raw.downloadCount) || undefined) : isAscendhub ? (asNumber(raw.downloads) || undefined) : undefined,
   };
 }
 

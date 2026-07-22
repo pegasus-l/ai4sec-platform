@@ -62,6 +62,19 @@ export interface ThreatAsset {
   confidence?: AssetConfidence;
   repos?: string[];
   evidence?: string;
+  // Per-source fields for richer asset cards
+  catalog?: string[];
+  syncState?: string;
+  upstreamUrl?: string;
+  mirrorPath?: string;
+  publisher?: string;
+  labelNames?: string[];
+  size?: string;
+  fullDescription?: string;
+  cannVersion?: string;
+  online?: boolean;
+  official?: boolean;
+  downloadCount?: number;
 }
 
 // ============================================================================
