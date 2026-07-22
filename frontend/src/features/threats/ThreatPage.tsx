@@ -153,10 +153,15 @@ function ThreatSurface({ model, openRepo, setFilters, setView }: { model: Threat
 }
 
 function ThreatAssets({ model, openAsset }: { model: ThreatViewModel; openAsset: (asset: ThreatAsset) => void }) {
-  const bySource = groupBy(model.assets, asset => asset.source);
-  return <div className="view-stack">
-    <div className="metric-grid">{Object.entries(bySource).map(([source, items]) => <MetricCard key={source} label={source} value={items.length} hint="资产条目" tone="violet" />)}</div>
-    <div className="asset-grid">{model.assets.map(asset => <AssetCard key={asset.id} asset={asset} onClick={() => openAsset(asset)} />)}</div>
+  const [assetType, setAssetType] = useState('all');
+  const [confidence, setConfidence] = useState('all');
+  const filtered = model.assets.filter(a => (assetType === 'all' || a.type === assetType) && (confidence === 'all' || a.confidence === confidence));
+  return <div className="grid">
+    <div className="split">
+      <select className="select" value={assetType} onChange={e => setAssetType(e.target.value)}><option value="all">全部资产</option><option value="firmware">固件</option><option value="image">镜像</option><option value="mirror">软件源</option><option value="openx_firmware">OpenX固件</option></select>
+      <select className="select" value={confidence} onChange={e => setConfidence(e.target.value)}><option value="all">全部置信度</option><option value="direct">direct</option><option value="inferred">inferred</option><option value="weak">weak</option><option value="unknown">unknown</option></select>
+    </div>
+    <div className="grid cols-2">{filtered.map(asset => <AssetCard key={asset.id} asset={asset} onClick={() => openAsset(asset)} />)}</div>
   </div>;
 }
 
@@ -186,7 +191,7 @@ function RepoList({ repos, openRepo, compact = false }: { repos: ThreatRepo[]; o
 }
 
 function AssetCard({ asset, onClick }: { asset: ThreatAsset; onClick: () => void }) {
-  return <button className="asset-card" onClick={onClick}><span className="label">{asset.source}</span><strong>{asset.title}</strong><p>{asset.summary || asset.sourceType}</p><div><Badge tone="violet">{asset.sourceType}</Badge>{asset.score > 0 && <Badge tone="amber">{Math.round(asset.score)}</Badge>}</div></button>;
+  return <div className="card asset-card" onClick={onClick}><div className="row-title"><span className={`badge ${asset.confidence || 'C'}`}>{asset.label || asset.source}</span><span className={`badge ${asset.confidence || 'C'}`}>{asset.confidence || 'unknown'}</span></div><h3>{asset.title}</h3><p>{asset.evidence || asset.summary}</p><div className="asset-meta"><div><b>{asset.model || '-'}</b><span>型号/名称</span></div><div><b>{asset.version || '-'}</b><span>版本/tag</span></div><div><b>{asset.count || '-'}</b><span>包数量/下载量</span></div><div><b>{asset.latest || '-'}</b><span>最近更新</span></div></div><div className="split"><button className="btn primary" onClick={(e) => { e.stopPropagation(); onClick(); }}>资产详情</button><button className="btn" onClick={(e) => e.stopPropagation()}>加入跟踪</button></div></div>;
 }
 
 function AssetDrawer({ asset, onClose }: { asset: ThreatAsset | null; onClose: () => void }) {
