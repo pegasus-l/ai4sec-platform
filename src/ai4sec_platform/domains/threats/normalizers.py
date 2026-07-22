@@ -78,17 +78,30 @@ def normalize_cve_project(source: str, item: dict[str, Any]) -> dict[str, Any]:
 
 
 def normalize_firmware(source: str, item: dict[str, Any]) -> dict[str, Any]:
-    model = item.get("productModel") or item.get("modelName") or item.get("name") or item.get("productName") or "unknown"
-    return {
-        "item_key": f"firmware:{model}".lower(),
+    model = item.get("productModel") or item.get("modelName") or item.get("name") or item.get("productModel") or "unknown"
+    fw_type = item.get("source_type", "community")
+    result = {
+        "item_key": f"firmware:{model}:{fw_type}".lower(),
         "source": source,
-        "source_type": "firmware",
+        "source_type": f"firmware_{fw_type}",
         "title": model,
-        "url": "",
-        "summary": item.get("description") or item.get("softwareExplain") or f"固件/型号线索：{model}。",
+        "url": item.get("downloadUrl") or "",
+        "summary": item.get("softwareExplain") or item.get("description") or f"固件/型号线索：{model}。",
         "risk_score": item.get("packageCount") or item.get("downloadCount") or 0,
         "raw": item,
     }
+    # Package-level fields from 3-level API query
+    if item.get("packageName"):
+        result["package_name"] = item["packageName"]
+        result["file_size"] = item.get("fileSize", "")
+        result["release_time"] = item.get("releaseTime", "")
+        result["software_explain"] = item.get("softwareExplain", "")
+        result["download_url"] = item.get("downloadUrl", "")
+        result["product_type"] = item.get("productType", "")
+        result["firmware_version"] = item.get("firmwareVersion", "")
+        result["product_series"] = item.get("productSeries", "")
+        result["firmware_origin"] = fw_type  # community or commercial
+    return result
 
 
 import re
