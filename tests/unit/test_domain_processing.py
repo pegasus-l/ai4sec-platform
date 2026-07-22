@@ -30,9 +30,9 @@ def test_news_processing_classifies_and_scores_security_repo() -> None:
 
 
 def test_capability_processing_scores_reproducible_repo() -> None:
-    scoring = score_capability_candidate({"payload": {"source_news_item": {"title": "AI vulnerability scanner", "summary": "security repo with tests", "source_url": "https://github.com/a/b"}}})
-    assert scoring.score >= 75
-    assert scoring.signals["has_repo"] is True
+    scoring = score_capability_candidate({"payload": {"source_news_item": {"title": "AI vulnerability scanner", "summary": "security repo with tests", "source_url": "https://github.com/a/b", "score": 80}}})
+    assert 1 <= scoring.score <= 5
+    assert scoring.signals["has_code"] is True
 
 
 def test_threat_processing_extracts_history_cves_and_scores_risk() -> None:

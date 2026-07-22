@@ -27,7 +27,8 @@ def score_capability_candidate(item: dict[str, Any]) -> ScoreResult:
     news_score = float(news_item.get("score") or 0) / 10.0  # 归一化 0-1（资讯分 1-10）
 
     code_url = item.get("code_url") or payload.get("code_url") or news_item.get("code_url") or ""
-    has_code = 1.0 if code_url else 0.0
+    source_url = news_item.get("source_url") or payload.get("url") or item.get("source_url") or ""
+    has_code = 1.0 if (code_url or "github.com" in (source_url or "") or "gitlab.com" in (source_url or "")) else 0.0
 
     stars = float(news_item.get("stars") or payload.get("stars") or 0)
     stars_factor = min(math.log10(stars + 1) / 4.0, 1.0)  # 10K stars → 1.0
