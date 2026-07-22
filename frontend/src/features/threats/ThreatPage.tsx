@@ -172,6 +172,7 @@ function ThreatAssets({ model, openAsset }: { model: ThreatViewModel; openAsset:
     <div className="split">
       <select className="select" value={assetType} onChange={e => setAssetType(e.target.value)}><option value="all">全部资产</option><option value="firmware">固件</option><option value="image">镜像</option><option value="mirror">软件源</option><option value="openx_firmware">OpenX固件</option></select>
       <select className="select" value={confidence} onChange={e => setConfidence(e.target.value)}><option value="all">全部置信度</option><option value="direct">direct</option><option value="inferred">inferred</option><option value="weak">weak</option><option value="unknown">unknown</option></select>
+      <span className="muted small">共 {filtered.length} 个资产{assetType !== 'all' ? ` · ${assetType}` : ''}{confidence !== 'all' ? ` · ${confidence}` : ''}</span>
     </div>
     <div className="grid cols-2">{filtered.map(asset => <AssetCard key={asset.id} asset={asset} onClick={() => openAsset(asset)} />)}</div>
   </div>;
