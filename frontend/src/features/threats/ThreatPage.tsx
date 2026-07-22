@@ -167,7 +167,29 @@ function ThreatSurface({ model, openRepo, setFilters, setView }: { model: Threat
 
 function ThreatAssets({ openAsset }: { openAsset: (asset: ThreatAsset) => void }) {
   const { data: assetData, isLoading } = useQuery({ queryKey: ['threats-assets'], queryFn: fetchAssets });
-  const assets = useMemo(() => (assetData?.items || []).map(assetFromItem), [assetData]);
+  const assets = useMemo(() => {
+    const all = (assetData?.items || []).map(assetFromItem);
+    // Filter out ascendhub entries without name (tag lists, not actual images)
+    const filtered = all.filter(a => !(a.source === 'ascendhub' && (a.model === '-' || !a.model)));
+    // Dedupe firmware by modelName, merge cannVersion from cann entries
+    const firmwareMap = new Map<string, ThreatAsset>();
+    const result: ThreatAsset[] = [];
+    filtered.forEach(a => {
+      if (a.source === 'firmware') {
+        const key = a.model || a.title;
+        if (firmwareMap.has(key)) {
+          const existing = firmwareMap.get(key)!;
+          if (a.cannVersion && !existing.cannVersion) existing.cannVersion = a.cannVersion;
+        } else {
+          firmwareMap.set(key, a);
+          result.push(a);
+        }
+      } else {
+        result.push(a);
+      }
+    });
+    return result;
+  }, [assetData]);
   const [assetType, setAssetType] = useState('all');
   const [confidence, setConfidence] = useState('all');
   const filtered = assets.filter(a => (assetType === 'all' || a.type === assetType) && (confidence === 'all' || a.confidence === confidence));
@@ -209,7 +231,7 @@ function OpenxGroupCard({ deviceModel, files, onClick }: { deviceModel: string; 
         {files.map((f, i) => (
           <div key={i} className="timeline-item clickable" onClick={(e) => { e.stopPropagation(); onClick(f); }}>
             <div className="row-title"><b>{f.softwareVersion || f.version || '-'}</b><span className="badge">{f.fileType || '-'}</span></div>
-            <span className="muted small">{f.link || f.url || '-'}</span>
+            <span className="muted small" style={{ wordBreak: 'break-all', display: 'block' }}>{f.link || f.url || '-'}</span>
           </div>
         ))}
       </div>
@@ -295,12 +317,16 @@ function AssetCard({ asset, onClick }: { asset: ThreatAsset; onClick: () => void
         <div><b>{asset.downloadCount ? formatNum(asset.downloadCount) : '-'}</b><span>下载量</span></div>
       </div>
     ) : asset.type === 'image' ? (
+      <>
       <div className="asset-meta">
         <div><b>{asset.publisher || '-'}</b><span>发布者</span></div>
         <div><b>{asset.version || '-'}</b><span>版本</span></div>
         <div><b>{asset.size || '-'}</b><span>大小</span></div>
         <div><b>{asset.downloadCount ?? '-'}</b><span>下载次数</span></div>
       </div>
+      {asset.labelNames?.length ? <div className="split" style={{ marginTop: 6 }}>{asset.labelNames.map((l, i) => <span key={i} className="badge">{l}</span>)}</div> : null}
+      {asset.fullDescription && asset.fullDescription !== asset.evidence && <p className="muted small" style={{ marginTop: 6 }}>{asset.fullDescription.slice(0, 200)}{asset.fullDescription.length > 200 ? '...' : ''}</p>}
+      </>
     ) : asset.type === 'firmware' ? (
       <div className="asset-meta">
         <div><b>{asset.model || '-'}</b><span>型号</span></div>
