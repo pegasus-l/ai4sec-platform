@@ -169,7 +169,35 @@ def normalize_asset(source: str, item: dict[str, Any]) -> dict[str, Any]:
         result["file_type"] = _determine_file_type(filename)
         if device_model:
             result["title"] = device_model
+    if source == "mirrors":
+        catalog = item.get("catalog", [])
+        if isinstance(catalog, list) and catalog:
+            result["os"] = _infer_os_from_catalog(catalog, item.get("msg", ""))
+            result["category_display"] = ", ".join(catalog)
     return result
+
+
+def _infer_os_from_catalog(catalog: list[str], msg: str = "") -> str:
+    """Infer OS from catalog tags (like old huawei_mirror_scraper.py)."""
+    if "os" in catalog:
+        return msg or "Linux/Unix"
+    if "language" in catalog:
+        return "跨平台"
+    if "docker" in catalog:
+        return "容器"
+    if "tool" in catalog:
+        return "跨平台"
+    if "sdk" in catalog:
+        return "跨平台"
+    if "huawei" in catalog:
+        return "华为专属"
+    if "ascend" in catalog:
+        return "昇腾"
+    if "x86" in catalog:
+        return "x86_64"
+    if "arm" in catalog:
+        return "ARM"
+    return ""
 
 
 def _org_from_url(value: str) -> str:
