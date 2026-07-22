@@ -6,7 +6,7 @@ from typing import Any
 
 CVE_RE = re.compile(r"CVE-\d{4}-\d{4,7}", re.I)
 SA_RE = re.compile(r"(?:OpenHarmony-SA|openEuler-SA|openGauss-SA|opengauss-SA|Huawei-SA|SA)-\d{4}-\d{4,7}", re.I)
-CVSS_CONTEXT_RE = re.compile(r"[^\n\r]{0,60}\bcvss\b[^\n\r]{0,120}", re.I)
+CVSS_CONTEXT_RE = re.compile(r"[^\n\r]{0,240}\bcvss\b[^\n\r]{0,240}", re.I)
 CVSS_SCORE_RE = re.compile(r"\b(10(?:\.0)?|[0-9](?:\.\d)?)\b")
 SEVERITY_TERMS = {
     "critical": ["critical", "紧急", "严重", "致命", "rce", "remote code execution", "远程代码执行"],
@@ -118,13 +118,16 @@ def parse_markdown_table_rows(content: str) -> list[list[str]]:
 
 
 def dedupe_security_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    seen: set[str] = set()
+    seen: dict[str, dict[str, Any]] = {}
     deduped = []
     for item in items:
         key = _dedupe_key(item)
-        if not key or key in seen:
+        if not key:
             continue
-        seen.add(str(key))
+        if key in seen:
+            _merge_duplicate_security_item(seen[key], item)
+            continue
+        seen[str(key)] = item
         deduped.append(item)
     return deduped
 
@@ -132,10 +135,27 @@ def dedupe_security_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
 def _dedupe_key(item: dict[str, Any]) -> str:
     cve_id = str(item.get("cve_id") or "")
     sa_id = str(item.get("sa_id") or "")
-    source = str(item.get("source_url") or item.get("source_path") or "")
     if cve_id or sa_id:
-        return f"{cve_id}:{sa_id}:{source}"
+        return f"{cve_id}:{sa_id}"
     return f"{item.get('source_type')}:{item.get('description')}"
+
+
+def _merge_duplicate_security_item(target: dict[str, Any], incoming: dict[str, Any]) -> None:
+    for key in ["project_hints", "matched_keywords"]:
+        merged = [*target.get(key, []), *incoming.get(key, [])]
+        if merged:
+            target[key] = sorted({str(item) for item in merged if item})
+    for key, merged_key in [("source_url", "source_urls"), ("source_path", "source_paths")]:
+        values = [target.get(key), incoming.get(key), *target.get(merged_key, []), *incoming.get(merged_key, [])]
+        unique_values = [str(item) for item in values if item]
+        if unique_values:
+            target[merged_key] = sorted(set(unique_values))
+    source_repos = [target.get("source_repo"), incoming.get("source_repo"), *target.get("source_repos", []), *incoming.get("source_repos", [])]
+    unique_source_repos = [str(item) for item in source_repos if item]
+    if unique_source_repos:
+        target["source_repos"] = sorted(set(unique_source_repos))
+    if not target.get("source_repo") and incoming.get("source_repo"):
+        target["source_repo"] = incoming.get("source_repo")
 
 
 def _items_from_text(text: str, *, source_path: str, source_url: str, repo_names: list[str] | None, source_type: str, row: Any = None) -> list[dict[str, Any]]:
@@ -233,9 +253,23 @@ def _source_repo_hint(text: str, repo_names: list[str], row: Any) -> str:
     if isinstance(row, list):
         for cell in row:
             value = str(cell or "").strip()
-            if value and not CVE_RE.search(value) and not SA_RE.search(value):
+            if _looks_like_component_name(value):
                 return value[:120]
     return ""
+
+
+def _looks_like_component_name(value: str) -> bool:
+    stripped = (value or "").strip()
+    lowered = stripped.lower()
+    if not stripped or CVE_RE.search(stripped) or SA_RE.search(stripped):
+        return False
+    if lowered in {"critical", "high", "medium", "moderate", "low", "unknown", "严重", "高危", "中危", "低危", "一般", "重要"}:
+        return False
+    if "cvss" in lowered or CVSS_SCORE_RE.fullmatch(stripped) or re.fullmatch(r"\d{4}[-/.]\d{1,2}(?:[-/.]\d{1,2})?", stripped):
+        return False
+    if len(stripped) > 120 or re.search(r"\s", stripped):
+        return False
+    return bool(re.search(r"[A-Za-z_\-/]", stripped))
 
 
 def _compact(text: str, limit: int = 500) -> str:

@@ -46,9 +46,21 @@ def test_security_parser_aligns_old_severity_and_cvss_rules() -> None:
     assert infer_severity("CANN package version 8.1 release note") == "unknown"
     assert infer_severity("CVSS v3.1 base score 9.8") == "critical"
     assert infer_severity("| CVE-2026-11111 | 7.5 | CVSS v3.1 | telephony_sms_mms |") == "high"
+    long_row = "| CVE-2026-11111 | 7.5 | " + " | ".join(["x" * 24 for _ in range(7)]) + " | CVSS v3.1 | telephony_sms_mms |"
+    assert infer_severity(long_row) == "high"
     broad_items = parse_security_file("telephony_sms_mms 存在信息泄露风险", repo_names=["telephony_sms_mms"])
     assert broad_items[0]["is_broad_sec"] is True
     assert "信息泄露" in broad_items[0]["matched_keywords"]
+
+
+def test_security_parser_dedupes_same_cve_across_sources_and_safe_source_repo_hint() -> None:
+    items = parse_security_file("| ID | Severity |\n| CVE-2026-77777 | High |", source_url="https://example.com/file-a.md")
+    items.extend(parse_security_file("| ID | Severity |\n| CVE-2026-77777 | High |", source_url="https://example.com/issue/1"))
+    unique = {item["cve_id"] for item in items}
+    assert unique == {"CVE-2026-77777"}
+    assert len({(item.get("cve_id"), item.get("source_url")) for item in items}) == 2
+    severity_only = parse_security_file("| Severity | ID |\n| High | CVE-2026-88888 |", source_url="https://example.com/security.md")
+    assert severity_only[0].get("source_repo") == ""
 
 
 def test_cve_scout_builds_old_style_org_output() -> None:
@@ -109,6 +121,36 @@ def test_cve_scout_uses_org_level_security_material_pool() -> None:
     assert telephony["scan_mode"] == "from_pool"
     assert telephony["cves"][0]["severity"] == "high"
     assert result["meta"]["org_security_materials"] == 1
+
+
+def test_cve_scout_counts_same_cve_once_across_org_material_sources() -> None:
+    projects = [
+        {"org": "openharmony", "name": "security", "url": "https://gitcode.com/openharmony/security", "description": "security", "star_count": 10, "is_security_repo": True},
+        {"org": "openharmony", "name": "kernel_linux", "url": "https://gitcode.com/openharmony/kernel_linux", "description": "kernel", "star_count": 30},
+    ]
+    materials = [
+        {"org": "openharmony", "repo": "security", "material_type": "security_repo_issue", "title": "kernel_linux CVE-2026-99991", "description": "High", "html_url": "https://example.com/issues/1"},
+        {"org": "openharmony", "repo": "security", "material_type": "security_repo_file", "content": "| Component | ID | Severity |\n| kernel_linux | CVE-2026-99991 | High |", "source_url": "https://example.com/security.md"},
+    ]
+    result = build_cve_scout_from_local_records(projects, None, materials)
+    kernel = result["orgs"]["openharmony"]["projects"]["kernel_linux"]
+    assert kernel["cve_count"] == 1
+    assert result["meta"]["total_cve_ids"] == 1
+
+
+def test_cve_scout_deduped_cve_keeps_multiple_source_repo_hints() -> None:
+    projects = [
+        {"org": "openharmony", "name": "security", "url": "https://gitcode.com/openharmony/security", "description": "security", "star_count": 10, "is_security_repo": True},
+        {"org": "openharmony", "name": "component_b", "url": "https://gitcode.com/openharmony/component_b", "description": "component", "star_count": 30},
+    ]
+    materials = [
+        {"org": "openharmony", "repo": "security", "material_type": "security_repo_file", "content": "| Component | ID | Severity |\n| component_a | CVE-2026-99992 | High |", "source_url": "https://example.com/a.md"},
+        {"org": "openharmony", "repo": "security", "material_type": "security_repo_file", "content": "| Component | ID | Severity |\n| component_b | CVE-2026-99992 | High |", "source_url": "https://example.com/b.md"},
+    ]
+    result = build_cve_scout_from_local_records(projects, None, materials)
+    project = result["orgs"]["openharmony"]["projects"]["component_b"]
+    assert project["cve_count"] == 1
+    assert "component_b" in project["cves"][0].get("source_repos", [])
 
 
 def test_cve_scout_skips_security_repo_reparse_when_org_materials_present() -> None:

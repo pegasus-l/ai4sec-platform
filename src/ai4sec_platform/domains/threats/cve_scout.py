@@ -227,8 +227,8 @@ def _match_pool(project_name: str, pool: list[dict[str, Any]]) -> list[dict[str,
     for item in pool:
         hints = [str(hint).lower() for hint in item.get("project_hints") or []]
         description = str(item.get("description") or "").lower()
-        source_repo = str(item.get("source_repo") or "").lower()
-        if lowered in hints or (lowered and lowered in description) or _source_repo_matches(lowered, source_repo):
+        source_repos = [str(item.get("source_repo") or "").lower(), *[str(value).lower() for value in item.get("source_repos") or []]]
+        if lowered in hints or (lowered and lowered in description) or any(_source_repo_matches(lowered, source_repo) for source_repo in source_repos):
             matched.append(item)
     return dedupe_security_items(matched)
 
