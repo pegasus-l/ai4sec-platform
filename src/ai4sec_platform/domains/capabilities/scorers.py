@@ -20,11 +20,13 @@ def score_capability_candidate(item: dict[str, Any]) -> ScoreResult:
     资讯 score 存在 news domain_items（1-10），能力 score 存在 capabilities domain_items（1-5），
     两者独立、互不覆盖。
     """
+    # 兼容三种输入：候选 dict（from_news）/ capability domain_item（有 payload）/ 原始 news item
     payload: dict[str, Any] = item.get("payload") or {}
-    # 兼容两种输入：候选 dict（含 source_news_item）或直接 news item
-    source_news = payload.get("source_news_item")
-    news_item: dict[str, Any] = source_news if isinstance(source_news, dict) else item
-    news_score = float(news_item.get("score") or 0) / 10.0  # 归一化 0-1（资讯分 1-10）
+    candidate_news = item.get("source_news_item") or payload.get("source_news_item")
+    news_item: dict[str, Any] = candidate_news if isinstance(candidate_news, dict) else item
+    # 资讯分归一化到 0-1（score 0-100 或 source_news_score 0-100）
+    raw_news_score = float(news_item.get("score") or item.get("source_news_score") or 0)
+    news_score = min(raw_news_score / 100.0, 1.0)  # 0-100 → 0-1
 
     code_url = item.get("code_url") or payload.get("code_url") or news_item.get("code_url") or ""
     source_url = news_item.get("source_url") or payload.get("url") or item.get("source_url") or ""

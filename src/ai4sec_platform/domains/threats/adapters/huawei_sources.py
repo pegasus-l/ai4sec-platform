@@ -40,6 +40,7 @@ DEFAULT_LIVE_ORGS = [
 ]
 SECURITY_FILE_SUFFIXES = (".md", ".markdown", ".yml", ".yaml", ".json")
 SECURITY_FILE_TERMS = ["security", "advisory", "cve", "vulnerability", "vuln", "漏洞", "安全公告", "安全披露"]
+SECURITY_SOURCE_CODE_REPO_NAMES = {"cve-manager", "cve-manage", "cve-manage-bot", "cve-ease"}
 DEFAULT_ASCENDHUB_TARGETS = [
     {"hub_id": 'af85b724a7e5469ebd7ea13c3439d48f', "name": 'mindie', "url": 'https://www.hiascend.com/developer/ascendhub/detail/af85b724a7e5469ebd7ea13c3439d48f', "label": 'mindie'},
     {"hub_id": 'f1690465f39847a8b0a1f9e5b36a03c4', "name": 'mindie-motor', "url": 'https://www.hiascend.com/developer/ascendhub/detail/f1690465f39847a8b0a1f9e5b36a03c4', "label": 'mindie-motor'},
@@ -190,7 +191,7 @@ def load_huawei_live(params: dict[str, Any]) -> list[dict[str, Any]]:
     records = []
     requested = _requested_sources(params)
     if "repos" in requested:
-        records.append(_collect_repo_record(registry, params))
+        records.extend(_collect_repo_records(registry, params))
     records.extend(_collect_live_assets(registry, params, requested_sources=requested))
     return records
 
@@ -202,7 +203,7 @@ def _load_huawei_sources_with_source_cache(settings, params: dict[str, Any]) -> 
     refresh_all = bool(params.get("refresh_source_cache", False))
     records = []
     collectors = {
-        "repos": lambda: _collect_repo_record(registry, params),
+        "repos": lambda: _collect_repo_records(registry, params),
         "firmware": lambda: _collect_firmware_assets(registry, params),
         "ascendhub": lambda: _collect_ascendhub_assets(registry, params),
         "mirrors": lambda: _collect_single_asset_source(registry, "mirrors", "huawei_mirror", {"catalog": params.get("mirror_catalog", ""), "timeout_seconds": params.get("timeout_seconds", 20)}),
@@ -216,17 +217,25 @@ def _load_huawei_sources_with_source_cache(settings, params: dict[str, Any]) -> 
             records.extend(_read_source_records(cache_path))
             continue
         record = collectors[source]()
+        source_records = record if isinstance(record, list) else [record]
         cache_path.parent.mkdir(parents=True, exist_ok=True)
-        cache_path.write_text(json.dumps({"records": [record], "params": _cache_signature_payload(params)}, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
-        records.append(record)
+        cache_path.write_text(json.dumps({"records": source_records, "params": _cache_signature_payload(params)}, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+        records.extend(source_records)
     return records
 
 
 def _collect_repo_record(registry: SourceRegistry, params: dict[str, Any]) -> dict[str, Any]:
+    return _collect_repo_records(registry, params)[0]
+
+
+def _collect_repo_records(registry: SourceRegistry, params: dict[str, Any]) -> list[dict[str, Any]]:
     repos = _collect_live_repos(registry, params)
-    repos = _enrich_security_repos(registry, repos, params)
+    repos, org_security_materials = _enrich_security_repos(registry, repos, params)
     repos = _enrich_project_issues(registry, repos, params)
-    return {"source": "repos", "path": "connector:repos", "exists": True, "items": repos, "raw": {"projects": repos, "mode": "live"}, "mode": "live"}
+    records = [{"source": "repos", "path": "connector:repos", "exists": True, "items": repos, "raw": {"projects": repos, "mode": "live"}, "mode": "live"}]
+    if org_security_materials:
+        records.append({"source": "org_security_materials", "path": "connector:security_repos", "exists": True, "items": org_security_materials, "raw": {"mode": "live", "orgs": sorted({str(item.get("org") or "") for item in org_security_materials if item.get("org")})}, "mode": "live"})
+    return records
 
 
 def _requested_sources(params: dict[str, Any]) -> set[str]:
@@ -313,20 +322,19 @@ def _fetch_paginated_repo_items(connector, platform: str, owner: str, repo_name:
     return items
 
 
-def _enrich_security_repos(registry: SourceRegistry, repos: list[dict[str, Any]], params: dict[str, Any]) -> list[dict[str, Any]]:
+def _enrich_security_repos(registry: SourceRegistry, repos: list[dict[str, Any]], params: dict[str, Any]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     if not repos or not params.get("fetch_security_details", True):
-        return repos
+        return repos, []
     grouped = group_projects_by_org(repos)
     security = discover_security_repos(grouped)
-    issue_pages = int(params.get("security_issue_pages", 2 if _full_scan(params) else 1))
+    issue_pages = int(params.get("security_issue_pages", 20 if _full_scan(params) else 1))
     pr_pages = int(params.get("security_pr_pages", 1 if _full_scan(params) else 0))
-    max_files = int(params.get("security_file_limit", 20 if _full_scan(params) else 3))
-    max_security_repos = int(params.get("security_repo_limit", 20 if _full_scan(params) else 2))
-    max_content_dirs = int(params.get("security_content_dir_limit", 80 if _full_scan(params) else 20))
+    max_files = int(params.get("security_file_limit", 200 if _full_scan(params) else 3))
+    max_security_repos = int(params.get("security_repo_limit", 50 if _full_scan(params) else 2))
+    max_content_dirs = int(params.get("security_content_dir_limit", 200 if _full_scan(params) else 20))
     by_key = {(repo.get("platform"), repo.get("org"), repo.get("name")): repo for repo in repos}
+    org_security_materials: list[dict[str, Any]] = []
     for org, sec_data in security.items():
-        repo_names = [str(repo.get("name") or "") for repo in grouped.get(org, []) if repo.get("name")]
-        org_security_materials: list[dict[str, Any]] = []
         for sec_repo in (sec_data.get("security_repos") or [])[:max_security_repos]:
             platform = sec_repo.get("platform") or _platform_from_url(sec_repo.get("url") or "")
             owner = sec_repo.get("org") or org
@@ -342,6 +350,7 @@ def _enrich_security_repos(registry: SourceRegistry, repos: list[dict[str, Any]]
                 issues.extend(result.items)
                 if len(result.items) < 100:
                     break
+            org_security_materials.extend(_security_issue_materials(issues, platform=platform, org=owner, repo=repo_name))
             pull_requests = []
             for page in range(1, pr_pages + 1):
                 result = connector.fetch(SourceFetchRequest(source_name=f"{platform}:{owner}/{repo_name}:prs", params={"resource": "pull_requests", "owner": owner, "repo": repo_name, "page": page, "per_page": 100, "timeout_seconds": params.get("timeout_seconds", 15)}))
@@ -350,19 +359,39 @@ def _enrich_security_repos(registry: SourceRegistry, repos: list[dict[str, Any]]
                 pull_requests.extend(result.items)
                 if len(result.items) < 100:
                     break
-            security_files = _fetch_security_files(connector, platform, owner, repo_name, max_files=max_files, max_dirs=max_content_dirs)
-            org_security_materials.extend(security_files)
+            org_security_materials.extend(_security_pr_materials(pull_requests, platform=platform, org=owner, repo=repo_name))
+            security_files = []
+            if params.get("parse_security_source_repos", False) or not _is_security_source_code_repo(repo_name):
+                security_files = _fetch_security_files(connector, platform, owner, repo_name, max_files=max_files, max_dirs=max_content_dirs)
+                org_security_materials.extend(_security_file_materials(security_files, platform=platform, org=owner, repo=repo_name))
             key = (platform, owner, repo_name)
             target = by_key.get(key) or sec_repo
             target["issues"] = issues
             target["pull_requests"] = pull_requests
             target["security_files"] = security_files
             target["is_security_repo"] = True
-        if org_security_materials:
-            for repo in grouped.get(org, []):
-                repo["org_security_materials"] = org_security_materials
-                repo["org_security_repo_count"] = len(sec_data.get("security_repos") or [])
-    return repos
+            target["org_security_repo_count"] = len(sec_data.get("security_repos") or [])
+    return repos, org_security_materials
+
+
+def _security_issue_materials(issues: list[dict[str, Any]], *, platform: str, org: str, repo: str) -> list[dict[str, Any]]:
+    return [_security_material(item, material_type="security_repo_issue", platform=platform, org=org, repo=repo) for item in issues]
+
+
+def _security_pr_materials(pull_requests: list[dict[str, Any]], *, platform: str, org: str, repo: str) -> list[dict[str, Any]]:
+    return [_security_material(item, material_type="security_repo_pr", platform=platform, org=org, repo=repo) for item in pull_requests]
+
+
+def _security_file_materials(files: list[dict[str, Any]], *, platform: str, org: str, repo: str) -> list[dict[str, Any]]:
+    return [_security_material(item, material_type="security_repo_file", platform=platform, org=org, repo=repo) for item in files]
+
+
+def _security_material(item: dict[str, Any], *, material_type: str, platform: str, org: str, repo: str) -> dict[str, Any]:
+    return {**item, "material_type": material_type, "platform": platform, "org": org, "repo": repo}
+
+
+def _is_security_source_code_repo(repo_name: str) -> bool:
+    return str(repo_name or "").lower() in SECURITY_SOURCE_CODE_REPO_NAMES
 
 
 def _fetch_security_files(connector, platform: str, owner: str, repo_name: str, *, max_files: int, max_dirs: int) -> list[dict[str, Any]]:
