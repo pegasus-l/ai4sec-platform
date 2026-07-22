@@ -6,6 +6,8 @@ import { Badge, Card, Drawer, EmptyState, MetricCard } from '../../components/ui
 import type { ThreatAsset, ThreatRepo, ThreatViewModel } from '../../types/threat';
 import { adaptThreatContract } from './threatAdapters';
 import { ThreatGraphView } from './graph/ThreatGraphView';
+import { RepoDrawerContent } from './RepoDrawer';
+import { useDrawerStack } from '../../components/DrawerStack';
 
 type ViewId = 'today' | 'repos' | 'surface' | 'assets' | 'graph' | 'queue' | 'ops-tasks' | 'ops-sources' | 'ops-quality';
 
@@ -36,10 +38,18 @@ interface FilterState {
 export function ThreatPage() {
   const [view, setView] = useState<ViewId>('today');
   const [filters, setFilters] = useState<FilterState>({ search: '', grade: 'all', surface: 'all', onlyCve: false, onlyHigh: false });
-  const [selectedRepo, setSelectedRepo] = useState<ThreatRepo | null>(null);
   const [selectedAsset, setSelectedAsset] = useState<ThreatAsset | null>(null);
+  const { push } = useDrawerStack();
   const { data, isLoading, error } = useQuery({ queryKey: ['frontend-contract'], queryFn: fetchFrontendContract });
   const model = useMemo(() => data ? adaptThreatContract(data) : null, [data]);
+
+  const openRepo = (repo: ThreatRepo) => {
+    push({
+      title: '仓库详情',
+      subtitle: `${repo.org}/${repo.name}`,
+      render: () => model ? <RepoDrawerContent repo={repo} model={model} onViewGraph={() => setView('graph')} onOpenAsset={setSelectedAsset} /> : null,
+    });
+  };
 
   const visibleRepos = useMemo(() => filterRepos(model?.repos ?? [], filters), [model, filters]);
   const activeTitle = navGroups.flatMap(group => group.items).find(item => item.id === view)?.title ?? '威胁洞察';
@@ -64,10 +74,9 @@ export function ThreatPage() {
       <div className="content-body view">
         {isLoading && <EmptyState title="正在加载威胁洞察数据" description="从 /api/frontend/v9 拉取统一契约。" />}
         {error && <EmptyState title="加载失败" description={(error as Error).message} />}
-        {model && renderView(view, model, visibleRepos, filters, setFilters, setSelectedRepo, setSelectedAsset)}
+        {model && renderView(view, model, visibleRepos, filters, setFilters, openRepo, setSelectedAsset)}
       </div>
     </section>
-    <RepoDrawer repo={selectedRepo} onClose={() => setSelectedRepo(null)} />
     <AssetDrawer asset={selectedAsset} onClose={() => setSelectedAsset(null)} />
   </main>;
 }
@@ -169,12 +178,11 @@ function AssetCard({ asset, onClick }: { asset: ThreatAsset; onClick: () => void
   return <button className="asset-card" onClick={onClick}><span className="label">{asset.source}</span><strong>{asset.title}</strong><p>{asset.summary || asset.sourceType}</p><div><Badge tone="violet">{asset.sourceType}</Badge>{asset.score > 0 && <Badge tone="amber">{Math.round(asset.score)}</Badge>}</div></button>;
 }
 
-function RepoDrawer({ repo, onClose }: { repo: ThreatRepo | null; onClose: () => void }) {
-  return <Drawer open={Boolean(repo)} title={repo?.title ?? ''} subtitle={repo?.url} onClose={onClose}>{repo && <div className="drawer-grid"><MetricCard label="风险分" value={Math.round(repo.score)} tone="red" /><MetricCard label="CVE/SA/Sec" value={`${repo.cve}/${repo.sa}/${repo.sec}`} tone="amber" /><MetricCard label="攻击面" value={repo.surface} tone="sky" /><MetricCard label="Stars" value={repo.stars} tone="green" /><Card><PanelTitle title="评分拆解" /><ScoreBreakdown breakdown={repo.breakdown} /></Card><Card><PanelTitle title="证据链" /><EvidenceList items={repo.evidence} /></Card><Card><PanelTitle title="研判原因" /><EvidenceList items={repo.reasons} /></Card><Card><PanelTitle title="原始字段" /><pre className="json-preview">{JSON.stringify(repo.raw, null, 2).slice(0, 5000)}</pre></Card></div>}</Drawer>;
-}
-
 function AssetDrawer({ asset, onClose }: { asset: ThreatAsset | null; onClose: () => void }) {
-  return <Drawer open={Boolean(asset)} title={asset?.title ?? ''} subtitle={asset?.source} onClose={onClose}>{asset && <div className="drawer-grid"><MetricCard label="来源" value={asset.source} tone="violet" /><MetricCard label="状态" value={asset.status} tone="green" /><Card><PanelTitle title="资产说明" /><p>{asset.summary || '暂无摘要。'}</p>{asset.url && <a href={asset.url} target="_blank" rel="noreferrer">打开来源</a>}</Card><Card><PanelTitle title="原始字段" /><pre className="json-preview">{JSON.stringify(asset.raw, null, 2).slice(0, 6000)}</pre></Card></div>}</Drawer>;
+  return <Drawer open={Boolean(asset)} title={asset?.title ?? ''} subtitle={asset ? `${asset.source} · ${asset.sourceType}` : ''} onClose={onClose}>{asset && <>
+    <div className="grid cols-2"><div className="detail-card card"><h3>资产概览</h3><p>{asset.summary || '暂无摘要。'}</p><div className="asset-meta"><div><b>{asset.raw.modelName as string || asset.title}</b><span>型号/名称</span></div><div><b>{asset.raw.tag as string || asset.raw.firmwareVersion as string || '-'}</b><span>版本/tag</span></div><div><b>{asset.raw.packageCount as string || asset.raw.downloadCount as string || '-'}</b><span>规模</span></div><div><b>{asset.raw.updateTime as string || asset.raw.latestRelease as string || '-'}</b><span>更新时间</span></div></div></div><div className="detail-card card"><h3>推断关联仓库（待复核）</h3><p className="muted small">资产到代码仓关系来自命名、产品线和生态推断，需要人工复核。</p><p>当前无显式源码仓证据。</p></div></div>
+    <div className="detail-card card"><h3>建议动作</h3><div className="split"><button className="btn primary">加入跟踪</button><button className="btn">加入解包</button><button className="btn">加入 SBOM</button><button className="btn warn">标记关联待复核</button></div></div>
+  </>}</Drawer>;
 }
 
 function FiltersBar({ filters, setFilters, grades, surfaces }: { filters: FilterState; setFilters: (filters: FilterState) => void; grades: string[]; surfaces: string[] }) {
