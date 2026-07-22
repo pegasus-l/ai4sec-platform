@@ -74,15 +74,15 @@ export function ThreatPage() {
       <div className="content-body view">
         {isLoading && <EmptyState title="正在加载威胁洞察数据" description="从 /api/frontend/v9 拉取统一契约。" />}
         {error && <EmptyState title="加载失败" description={(error as Error).message} />}
-        {model && renderView(view, model, visibleRepos, filters, setFilters, openRepo, setSelectedAsset)}
+        {model && renderView(view, model, visibleRepos, filters, setFilters, openRepo, setSelectedAsset, setView)}
       </div>
     </section>
     <AssetDrawer asset={selectedAsset} onClose={() => setSelectedAsset(null)} />
   </main>;
 }
 
-function renderView(view: ViewId, model: ThreatViewModel, repos: ThreatRepo[], filters: FilterState, setFilters: (filters: FilterState) => void, openRepo: (repo: ThreatRepo) => void, openAsset: (asset: ThreatAsset) => void) {
-  if (view === 'today') return <ThreatToday model={model} openRepo={openRepo} />;
+function renderView(view: ViewId, model: ThreatViewModel, repos: ThreatRepo[], filters: FilterState, setFilters: (filters: FilterState) => void, openRepo: (repo: ThreatRepo) => void, openAsset: (asset: ThreatAsset) => void, setView: (view: ViewId) => void) {
+  if (view === 'today') return <ThreatToday model={model} openRepo={openRepo} setView={setView} setFilters={setFilters} />;
   if (view === 'repos') return <ThreatRepos model={model} repos={repos} filters={filters} setFilters={setFilters} openRepo={openRepo} />;
   if (view === 'surface') return <ThreatSurface model={model} openRepo={openRepo} />;
   if (view === 'assets') return <ThreatAssets model={model} openAsset={openAsset} />;
@@ -91,15 +91,21 @@ function renderView(view: ViewId, model: ThreatViewModel, repos: ThreatRepo[], f
   return <ThreatOps model={model} kind={view} />;
 }
 
-function ThreatToday({ model, openRepo }: { model: ThreatViewModel; openRepo: (repo: ThreatRepo) => void }) {
+function ThreatToday({ model, openRepo, setView, setFilters }: { model: ThreatViewModel; openRepo: (repo: ThreatRepo) => void; setView: (view: ViewId) => void; setFilters: (filters: FilterState) => void }) {
   const { summary } = model;
   const focus = model.today.slice(0, 4);
+  const kpiJump = (type: 'gradeA' | 'securitySignals' | 'assetChanges' | 'weakRelations') => {
+    if (type === 'gradeA') { setFilters({ search: '', grade: 'A', surface: 'all', onlyCve: false, onlyHigh: false }); setView('repos'); return; }
+    if (type === 'securitySignals') { setFilters({ search: '', grade: 'all', surface: 'all', onlyCve: false, onlyHigh: false }); setView('repos'); return; }
+    if (type === 'assetChanges') { setView('assets'); return; }
+    if (type === 'weakRelations') { setView('graph'); return; }
+  };
   return <div className="grid">
     <div className="grid cols-4">
-      <MetricCard label="A级/高风险仓库" value={summary.highRisk} hint="点击代码仓可筛选高风险目标" tone="red" />
-      <MetricCard label="安全线索项目" value={summary.withCve} hint="命中过 CVE / SA / security issue" tone="amber" />
-      <MetricCard label="资产变化" value={summary.assets} hint="固件/镜像/Hub/OpenX 资产条目" tone="green" />
-      <MetricCard label="CVE / SA" value={`${summary.uniqueCve}/${summary.totalSa}`} hint={`${summary.totalCve} 条 CVE 记录`} tone="sky" />
+      <MetricCard label="A级仓库" value={summary.highRisk} hint="风险评分为 A 的代码仓；点击进入代码仓并筛选 A 级。" tone="red" onClick={() => kpiJump('gradeA')} />
+      <MetricCard label="安全线索项目" value={summary.withCve} hint="命中过 CVE / SA / security issue 的代码仓；点击查看有安全线索的代码仓。" tone="amber" onClick={() => kpiJump('securitySignals')} />
+      <MetricCard label="资产变化" value={summary.assets} hint="今日新增或版本变化的固件/镜像资产；点击查看相关资产。" tone="green" onClick={() => kpiJump('assetChanges')} />
+      <MetricCard label="待复核关联" value={summary.highRisk} hint="inferred / weak 的仓库-资产关系；点击进入关联图谱查看弱关联。" tone="violet" onClick={() => kpiJump('weakRelations')} />
     </div>
     <div className="grid cols-2">
       {focus.map((repo) => <button className="focus-card" key={repo.id} onClick={() => openRepo(repo)}>
