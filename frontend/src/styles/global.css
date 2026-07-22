@@ -26,7 +26,7 @@
     html, body { height: 100%; }
     body {
       margin: 0;
-      overflow: hidden;
+      overflow: auto;
       color: var(--text);
       font-family: Inter, "Noto Sans SC", "Microsoft YaHei", system-ui, sans-serif;
       background:

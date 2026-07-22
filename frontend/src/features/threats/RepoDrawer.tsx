@@ -69,11 +69,6 @@ export function RepoDrawerContent({ repo, model, onViewGraph, onOpenAsset }: Rep
         <p className="muted small" style={{ marginTop: 10 }}>
           {repo.summary}
         </p>
-        {repo.url && (
-          <a href={repo.url} target="_blank" rel="noreferrer" className="muted small" style={{ display: 'inline-block', marginTop: 6 }}>
-            {repo.url}
-          </a>
-        )}
       </Card>
 
       {/* 2. Vuln / security线索 — inline timeline like demo v12 renderVulnList */}

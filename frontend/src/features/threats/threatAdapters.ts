@@ -19,6 +19,18 @@ import {
 // ============================================================================
 // Helpers
 // ============================================================================
+function formatBytes(bytes: number): string {
+  if (!bytes || bytes <= 0) return '';
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  let value = bytes;
+  let unitIndex = 0;
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024;
+    unitIndex++;
+  }
+  return `${value.toFixed(1)} ${units[unitIndex]}`;
+}
+
 const asRecord = (value: unknown): Record<string, unknown> =>
   value && typeof value === 'object' && !Array.isArray(value)
     ? (value as Record<string, unknown>)
@@ -246,18 +258,18 @@ function assetFromItem(item: Record<string, unknown>): ThreatAsset {
     status: asString(item.status, 'active'),
     tags: asArray<string>(item.tags),
     raw: payload,
-    // v12 extended fields (mapped from raw)
+    // v12 extended fields (mapped from raw — mirrors have repoName/storageSize/validateTime)
     type: inferredType,
-    label: asString(raw.label ?? raw.displayName, source),
-    model: asString(raw.model ?? raw.name ?? raw.displayName),
-    version: asString(raw.version ?? raw.tag ?? raw.releaseCount),
-    count: asString(raw.count ?? raw.storageSize ?? raw.downloadCount),
-    latest: asString(raw.latest ?? raw.validateTime ?? raw.updated_at),
-    meta: asString(raw.meta ?? raw.msg),
-    link: asString(raw.webUrl ?? raw.url ?? raw.downloadUrl),
+    label: asString(raw.displayName ?? raw.name ?? raw.repoName, source),
+    model: asString(raw.repoName ?? raw.displayName ?? raw.name, '-'),
+    version: asString(raw.tag ?? (raw.releaseCount && raw.releaseCount !== 0 ? String(raw.releaseCount) : ''), '-') || '-',
+    count: formatBytes(asNumber(raw.storageSize)) || asString(raw.packageCount ?? raw.downloadCount, '-'),
+    latest: asString(raw.validateTime ?? raw.updateTime, '-'),
+    meta: asString(raw.msg),
+    link: asString(raw.mirrorPath ?? raw.webUrl ?? raw.url),
     confidence: inferAssetConfidence(raw),
     repos: asArray<string>(raw.repos),
-    evidence: asString(raw.evidence ?? raw.msg ?? payload.summary),
+    evidence: asString(raw.msg ?? raw.mirrorPath ?? payload.summary),
   };
 }
 

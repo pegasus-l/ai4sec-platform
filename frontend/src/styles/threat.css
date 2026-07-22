@@ -5,7 +5,7 @@
 .hero p { margin: 8px 0 0; color: var(--muted); font-size: 13px; line-height: 1.55; max-width: 880px; }
 .hero-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; justify-content: flex-end; }
 .hero-actions .filters { margin: 0; display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
-.badge-red, .badge.A { color:#bbf7d0; border-color:rgba(52,211,153,.36); background:rgba(52,211,153,.08); }
+.badge-red, .badge.A { color:#fda4af; border-color:rgba(251,113,133,.36); background:rgba(251,113,133,.08); }
 .badge-amber, .badge.B { color:#fde68a; border-color:rgba(245,158,11,.34); background:rgba(245,158,11,.08); }
 .badge-slate, .badge.C { color:#cbd5e1; border-color:rgba(148,163,184,.26); background:rgba(148,163,184,.08); }
 .badge-sky { color:var(--sky); border-color:rgba(56,189,248,.34); background:rgba(56,189,248,.08); }
