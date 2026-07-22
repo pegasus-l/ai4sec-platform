@@ -32,7 +32,7 @@ def page_contract(conn: sqlite3.Connection) -> dict[str, Any]:
         "threat": {
             "today": [_threat_item(item) for item in threat_targets[:30]],
             "targets": [_threat_item(item) for item in threat_targets],
-            "assets": [_threat_item(item) for item in _items(domain_items.list_items(conn, "threats", item_type="asset", limit=300))],
+            "assets": [_threat_item(item) for item in _items(domain_items.list_items(conn, "threats", item_type="asset", limit=500))],
             "tracking": operations.human_queue(conn, "threats")["items"],
             "graph": _threat_graph(threat_targets),
             "riskAssessments": [_risk_assessment(item) for item in threat_targets if (item.get("payload") or {}).get("risk_assessment")],
