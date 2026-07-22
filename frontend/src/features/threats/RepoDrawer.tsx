@@ -32,8 +32,10 @@ interface RepoDrawerContentProps {
   onOpenAsset?: (asset: ThreatAsset) => void;
 }
 
-export function RepoDrawerContent({ repo, model, onViewGraph, onOpenAsset }: RepoDrawerContentProps) {
+export function RepoDrawerContent({ repo: initialRepo, model, onViewGraph, onOpenAsset }: RepoDrawerContentProps) {
   const { push } = useDrawerStack();
+  // Always use latest repo from model (updates after AI calibration via invalidateQueries)
+  const repo = model.repos.find(r => r.id === initialRepo.id) ?? initialRepo;
   const vulns = model.vulnDetails?.[repo.id] ?? [];
   const [aiReview, setAiReview] = useState<AiReviewResult | null>(null);
   const [aiLoading, setAiLoading] = useState(false);
