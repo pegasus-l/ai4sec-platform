@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from ai4sec_platform.pipelines.base import PipelineDefinition
+from ai4sec_platform.pipelines.steps.vulnerability_event import AggregateVulnerabilityEventsStep
 from ai4sec_platform.pipelines.steps.vulnerability_raw import BuildVulnerabilityMaterialItemsStep, ImportVulnerabilityRawStep, NormalizeVulnerabilityRawStep
 from ai4sec_platform.pipelines.steps.vulnerability_knowledge import ExtractVulnerabilityKnowledgeStep, SelectVulnerabilityKnowledgeCandidatesStep
 
@@ -18,4 +19,12 @@ def vulnerability_knowledge_pipeline() -> PipelineDefinition:
         name="vulnerabilities.knowledge_extraction_pipeline",
         domain="vulnerabilities",
         steps=[SelectVulnerabilityKnowledgeCandidatesStep(), ExtractVulnerabilityKnowledgeStep()],
+    )
+
+
+def vulnerability_event_pipeline() -> PipelineDefinition:
+    return PipelineDefinition(
+        name="vulnerabilities.event_aggregation_pipeline",
+        domain="vulnerabilities",
+        steps=[AggregateVulnerabilityEventsStep()],
     )
