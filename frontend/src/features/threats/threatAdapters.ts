@@ -281,9 +281,10 @@ export function assetFromItem(item: Record<string, unknown>): ThreatAsset {
   const downloadCount = isMirror ? asNumber(raw.downloadCount) : isAscendhub ? asNumber(raw.downloads) : 0;
   const storageBytes = isMirror ? asNumber(raw.storageSize) : 0;
 
-  // latest: mirrors→validateTime, ascendhub→updateTime
+  // latest: mirrors→validateTime, ascendhub→updateTime, openx→last_modified
   const latestField = isMirror ? asString(raw.validateTime)
     : isAscendhub ? asString(raw.updateTime)
+    : isOpenx ? asString(raw.last_modified)
     : '';
 
   return {
@@ -317,7 +318,7 @@ export function assetFromItem(item: Record<string, unknown>): ThreatAsset {
     mirrorPath: isMirror ? asString(raw.mirrorPath) : '',
     publisher: isAscendhub ? asString(raw.publisher) : '',
     labelNames: isAscendhub ? asArray<string>(raw.labelNames) : [],
-    size: isAscendhub ? asString(raw.size) : '',
+    size: isAscendhub ? asString(raw.size) : isOpenx ? asString(raw.size) : '',
     fullDescription: isAscendhub ? asString(raw.fullDescription ?? raw.description) : '',
     cannVersion: isFirmware ? asString(raw.cannVersion) : '',
     online: isMirror ? Boolean(raw.online) : isAscendhub ? Boolean(raw.open) : undefined,

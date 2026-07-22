@@ -231,6 +231,7 @@ function OpenxGroupCard({ deviceModel, files, onClick }: { deviceModel: string; 
         {files.map((f, i) => (
           <div key={i} className="timeline-item clickable" onClick={(e) => { e.stopPropagation(); onClick(f); }}>
             <div className="row-title"><b>{f.softwareVersion || f.version || '-'}</b><span className="badge">{f.fileType || '-'}</span></div>
+            <span className="muted small">{f.size || '-'} | {f.latest || '-'}</span>
             <span className="muted small" style={{ wordBreak: 'break-all', display: 'block' }}>{f.link || f.url || '-'}</span>
           </div>
         ))}
@@ -339,7 +340,9 @@ function AssetCard({ asset, onClick }: { asset: ThreatAsset; onClick: () => void
         <div><b>{asset.deviceModel || asset.model || '-'}</b><span>设备型号</span></div>
         <div><b>{asset.softwareVersion || asset.version || '-'}</b><span>软件版本</span></div>
         <div><b>{asset.fileType || '-'}</b><span>文件类型</span></div>
+        <div><b>{asset.size || '-'}</b><span>大小</span></div>
         <div><b>{asset.category || '-'}</b><span>分类</span></div>
+        <div><b>{asset.latest || '-'}</b><span>修改时间</span></div>
       </div>
     ) : (
       <div className="asset-meta"><div><b>{asset.model || '-'}</b><span>型号/名称</span></div><div><b>{asset.version || '-'}</b><span>版本</span></div><div><b>{asset.count || '-'}</b><span>数量</span></div><div><b>{asset.latest || '-'}</b><span>更新</span></div></div>
