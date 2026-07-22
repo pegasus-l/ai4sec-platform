@@ -255,30 +255,61 @@ function assetFromItem(item: Record<string, unknown>): ThreatAsset {
   const raw = asRecord(payload.raw);
   const source = asString(item.source ?? payload.source, 'asset');
   const inferredType = inferAssetType(source, raw);
+  // Different sources have different field names — map per source
+  const isMirror = source === 'mirrors';
+  const isAscendhub = source === 'ascendhub';
+  const isFirmware = source === 'firmware';
+  const isOpenx = source === 'openx_huawei';
+
+  // model/name: mirrors→displayName, firmware→modelName, ascendhub→name, openx→name
+  const modelField = isMirror ? raw.displayName
+    : isFirmware ? raw.modelName ?? raw.productName
+    : isAscendhub ? raw.name
+    : isOpenx ? raw.name
+    : raw.displayName ?? raw.name;
+
+  // version: only ascendhub.tag is a real version (e.g. "3.0.0-800I-A3")
+  // mirrors.tag is a category label ("gitcode"), NOT a version — skip it
+  const versionField = isAscendhub
+    ? asString(raw.tag)
+    : isMirror
+      ? (raw.releaseCount && raw.releaseCount !== 0 ? String(raw.releaseCount) : '')
+      : '';
+
+  // count: mirrors→packageCount, ascendhub→downloads (different field name!)
+  const packageCount = isMirror ? asNumber(raw.packageCount) : 0;
+  const downloadCount = isMirror ? asNumber(raw.downloadCount) : isAscendhub ? asNumber(raw.downloads) : 0;
+  const storageBytes = isMirror ? asNumber(raw.storageSize) : 0;
+
+  // latest: mirrors→validateTime, ascendhub→updateTime
+  const latestField = isMirror ? asString(raw.validateTime)
+    : isAscendhub ? asString(raw.updateTime)
+    : '';
+
   return {
     id: asString(item.id ?? payload.item_key ?? item.title),
-    title: asString(item.title ?? payload.title ?? raw.name ?? raw.displayName, '未命名资产'),
+    title: asString(item.title ?? payload.title ?? modelField, '未命名资产'),
     source,
     sourceType: asString(payload.source_type ?? raw.source_type ?? source),
     category: asString(raw.category ?? raw.catalog ?? source),
-    url: asString(item.source_url ?? payload.url ?? raw.url ?? raw.downloadUrl ?? raw.webUrl),
+    url: asString(item.source_url ?? payload.url ?? raw.url ?? raw.webUrl),
     summary: asString(item.summary ?? payload.summary ?? raw.description ?? raw.msg),
     score: asNumber(item.score ?? payload.risk_score),
     status: asString(item.status, 'active'),
     tags: asArray<string>(item.tags),
     raw: payload,
-    // v12 extended fields (mapped from raw — mirrors have repoName/storageSize/validateTime)
+    // v12 extended fields — mapped per source
     type: inferredType,
-    label: asString(raw.displayName ?? raw.name ?? raw.repoName, source),
-    model: asString(raw.repoName ?? raw.displayName ?? raw.name, '-'),
-    version: asString(raw.tag ?? (raw.releaseCount && raw.releaseCount !== 0 ? String(raw.releaseCount) : ''), '-') || '-',
-    count: formatBytes(asNumber(raw.storageSize)) || asString(raw.packageCount ?? raw.downloadCount, '-'),
-    latest: asString(raw.validateTime ?? raw.updateTime, '-'),
-    meta: asString(raw.msg),
+    label: asString(modelField, source),
+    model: asString(modelField, '-'),
+    version: asString(versionField) || '-',
+    count: packageCount > 0 ? String(packageCount) : (storageBytes > 0 ? formatBytes(storageBytes) : '-'),
+    latest: asString(latestField) || '-',
+    meta: asString(raw.msg ?? raw.description),
     link: asString(raw.mirrorPath ?? raw.webUrl ?? raw.url),
     confidence: inferAssetConfidence(raw),
     repos: asArray<string>(raw.repos),
-    evidence: asString(raw.msg ?? raw.mirrorPath ?? payload.summary),
+    evidence: asString(raw.msg ?? raw.description ?? payload.summary),
   };
 }
 
