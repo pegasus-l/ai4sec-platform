@@ -235,10 +235,10 @@ function repoFromItem(item: Record<string, unknown>): ThreatRepo {
 
 function inferAssetType(source: string, raw: Record<string, unknown>): string {
   const sourceLower = source.toLowerCase();
-  if (sourceLower.includes('firmware') || sourceLower.includes('openx')) return 'openx_firmware';
+  if (sourceLower.includes('openx')) return 'openx_firmware';
+  if (sourceLower.includes('firmware')) return 'firmware';
   if (sourceLower.includes('ascendhub') || sourceLower.includes('image')) return 'image';
   if (sourceLower.includes('mirror')) return 'mirror';
-  if (sourceLower.includes('firmware')) return 'firmware';
   return asString(raw.type ?? raw.source_type, 'unknown');
 }
 
