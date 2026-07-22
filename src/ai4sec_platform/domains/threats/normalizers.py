@@ -91,9 +91,66 @@ def normalize_firmware(source: str, item: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+import re
+from typing import Any
+
+
+def _determine_file_type(filename: str) -> str:
+    ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+    type_map = {
+        "bin": "firmware_bin", "cc": "system_software_cc", "pat": "patch_file",
+        "zip": "compressed_archive", "efs": "efs_patch", "dat": "license_dat",
+    }
+    return type_map.get(ext, f"other_{ext}" if ext else "unknown")
+
+
+def _parse_filename_metadata(filename: str) -> tuple[str, str, str]:
+    """Extract device_model, software_version, version_variant from firmware filename."""
+    device_model = ""
+    software_version = ""
+    version_variant = ""
+    name_without_ext = filename.rsplit(".", 1)[0] if "." in filename else filename
+
+    m = re.match(r'^([A-Za-z0-9][A-Za-z0-9\-]+?)_V(\d+R\d+[A-Za-z0-9]*?)(?:_|$)', name_without_ext)
+    if not m:
+        m = re.match(r'^([A-Za-z0-9][A-Za-z0-9\-]+?)-V(\d+R\d+[A-Za-z0-9]*?)(?:_|-|$)', name_without_ext)
+    if m:
+        device_model = m.group(1)
+        software_version = "V" + m.group(2)
+        rest = name_without_ext[m.end():]
+        if rest.startswith(("_", "-")):
+            rest = rest[1:]
+        version_variant = rest
+        return device_model, software_version, version_variant
+
+    m = re.match(r'^V(\d+R\d+[A-Za-z0-9]*)', name_without_ext)
+    if m:
+        software_version = "V" + m.group(1)
+        rest = name_without_ext[len(software_version):]
+        if rest.startswith("_"):
+            rest = rest[1:]
+        version_variant = rest
+        return device_model, software_version, version_variant
+
+    ver_pos = re.search(r'V\d+R\d+', name_without_ext)
+    if ver_pos:
+        prefix = name_without_ext[:ver_pos.start()]
+        ver_match = re.match(r'V(\d+R\d+[A-Za-z0-9]*)', name_without_ext[ver_pos.start():])
+        if ver_match:
+            device_model = prefix
+            software_version = "V" + ver_match.group(1)
+            after_ver = name_without_ext[ver_pos.start() + len(software_version):]
+            if after_ver.startswith(("_", "-")):
+                after_ver = after_ver[1:]
+            version_variant = after_ver
+            return device_model, software_version, version_variant
+
+    return device_model, software_version, version_variant
+
+
 def normalize_asset(source: str, item: dict[str, Any]) -> dict[str, Any]:
     title = item.get("title") or item.get("displayName") or item.get("name") or item.get("repoName") or item.get("productModel") or source
-    return {
+    result = {
         "item_key": f"asset:{source}:{hashlib.sha1(repr(item).encode('utf-8')).hexdigest()[:16]}",
         "source": source,
         "source_type": "asset",
@@ -103,6 +160,16 @@ def normalize_asset(source: str, item: dict[str, Any]) -> dict[str, Any]:
         "risk_score": item.get("packageCount") or item.get("downloadCount"),
         "raw": item,
     }
+    if source == "openx_huawei":
+        filename = item.get("name") or ""
+        device_model, software_version, version_variant = _parse_filename_metadata(filename)
+        result["device_model"] = device_model
+        result["software_version"] = software_version
+        result["version_variant"] = version_variant
+        result["file_type"] = _determine_file_type(filename)
+        if device_model:
+            result["title"] = device_model
+    return result
 
 
 def _org_from_url(value: str) -> str:

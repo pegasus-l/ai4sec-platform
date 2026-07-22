@@ -271,8 +271,10 @@ function AssetCard({ asset, onClick }: { asset: ThreatAsset; onClick: () => void
       </div>
     ) : asset.type === 'openx_firmware' ? (
       <div className="asset-meta">
+        <div><b>{asset.deviceModel || asset.model || '-'}</b><span>设备型号</span></div>
+        <div><b>{asset.softwareVersion || asset.version || '-'}</b><span>软件版本</span></div>
+        <div><b>{asset.fileType || '-'}</b><span>文件类型</span></div>
         <div><b>{asset.category || '-'}</b><span>分类</span></div>
-        <div><b>{asset.link ? '有' : '无'}</b><span>下载链接</span></div>
       </div>
     ) : (
       <div className="asset-meta"><div><b>{asset.model || '-'}</b><span>型号/名称</span></div><div><b>{asset.version || '-'}</b><span>版本</span></div><div><b>{asset.count || '-'}</b><span>数量</span></div><div><b>{asset.latest || '-'}</b><span>更新</span></div></div>

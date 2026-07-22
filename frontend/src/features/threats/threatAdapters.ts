@@ -323,6 +323,9 @@ function assetFromItem(item: Record<string, unknown>): ThreatAsset {
     online: isMirror ? Boolean(raw.online) : isAscendhub ? Boolean(raw.open) : undefined,
     official: isMirror ? Boolean(raw.official) : undefined,
     downloadCount: isMirror ? (asNumber(raw.downloadCount) || undefined) : isAscendhub ? (asNumber(raw.downloads) || undefined) : undefined,
+    deviceModel: isOpenx ? asString(payload.device_model) : (isFirmware ? asString(raw.modelName) : ''),
+    softwareVersion: isOpenx ? asString(payload.software_version) : '',
+    fileType: isOpenx ? asString(payload.file_type) : '',
   };
 }
 

@@ -75,6 +75,9 @@ export interface ThreatAsset {
   online?: boolean;
   official?: boolean;
   downloadCount?: number;
+  deviceModel?: string;
+  softwareVersion?: string;
+  fileType?: string;
 }
 
 // ============================================================================
