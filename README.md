@@ -62,7 +62,7 @@ AGENTS.md
 
 ## 前端页面
 
-当前前端已重建为 React + Vite + TypeScript 工程，威胁洞察参考 `/mnt/d/漏洞挖掘/洞察工具/dashboard/demo/index-v10.html` 的功能布局，并沿用 v9 的深色视觉风格。FastAPI 会直接提供 `frontend/dist` 构建产物。
+当前前端已重建为 React + Vite + TypeScript 工程，威胁洞察参考 `/mnt/d/漏洞挖掘/洞察工具/dashboard/demo/index-v12.html` 的功能布局，并沿用 v9 的深色视觉风格。FastAPI 会直接提供 `frontend/dist` 构建产物。
 
 ```text
 http://127.0.0.1:8000/
