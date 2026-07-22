@@ -178,7 +178,9 @@ def _threat_item(item: dict[str, Any]) -> dict[str, Any]:
     return {
         "id": item.get("id"),
         "title": item.get("title"),
-        "summary": item.get("summary"),
+        "summary": payload.get("summary_zh") or item.get("summary"),
+        "security_summary": payload.get("security_summary"),
+        "summary_source": payload.get("summary_source"),
         "score": item.get("score"),
         "status": item.get("status"),
         "source_url": item.get("source_url"),

@@ -320,7 +320,7 @@ def list_evidence(conn: sqlite3.Connection, domain: str, item_id: int) -> list[d
 
 
 def list_table(conn: sqlite3.Connection, table: str, *, domain: str | None = None, limit: int = 50) -> list[dict[str, Any]]:
-    allowed = {"pipeline_runs", "task_runs", "artifacts", "data_sources", "quality_audits", "human_queue_items", "raw_artifacts", "normalized_items", "model_calls"}
+    allowed = {"pipeline_runs", "task_runs", "artifacts", "data_sources", "quality_audits", "human_queue_items", "raw_artifacts", "normalized_items", "model_calls", "capability_repro_tasks"}
     if table not in allowed:
         raise ValueError(f"Unsupported table: {table}")
     if domain and table in {"pipeline_runs", "data_sources", "quality_audits", "human_queue_items"}:
@@ -333,3 +333,111 @@ def list_table(conn: sqlite3.Connection, table: str, *, domain: str | None = Non
 def count_by_domain(conn: sqlite3.Connection, domain: str) -> int:
     row = conn.execute("SELECT COUNT(*) AS count FROM domain_items WHERE domain = ?", (domain,)).fetchone()
     return int(row["count"])
+
+
+# ============================================================================
+# capability_repro_tasks - 复现任务 CRUD（迁移自旧 v1 db.py）
+# ============================================================================
+
+_REPRO_UPDATABLE_FIELDS = {
+    "status",
+    "container_name",
+    "workspace_path",
+    "log",
+    "result",
+    "finished_at",
+    "cleaned_at",
+    "trigger",
+    "report_json",
+    "web_port",
+    "web_url",
+}
+
+
+def create_repro_task(
+    conn: sqlite3.Connection,
+    *,
+    item_id: int,
+    repo_url: str,
+    trigger: str = "manual",
+) -> int:
+    """创建复现任务，返回 task_id"""
+    cur = conn.execute(
+        "INSERT INTO capability_repro_tasks (item_id, repo_url, status, created_at, trigger) "
+        "VALUES (?, ?, 'queued', ?, ?)",
+        (item_id, repo_url, utc_now(), trigger),
+    )
+    return int(cur.lastrowid)
+
+
+def get_repro_task(conn: sqlite3.Connection, task_id: int) -> dict[str, Any] | None:
+    row = conn.execute("SELECT * FROM capability_repro_tasks WHERE id = ?", (task_id,)).fetchone()
+    if not row:
+        return None
+    item = dict(row)
+    # report_json → report（保持 _json 后缀的字段也保留，方便 row_to_dict 调用方）
+    return item
+
+
+def list_repro_tasks(
+    conn: sqlite3.Connection,
+    *,
+    item_id: int | None = None,
+    limit: int = 200,
+    include_cleaned: bool = False,
+) -> list[dict[str, Any]]:
+    """列出复现任务，可按 item_id 过滤；默认排除 cleaned"""
+    if item_id is not None:
+        sql = "SELECT * FROM capability_repro_tasks WHERE item_id = ?"
+        params: list[Any] = [item_id]
+        if not include_cleaned:
+            sql += " AND status != 'cleaned'"
+        sql += " ORDER BY created_at DESC LIMIT ?"
+        params.append(limit)
+    else:
+        sql = "SELECT * FROM capability_repro_tasks"
+        params = []
+        if not include_cleaned:
+            sql += " WHERE status != 'cleaned'"
+        sql += " ORDER BY created_at DESC LIMIT ?"
+        params.append(limit)
+    rows = conn.execute(sql, params).fetchall()
+    return [dict(row) for row in rows]
+
+
+def update_repro_task(conn: sqlite3.Connection, *, task_id: int, **fields: Any) -> None:
+    """更新复现任务字段，只允许白名单内字段"""
+    sets, vals = [], []
+    for k, v in fields.items():
+        if k in _REPRO_UPDATABLE_FIELDS:
+            sets.append(f"{k} = ?")
+            vals.append(v)
+    if not sets:
+        return
+    vals.append(task_id)
+    conn.execute(f"UPDATE capability_repro_tasks SET {', '.join(sets)} WHERE id = ?", vals)
+
+
+def append_repro_log(conn: sqlite3.Connection, *, task_id: int, line: str) -> None:
+    """追加日志行到 task 的 log 字段（累积）"""
+    conn.execute(
+        "UPDATE capability_repro_tasks SET log = log || ? WHERE id = ?",
+        (line + "\n", task_id),
+    )
+
+
+def get_succeeded_repro_item_ids(conn: sqlite3.Connection) -> set[int]:
+    """已成功复现的 item_id 集合（含 status=success 或 partial）"""
+    rows = conn.execute(
+        "SELECT DISTINCT item_id FROM capability_repro_tasks WHERE status IN ('success', 'partial')"
+    ).fetchall()
+    return {row["item_id"] for row in rows}
+
+
+def get_active_repro_item_ids(conn: sqlite3.Connection) -> set[int]:
+    """正在复现中的 item_id 集合"""
+    rows = conn.execute(
+        "SELECT DISTINCT item_id FROM capability_repro_tasks WHERE status IN ('queued', 'running')"
+    ).fetchall()
+    return {row["item_id"] for row in rows}
+

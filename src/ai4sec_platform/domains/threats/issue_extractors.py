@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from ai4sec_platform.domains.threats.security_file_parsers import dedupe_security_items, infer_severity
+from ai4sec_platform.domains.threats.security_file_parsers import broad_security_keywords, dedupe_security_items, infer_severity
 from ai4sec_platform.domains.threats.security_file_parsers import CVE_RE, SA_RE
 
 
@@ -34,16 +34,11 @@ def extract_security_items_from_pull_requests(prs: list[dict[str, Any]]) -> list
 def _is_security_issue(text: str, issue: dict[str, Any]) -> bool:
     lowered = text.lower()
     labels = " ".join(str(label.get("name") if isinstance(label, dict) else label) for label in issue.get("labels") or []).lower()
-    return bool(CVE_RE.search(text) or any(term in f"{lowered} {labels}" for term in _security_terms()))
+    return bool(CVE_RE.search(text) or broad_security_keywords(f"{lowered} {labels}"))
 
 
 def _matched_keywords(text: str) -> list[str]:
-    lowered = text.lower()
-    return [term for term in _security_terms() if term in lowered]
-
-
-def _security_terms() -> list[str]:
-    return ["security", "vulnerability", "cve", "rce", "xss", "sqli", "bypass", "dos", "注入", "越权", "漏洞", "安全", "命令执行"]
+    return broad_security_keywords(text)
 
 
 def _compact(text: str, limit: int = 500) -> str:

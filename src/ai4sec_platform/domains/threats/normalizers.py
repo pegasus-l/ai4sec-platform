@@ -18,14 +18,20 @@ def normalize_repo(source: str, item: dict[str, Any]) -> dict[str, Any]:
     org = item.get("org") or _org_from_url(item.get("url", ""))
     name = item.get("name") or item.get("repo") or item.get("project") or "unknown"
     key = f"repo:{org}/{name}".lower()
+    description = item.get("description") or item.get("reason") or ""
     return {
         "item_key": key,
         "source": source,
         "source_type": "repo",
         "title": f"{org}/{name}" if org else name,
+        "org": org,
+        "name": name,
         "url": item.get("url") or "",
         "primary_date": item.get("updated_at") or item.get("created_at") or "",
-        "summary": item.get("description") or item.get("reason") or "",
+        "summary": description,
+        "summary_original": description,
+        "description_original": description,
+        "summary_source": "repo_description" if description else "empty",
         "risk_score": item.get("attack_surface_score") or item.get("risk_score") or item.get("score"),
         "risk_grade": item.get("grade") or item.get("risk_grade") or "",
         "attack_surface": item.get("primary_attack_surface") or item.get("attack_surface") or "",
@@ -43,14 +49,20 @@ def normalize_cve_project(source: str, item: dict[str, Any]) -> dict[str, Any]:
     sa_count = item.get("sa_count") or len(item.get("sa_items") or [])
     broad_sec_count = item.get("broad_sec_count") or len(item.get("broad_sec_items") or [])
     total_sec_items = item.get("total_sec_items") or cve_count + sa_count + broad_sec_count
-    key = f"repo-cves:{org}/{name}".lower()
+    key = f"repo:{org}/{name}".lower()
+    security_summary = _security_finding_summary(cve_count=cve_count, sa_count=sa_count, broad_sec_count=broad_sec_count, total_sec_items=total_sec_items)
     return {
         "item_key": key,
         "source": source,
         "source_type": "repo_cve",
-        "title": _security_finding_title(org, name, cve_count=cve_count, sa_count=sa_count, broad_sec_count=broad_sec_count),
+        "title": f"{org}/{name}" if org else name,
+        "security_title": _security_finding_title(org, name, cve_count=cve_count, sa_count=sa_count, broad_sec_count=broad_sec_count),
+        "org": org,
+        "name": name,
         "url": item.get("url") or "",
-        "summary": _security_finding_summary(cve_count=cve_count, sa_count=sa_count, broad_sec_count=broad_sec_count, total_sec_items=total_sec_items),
+        "summary": "",
+        "security_summary": security_summary,
+        "summary_source": "security_summary",
         "risk_score": cve_count or sa_count or broad_sec_count,
         "cve_count": cve_count,
         "sa_count": sa_count,
