@@ -23,3 +23,67 @@
 .table-card td { padding-top: 12px; padding-bottom: 12px; }
 .table-card .repo-name { font-size: 13px; }
 .table-card .repo-url { font-size: 11px; margin-top: 4px; }
+
+/* === reactflow overrides for threat graph (W2.4) === */
+
+/* Override demo v12 .graph-node absolute positioning — reactflow manages position */
+.react-flow__node .graph-node {
+  position: relative;
+  max-width: 190px;
+  transform: none;
+}
+
+/* reactflow node container — remove default border/bg, let .graph-node style */
+.react-flow__node {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font-size: inherit;
+}
+
+/* reactflow handle — minimal, non-interactive */
+.react-flow__handle {
+  opacity: 0;
+  width: 1px;
+  height: 1px;
+  min-width: 0;
+  min-height: 0;
+  border: 0;
+  background: transparent;
+}
+
+/* reactflow edge colors — match demo v12 .edge.direct/inferred/weak */
+.react-flow__edge.direct path {
+  stroke: rgba(52, 211, 153, 0.5);
+  stroke-width: 1.5;
+}
+.react-flow__edge.inferred path {
+  stroke: rgba(245, 158, 11, 0.5);
+  stroke-width: 1.5;
+  stroke-dasharray: 5 3;
+}
+.react-flow__edge.weak path {
+  stroke: rgba(251, 113, 133, 0.5);
+  stroke-width: 1.5;
+  stroke-dasharray: 5 3;
+}
+
+/* reactflow controls — match dark theme */
+.react-flow__controls {
+  background: rgba(15, 23, 42, 0.9);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  box-shadow: var(--shadow);
+}
+.react-flow__controls-button {
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  color: var(--text);
+}
+.react-flow__controls-button:hover {
+  background: rgba(56, 189, 248, 0.1);
+}
+
+/* reactflow attribution — hide */
+.react-flow__attribution { display: none; }

@@ -5,6 +5,7 @@ import { fetchFrontendContract } from '../../api/frontendContract';
 import { Badge, Card, Drawer, EmptyState, MetricCard } from '../../components/ui';
 import type { ThreatAsset, ThreatRepo, ThreatViewModel } from '../../types/threat';
 import { adaptThreatContract } from './threatAdapters';
+import { ThreatGraphView } from './graph/ThreatGraphView';
 
 type ViewId = 'today' | 'repos' | 'surface' | 'assets' | 'graph' | 'queue' | 'ops-tasks' | 'ops-sources' | 'ops-quality';
 
@@ -76,7 +77,7 @@ function renderView(view: ViewId, model: ThreatViewModel, repos: ThreatRepo[], f
   if (view === 'repos') return <ThreatRepos model={model} repos={repos} filters={filters} setFilters={setFilters} openRepo={openRepo} />;
   if (view === 'surface') return <ThreatSurface model={model} openRepo={openRepo} />;
   if (view === 'assets') return <ThreatAssets model={model} openAsset={openAsset} />;
-  if (view === 'graph') return <ThreatGraph model={model} openRepo={openRepo} openAsset={openAsset} />;
+  if (view === 'graph') return <ThreatGraphView model={model} openRepo={openRepo} openAsset={openAsset} />;
   if (view === 'queue') return <ThreatQueue model={model} />;
   return <ThreatOps model={model} kind={view} />;
 }
@@ -136,18 +137,6 @@ function ThreatAssets({ model, openAsset }: { model: ThreatViewModel; openAsset:
   return <div className="view-stack">
     <div className="metric-grid">{Object.entries(bySource).map(([source, items]) => <MetricCard key={source} label={source} value={items.length} hint="资产条目" tone="violet" />)}</div>
     <div className="asset-grid">{model.assets.map(asset => <AssetCard key={asset.id} asset={asset} onClick={() => openAsset(asset)} />)}</div>
-  </div>;
-}
-
-function ThreatGraph({ model, openRepo, openAsset }: { model: ThreatViewModel; openRepo: (repo: ThreatRepo) => void; openAsset: (asset: ThreatAsset) => void }) {
-  const orgs = Object.entries(groupBy(model.repos, repo => repo.org)).sort((a, b) => b[1].length - a[1].length).slice(0, 10);
-  const assetGroups = Object.entries(groupBy(model.assets, asset => asset.source)).sort((a, b) => b[1].length - a[1].length);
-  return <div className="graph-layout">
-    <div className="graph-wrap">
-      <div className="tree-column repo-tree"><h3>代码仓生态</h3>{orgs.map(([org, repos]) => <div className="tree-group" key={org}><div className="tree-group-title">{org}<span>{repos.length}</span></div>{repos.slice(0, 8).map(repo => <button key={repo.id} className="tree-node-row" onClick={() => openRepo(repo)}><span className="node-icon">◎</span><span><span className="node-title">{repo.name}</span><span className="node-count">{repo.surface} · score {Math.round(repo.score)}</span></span></button>)}</div>)}</div>
-      <div className="tree-column asset-tree"><h3>资产侧</h3>{assetGroups.map(([source, assets]) => <div className="tree-group" key={source}><div className="tree-group-title">{source}<span>{assets.length}</span></div>{assets.slice(0, 10).map(asset => <button key={asset.id} className="tree-node-row" onClick={() => openAsset(asset)}><span className="node-icon">▣</span><span><span className="node-title">{asset.title}</span><span className="node-count">{asset.sourceType}</span></span></button>)}</div>)}</div>
-    </div>
-    <aside className="graph-side"><Card><h3>使用方式</h3><p className="muted small">图谱不是主导航入口，而是目标库里的视图模式：先看列表排序，再用图谱理解组织、仓库、CVE、固件和镜像之间的关系。</p><div className="relation-note">当前关系由命名、产品线和资产文本推断，弱关联需要人工复核。</div></Card><Card><h3>图谱统计</h3><div className="asset-meta"><div><b>{model.repos.length}</b><span>仓库节点</span></div><div><b>{model.assets.length}</b><span>资产节点</span></div><div><b>{model.summary.uniqueCve}</b><span>CVE</span></div><div><b>{model.summary.broadSecurity}</b><span>安全线索</span></div></div></Card></aside>
   </div>;
 }
 
