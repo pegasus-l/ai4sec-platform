@@ -45,7 +45,7 @@ export function OpsTasks() {
     setRunningPipeline(p.name);
     setRunError(null);
     try {
-      const params: Record<string, unknown> = { refresh_source_cache: true };
+      const params: Record<string, unknown> = { use_source_cache: true, refresh_source_cache: true };
       await fetch('/api/runs', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
