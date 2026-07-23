@@ -19,9 +19,9 @@
 .breakdown.mini .break-row { padding: 2px 0; border-bottom: 0; }
 .breakdown.mini { gap: 1px; }
 .graph-node { position: absolute; max-width: 150px; transform: translate(-50%, -50%); }
-.table-card tbody tr { height: 126px; }
-.table-card { overflow: auto; max-height: calc(100vh - 180px); }
-.table-card td { padding-top: 12px; padding-bottom: 12px; }
+.table-card tbody tr { height: auto; }
+.table-card { overflow: auto; max-height: none; }
+.table-card td { padding: 10px 12px; }
 .table-card .repo-name { font-size: 13px; }
 .table-card .repo-url { font-size: 11px; margin-top: 4px; }
 .table-card thead { position: sticky; top: 0; z-index: 2; background: rgba(2, 6, 23, 0.98); }
