@@ -213,6 +213,16 @@ export function ThreatGraphView({ model, openRepo, openAsset }: ThreatGraphViewP
   const handleNodeClick = useCallback((_evt: unknown, node: Node<ThreatGraphData>) => {
     const data = node.data;
     setActiveNodeId(node.id);
+    // Directly open drawer for repo/asset nodes
+    if (data?.kind === 'repo' && data.repoId) {
+      const repo = model.repos.find((r) => r.id === data.repoId);
+      if (repo) { openRepo(repo); return; }
+    }
+    if (data?.kind === 'asset' && data.assetId) {
+      const asset = model.assets.find((a) => a.id === data.assetId);
+      if (asset) { openAsset(asset); return; }
+    }
+    // Toggle expand for ecosystem, repo, asset-category
     if (data?.kind === 'ecosystem' || data?.kind === 'repo' || data?.kind === 'asset-category') {
       setExpandedNodes((prev) => {
         const next = new Set(prev);
@@ -220,7 +230,7 @@ export function ThreatGraphView({ model, openRepo, openAsset }: ThreatGraphViewP
         return next;
       });
     }
-  }, []);
+  }, [model, openRepo, openAsset]);
 
   return (
     <div className="graph-layout">
