@@ -216,8 +216,8 @@
     .asset-meta div { padding: 8px; border: 1px solid var(--line); border-radius: 12px; background: rgba(2,6,23,.28); }
     .asset-meta b { display: block; color: var(--text); font-size: 12px; }
     .asset-meta span { display: block; margin-top: 3px; color: var(--muted); font-size: 11px; }
-    .graph-layout { display: grid; grid-template-columns: minmax(0, 1.45fr) minmax(330px, 0.65fr); gap: 12px; min-height: 620px; }
-    .graph-wrap { height: calc(100vh - 220px); min-height: 620px; position: relative; border: 1px solid var(--line); border-radius: var(--radius); overflow: auto; background: radial-gradient(circle at 50% 48%, rgba(56,189,248,.09), transparent 36%), rgba(2,6,23,.28); }
+    .graph-layout { display: grid; grid-template-columns: 1fr; gap: 12px; min-height: 620px; }
+    .graph-wrap { height: calc(100vh - 140px); min-height: 620px; position: relative; border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; background: radial-gradient(circle at 50% 48%, rgba(56,189,248,.09), transparent 36%), rgba(2,6,23,.28); }
     .tree-graph-canvas { position: relative; width: 1280px; height: 1420px; }
     .edge { position: absolute; height: 1px; background: rgba(148,163,184,.28); transform-origin: left center; pointer-events: none; }
     .edge.direct { background: rgba(52,211,153,.42); }
