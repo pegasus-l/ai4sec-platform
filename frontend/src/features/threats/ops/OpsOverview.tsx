@@ -29,7 +29,7 @@ export function OpsOverview({ setView }: Props) {
         <Card className="kpi"><span>质量审计</span><strong>{stats.quality_audits}</strong></Card>
       </div>
 
-      <div className="grid cols-2" style={{ marginTop: 12 }}>
+      <div className="grid cols-2" style={{ marginTop: 12, alignItems: 'stretch' }}>
         <Card>
           <h3>上次 Pipeline 运行</h3>
           {lastRun ? (
