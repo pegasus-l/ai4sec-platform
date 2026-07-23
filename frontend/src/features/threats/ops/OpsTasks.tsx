@@ -1,8 +1,7 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState, useCallback } from 'react';
 import { Card, Drawer } from '../../../components/ui';
-import { fetchOpsPipelines, fetchRuns, type OpsPipeline, type OpsRun } from '../../../api/opsClient';
-import { fetchOpsOverview } from '../../../api/opsClient';
+import { fetchOpsPipelines, fetchRuns, fetchOpsOverview, type OpsPipeline, type OpsRun } from '../../../api/opsClient';
 import { postJson } from '../../../api/client';
 
 export function OpsTasks() {
@@ -22,11 +21,10 @@ export function OpsTasks() {
   const failed = runs.filter(r => r.status === 'failed');
   const lastSuccess = runs.find(r => r.status === 'success') || runs[0];
   const activeRun = runs.find(r => r.status === 'running');
-  const failedCount = failed.length;
 
   const handleRun = async (p: OpsPipeline) => {
     const highRisk = p.risk === '高';
-    if (highRisk && !window.confirm(`${p.short_name} 是高风险操作（完整链路 30-60 分钟，会重新采集全量数据），确认要运行吗？`)) return;
+    if (highRisk && !window.confirm(`${p.short_name} 是高风险操作（完整链路 30-60 分钟），确认运行吗？`)) return;
     setRunningPipeline(p.name);
     setRunError(null);
     try {
@@ -40,83 +38,57 @@ export function OpsTasks() {
   };
 
   const selectedRun = runs.find(r => r.run_id === selectedRunId);
-
   const closeRunDetail = useCallback(() => setSelectedRunId(null), []);
+  const badgeClass = (s: string) => s === 'success' ? 'success' : s === 'failed' ? 'failed' : s === 'running' ? 'running' : 'queued';
+  const zhStatus = (s: string) => ({ success: '成功', running: '运行中', failed: '失败', queued: '排队', pending: '待处理', skipped: '跳过' }[s] || s);
 
   return (
     <div className="grid" style={{ paddingBottom: 48 }}>
-      {/* 5 KPI cards */}
-      <div className="grid cols-5">
-        <Card className="metric"><span>采集 Worker</span><strong>{running.length ? '运行中' : '空闲'}</strong><p>{running.length ? `${running.length} 个运行 · ${activeRun?.started_at ?? ''}` : '无运行任务'}</p></Card>
-        <Card className="metric"><span>当前运行</span><strong>{running.length ? activeRun?.pipeline_name?.replace('threats.', '') ?? '—' : '空闲'}</strong><p>{running.length ? activeRun?.started_at ?? '' : '无运行任务'}</p>{running.length ? <div className="progress running" style={{ marginTop: 8 }}><i style={{ width: '48%' }}></i></div> : null}</Card>
-        <Card className="metric"><span>最近成功</span><strong>{lastSuccess ? lastSuccess.started_at?.slice(11, 16) ?? '—' : '—'}</strong><p>{lastSuccess ? `${lastSuccess.pipeline_name?.replace('threats.', '') ?? ''}` : '无成功记录'}</p></Card>
-        <Card className="metric"><span>今日数据</span><div className="chips" style={{ marginTop: 9 }}>{stats ? <><span className="chip-sm">Repo {stats.repos}</span><span className="chip-sm">Asset {stats.assets}</span><span className="chip-sm">Queue {stats.queue}</span></> : <span className="chip-sm">加载中</span>}</div><p className="small faint" style={{ marginTop: 8 }}>{stats ? `证据 ${stats.evidence_items} · 审计 ${stats.quality_audits}` : ''}</p></Card>
-        <Card className="metric"><span>异常任务</span><strong>{failedCount}</strong><p>{failedCount ? `${failedCount} 个失败` : '当前无失败'}</p></Card>
-      </div>
+      <Card>
+        <h3>采集方式</h3>
+        <p className="muted small">当前系统为<b>手动触发</b>采集，无定时调度。点击 pipeline 卡片触发运行，运行历史每 5 秒自动刷新。</p>
+      </Card>
 
-      {/* layout-2: left = pipeline list, right = quick actions */}
-      <div className="layout-2" style={{ marginTop: 12 }}>
-        <Card>
-          <div className="row-title"><h3>采集任务</h3><span className="badge">手动触发</span></div>
-          <p className="muted small">当前系统为手动触发采集，无定时调度。点击 pipeline 运行按钮触发。</p>
-          <div className="grid cols-2" style={{ marginTop: 10, alignItems: 'stretch' }}>
-            {pipelines.map((p) => (
-              <div key={p.name} className="profile" onClick={() => handleRun(p)}>
-                <div>
-                  <div className="pt">{p.short_name}</div>
-                  <div className="ph">{p.description}</div>
-                  <div className="pc">
-                    <span className={`badge ${p.risk === '高' ? 'failed' : 'warn'}`}>{p.risk}风险</span>
-                    <span className="badge">{p.estimated_time}</span>
-                    <span className="badge">{p.steps || '?'} 步</span>
-                  </div>
-                  {runningPipeline === p.name && <p className="muted small" style={{ marginTop: 6, color: '#bfdbfe' }}>运行中...</p>}
-                </div>
-                <span className="nav-ico" style={{ color: 'var(--sky)', alignSelf: 'center' }}>▶</span>
-              </div>
-            ))}
-          </div>
-          {runError && <p className="muted small" style={{ color: '#fecaca', marginTop: 8 }}>运行失败: {runError}</p>}
-        </Card>
-
-        <Card>
-          <div className="row-title"><h3>快捷操作</h3>{failedCount ? <span className="badge failed">需要处理</span> : <span className="badge ok">正常</span>}</div>
-          <div className="grid" style={{ marginTop: 12, gap: 8 }}>
-            {pipelines.filter(p => p.risk !== '高').slice(0, 3).map(p => (
-              <button key={p.name} className="btn primary" disabled={runningPipeline === p.name} onClick={() => handleRun(p)}>{runningPipeline === p.name ? '运行中...' : p.short_name}</button>
-            ))}
-            {pipelines.filter(p => p.risk === '高').map(p => (
-              <button key={p.name} className="btn danger" disabled={runningPipeline === p.name} onClick={() => handleRun(p)}>{runningPipeline === p.name ? '运行中...' : p.short_name}（高风险）</button>
-            ))}
-          </div>
-          <div className="card" style={{ marginTop: 12, background: 'rgba(56,189,248,.05)', borderColor: 'rgba(56,189,248,.2)' }}>
-            <div className="row-title"><b>当前运行</b>{running.length ? <span className="badge running">运行中</span> : <span className="badge ok">空闲</span>}</div>
-            <p className="small muted">{running.length ? `${activeRun?.pipeline_name?.replace('threats.', '') ?? ''}` : '无运行任务'}</p>
-            {running.length ? <div className="progress running" style={{ marginTop: 8 }}><i style={{ width: '48%' }}></i></div> : null}
-            <div className="split" style={{ marginTop: 10 }}>
-              <button className="btn sm" onClick={() => running.length ? setSelectedRunId(activeRun!.run_id) : null}>查看详情</button>
-            </div>
-          </div>
-        </Card>
-      </div>
-
-      {/* history table */}
+      {/* pipeline cards */}
       <Card style={{ marginTop: 12 }}>
-        <div className="row-title"><h3>运行历史</h3><span className="muted small">每 5 秒自动刷新</span></div>
+        <div className="row-title"><h3>可用 Pipeline</h3>{runError && <span className="badge failed">错误</span>}</div>
+        {runError && <p className="small" style={{ color: '#fecaca', marginTop: 4 }}>运行失败: {runError}</p>}
+        <div className="grid cols-2" style={{ marginTop: 10, alignItems: 'stretch' }}>
+          {pipelines.map((p) => (
+            <div key={p.name} className="profile" onClick={() => handleRun(p)}>
+              <div>
+                <div className="pt">{p.short_name}</div>
+                <div className="ph">{p.description}</div>
+                <div className="pc">
+                  <span className={`badge ${p.risk === '高' ? 'failed' : 'warn'}`}>{p.risk}风险</span>
+                  <span className="badge">{p.estimated_time}</span>
+                  <span className="badge">{p.steps || '?'} 步</span>
+                </div>
+                {runningPipeline === p.name && <p className="small" style={{ marginTop: 6, color: '#bfdbfe' }}>运行中...</p>}
+              </div>
+              <span style={{ color: 'var(--sky)', alignSelf: 'center' }}>▶</span>
+            </div>
+          ))}
+        </div>
+      </Card>
+
+      {/* history table — V17 style */}
+      <Card style={{ marginTop: 12 }}>
+        <div className="row-title"><h3>历史任务</h3><span className="muted small">每 5 秒自动刷新</span></div>
         <div className="table-card" style={{ marginTop: 12, overflow: 'hidden' }}>
           {runs.length > 0 ? (
             <table>
-              <thead><tr><th>Run ID</th><th>Pipeline</th><th>状态</th><th>触发</th><th>开始</th><th>结束</th><th>操作</th></tr></thead>
+              <thead><tr><th>Run</th><th>运营任务</th><th>状态</th><th>触发</th><th>开始</th><th>结束</th><th>备注</th></tr></thead>
               <tbody>
                 {runs.map(r => (
                   <tr key={r.run_id} className="clickable" onClick={() => setSelectedRunId(r.run_id)}>
-                    <td><div className="repo-name mono">{r.run_id?.slice(-16)}</div></td>
-                    <td className="small">{r.pipeline_name?.replace('threats.', '')}</td>
-                    <td><span className={`badge ${r.status === 'success' ? 'success' : r.status === 'failed' ? 'failed' : 'running'}`}>{r.status}</span></td>
-                    <td className="small muted">手动</td>
-                    <td className="small muted">{r.started_at}</td>
-                    <td className="small muted">{r.finished_at}</td>
-                    <td><button className="btn sm">详情</button></td>
+                    <td><div className="name mono" style={{ fontSize: 12 }}>{r.run_id?.slice(-16)}</div></td>
+                    <td className="small">{r.pipeline_name?.replace('threats.', '') ?? '—'}</td>
+                    <td><span className={`badge ${badgeClass(r.status)}`}>{zhStatus(r.status)}</span></td>
+                    <td className="small">手动<div className="sub">{r.started_at?.slice(0, 10)}</div></td>
+                    <td className="small muted">{r.started_at?.slice(11, 19) ?? '—'}</td>
+                    <td className="small muted">{r.finished_at?.slice(11, 19) ?? '—'}</td>
+                    <td className="small muted" style={{ color: r.status === 'failed' ? '#fecaca' : undefined }}>{r.status === 'failed' ? '运行失败' : r.status === 'success' ? '运行成功' : '运行中'}</td>
                   </tr>
                 ))}
               </tbody>
@@ -125,7 +97,7 @@ export function OpsTasks() {
         </div>
       </Card>
 
-      {/* run detail drawer */}
+      {/* run detail drawer — V17 style step timeline */}
       {selectedRun && (
         <Drawer open={true} title={selectedRun.run_id?.slice(-16) ?? 'Run'} subtitle={selectedRun.pipeline_name} onClose={closeRunDetail}>
           <div className="drawer-grid">
@@ -133,9 +105,10 @@ export function OpsTasks() {
               <h3>运行概览</h3>
               <div className="field"><b>run_id</b><span className="mono small">{selectedRun.run_id}</span></div>
               <div className="field"><b>pipeline</b><span className="small">{selectedRun.pipeline_name}</span></div>
-              <div className="field"><b>状态</b><span className={`badge ${selectedRun.status === 'success' ? 'success' : selectedRun.status === 'failed' ? 'failed' : 'running'}`}>{selectedRun.status}</span></div>
-              <div className="field"><b>开始</b><span className="mono small">{selectedRun.started_at}</span></div>
-              <div className="field"><b>结束</b><span className="mono small">{selectedRun.finished_at}</span></div>
+              <div className="field"><b>状态</b><span className={`badge ${badgeClass(selectedRun.status)}`}>{zhStatus(selectedRun.status)}</span></div>
+              <div className="field"><b>触发</b><span className="small">手动</span></div>
+              <div className="field"><b>开始</b><span className="mono small">{selectedRun.started_at ?? '—'}</span></div>
+              <div className="field"><b>结束</b><span className="mono small">{selectedRun.finished_at ?? '—'}</span></div>
             </Card>
             {selectedRun.tasks && Array.isArray(selectedRun.tasks) && selectedRun.tasks.length > 0 && (
               <Card>
@@ -150,7 +123,7 @@ export function OpsTasks() {
                           <div className="step-name mono">{i+1}. {String(task.task_name ?? task.name ?? `Step ${i+1}`)}</div>
                           <div className="step-meta">{String(task.started_at ?? '—')} → {String(task.finished_at ?? '—')}</div>
                         </div>
-                        <span className={`badge ${status === 'success' ? 'success' : status === 'failed' ? 'failed' : 'running'}`}>{status}</span>
+                        <span className={`badge ${badgeClass(status)}`}>{zhStatus(status)}</span>
                       </div>
                     );
                   })}
