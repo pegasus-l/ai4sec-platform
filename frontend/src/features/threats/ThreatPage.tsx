@@ -1,8 +1,8 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useState, useEffect } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { AlertTriangle, Boxes, GitBranch, GitFork, Network, Radar, ShieldCheck, Target, Workflow } from 'lucide-react';
 import { fetchFrontendContract } from '../../api/frontendContract';
-import { fetchAssets } from '../../api/client';
+import { fetchAssets, postJson, getJson, type AiAssociationResult } from '../../api/client';
 import { Badge, Card, Drawer, EmptyState, MetricCard } from '../../components/ui';
 import type { ThreatAsset, ThreatRepo, ThreatViewModel } from '../../types/threat';
 import { adaptThreatContract, assetFromItem } from './threatAdapters';
@@ -80,7 +80,7 @@ export function ThreatPage() {
         {model && renderView(view, model, visibleRepos, filters, setFilters, openRepo, setSelectedAsset, setView)}
       </div>
     </section>
-    <AssetDrawer asset={selectedAsset} onClose={() => setSelectedAsset(null)} />
+    <AssetDrawer asset={selectedAsset} onClose={() => setSelectedAsset(null)} openRepo={openRepo} />
   </main>;
 }
 
@@ -403,8 +403,33 @@ function AssetCard({ asset, onClick }: { asset: ThreatAsset; onClick: () => void
   </div>;
 }
 
-function AssetDrawer({ asset, onClose }: { asset: ThreatAsset | null; onClose: () => void }) {
+function AssetDrawer({ asset, onClose, openRepo }: { asset: ThreatAsset | null; onClose: () => void; openRepo: (repo: ThreatRepo) => void }) {
   const typeLabel = asset?.type === 'firmware' ? '固件' : asset?.type === 'image' ? '镜像' : asset?.type === 'mirror' ? '软件源' : asset?.type === 'openx_firmware' ? 'OpenX固件' : asset?.type || '未知';
+  const [assocResult, setAssocResult] = useState<AiAssociationResult | null>(null);
+  const [assocLoading, setAssocLoading] = useState(false);
+  const [assocError, setAssocError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setAssocResult(null);
+    if (asset?.id) {
+      getJson<AiAssociationResult>(`/api/threats/assets/${asset.id}/ai-associate`).then(setAssocResult).catch(() => {});
+    }
+  }, [asset?.id]);
+
+  const handleAssociate = async () => {
+    if (!asset?.id) return;
+    setAssocLoading(true);
+    setAssocError(null);
+    try {
+      const result = await postJson<AiAssociationResult>(`/api/threats/assets/${asset.id}/ai-associate`);
+      setAssocResult(result);
+    } catch (e) {
+      setAssocError(String(e));
+    } finally {
+      setAssocLoading(false);
+    }
+  };
+
   return <Drawer open={Boolean(asset)} title={asset?.title ?? ''} subtitle={asset ? `${typeLabel} · ${asset.source}` : ''} onClose={onClose}>{asset && <>
     <div className="detail-card card"><h3>资产概览</h3><p>{asset.evidence || asset.summary || '暂无摘要。'}</p></div>
     <div className="detail-card card"><h3>详细信息</h3>
@@ -444,7 +469,34 @@ function AssetDrawer({ asset, onClose }: { asset: ThreatAsset | null; onClose: (
         </div>
       ) : <p className="muted">暂无详细信息。</p>}
     </div>
-    <div className="detail-card card"><h3>推断关联仓库（待复核）</h3><p className="muted small">资产到代码仓关系来自命名、产品线和生态推断，需要人工复核。</p>{asset.repos?.length ? <div className="timeline">{asset.repos.map((r, i) => <div key={i} className="timeline-item">{r}</div>)}</div> : <p>当前无显式源码仓证据。</p>}</div>
+    <div className="detail-card card">
+      <h3>AI 关联分析</h3>
+      {assocResult ? (
+        <div>
+          <p>{assocResult.associations?.summary || '已完成关联分析。'}</p>
+          {assocResult.associations?.associations?.length ? (
+            <div className="timeline" style={{ marginTop: 10 }}>
+              {assocResult.associations.associations.map((a, i) => (
+                <div key={i} className="timeline-item clickable" onClick={() => {
+                  const repo: ThreatRepo = { id: a.repo_id, title: a.repo_name, org: a.repo_name.split('/')[0] || '', name: a.repo_name.split('/')[1] || a.repo_name, url: '', summary: '', score: 0, grade: '', status: '', surface: '', stars: 0, cve: 0, sa: 0, sec: 0, filtered: false, breakdown: {}, reasons: [], evidence: [], assets: [], raw: {} };
+                  openRepo(repo);
+                }}>
+                  <div className="row-title"><b>{a.repo_name}</b><span className={`badge ${a.confidence === 'direct' ? 'A' : a.confidence === 'inferred' ? 'B' : 'C'}`}>{a.confidence}</span></div>
+                  <span className="muted small">{a.reason}</span>
+                </div>
+              ))}
+            </div>
+          ) : <p className="muted">未发现关联的代码仓库。</p>}
+          <span className="badge" style={{ marginTop: 8 }}>{assocResult.status === 'cached' ? '已缓存' : '新分析'}</span>
+        </div>
+      ) : assocLoading ? (
+        <p className="muted">AI 关联分析中，请稍候 3-10 秒...</p>
+      ) : assocError ? (
+        <p className="muted small">分析失败: {assocError}</p>
+      ) : (
+        <button className="btn primary" onClick={handleAssociate}>开始 AI 关联分析</button>
+      )}
+    </div>
     <div className="detail-card card"><h3>建议动作</h3><div className="split"><button className="btn primary">加入跟踪</button><button className="btn">加入解包</button><button className="btn">加入 SBOM</button><button className="btn warn">标记关联待复核</button></div></div>
   </>}</Drawer>;
 }

@@ -179,3 +179,154 @@ def get_ai_review(item_id: int, conn: sqlite3.Connection = Depends(get_db)) -> d
         raise HTTPException(status_code=404, detail="no cached review")
     data = repo.row_to_dict(row)
     return {"item_id": item_id, "status": "cached", "assessment": data.get("payload", {})}
+
+
+def _asset_association_prompt() -> str:
+    return """
+你是华为开源生态分析专家。我给你一个资产信息和一批候选代码仓库，请判断哪些仓库和这个资产有关联。
+
+关联类型：
+- direct: 资产直接包含或依赖该仓库的代码（如固件包里有该仓库的 .so 文件）
+- inferred: 通过产品线/生态链路推断关联（如 Atlas 固件 → CANN 仓库，因为 CANN 是 Atlas 的软件栈）
+- weak: 间接关联（如镜像站包含该仓库的软件包）
+
+如果没有关联，返回空数组。
+
+输出 JSON：
+{
+  "associations": [
+    {"repo_id": "仓库ID", "repo_name": "org/name", "confidence": "direct|inferred|weak", "reason": "关联理由"}
+  ],
+  "summary": "一句话总结关联情况"
+}
+""".strip()
+
+
+@router.post("/assets/{item_id}/ai-associate")
+def ai_associate(item_id: int, conn: sqlite3.Connection = Depends(get_db)) -> dict:
+    """On-demand AI asset-to-repo association analysis."""
+    # Read the asset
+    row = conn.execute(
+        "SELECT * FROM domain_items WHERE id = ? AND domain = ? AND item_type = ?",
+        (item_id, DOMAIN, "asset"),
+    ).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="asset not found")
+    target = repo.row_to_dict(row)
+
+    # Check cache
+    existing = conn.execute(
+        "SELECT * FROM evidence_items WHERE domain_item_id = ? AND evidence_type = 'asset_association' ORDER BY id DESC LIMIT 1",
+        (item_id,),
+    ).fetchone()
+    if existing:
+        existing_data = repo.row_to_dict(existing)
+        return {"item_id": item_id, "status": "cached", "associations": existing_data.get("payload", {})}
+
+    # Build asset info
+    payload = target.get("payload") or {}
+    if isinstance(payload, str):
+        import json as _json
+        payload = _json.loads(payload)
+    raw = payload.get("raw") or {}
+    asset_name = target.get("title", "")
+    asset_source = payload.get("source", "")
+    asset_desc = raw.get("msg") or raw.get("description") or raw.get("softwareExplain") or ""
+    asset_model = raw.get("modelName") or raw.get("displayName") or raw.get("name") or raw.get("repoName") or ""
+
+    # Pre-filter candidate repos by name matching (limit to top 30)
+    all_repos = conn.execute(
+        "SELECT id, title, source, summary, payload_json FROM domain_items WHERE domain = ? AND item_type = ? LIMIT 800",
+        (DOMAIN, "target"),
+    ).fetchall()
+
+    candidates = []
+    asset_words = set()
+    for word in (asset_name + " " + asset_model + " " + asset_desc).lower().replace("/", " ").replace("-", " ").replace("_", " ").split():
+        if len(word) >= 3:
+            asset_words.add(word)
+
+    for repo_row in all_repos:
+        repo_data = repo.row_to_dict(repo_row)
+        repo_title = repo_data.get("title", "")
+        repo_summary = repo_data.get("summary", "")
+        repo_text = (repo_title + " " + repo_summary).lower()
+        # Match if any asset word appears in repo text
+        if any(word in repo_text for word in asset_words):
+            candidates.append({
+                "repo_id": str(repo_data.get("id", "")),
+                "repo_name": repo_title,
+                "repo_summary": (repo_summary or "")[:100],
+            })
+        if len(candidates) >= 30:
+            break
+
+    # If no candidates from name matching, take top repos by score as fallback
+    if not candidates:
+        top_repos = conn.execute(
+            "SELECT id, title, summary FROM domain_items WHERE domain = ? AND item_type = ? ORDER BY score DESC LIMIT 10",
+            (DOMAIN, "target"),
+        ).fetchall()
+        for repo_row in top_repos:
+            repo_data = repo.row_to_dict(repo_row)
+            candidates.append({
+                "repo_id": str(repo_data.get("id", "")),
+                "repo_name": repo_data.get("title", ""),
+                "repo_summary": (repo_data.get("summary") or "")[:100],
+            })
+
+    # Call LLM
+    llm_payload = {
+        "asset_name": asset_name,
+        "asset_type": asset_source,
+        "asset_model": asset_model,
+        "asset_description": asset_desc[:300],
+        "candidate_repos": candidates,
+    }
+
+    router_instance = LLMRouter()
+    prompt = _asset_association_prompt()
+    output = router_instance.complete_json(profile="configured_model", prompt=prompt, payload=llm_payload)
+
+    # Normalize result
+    result = output if isinstance(output, dict) else {}
+    associations = result.get("associations") or result.get("result", {}).get("associations", [])
+    summary = result.get("summary") or result.get("result", {}).get("summary", "已完成关联分析。")
+
+    association_data = {"associations": associations, "summary": summary, "reviewed_at": datetime.now().isoformat()}
+
+    # Cache to evidence
+    repo.create_evidence(
+        conn,
+        domain=DOMAIN,
+        domain_item_id=item_id,
+        evidence_type="asset_association",
+        title="AI 资产关联分析",
+        content=summary,
+        source_url=target.get("source_url") or "",
+        confidence=None,
+        payload=association_data,
+    )
+
+    # Write to domain_items payload
+    if isinstance(payload, str):
+        import json as _json
+        payload = _json.loads(payload)
+    payload["ai_association"] = association_data
+    repo.update_domain_item(conn, item_id=item_id, payload=payload)
+    conn.commit()
+
+    return {"item_id": item_id, "status": "success", "associations": association_data}
+
+
+@router.get("/assets/{item_id}/ai-associate")
+def get_ai_associate(item_id: int, conn: sqlite3.Connection = Depends(get_db)) -> dict:
+    """Get cached asset association without triggering LLM. Returns 404 if not cached."""
+    row = conn.execute(
+        "SELECT * FROM evidence_items WHERE domain_item_id = ? AND evidence_type = 'asset_association' ORDER BY id DESC LIMIT 1",
+        (item_id,),
+    ).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="no cached association")
+    data = repo.row_to_dict(row)
+    return {"item_id": item_id, "status": "cached", "associations": data.get("payload", {})}
