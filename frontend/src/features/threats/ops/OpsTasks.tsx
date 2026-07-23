@@ -4,6 +4,16 @@ import { Card, Drawer } from '../../../components/ui';
 import { fetchOpsPipelines, fetchRuns, fetchOpsOverview, type OpsPipeline, type OpsRun } from '../../../api/opsClient';
 import { postJson } from '../../../api/client';
 
+const zhPipelineNames: Record<string, string> = {
+  'huawei_full_migration_pipeline': '完整威胁链路',
+  'huawei_raw_pipeline': '快速刷新',
+  'huawei_cve_scout_pipeline': 'CVE/SA侦察',
+  'huawei_attack_surface_pipeline': '攻击面评分',
+  'huawei_asset_pipeline': '资产同步',
+  'huawei_collect_sources_pipeline': '采集源数据',
+  'risk_reasoning_pipeline': '风险推理',
+};
+
 export function OpsTasks() {
   const queryClient = useQueryClient();
   const { data: pipelinesData } = useQuery({ queryKey: ['ops-pipelines'], queryFn: fetchOpsPipelines });
@@ -63,7 +73,7 @@ export function OpsTasks() {
                   const lastStatus = lastRun?.status ?? '—';
                   return (
                     <tr key={p.name} className="clickable" onClick={() => lastRun ? setSelectedRunId(lastRun.run_id) : undefined}>
-                      <td><div className="name">{p.short_name}</div><div className="sub">{p.steps || '?'} 步 · {p.estimated_time}</div></td>
+                      <td><div className="name">{zhPipelineNames[p.short_name] || p.short_name}</div><div className="sub">{p.short_name}</div></td>
                       <td>
                         <span className={`badge ${badgeClass(lastStatus)}`}>{zhStatus(lastStatus)}</span>
                         <div className="sub">{p.risk}风险</div>
