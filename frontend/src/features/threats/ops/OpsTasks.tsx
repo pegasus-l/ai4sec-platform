@@ -45,10 +45,11 @@ export function OpsTasks() {
     setRunningPipeline(p.name);
     setRunError(null);
     try {
+      const params: Record<string, unknown> = { refresh_source_cache: true };
       await fetch('/api/runs', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ pipeline_name: p.name, reset: highRisk, params: {} }),
+        body: JSON.stringify({ pipeline_name: p.name, reset: highRisk, params }),
       });
       queryClient.invalidateQueries({ queryKey: ['ops-runs'] });
     } catch (e) {
