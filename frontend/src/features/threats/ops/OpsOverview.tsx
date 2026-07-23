@@ -9,7 +9,7 @@ interface Props {
   setView: (view: ViewId) => void;
 }
 
-export function OpsOverview({ model, setView }: Props) {
+export function OpsOverview({ setView }: Props) {
   const { data, isLoading } = useQuery({ queryKey: ['ops-overview'], queryFn: fetchOpsOverview, staleTime: 5000 });
 
   if (isLoading || !data) return <p className="muted">加载中...</p>;
@@ -19,14 +19,11 @@ export function OpsOverview({ model, setView }: Props) {
   const ai = data.ai_stats;
 
   return (
-    <div className="grid">
-      <div className="grid cols-6">
-        <Card className="kpi"><span>代码仓</span><strong>{stats.repos}</strong></Card>
-        <Card className="kpi"><span>资产</span><strong>{stats.assets}</strong></Card>
-        <Card className="kpi"><span>今日高风险</span><strong>{stats.today}</strong></Card>
-        <Card className="kpi"><span>跟踪队列</span><strong>{stats.queue}</strong></Card>
-        <Card className="kpi"><span>证据条目</span><strong>{stats.evidence_items}</strong></Card>
-        <Card className="kpi"><span>质量审计</span><strong>{stats.quality_audits}</strong></Card>
+    <div className="grid" style={{ paddingBottom: 48 }}>
+      <div className="grid cols-3">
+        <Card className="kpi"><span>代码仓</span><strong>{stats.repos}</strong><p>资产 {stats.assets} · 队列 {stats.queue}</p></Card>
+        <Card className="kpi"><span>AI 研判 / 资产关联</span><strong>{ai.ai_reviews} / {ai.asset_associations}</strong><p>证据 {stats.evidence_items} · 审计 {stats.quality_audits}</p></Card>
+        <Card className="kpi"><span>上次 Pipeline</span><strong>{lastRun ? lastRun.status : '—'}</strong><p>{lastRun ? `${lastRun.days_ago} 天前` : '无记录'}</p></Card>
       </div>
 
       <div className="grid cols-2" style={{ marginTop: 12 }}>
