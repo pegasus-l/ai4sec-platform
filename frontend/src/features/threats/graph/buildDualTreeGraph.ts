@@ -57,8 +57,8 @@ const LAYOUT = {
   assetCatYStep: 120,
   assetX: 880,
   assetYStep: 64,
-  maxReposPerEco: 8,
-  maxVulnsPerRepo: 3,
+  maxReposPerEco: 9999,
+  maxVulnsPerRepo: 5,
 } as const;
 
 export interface DualTreeGraphModel {
