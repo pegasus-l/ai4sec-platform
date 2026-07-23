@@ -359,7 +359,7 @@ function formatNum(n: number): string {
 function AssetCard({ asset, onClick }: { asset: ThreatAsset; onClick: () => void }) {
   const typeLabel = asset.type === 'firmware' ? '固件' : asset.type === 'image' ? '镜像' : asset.type === 'mirror' ? '软件源' : asset.type === 'openx_firmware' ? 'OpenX固件' : asset.type || '未知';
   return <div className="card asset-card" onClick={onClick}>
-    <div className="row-title"><span className="badge">{typeLabel}</span>{asset.official && <span className="badge A">官方</span>}<span className={`badge ${asset.confidence || 'C'}`}>{asset.confidence || 'unknown'}</span></div>
+    <div className="row-title"><span className="badge">{typeLabel}</span>{asset.official && <span className="badge A">官方</span>}</div>
     <h3>{asset.title}</h3>
     <p>{asset.evidence || asset.summary}</p>
     {asset.type === 'mirror' ? (
