@@ -309,7 +309,15 @@ export function assetFromItem(item: Record<string, unknown>): ThreatAsset {
     meta: asString(raw.msg ?? raw.description),
     link: asString(raw.mirrorPath ?? raw.webUrl ?? raw.url),
     confidence: inferAssetConfidence(raw),
-    repos: asArray<string>(raw.repos),
+    repos: (() => {
+      // If AI association was done, use those repo_ids
+      const aiAssoc = asRecord(payload.ai_association);
+      const associations = asArray<Record<string, unknown>>(aiAssoc.associations);
+      if (associations.length > 0) {
+        return associations.map(a => asString(a.repo_id)).filter(Boolean);
+      }
+      return asArray<string>(raw.repos);
+    })(),
     evidence: asString(raw.msg ?? raw.description ?? payload.summary),
     // Per-source rich fields
     catalog: isMirror ? asArray<string>(raw.catalog) : isAscendhub ? asArray<string>(raw.labelNames) : [],
