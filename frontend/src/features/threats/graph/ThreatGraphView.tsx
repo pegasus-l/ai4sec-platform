@@ -288,19 +288,6 @@ export function ThreatGraphView({ model, openRepo, openAsset }: ThreatGraphViewP
           </div>
         </div>
       </div>
-      <div className="card">
-        <h3>节点详情</h3>
-        {activeNode?.data ? (
-          <NodeDetail
-            data={activeNode.data}
-            model={model}
-            openRepo={openRepo}
-            openAsset={openAsset}
-          />
-        ) : (
-          <p className="muted">点击任意节点查看详情。</p>
-        )}
-      </div>
     </div>
   );
 }
