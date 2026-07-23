@@ -132,9 +132,10 @@ export function OpsTasks() {
               {subPipelines.map(p => {
                 const lastRun = lastRunForPipeline(p.name);
                 const lastStatus = lastRun?.status ?? '—';
-                // Check if this sub-step is running now (from active run's task_runs)
                 const stepStatus = stepStatusMap[p.name];
-                const displayStatus = stepStatus?.status ?? lastStatus;
+                // When full pipeline is running, show "运行中" for steps not yet completed
+                const isFullRunning = running.some(r => r.pipeline_name === 'threats.huawei_full_migration_pipeline');
+                const displayStatus = stepStatus?.status ?? (isFullRunning ? 'running' : lastStatus);
                 return (
                   <tr key={p.name} className="clickable" onClick={() => lastRun ? setSelectedRunId(lastRun.run_id) : undefined}>
                     <td>
