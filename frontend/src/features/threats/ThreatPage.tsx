@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 import { AlertTriangle, Boxes, GitBranch, GitFork, Network, Radar, ShieldCheck, Target, Workflow } from 'lucide-react';
 import { fetchFrontendContract } from '../../api/frontendContract';
 import { fetchAssets, postJson, getJson, type AiAssociationResult } from '../../api/client';
+import { fetchOpsOverview, fetchOpsSources, fetchOpsQuality, fetchOpsAISummary, fetchOpsPipelines, fetchRuns } from '../../api/opsClient';
 import { Badge, Card, Drawer, EmptyState, MetricCard } from '../../components/ui';
 import type { ThreatAsset, ThreatRepo, ThreatViewModel } from '../../types/threat';
 import { adaptThreatContract, assetFromItem } from './threatAdapters';
@@ -10,8 +11,13 @@ import { opsTasks, opsSources } from './threatStaticData';
 import { ThreatGraphView } from './graph/ThreatGraphView';
 import { RepoDrawerContent } from './RepoDrawer';
 import { useDrawerStack } from '../../components/DrawerStack';
+import { OpsOverview } from './ops/OpsOverview';
+import { OpsTasks } from './ops/OpsTasks';
+import { OpsSources } from './ops/OpsSources';
+import { OpsQuality } from './ops/OpsQuality';
+import { OpsAISummary } from './ops/OpsAISummary';
 
-type ViewId = 'today' | 'repos' | 'surface' | 'assets' | 'graph' | 'queue' | 'ops-tasks' | 'ops-sources' | 'ops-rules' | 'ops-quality' | 'ops-queue';
+type ViewId = 'today' | 'repos' | 'surface' | 'assets' | 'graph' | 'queue' | 'ops-overview' | 'ops-tasks' | 'ops-sources' | 'ops-quality' | 'ops-queue' | 'ops-ai-summary';
 
 const navGroups: Array<{ title: string; items: Array<{ id: ViewId; icon: string; title: string }> }> = [
   { title: '开源威胁洞察', items: [
@@ -23,11 +29,12 @@ const navGroups: Array<{ title: string; items: Array<{ id: ViewId; icon: string;
     { id: 'queue', icon: '▤', title: '跟踪队列' }
   ]},
   { title: '运营', items: [
+    { id: 'ops-overview', icon: '◉', title: '运营概览' },
     { id: 'ops-tasks', icon: '↻', title: '采集任务' },
     { id: 'ops-sources', icon: '◇', title: '数据源' },
-    { id: 'ops-rules', icon: '≋', title: '规则配置' },
     { id: 'ops-quality', icon: '◈', title: '质量审计' },
-    { id: 'ops-queue', icon: '▤', title: '人工队列' }
+    { id: 'ops-queue', icon: '▤', title: '人工队列' },
+    { id: 'ops-ai-summary', icon: '✦', title: 'AI 分析汇总' }
   ]}
 ];
 
@@ -91,7 +98,13 @@ function renderView(view: ViewId, model: ThreatViewModel, repos: ThreatRepo[], f
   if (view === 'assets') return <ThreatAssets openAsset={openAsset} />;
   if (view === 'graph') return <ThreatGraphView model={model} openRepo={openRepo} openAsset={openAsset} />;
   if (view === 'queue') return <ThreatQueue model={model} />;
-  return <ThreatOps model={model} kind={view} />;
+  if (view === 'ops-overview') return <OpsOverview model={model} setView={setView} />;
+  if (view === 'ops-tasks') return <OpsTasks />;
+  if (view === 'ops-sources') return <OpsSources />;
+  if (view === 'ops-quality') return <OpsQuality />;
+  if (view === 'ops-queue') return <ThreatQueue model={model} />;
+  if (view === 'ops-ai-summary') return <OpsAISummary openRepo={openRepo} openAsset={openAsset} />;
+  return <EmptyState title="未知页面" />;
 }
 
 function ThreatToday({ model, openRepo, setView, setFilters }: { model: ThreatViewModel; openRepo: (repo: ThreatRepo) => void; setView: (view: ViewId) => void; setFilters: (filters: FilterState) => void }) {
@@ -306,33 +319,6 @@ function ThreatQueue({ model }: { model: ThreatViewModel }) {
   </>;
 }
 
-function ThreatOps({ model, kind }: { model: ThreatViewModel; kind: ViewId }) {
-  if (kind === 'ops-tasks') {
-    return <div className="table-card"><table><thead><tr><th>任务</th><th>状态</th><th>触发</th><th>范围</th><th>数量</th><th>说明</th></tr></thead><tbody>{opsTasks.map(t => <tr key={t.id} className="clickable"><td><div className="repo-name">{t.name}</div></td><td><span className={`badge ${t.status === '成功' ? 'A' : t.status === '运行中' ? 'B' : 'C'}`}>{t.status}</span></td><td>{t.trigger}</td><td>{t.scope}</td><td>{t.count}</td><td>{t.note}</td></tr>)}</tbody></table></div>;
-  }
-  if (kind === 'ops-sources') {
-    return <div className="table-card"><table><thead><tr><th>数据源</th><th>类型</th><th>状态</th><th>覆盖</th><th>最近成功</th><th>说明</th></tr></thead><tbody>{opsSources.map(s => <tr key={s.id} className="clickable"><td><div className="repo-name">{s.name}</div></td><td>{s.type}</td><td><span className={`badge ${s.status === 'enabled' ? 'A' : s.status === 'cooldown' ? 'B' : 'C'}`}>{s.status}</span></td><td>{s.coverage}</td><td>{s.last}</td><td>{s.note}</td></tr>)}</tbody></table></div>;
-  }
-  if (kind === 'ops-rules') {
-    const rules = model.opsRules ?? [];
-    return <div className="grid cols-2">{rules.map(r => <Card key={r.id} className="clickable"><div className="row-title"><span className={`badge ${r.status === 'active' ? 'A' : r.status === 'caution' ? 'B' : 'C'}`}>{r.status}</span><span className="badge">{r.owner}</span></div><h3>{r.name}</h3><p>{r.note}</p></Card>)}</div>;
-  }
-  if (kind === 'ops-quality') {
-    const qualityItems = [
-      { id: 'qa-preselector-fn', severity: 'warn', title: 'PreSelector false-negative 偏高', target: '2026-06-15', note: '旧入选误拒 108/242，不能 hard reject。' },
-      { id: 'qa-weak-relation', severity: 'warn', title: 'MindIE ↔ CANN/GE 弱关联', target: 'asset-mindie', note: '需要 SBOM 或 release note 证据确认。' },
-      { id: 'qa-source-gap', severity: 'info', title: 'SourceAvailabilityCheck 未接入', target: 'daily shadow', note: '下一步补 6 源存在性和数量检查。' },
-      { id: 'qa-cve-dup', severity: 'info', title: 'CVE 聚合可能重复', target: 'opengauss/security', note: '同一 CVE 在 issue/公告中重复出现，需要归一。' },
-    ];
-    return <div className="table-card"><table><thead><tr><th>质量项</th><th>级别</th><th>对象</th><th>说明</th><th>操作</th></tr></thead><tbody>{qualityItems.map(q => <tr key={q.id} className="clickable"><td><div className="repo-name">{q.title}</div></td><td><span className={`badge ${q.severity === 'warn' ? 'B' : 'C'}`}>{q.severity}</span></td><td>{q.target}</td><td>{q.note}</td><td><button className="btn">复核</button></td></tr>)}</tbody></table></div>;
-  }
-  if (kind === 'ops-queue') {
-    const items = model.opsManualQueue ?? [];
-    return <div className="table-card"><table><thead><tr><th>事项</th><th>类型</th><th>优先级</th><th>状态</th><th>操作</th></tr></thead><tbody>{items.map(q => <tr key={q.id} className="clickable"><td><div className="repo-name">{q.title}</div></td><td>{q.type}</td><td><span className={`badge ${q.priority === 'P0' ? 'A' : q.priority === 'P1' ? 'B' : 'C'}`}>{q.priority}</span></td><td>{q.status}</td><td><button className="btn">标记处理</button></td></tr>)}</tbody></table></div>;
-  }
-  return <EmptyState title="未知运营页面" />;
-}
-
 function RepoTable({ repos, openRepo }: { repos: ThreatRepo[]; openRepo: (repo: ThreatRepo) => void }) {
   return <table><thead><tr><th>目标</th><th>风险</th><th>攻击面</th><th>安全线索</th><th>评分拆解</th><th>操作</th></tr></thead><tbody>{repos.map(repo => <tr className="clickable" key={repo.id} onClick={() => openRepo(repo)}>
     <td style={{ maxWidth: 320 }}><div className="repo-name">{repo.org}/{repo.name}</div><div className="repo-url">{repo.url}</div><div className="muted small" style={{ maxHeight: '2.6em', overflow: 'hidden' }}>{repo.summary}</div></td>
@@ -541,15 +527,15 @@ function filterRepos(repos: ThreatRepo[], filters: FilterState): ThreatRepo[] {
 }
 
 function heroTitle(view: ViewId): string {
-  return ({ today: '今天有哪些目标值得看', repos: '开源代码仓目标库', surface: '攻击面评分与分布', assets: '固件 / 镜像 / Hub 资产库', graph: '代码仓与资产关联图谱', queue: '威胁跟踪队列', 'ops-tasks': '采集任务', 'ops-sources': '数据源状态', 'ops-quality': '质量审计' } as Record<ViewId, string>)[view];
+  return ({ today: '今天有哪些目标值得看', repos: '开源代码仓目标库', surface: '攻击面评分与分布', assets: '固件 / 镜像 / Hub 资产库', graph: '代码仓与资产关联图谱', queue: '威胁跟踪队列', 'ops-overview': '运营概览', 'ops-tasks': '采集任务', 'ops-sources': '数据源状态', 'ops-quality': '质量审计', 'ops-queue': '人工队列', 'ops-ai-summary': 'AI 分析汇总' } as Record<ViewId, string>)[view];
 }
 
 function heroCopy(view: ViewId): string {
-  return ({ today: '优先呈现高风险目标、CVE/SA/security issue 和推荐挖洞方向。', repos: '搜索、过滤、排序所有华为开源仓，并查看证据链。', surface: '按语言、输入面、历史漏洞、复杂度和安全边界拆分评分。', assets: '查看 firmware、AscendHub、mirror、OpenX Huawei 等资产线索。', graph: '用轻量关系图查看组织、仓库、CVE、攻击面和资产。', queue: '承接待研判、待代码审计、持续跟踪等行动项。', 'ops-tasks': '查看威胁 pipeline 运行结果和报告 artifact。', 'ops-sources': '查看 CVE scout、攻击面和报告数据源。', 'ops-quality': '查看质量审计与覆盖率提示。' } as Record<ViewId, string>)[view];
+  return ({ today: '优先呈现高风险目标、CVE/SA/security issue 和推荐挖洞方向。', repos: '搜索、过滤、排序所有华为开源仓，并查看证据链。', surface: '按语言、输入面、历史漏洞、复杂度和安全边界拆分评分。', assets: '查看 firmware、AscendHub、mirror、OpenX Huawei 等资产线索。', graph: '用轻量关系图查看组织、仓库、CVE、攻击面和资产。', queue: '承接待研判、待代码审计、持续跟踪等行动项。', 'ops-overview': '系统状态、数据新鲜度、AI 分析进度和快捷操作。', 'ops-tasks': '触发 pipeline、追踪 step 进度和产物。', 'ops-sources': '每个源的健康、记录数和最近采集时间。', 'ops-quality': '质量审计记录与覆盖率。', 'ops-queue': '人工队列，承接待研判和复核事项。', 'ops-ai-summary': 'AI 研判和资产关联的汇总视图。' } as Record<ViewId, string>)[view];
 }
 
 function navCount(view: ViewId, model: ThreatViewModel | null): string {
-  if (!model) return '—';
+  if (!model) return '';
   return ({
     today: String(model.today.length),
     repos: String(model.summary.totalRepos || model.repos.length),
@@ -557,16 +543,17 @@ function navCount(view: ViewId, model: ThreatViewModel | null): string {
     assets: '',
     graph: String(model.graph.nodes.length),
     queue: String(model.queue.length),
-    'ops-tasks': String(model.summary.totalRepos),
-    'ops-sources': String(Object.keys(model.summary.sourceStats).length),
-    'ops-rules': String(0),
-    'ops-quality': String(Object.keys(model.summary.scanModes).length),
+    'ops-overview': '',
+    'ops-tasks': '',
+    'ops-sources': '',
+    'ops-quality': '',
     'ops-queue': String(model.queue.length),
+    'ops-ai-summary': '',
   } as Record<ViewId, string>)[view];
 }
 
 function navMeta(view: ViewId): string {
-  return ({ today: 'Today', repos: 'Repo', surface: 'Surface', assets: 'Asset', graph: 'Graph', queue: 'Track', 'ops-tasks': 'Jobs', 'ops-sources': 'Sources', 'ops-quality': 'QA' } as Record<ViewId, string>)[view];
+  return '' as string;
 }
 
 function unique(values: string[]): string[] { return Array.from(new Set(values)).filter(Boolean).sort(); }
