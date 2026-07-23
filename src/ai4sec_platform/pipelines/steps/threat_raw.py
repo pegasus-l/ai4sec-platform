@@ -56,7 +56,7 @@ class NormalizeHuaweiRawStep:
 
     def run(self, context: PipelineContext) -> StepResult:
         raw_sources = context.outputs.get("huawei_raw_sources") or []
-        limit = int(context.params.get("limit", 300))
+        limit = int(context.params.get("limit", 9999))
         normalized_count = 0
         for raw in raw_sources:
             if raw.get("source") not in TARGET_SOURCES:
