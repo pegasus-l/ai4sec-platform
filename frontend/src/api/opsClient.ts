@@ -52,6 +52,20 @@ export interface OpsRun {
   artifacts?: Array<Record<string, unknown>>;
 }
 
+// Map step_name (in task_runs) → pipeline_name (in sub-step table)
+export const STEP_TO_PIPELINE: Record<string, string> = {
+  'collect_huawei_sources': 'threats.huawei_collect_sources_pipeline',
+  'huawei_cve_scout': 'threats.huawei_cve_scout_pipeline',
+  'huawei_attack_surface_score': 'threats.huawei_attack_surface_pipeline',
+  'import_huawei_threat_assets': 'threats.huawei_asset_pipeline',
+  'reason_threat_risk': 'threats.risk_reasoning_pipeline',
+  'select_threat_risk_candidates': 'threats.risk_reasoning_pipeline',
+};
+
+export async function fetchRunDetail(runId: string): Promise<OpsRun> {
+  return getJson(`/api/runs/${runId}`);
+}
+
 export async function fetchOpsOverview(): Promise<OpsOverviewData> {
   return getJson('/api/ops/overview');
 }

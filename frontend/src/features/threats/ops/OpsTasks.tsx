@@ -1,7 +1,7 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState, useCallback } from 'react';
 import { Card, Drawer } from '../../../components/ui';
-import { fetchOpsPipelines, fetchRuns, type OpsPipeline, type OpsRun } from '../../../api/opsClient';
+import { fetchOpsPipelines, fetchRuns, fetchRunDetail, STEP_TO_PIPELINE, type OpsPipeline, type OpsRun } from '../../../api/opsClient';
 import { postJson } from '../../../api/client';
 
 const zhPipelineNames: Record<string, string> = {
@@ -26,7 +26,6 @@ export function OpsTasks() {
   const { data: pipelinesData } = useQuery({ queryKey: ['ops-pipelines'], queryFn: fetchOpsPipelines });
   const { data: runsData } = useQuery({ queryKey: ['ops-runs'], queryFn: fetchRuns, refetchInterval: 5000 });
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
-  const [runningPipeline, setRunningPipeline] = useState<string | null>(null);
   const [runError, setRunError] = useState<string | null>(null);
 
   const pipelines = pipelinesData?.items ?? [];
@@ -36,6 +35,29 @@ export function OpsTasks() {
   const failed = runs.filter(r => r.status === 'failed');
   const activeRun = runs.find(r => r.status === 'running');
 
+  // Fetch run detail (with task_runs) when a pipeline is running
+  const { data: activeRunDetail } = useQuery({
+    queryKey: ['ops-run-detail', activeRun?.run_id],
+    queryFn: () => activeRun ? fetchRunDetail(activeRun.run_id) : Promise.resolve(null),
+    enabled: !!activeRun,
+    refetchInterval: activeRun ? 3000 : false,
+  });
+
+  // Map task_runs step_name → sub-pipeline status
+  const stepStatusMap: Record<string, { status: string; detail: string }> = {};
+  if (activeRunDetail?.tasks) {
+    for (const task of activeRunDetail.tasks) {
+      const stepName = String(task.step_name ?? '');
+      const mappedPipeline = STEP_TO_PIPELINE[stepName];
+      if (mappedPipeline) {
+        stepStatusMap[mappedPipeline] = {
+          status: String(task.status ?? 'pending'),
+          detail: String(task.metrics_json ?? task.error_message ?? '').slice(0, 60),
+        };
+      }
+    }
+  }
+
   const parentPipeline = pipelines.find(p => p.name === 'threats.huawei_full_migration_pipeline');
   const subPipelines = pipelines.filter(p => SUB_PIPELINES.includes(p.name));
 
@@ -43,7 +65,6 @@ export function OpsTasks() {
     const highRisk = p.risk === '高';
     if (highRisk && !forceReset && !window.confirm(`${zhPipelineNames[p.short_name] || p.short_name} 是高风险操作（完整链路 30-60 分钟），确认运行吗？`)) return;
     if (forceReset && !window.confirm(`清空并重建会删除所有数据（包括 AI 研判结果），确认吗？`)) return;
-    setRunningPipeline(p.name);
     setRunError(null);
     try {
       const params: Record<string, unknown> = { use_source_cache: true, refresh_source_cache: true };
@@ -113,6 +134,9 @@ export function OpsTasks() {
               {subPipelines.map(p => {
                 const lastRun = lastRunForPipeline(p.name);
                 const lastStatus = lastRun?.status ?? '—';
+                // Check if this sub-step is running now (from active run's task_runs)
+                const stepStatus = stepStatusMap[p.name];
+                const displayStatus = stepStatus?.status ?? lastStatus;
                 return (
                   <tr key={p.name} className="clickable" onClick={() => lastRun ? setSelectedRunId(lastRun.run_id) : undefined}>
                     <td>
@@ -120,19 +144,19 @@ export function OpsTasks() {
                       <div className="sub">{p.short_name}</div>
                     </td>
                     <td>
-                      <span className={`badge ${badgeClass(lastStatus)}`}>{zhStatus(lastStatus)}</span>
+                      <span className={`badge ${badgeClass(displayStatus)}`}>{zhStatus(displayStatus)}</span>
                       <div className="sub">{p.risk}风险</div>
                     </td>
                     <td className="small">{lastRun?.started_at?.slice(11, 19) ?? '—'}<div className="sub">{lastRun?.started_at?.slice(0, 10) ?? '从未运行'}</div></td>
-                    <td className="small">{lastRun ? zhStatus(lastRun.status) : '—'}<div className="sub">{lastRun?.run_id?.slice(-8) ?? ''}</div></td>
+                    <td className="small">{stepStatus?.detail || (lastRun ? zhStatus(lastRun.status) : '—')}<div className="sub">{lastRun?.run_id?.slice(-8) ?? ''}</div></td>
                     <td className="small muted">{p.description.slice(0, 50)}{p.description.length > 50 ? '...' : ''}</td>
                     <td>
                       <button
                         className={`btn sm ${p.risk === '高' ? 'danger' : 'primary'}`}
-                        disabled={runningPipeline === p.name}
+                        disabled={running.length > 0}
                         onClick={(e) => { e.stopPropagation(); handleRun(p); }}
                       >
-                        {runningPipeline === p.name ? '运行中' : '运行'}
+                        {running.length > 0 ? '—' : '运行'}
                       </button>
                     </td>
                   </tr>
