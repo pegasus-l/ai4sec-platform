@@ -77,8 +77,6 @@ export function OpsTasks() {
       queryClient.invalidateQueries({ queryKey: ['ops-runs'] });
     } catch (e) {
       setRunError(String(e));
-    } finally {
-      setRunningPipeline(null);
     }
   };
 
