@@ -245,13 +245,19 @@ function OpenxGroupCard({ deviceModel, files, onClick }: { deviceModel: string; 
     </div>
     {expanded ? (
       <div className="timeline" style={{ marginTop: 10 }}>
-        {files.map((f, i) => (
-          <div key={i} className="timeline-item clickable" onClick={(e) => { e.stopPropagation(); onClick(f); }}>
-            <div className="row-title"><b>{f.softwareVersion || f.version || '-'}</b><span className="badge">{f.fileType || '-'}</span></div>
-            <span className="muted small">{f.size || '-'} | {f.latest || '-'}</span>
-            <span className="muted small" style={{ wordBreak: 'break-all', display: 'block' }}>{f.link || f.url || '-'}</span>
-          </div>
-        ))}
+        {files.map((f, i) => {
+          const name = f.softwareVersion || f.version || f.model || f.title || '-';
+          const size = f.size || '';
+          const date = f.latest || '';
+          const fileInfo = [size, date].filter(Boolean).join(' | ') || '-';
+          return (
+            <div key={i} className="timeline-item clickable" onClick={(e) => { e.stopPropagation(); onClick(f); }}>
+              <div className="row-title"><b>{name}</b><span className="badge">{f.fileType || '-'}</span></div>
+              <span className="muted small">{fileInfo}</span>
+              {f.link || f.url ? <span className="muted small" style={{ wordBreak: 'break-all', display: 'block' }}>{f.link || f.url}</span> : null}
+            </div>
+          );
+        })}
       </div>
     ) : <p className="muted small" style={{ marginTop: 8 }}>点击展开 {files.length} 个固件文件</p>}
   </div>;
@@ -350,16 +356,18 @@ function AssetCard({ asset, onClick }: { asset: ThreatAsset; onClick: () => void
         <div><b>{asset.downloadCount ?? '-'}</b><span>下载次数</span></div>
       </div>
       {asset.labelNames?.length ? <div className="split" style={{ marginTop: 6 }}>{asset.labelNames.map((l, i) => <span key={i} className="badge">{l}</span>)}</div> : null}
-      {asset.fullDescription && asset.fullDescription !== asset.evidence && <p className="muted small" style={{ marginTop: 6 }}>{asset.fullDescription.slice(0, 200)}{asset.fullDescription.length > 200 ? '...' : ''}</p>}
       {asset.versionTags?.length ? (
-        <div className="timeline" style={{ marginTop: 8 }}>
-          {asset.versionTags.slice(0, 3).map((t, i) => (
-            <div key={i} className="timeline-item">
-              <div className="row-title"><b>{t.tag}</b><span className="badge">{t.size || '-'}</span></div>
-              <span className="muted small">{t.update_time || '-'} | {t.architectures?.join(', ') || '-'}</span>
-            </div>
-          ))}
-          {asset.versionTags.length > 3 && <p className="muted small">+{asset.versionTags.length - 3} 更多版本</p>}
+        <div style={{ marginTop: 8 }}>
+          <b className="muted small">版本标签 ({asset.versionTags.length})</b>
+          <div className="timeline" style={{ marginTop: 4 }}>
+            {asset.versionTags.slice(0, 5).map((t, i) => (
+              <div key={i} className="timeline-item">
+                <div className="row-title"><b>{t.tag}</b><span className="badge">{t.size || '-'}</span></div>
+                <span className="muted small">{t.update_time || '-'} | 架构: {t.architectures?.join(', ') || '-'}</span>
+              </div>
+            ))}
+            {asset.versionTags.length > 5 && <div className="muted small" style={{ marginTop: 4 }}>还有 {asset.versionTags.length - 5} 个版本，点击资产详情查看全部</div>}
+          </div>
         </div>
       ) : null}
       </>
@@ -485,7 +493,7 @@ function navCount(view: ViewId, model: ThreatViewModel | null): string {
     today: String(model.today.length),
     repos: String(model.summary.totalRepos || model.repos.length),
     surface: String(Object.keys(groupBy(model.repos, repo => repo.surface || 'unknown')).length),
-    assets: String(model.assets.length),
+    assets: '—',
     graph: String(model.graph.nodes.length),
     queue: String(model.queue.length),
     'ops-tasks': String(model.summary.totalRepos),
