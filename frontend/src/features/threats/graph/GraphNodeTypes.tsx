@@ -11,15 +11,15 @@
 import { Handle, Position, type NodeProps } from 'reactflow';
 import type { ThreatGraphData } from '../../../types/threat';
 
-/** Root node — code-root (left) or asset-root (right). Purple border. */
+/** Root node — code-root (source RIGHT, children on left in LR) or asset-root (source LEFT, children on left in RL). */
 export function RootNode({ data }: NodeProps<ThreatGraphData>) {
   if (!data) return null;
+  const isAssetRoot = data.title === '资产';
   return (
     <div className="graph-node root">
       <strong>{data.title}</strong>
       {data.meta && <span>{data.meta}</span>}
-      <Handle type="source" position={Position.Right} />
-      <Handle type="target" position={Position.Left} />
+      <Handle type="source" position={isAssetRoot ? Position.Left : Position.Right} id="source" />
     </div>
   );
 }
