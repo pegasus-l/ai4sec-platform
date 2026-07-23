@@ -28,7 +28,7 @@ export function OpsTasks() {
               <p className="muted small">{p.description}</p>
               <div className="split" style={{ marginTop: 6 }}>
                 <span className="badge">{p.estimated_time}</span>
-                <span className="badge">{p.steps} 步</span>
+                <span className="badge">{p.steps || '?'} 步</span>
               </div>
             </div>
           ))}

@@ -38,6 +38,8 @@ export interface OpsPipeline {
   description: string;
   risk: string;
   estimated_time: string;
+  steps?: string;
+  domain?: string;
 }
 
 export interface OpsRun {
@@ -46,8 +48,8 @@ export interface OpsRun {
   status: string;
   started_at: string;
   finished_at: string;
-  tasks?: unknown[];
-  artifacts?: unknown[];
+  tasks?: Array<Record<string, unknown>>;
+  artifacts?: Array<Record<string, unknown>>;
 }
 
 export async function fetchOpsOverview(): Promise<OpsOverviewData> {

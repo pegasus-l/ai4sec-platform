@@ -17,7 +17,7 @@ import { OpsSources } from './ops/OpsSources';
 import { OpsQuality } from './ops/OpsQuality';
 import { OpsAISummary } from './ops/OpsAISummary';
 
-type ViewId = 'today' | 'repos' | 'surface' | 'assets' | 'graph' | 'queue' | 'ops-overview' | 'ops-tasks' | 'ops-sources' | 'ops-quality' | 'ops-queue' | 'ops-ai-summary';
+export type ViewId = 'today' | 'repos' | 'surface' | 'assets' | 'graph' | 'queue' | 'ops-overview' | 'ops-tasks' | 'ops-sources' | 'ops-quality' | 'ops-queue' | 'ops-ai-summary';
 
 const navGroups: Array<{ title: string; items: Array<{ id: ViewId; icon: string; title: string }> }> = [
   { title: '开源威胁洞察', items: [
