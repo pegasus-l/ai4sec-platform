@@ -231,9 +231,19 @@ export function ThreatGraphView({ model, openRepo, openAsset }: ThreatGraphViewP
   return (
     <div className="graph-layout">
       <div className="card">
-        <h3>生态树图</h3>
+        <div className="row-title">
+          <h3>生态树图</h3>
+          <div className="split">
+            <button className="btn" onClick={() => {
+              setExpandedNodes(new Set(fullGraph.nodes
+                .filter(n => { const k = (n.data as ThreatGraphData)?.kind; return k === 'ecosystem' || k === 'repo' || k === 'asset-category'; })
+                .map(n => n.id)));
+            }}>一键展开</button>
+            <button className="btn" onClick={() => setExpandedNodes(new Set())}>一键折叠</button>
+          </div>
+        </div>
         <p className="muted small">
-          点击生态节点展开/折叠代码仓，点击代码仓展开/折叠 CVE。dagre 自动布局，拖拽平移，滚轮缩放。
+          点击节点展开/折叠。dagre 自动布局，拖拽平移，滚轮缩放。
         </p>
         <div className="graph-wrap">
           <ReactFlow
