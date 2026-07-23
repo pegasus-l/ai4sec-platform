@@ -210,28 +210,13 @@ export function ThreatGraphView({ model, openRepo, openAsset }: ThreatGraphViewP
   const activeNode =
     fullGraph.nodes.find((n) => n.id === activeNodeId) as Node<ThreatGraphData> | undefined;
 
-  const [popupNode, setPopupNode] = useState<{ node: Node<ThreatGraphData>; x: number; y: number } | null>(null);
-
-  const handleNodeClick = useCallback((evt: unknown, node: Node<ThreatGraphData>) => {
+  const handleNodeClick = useCallback((_evt: unknown, node: Node<ThreatGraphData>) => {
     const data = node.data;
     setActiveNodeId(node.id);
-    // Show popup detail at click position
-    const event = evt as React.MouseEvent;
-    if (event && event.clientX !== undefined) {
-      const rect = (event.currentTarget as HTMLElement)?.closest('.graph-wrap')?.getBoundingClientRect();
-      if (rect) {
-        setPopupNode({ node, x: event.clientX - rect.left, y: event.clientY - rect.top });
-      }
-    }
-    // Toggle expand for ecosystem, repo, asset-category
     if (data?.kind === 'ecosystem' || data?.kind === 'repo' || data?.kind === 'asset-category') {
       setExpandedNodes((prev) => {
         const next = new Set(prev);
-        if (next.has(node.id)) {
-          next.delete(node.id);
-        } else {
-          next.add(node.id);
-        }
+        if (next.has(node.id)) { next.delete(node.id); } else { next.add(node.id); }
         return next;
       });
     }
@@ -252,15 +237,14 @@ export function ThreatGraphView({ model, openRepo, openAsset }: ThreatGraphViewP
           </div>
         </div>
         <p className="muted small">
-          单击节点展开/折叠并显示详情卡片。dagre 自动布局，拖拽平移，滚轮缩放。
+          点击节点展开/折叠并查看右侧详情。拖拽平移，滚轮缩放。
         </p>
-        <div className="graph-wrap" style={{ position: 'relative' }}>
+        <div className="graph-wrap">
           <ReactFlow
             nodes={enhancedNodes}
             edges={layoutedEdges}
             nodeTypes={graphNodeTypes}
             onNodeClick={handleNodeClick}
-            onPaneClick={() => { setPopupNode(null); setActiveNodeId(null); }}
             fitView
             panOnScroll
             zoomOnScroll
@@ -292,34 +276,20 @@ export function ThreatGraphView({ model, openRepo, openAsset }: ThreatGraphViewP
             <span className="badge inferred">inferred</span>
             <span className="badge weak">weak</span>
           </div>
-          {/* Floating popup detail card */}
-          {popupNode && (
-            <div style={{
-              position: 'absolute',
-              left: Math.min(popupNode.x + 20, 400),
-              top: Math.max(popupNode.y - 100, 10),
-              maxWidth: 360,
-              zIndex: 20,
-              background: 'rgba(2,6,23,0.98)',
-              border: '1px solid var(--line)',
-              borderRadius: '12px',
-              padding: '14px',
-              boxShadow: '0 8px 32px rgba(0,0,0,0.5)',
-              maxHeight: '400px',
-              overflowY: 'auto',
-            }}>
-              <div className="split" style={{ marginBottom: 8 }}>
-                <span className="muted small" style={{ cursor: 'pointer' }} onClick={() => setPopupNode(null)}>✕ 关闭</span>
-              </div>
-              <NodeDetail
-                data={popupNode.node.data as ThreatGraphData}
-                model={model}
-                openRepo={openRepo}
-                openAsset={openAsset}
-              />
-            </div>
-          )}
         </div>
+      </div>
+      <div className="card">
+        <h3>节点详情</h3>
+        {activeNode?.data ? (
+          <NodeDetail
+            data={activeNode.data}
+            model={model}
+            openRepo={openRepo}
+            openAsset={openAsset}
+          />
+        ) : (
+          <p className="muted">点击任意节点查看详情。</p>
+        )}
       </div>
     </div>
   );
