@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import time
+import urllib.error
+import urllib.request
 from typing import Any
 
 from ai4sec_platform.schemas.sources import SourceFetchRequest
@@ -35,7 +38,7 @@ class GitCodeConnector(LiveJsonConnector):
         return super().build_url(request)
 
     def fetch(self, request: SourceFetchRequest) -> SourceFetchResult:
-        """Override to add pagination for 'repos' resource — fetch ALL pages for each org."""
+        """Override to add pagination with rate-limit handling for 'repos' resource."""
         resource = request.params.get("resource") or request.config.get("resource") or "repos"
         if resource != "repos":
             return super().fetch(request)
@@ -43,26 +46,55 @@ class GitCodeConnector(LiveJsonConnector):
         org = request.params.get("org") or request.config.get("org") or "openharmony"
         per_page = int(request.params.get("per_page") or 100)
         timeout = int(request.params.get("timeout_seconds") or 30)
+        max_pages = 200  # 200 * 100 = 20000, covers any org
+        max_retries = 3
+        rate_limit_sleep = 30  # seconds to wait on 403/429
+
         all_items: list[dict[str, Any]] = []
-        page = 1
         errors: list[str] = []
 
-        while True:
+        for page in range(1, max_pages + 1):
             url = with_query(f"{self.api_base}/orgs/{org}/repos", {"type": "all", "page": page, "per_page": per_page})
-            try:
-                raw = self.get_json(url, timeout=timeout)
-                items = self.extract_items(raw)
-                if not items:
+            success = False
+
+            for retry in range(max_retries):
+                try:
+                    req = urllib.request.Request(url, headers={
+                        "User-Agent": "opencode-huawei-scout/1.0",
+                        "Accept": "application/json",
+                    })
+                    resp = urllib.request.urlopen(req, timeout=timeout)  # noqa: S310
+                    raw = resp.read()
+                    import json
+                    data = json.loads(raw)
+                    success = True
                     break
-                all_items.extend(items)
-                if len(items) < per_page:
-                    break  # last page
-                page += 1
-                if page > 200:  # safety limit
-                    break
-            except Exception as exc:
-                errors.append(f"page {page}: {exc}")
+                except urllib.error.HTTPError as e:
+                    if e.code in (403, 429) and retry < max_retries - 1:
+                        # Rate limited — sleep and retry
+                        time.sleep(rate_limit_sleep)
+                        continue
+                    else:
+                        errors.append(f"page {page} HTTP {e.code}: {e.reason}")
+                        break
+                except Exception as e:
+                    if retry < max_retries - 1:
+                        time.sleep(5)
+                        continue
+                    else:
+                        errors.append(f"page {page}: {e}")
+                        break
+
+            if not success:
                 break
+
+            items = self.extract_items(data) if 'data' in dir() else []
+            if not items:
+                break
+
+            all_items.extend(items)
+            if len(items) < per_page:
+                break  # last page
 
         return SourceFetchResult(
             source_name=request.source_name,
