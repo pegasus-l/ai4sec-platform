@@ -37,15 +37,16 @@ export function EcosystemNode({ data }: NodeProps<ThreatGraphData>) {
   );
 }
 
-/** Repo node — a code repository. Green border. */
+/** Repo node — source RIGHT (CVE children), target LEFT (ecosystem parent) + target RIGHT (cross-edge from asset) */
 export function RepoNode({ data }: NodeProps<ThreatGraphData>) {
   if (!data) return null;
   return (
     <div className="graph-node repo">
       <strong>{data.title}</strong>
       {data.meta && <span>{data.meta}</span>}
-      <Handle type="source" position={Position.Right} />
-      <Handle type="target" position={Position.Left} />
+      <Handle type="source" position={Position.Right} id="right" />
+      <Handle type="target" position={Position.Left} id="left" />
+      <Handle type="target" position={Position.Right} id="cross" />
     </div>
   );
 }
@@ -74,32 +75,28 @@ export function VulnMoreNode({ data }: NodeProps<ThreatGraphData>) {
   );
 }
 
-/** Asset-category node — handles on both sides for tree edges + cross-edges */
+/** Asset-category node — source on LEFT (children in RL), target on RIGHT (parent in RL) */
 export function AssetCategoryNode({ data }: NodeProps<ThreatGraphData>) {
   if (!data) return null;
   return (
     <div className="graph-node category">
       <strong>{data.title}</strong>
       {data.meta && <span>{data.meta}</span>}
-      <Handle type="source" position={Position.Left} />
-      <Handle type="target" position={Position.Right} />
-      <Handle type="source" position={Position.Right} />
-      <Handle type="target" position={Position.Left} />
+      <Handle type="source" position={Position.Left} id="left" />
+      <Handle type="target" position={Position.Right} id="right" />
     </div>
   );
 }
 
-/** Asset node — source on left (for cross-edges to repos), target on right (from category) */
+/** Asset node — source on LEFT (cross-edges to repos on the left), target on RIGHT (from category on the right) */
 export function AssetNode({ data }: NodeProps<ThreatGraphData>) {
   if (!data) return null;
   return (
     <div className="graph-node asset">
       <strong>{data.title}</strong>
       {data.meta && <span>{data.meta}</span>}
-      <Handle type="source" position={Position.Left} />
-      <Handle type="target" position={Position.Right} />
-      <Handle type="source" position={Position.Right} />
-      <Handle type="target" position={Position.Left} />
+      <Handle type="source" position={Position.Left} id="left" />
+      <Handle type="target" position={Position.Right} id="right" />
     </div>
   );
 }
