@@ -39,9 +39,10 @@ export function OpsTasks() {
   const parentPipeline = pipelines.find(p => p.name === 'threats.huawei_full_migration_pipeline');
   const subPipelines = pipelines.filter(p => SUB_PIPELINES.includes(p.name));
 
-  const handleRun = async (p: OpsPipeline) => {
+  const handleRun = async (p: OpsPipeline, forceReset = false) => {
     const highRisk = p.risk === '高';
-    if (highRisk && !window.confirm(`${zhPipelineNames[p.short_name] || p.short_name} 是高风险操作（完整链路 30-60 分钟），确认运行吗？`)) return;
+    if (highRisk && !forceReset && !window.confirm(`${zhPipelineNames[p.short_name] || p.short_name} 是高风险操作（完整链路 30-60 分钟），确认运行吗？`)) return;
+    if (forceReset && !window.confirm(`清空并重建会删除所有数据（包括 AI 研判结果），确认吗？`)) return;
     setRunningPipeline(p.name);
     setRunError(null);
     try {
@@ -49,8 +50,9 @@ export function OpsTasks() {
       await fetch('/api/runs', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ pipeline_name: p.name, reset: highRisk, params }),
+        body: JSON.stringify({ pipeline_name: p.name, reset: forceReset, params }),
       });
+      // Poll runs immediately and keep polling
       queryClient.invalidateQueries({ queryKey: ['ops-runs'] });
     } catch (e) {
       setRunError(String(e));
@@ -86,11 +88,14 @@ export function OpsTasks() {
             <span className="badge" style={{ color: 'var(--violet)', borderColor: 'rgba(167,139,250,.38)', background: 'rgba(167,139,250,.10)' }}>{parentPipeline.short_name}</span>
           </div>
           <div className="split" style={{ marginTop: 12 }}>
-            <button className="btn danger" disabled={runningPipeline === parentPipeline.name} onClick={() => handleRun(parentPipeline)}>
-              {runningPipeline === parentPipeline.name ? '运行中...' : '运行完整链路'}
+            <button className="btn primary" disabled={running.length > 0} onClick={() => handleRun(parentPipeline)}>
+              {running.length > 0 ? '运行中' : '运行完整链路'}
             </button>
-            {running.length > 0 && activeRun?.pipeline_name === parentPipeline.name && (
-              <span className="badge running">运行中 · {activeRun.started_at?.slice(11, 19)}</span>
+            <button className="btn danger" disabled={running.length > 0} onClick={() => handleRun(parentPipeline, true)}>
+              清空并重建
+            </button>
+            {running.length > 0 && (
+              <span className="badge running">运行中 · {activeRun?.started_at?.slice(11, 19) ?? ''}</span>
             )}
           </div>
           {runError && <p className="small" style={{ color: '#fecaca', marginTop: 8 }}>运行失败: {runError}</p>}

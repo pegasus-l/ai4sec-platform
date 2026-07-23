@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import sqlite3
+import threading
+import traceback
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -27,12 +29,30 @@ def pipelines() -> dict:
 
 @router.post("")
 def start_run(request: RunPipelineRequest) -> dict:
+    """Start pipeline asynchronously — returns immediately, pipeline runs in background thread."""
     params = dict(request.params)
     params["reset"] = request.reset
+
+    # Validate pipeline exists
     try:
-        return PipelineRunner().run(request.pipeline_name, params)
+        registry = default_registry()
+        registry.get(request.pipeline_name)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    # Run in background thread (PipelineRunner creates its own DB connection)
+    def _run_in_background():
+        try:
+            runner = PipelineRunner()
+            runner.run(request.pipeline_name, params)
+        except Exception:
+            # Pipeline errors are logged in task_runs, not here
+            traceback.print_exc()
+
+    thread = threading.Thread(target=_run_in_background, daemon=True)
+    thread.start()
+
+    return {"status": "started", "pipeline": request.pipeline_name, "message": "Pipeline started in background. Poll GET /api/runs to track progress."}
 
 
 @router.get("")
