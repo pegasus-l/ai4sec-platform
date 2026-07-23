@@ -74,7 +74,7 @@ export function VulnMoreNode({ data }: NodeProps<ThreatGraphData>) {
   );
 }
 
-/** Asset-category node — asset source (e.g. "AscendHub镜像仓库"). Blue border. */
+/** Asset-category node — handles on both sides for tree edges + cross-edges */
 export function AssetCategoryNode({ data }: NodeProps<ThreatGraphData>) {
   if (!data) return null;
   return (
@@ -83,11 +83,13 @@ export function AssetCategoryNode({ data }: NodeProps<ThreatGraphData>) {
       {data.meta && <span>{data.meta}</span>}
       <Handle type="source" position={Position.Left} />
       <Handle type="target" position={Position.Right} />
+      <Handle type="source" position={Position.Right} />
+      <Handle type="target" position={Position.Left} />
     </div>
   );
 }
 
-/** Asset node — a firmware/image/mirror asset. Amber border. */
+/** Asset node — source on left (for cross-edges to repos), target on right (from category) */
 export function AssetNode({ data }: NodeProps<ThreatGraphData>) {
   if (!data) return null;
   return (
@@ -96,6 +98,8 @@ export function AssetNode({ data }: NodeProps<ThreatGraphData>) {
       {data.meta && <span>{data.meta}</span>}
       <Handle type="source" position={Position.Left} />
       <Handle type="target" position={Position.Right} />
+      <Handle type="source" position={Position.Right} />
+      <Handle type="target" position={Position.Left} />
     </div>
   );
 }

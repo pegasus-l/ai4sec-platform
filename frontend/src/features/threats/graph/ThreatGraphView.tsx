@@ -29,26 +29,26 @@ interface ThreatGraphViewProps {
   openAsset: (asset: ThreatAsset) => void;
 }
 
-/** Apply dagre auto-layout to visible nodes and edges. */
-function applyDagreLayout(nodes: ThreatReactFlowNode[], edges: ThreatReactFlowEdge[]) {
+/** Node sizes per kind */
+const NODE_SIZE: Record<string, { w: number; h: number }> = {
+  root: { w: 120, h: 60 },
+  ecosystem: { w: 160, h: 50 },
+  repo: { w: 170, h: 50 },
+  vuln: { w: 140, h: 40 },
+  'vuln-more': { w: 140, h: 35 },
+  'asset-category': { w: 160, h: 50 },
+  asset: { w: 150, h: 50 },
+};
+
+/** Run dagre on a subgraph and return positioned nodes. */
+function runDagre(nodes: ThreatReactFlowNode[], edges: ThreatReactFlowEdge[], rankdir: 'LR' | 'RL', offsetX: number) {
   const g = new dagre.graphlib.Graph();
   g.setDefaultEdgeLabel(() => ({}));
-  g.setGraph({ rankdir: 'LR', ranksep: 140, nodesep: 25, marginx: 20, marginy: 20 });
-
-  // Node sizes per kind
-  const nodeSize: Record<string, { w: number; h: number }> = {
-    root: { w: 120, h: 60 },
-    ecosystem: { w: 160, h: 50 },
-    repo: { w: 170, h: 50 },
-    vuln: { w: 140, h: 40 },
-    'vuln-more': { w: 140, h: 35 },
-    'asset-category': { w: 160, h: 50 },
-    asset: { w: 150, h: 50 },
-  };
+  g.setGraph({ rankdir, ranksep: 140, nodesep: 25, marginx: 20, marginy: 20 });
 
   nodes.forEach((node) => {
     const kind = (node.data as ThreatGraphData)?.kind ?? 'repo';
-    const size = nodeSize[kind] ?? { w: 150, h: 50 };
+    const size = NODE_SIZE[kind] ?? { w: 150, h: 50 };
     g.setNode(node.id, { width: size.w, height: size.h });
   });
 
@@ -58,20 +58,55 @@ function applyDagreLayout(nodes: ThreatReactFlowNode[], edges: ThreatReactFlowEd
 
   dagre.layout(g);
 
-  const layoutedNodes = nodes.map((node) => {
+  return nodes.map((node) => {
     const dagreNode = g.node(node.id);
     const kind = (node.data as ThreatGraphData)?.kind ?? 'repo';
-    const size = nodeSize[kind] ?? { w: 150, h: 50 };
+    const size = NODE_SIZE[kind] ?? { w: 150, h: 50 };
     return {
       ...node,
       position: {
-        x: dagreNode.x - size.w / 2,
+        x: dagreNode.x - size.w / 2 + offsetX,
         y: dagreNode.y - size.h / 2,
       },
     };
   });
+}
 
-  return { layoutedNodes, layoutedEdges: edges };
+/** Apply dual-tree dagre layout: code tree LR (left→right), asset tree RL (right→left). */
+function applyDagreLayout(nodes: ThreatReactFlowNode[], edges: ThreatReactFlowEdge[]) {
+  // Split into code-tree and asset-tree based on node kind
+  const codeKinds = new Set(['root', 'ecosystem', 'repo', 'vuln', 'vuln-more']);
+  const assetKinds = new Set(['asset-category', 'asset']);
+
+  // Code root vs asset root
+  const codeNodes = nodes.filter((n) => {
+    const kind = (n.data as ThreatGraphData)?.kind;
+    return codeKinds.has(kind ?? '') || n.id === 'g:code-root';
+  });
+  const assetNodes = nodes.filter((n) => {
+    const kind = (n.data as ThreatGraphData)?.kind;
+    return assetKinds.has(kind ?? '') || n.id === 'g:asset-root';
+  });
+
+  // Code edges: both endpoints are code nodes
+  const codeNodeIds = new Set(codeNodes.map((n) => n.id));
+  const assetNodeIds = new Set(assetNodes.map((n) => n.id));
+  const codeEdges = edges.filter((e) => codeNodeIds.has(e.source) && codeNodeIds.has(e.target));
+  const assetEdges = edges.filter((e) => assetNodeIds.has(e.source) && assetNodeIds.has(e.target));
+  // Cross-edges (asset → repo) are not used in dagre, just rendered by reactflow
+
+  // Layout code tree: LR (left to right)
+  const layoutedCode = runDagre(codeNodes, codeEdges, 'LR', 0);
+
+  // Layout asset tree: RL (right to left), offset to the right
+  // Find max X of code tree to place asset tree to its right
+  const maxCodeX = layoutedCode.reduce((max, n) => Math.max(max, n.position.x), 0);
+  const layoutedAsset = runDagre(assetNodes, assetEdges, 'RL', maxCodeX + 300);
+
+  return {
+    layoutedNodes: [...layoutedCode, ...layoutedAsset],
+    layoutedEdges: edges, // all edges including cross-edges
+  };
 }
 
 export function ThreatGraphView({ model, openRepo, openAsset }: ThreatGraphViewProps) {
