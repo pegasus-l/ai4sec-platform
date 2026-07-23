@@ -45,7 +45,11 @@ export function OpsTasks() {
     setRunningPipeline(p.name);
     setRunError(null);
     try {
-      await postJson(`/api/runs?pipeline_name=${encodeURIComponent(p.name)}&reset=${highRisk}`);
+      await fetch('/api/runs', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pipeline_name: p.name, reset: highRisk, params: {} }),
+      });
       queryClient.invalidateQueries({ queryKey: ['ops-runs'] });
     } catch (e) {
       setRunError(String(e));
