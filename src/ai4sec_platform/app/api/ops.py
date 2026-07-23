@@ -151,7 +151,7 @@ def sources(conn: sqlite3.Connection = Depends(get_db)) -> dict:
 def quality(conn: sqlite3.Connection = Depends(get_db)) -> dict:
     """Quality audits from quality_audits table."""
     rows = conn.execute(
-        "SELECT id, domain, audit_type, status, score, summary, details, created_at "
+        "SELECT id, domain, audit_type, status, score, summary, details_json, created_at "
         "FROM quality_audits ORDER BY id DESC LIMIT 50"
     ).fetchall()
     items = []
@@ -168,11 +168,10 @@ def quality(conn: sqlite3.Connection = Depends(get_db)) -> dict:
             "audit_type": r[2],
             "status": r[3],
             "score": r[4],
-            "summary": r[5] or "",
+            "summary": (r[5] or "")[:200],
             "details": details,
             "created_at": r[7],
         })
-    # KPIs
     total = len(items)
     passed = len([i for i in items if i["status"] == "pass"])
     warned = len([i for i in items if i["status"] in ("warn", "warning")])
