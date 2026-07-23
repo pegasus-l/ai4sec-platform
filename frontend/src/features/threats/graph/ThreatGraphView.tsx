@@ -8,8 +8,8 @@
  * - Right-side detail panel with node info
  */
 
-import { useMemo, useState, useCallback } from 'react';
-import ReactFlow, { Background, Controls, MiniMap, type Node } from 'reactflow';
+import { useMemo, useState, useCallback, useEffect, useRef } from 'react';
+import ReactFlow, { Background, Controls, MiniMap, type Node, type ReactFlowInstance } from 'reactflow';
 import dagre from '@dagrejs/dagre';
 import { graphNodeTypes } from './GraphNodeTypes';
 import { buildDualTreeGraph } from './buildDualTreeGraph';
@@ -210,6 +210,18 @@ export function ThreatGraphView({ model, openRepo, openAsset }: ThreatGraphViewP
   const activeNode =
     fullGraph.nodes.find((n) => n.id === activeNodeId) as Node<ThreatGraphData> | undefined;
 
+  const rfRef = useRef<ReactFlowInstance | null>(null);
+
+  // Auto-fit view after expand/collapse changes
+  useEffect(() => {
+    if (rfRef.current) {
+      const timer = setTimeout(() => {
+        rfRef.current?.fitView({ padding: 0.15, duration: 400 });
+      }, 80);
+      return () => clearTimeout(timer);
+    }
+  }, [expandedNodes, layoutedNodes]);
+
   const handleNodeClick = useCallback((_evt: unknown, node: Node<ThreatGraphData>) => {
     const data = node.data;
     setActiveNodeId(node.id);
@@ -247,7 +259,7 @@ export function ThreatGraphView({ model, openRepo, openAsset }: ThreatGraphViewP
           </div>
         </div>
         <p className="muted small">
-          点击节点展开/折叠并查看右侧详情。拖拽平移，滚轮缩放。
+          点击节点展开/折叠，展开/折叠后自动回到内容区域。拖拽平移，滚轮缩放。
         </p>
         <div className="graph-wrap">
           <ReactFlow
@@ -255,6 +267,7 @@ export function ThreatGraphView({ model, openRepo, openAsset }: ThreatGraphViewP
             edges={layoutedEdges}
             nodeTypes={graphNodeTypes}
             onNodeClick={handleNodeClick}
+            onInit={(inst) => { rfRef.current = inst; }}
             fitView
             panOnScroll
             zoomOnScroll
