@@ -161,7 +161,7 @@ function inferSurface(org: string, name: string, summary: string): string {
   return 'unknown';
 }
 
-function repoFromItem(item: Record<string, unknown>): ThreatRepo {
+export function repoFromItem(item: Record<string, unknown>): ThreatRepo {
   const payload = payloadOf(item);
   const scoring = scoringOf(payload);
   const attackSurface = attackSurfaceOf(payload);

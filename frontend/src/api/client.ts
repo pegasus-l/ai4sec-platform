@@ -18,6 +18,22 @@ export async function fetchAssets(): Promise<{ items: Record<string, unknown>[];
   return getJson('/api/threats/assets?limit=9999');
 }
 
+export async function fetchToday(): Promise<{ items: Record<string, unknown>[] }> {
+  return getJson('/api/threats/today?limit=30');
+}
+
+export async function fetchTargets(): Promise<{ items: Record<string, unknown>[] }> {
+  return getJson('/api/threats/targets?limit=9999');
+}
+
+export async function fetchTrackingQueue(): Promise<{ items: Record<string, unknown>[] }> {
+  return getJson('/api/threats/tracking-queue');
+}
+
+export async function fetchGraph(): Promise<{ nodes: unknown[]; edges: unknown[] }> {
+  return getJson('/api/threats/graph');
+}
+
 export interface AiAssociationResult {
   item_id: number;
   status: 'success' | 'cached';

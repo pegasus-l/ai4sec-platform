@@ -13,18 +13,13 @@ import ReactFlow, { Background, Controls, MiniMap, type Node, type ReactFlowInst
 import dagre from '@dagrejs/dagre';
 import { graphNodeTypes } from './GraphNodeTypes';
 import { buildDualTreeGraph } from './buildDualTreeGraph';
-import type {
-  ThreatViewModel,
-  ThreatGraphData,
-  ThreatRepo,
-  ThreatAsset,
-  ThreatReactFlowNode,
-  ThreatReactFlowEdge,
-} from '../../../types/threat';
-import 'reactflow/dist/style.css';
+import { useQuery } from '@tanstack/react-query';
+import { fetchTargets, fetchAssets } from '../../../api/client';
+import { assetFromItem, repoFromItem } from '../threatAdapters';
+import type { ThreatGraphData, ThreatRepo, ThreatAsset, ThreatReactFlowNode, ThreatReactFlowEdge } from '../../../types/threat';
 
 interface ThreatGraphViewProps {
-  model: ThreatViewModel;
+  repos: ThreatRepo[];
   openRepo: (repo: ThreatRepo) => void;
   openAsset: (asset: ThreatAsset) => void;
 }
@@ -109,14 +104,29 @@ function applyDagreLayout(nodes: ThreatReactFlowNode[], edges: ThreatReactFlowEd
   };
 }
 
-export function ThreatGraphView({ model, openRepo, openAsset }: ThreatGraphViewProps) {
+export function ThreatGraphView({ repos, openRepo, openAsset }: ThreatGraphViewProps) {
   const [activeNodeId, setActiveNodeId] = useState<string | null>(null);
   const [expandedNodes, setExpandedNodes] = useState<Set<string>>(new Set());
 
+  // Fetch assets separately
+  const { data: assetsData } = useQuery({ queryKey: ['threats-assets'], queryFn: fetchAssets });
+  const assets = useMemo(() => (assetsData?.items ?? []).map(assetFromItem), [assetsData]);
+
+  // Build vulnDetails from repos' payload
+  const vulnDetails = useMemo(() => {
+    const map: Record<string, unknown[]> = {};
+    repos.forEach((r) => {
+      const payload = r.raw as Record<string, unknown>;
+      const cves = Array.isArray(payload.cves) ? payload.cves : [];
+      if (cves.length > 0) map[r.id] = cves;
+    });
+    return map;
+  }, [repos]);
+
   // Full graph (all nodes/edges)
   const fullGraph = useMemo(
-    () => buildDualTreeGraph(model.repos, model.assets, model.vulnDetails ?? {}),
-    [model.repos, model.assets, model.vulnDetails],
+    () => buildDualTreeGraph(repos, assets, vulnDetails as Record<string, { id: string; kind: string; severity: string; title: string; description: string; source_type: string; source_url: string; source_path: string; published_date: string; matched_keywords: string[]; patch_refs: string[]; analysis: string; }[]>),
+    [repos, assets, vulnDetails],
   );
 
   // Determine visible node IDs based on expandedNodes
@@ -227,11 +237,11 @@ export function ThreatGraphView({ model, openRepo, openAsset }: ThreatGraphViewP
     setActiveNodeId(node.id);
     // Directly open drawer for repo/asset nodes
     if (data?.kind === 'repo' && data.repoId) {
-      const repo = model.repos.find((r) => r.id === data.repoId);
+      const repo = repos.find((r) => r.id === data.repoId);
       if (repo) { openRepo(repo); return; }
     }
     if (data?.kind === 'asset' && data.assetId) {
-      const asset = model.assets.find((a) => a.id === data.assetId);
+      const asset = assets.find((a) => a.id === data.assetId);
       if (asset) { openAsset(asset); return; }
     }
     // Toggle expand for ecosystem, repo, asset-category
@@ -242,7 +252,7 @@ export function ThreatGraphView({ model, openRepo, openAsset }: ThreatGraphViewP
         return next;
       });
     }
-  }, [model, openRepo, openAsset]);
+  }, [repos, assets, openRepo, openAsset]);
 
   return (
     <div className="graph-layout">
@@ -308,12 +318,14 @@ export function ThreatGraphView({ model, openRepo, openAsset }: ThreatGraphViewP
 /** Right-panel detail content — 7 cases based on node.data.kind. */
 function NodeDetail({
   data,
-  model,
+  repos,
+  assets,
   openRepo,
   openAsset,
 }: {
   data: ThreatGraphData;
-  model: ThreatViewModel;
+  repos: ThreatRepo[];
+  assets: ThreatAsset[];
   openRepo: (r: ThreatRepo) => void;
   openAsset: (a: ThreatAsset) => void;
 }) {
@@ -323,8 +335,8 @@ function NodeDetail({
         <p>{data.title}根节点。</p>
         <p className="muted small">{data.meta}</p>
         <div className="asset-meta" style={{ marginTop: 12 }}>
-          <div><b>{model.repos.length}</b><span>repo</span></div>
-          <div><b>{model.assets.length}</b><span>asset</span></div>
+          <div><b>{repos.length}</b><span>repo</span></div>
+          <div><b>{assets.length}</b><span>asset</span></div>
         </div>
       </div>
     );
@@ -332,7 +344,7 @@ function NodeDetail({
 
   if (data.kind === 'ecosystem') {
     const ecoId = data.ecoId ?? '';
-    const ecoRepos = model.repos.filter(
+    const ecoRepos = repos.filter(
       (r) => r.org.toLowerCase() === ecoId.toLowerCase(),
     );
     return (
@@ -357,7 +369,7 @@ function NodeDetail({
   }
 
   if (data.kind === 'repo' && data.repoId) {
-    const repo = model.repos.find((r) => r.id === data.repoId);
+    const repo = repos.find((r) => r.id === data.repoId);
     if (!repo) return <p className="muted">仓库不存在。</p>;
     return (
       <div>
@@ -389,7 +401,7 @@ function NodeDetail({
   }
 
   if (data.kind === 'asset' && data.assetId) {
-    const asset = model.assets.find((a) => a.id === data.assetId);
+    const asset = assets.find((a) => a.id === data.assetId);
     if (!asset) return <p className="muted">资产不存在。</p>;
     return (
       <div>

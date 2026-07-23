@@ -5,7 +5,7 @@ import type { ThreatViewModel } from '../../../types/threat';
 import type { ViewId } from '../ThreatPage';
 
 interface Props {
-  model: ThreatViewModel;
+
   setView: (view: ViewId) => void;
 }
 

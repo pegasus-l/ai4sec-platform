@@ -1,12 +1,12 @@
 import { useMemo, useState, useEffect } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { AlertTriangle, Boxes, GitBranch, GitFork, Network, Radar, ShieldCheck, Target, Workflow } from 'lucide-react';
-import { fetchFrontendContract } from '../../api/frontendContract';
-import { fetchAssets, postJson, getJson, type AiAssociationResult } from '../../api/client';
+import { fetchTargets, fetchAssets, postJson, getJson, type AiAssociationResult } from '../../api/client';
 import { fetchOpsOverview, fetchOpsSources, fetchOpsQuality, fetchOpsAISummary, fetchOpsPipelines, fetchRuns } from '../../api/opsClient';
 import { Badge, Card, Drawer, EmptyState, MetricCard } from '../../components/ui';
 import type { ThreatAsset, ThreatRepo, ThreatViewModel } from '../../types/threat';
-import { adaptThreatContract, assetFromItem } from './threatAdapters';
+import { adaptThreatContract, assetFromItem, repoFromItem } from './threatAdapters';
+import { surfaces as staticSurfaces } from './threatStaticData';
 import { opsTasks, opsSources } from './threatStaticData';
 import { ThreatGraphView } from './graph/ThreatGraphView';
 import { RepoDrawerContent } from './RepoDrawer';
@@ -51,8 +51,17 @@ export function ThreatPage() {
   const [filters, setFilters] = useState<FilterState>({ search: '', grade: 'all', surface: 'all', onlyCve: false, onlyHigh: false });
   const [selectedAsset, setSelectedAsset] = useState<ThreatAsset | null>(null);
   const { push } = useDrawerStack();
-  const { data, isLoading, error } = useQuery({ queryKey: ['frontend-contract'], queryFn: fetchFrontendContract });
-  const model = useMemo(() => data ? adaptThreatContract(data) : null, [data]);
+
+  // Fetch targets separately (not through frontend_v9)
+  const { data: targetsData, isLoading, error } = useQuery({ queryKey: ['threats-targets'], queryFn: () => fetchTargets() });
+  const repos = useMemo(() => {
+    const items = (targetsData?.items ?? []).map(item => {
+      // Use repoFromItem logic via adapter
+      const payload = (item as Record<string, unknown>).payload ?? (item as Record<string, unknown>).signals;
+      return { item: item as Record<string, unknown>, payload: payload as Record<string, unknown> };
+    }).map(({ item }) => item as Record<string, unknown>);
+    return items.map(repoFromItem).sort((a, b) => b.score - a.score);
+  }, [targetsData]);
 
   const openRepo = (repo: ThreatRepo) => {
     push({
@@ -62,59 +71,58 @@ export function ThreatPage() {
     });
   };
 
-  const visibleRepos = useMemo(() => filterRepos(model?.repos ?? [], filters), [model, filters]);
+  const visibleRepos = useMemo(() => filterRepos(repos, filters), [repos, filters]);
   const activeTitle = navGroups.flatMap(group => group.items).find(item => item.id === view)?.title ?? '威胁洞察';
-  const repoGrades = model ? unique(model.repos.map(repo => repo.grade).filter(Boolean)) : [];
-  const repoSurfaces = model ? unique(model.repos.map(repo => repo.surface).filter(Boolean)) : [];
+  const repoGrades = unique(repos.map(repo => repo.grade).filter(Boolean));
+  const repoSurfaces = unique(repos.map(repo => repo.surface).filter(Boolean));
 
   return <main className="main">
     <aside className="sidebar">
-      <div className="sidebar-head"><div className="label"><span className="dot" /><span>威胁洞察</span></div><h2>开源目标与运营</h2><p>开源威胁洞察围绕“发现目标、判断风险、查看证据、加入跟踪”的挖洞动线组织。</p></div>
+      <div className="sidebar-head"><div className="label"><span className="dot" /><span>威胁洞察</span></div><h2>开源目标与运营</h2><p>开源威胁洞察围绕"发现目标、判断风险、查看证据、加入跟踪"的挖洞动线组织。</p></div>
       <div className="domain-switcher">
         <button className="domain-btn active" type="button"><span className="domain-icon">OS</span><span className="domain-main"><strong>威胁洞察</strong><span>华为开源仓库风险与挖洞目标</span></span><span className="domain-tag">OPS</span></button>
       </div>
-      <nav className="nav-scroll">{navGroups.map(group => <div className="nav-group" key={group.title}><div className="group-title">{group.title}</div>{group.items.map(item => <button key={item.id} className={`nav-item ${view === item.id ? 'active' : ''}`} onClick={() => setView(item.id)}><span className="nav-left"><span className="nav-ico">{item.icon}</span><span className="nav-text"><b>{item.title}</b></span></span><span className="nav-meta">{navCount(item.id, model)}</span></button>)}</div>)}</nav>
+      <nav className="nav-scroll">{navGroups.map(group => <div className="nav-group" key={group.title}><div className="group-title">{group.title}</div>{group.items.map(item => <button key={item.id} className={`nav-item ${view === item.id ? 'active' : ''}`} onClick={() => setView(item.id)}><span className="nav-left"><span className="nav-ico">{item.icon}</span><span className="nav-text"><b>{item.title}</b></span></span><span className="nav-meta" /></button>)}</div>)}</nav>
       <div className="sidebar-note">目标详情不是单独页签；从今日关注、代码仓、关联图谱或跟踪队列点击对象后打开。资产关系默认按置信度展示，不做无证据强关联。</div>
     </aside>
     <section className="content">
       <section className="content-head">
         <div className="content-title"><span className="label">{activeTitle}</span><h1>{heroTitle(view)}</h1><p>{heroCopy(view)}</p></div>
-        <div className="head-actions">{view === 'repos' && model ? <FiltersBar filters={filters} setFilters={setFilters} grades={repoGrades} surfaces={repoSurfaces} /> : <><label className="search"><span>⌕</span><input placeholder="搜索标题 / CVE / 仓库 / 资产" onChange={() => {}} /></label><button className="btn primary" onClick={() => location.reload()}>刷新数据</button><a className="btn" href="/api/threats/reports" target="_blank">查看报告 API</a></>}</div>
+        <div className="head-actions">{view === 'repos' ? <FiltersBar filters={filters} setFilters={setFilters} grades={repoGrades} surfaces={repoSurfaces} /> : <><label className="search"><span>⌕</span><input placeholder="搜索标题 / CVE / 仓库 / 资产" onChange={() => {}} /></label><button className="btn primary" onClick={() => location.reload()}>刷新数据</button><a className="btn" href="/api/threats/reports" target="_blank">查看报告 API</a></>}</div>
       </section>
       <div className="content-body view">
-        {isLoading && <EmptyState title="正在加载威胁洞察数据" description="从 /api/frontend/v9 拉取统一契约。" />}
+        {isLoading && <EmptyState title="正在加载" description="从 /api/threats/targets 拉取数据。" />}
         {error && <EmptyState title="加载失败" description={(error as Error).message} />}
-        {model && renderView(view, model, visibleRepos, filters, setFilters, openRepo, setSelectedAsset, setView)}
+        {!isLoading && !error && renderView(view, repos, visibleRepos, filters, setFilters, openRepo, setSelectedAsset, setView)}
+        <AssetDrawer asset={selectedAsset} onClose={() => setSelectedAsset(null)} openRepo={openRepo} />
       </div>
     </section>
-    <AssetDrawer asset={selectedAsset} onClose={() => setSelectedAsset(null)} openRepo={openRepo} />
   </main>;
 }
 
-function renderView(view: ViewId, model: ThreatViewModel, repos: ThreatRepo[], filters: FilterState, setFilters: (filters: FilterState) => void, openRepo: (repo: ThreatRepo) => void, openAsset: (asset: ThreatAsset) => void, setView: (view: ViewId) => void) {
-  if (view === 'today') return <ThreatToday model={model} openRepo={openRepo} setView={setView} setFilters={setFilters} />;
-  if (view === 'repos') return <ThreatRepos model={model} repos={repos} filters={filters} setFilters={setFilters} openRepo={openRepo} />;
-  if (view === 'surface') return <ThreatSurface model={model} openRepo={openRepo} setFilters={setFilters} setView={setView} />;
+function renderView(view: ViewId, repos: ThreatRepo[], visibleRepos: ThreatRepo[], filters: FilterState, setFilters: (filters: FilterState) => void, openRepo: (repo: ThreatRepo) => void, openAsset: (asset: ThreatAsset) => void, setView: (view: ViewId) => void) {
+  if (view === 'today') return <ThreatToday repos={repos} openRepo={openRepo} setView={setView} setFilters={setFilters} />;
+  if (view === 'repos') return <ThreatRepos repos={visibleRepos} filters={filters} setFilters={setFilters} openRepo={openRepo} />;
+  if (view === 'surface') return <ThreatSurface repos={repos} openRepo={openRepo} setFilters={setFilters} setView={setView} />;
   if (view === 'assets') return <ThreatAssets openAsset={openAsset} />;
-  if (view === 'graph') return <ThreatGraphView model={model} openRepo={openRepo} openAsset={openAsset} />;
-  if (view === 'queue') return <ThreatQueue model={model} />;
-  if (view === 'ops-overview') return <OpsOverview model={model} setView={setView} />;
+  if (view === 'graph') return <ThreatGraphView repos={repos} openRepo={openRepo} openAsset={openAsset} />;
+  if (view === 'queue') return <ThreatQueue />;
+  if (view === 'ops-overview') return <OpsOverview setView={setView} />;
   if (view === 'ops-tasks') return <OpsTasks />;
   if (view === 'ops-sources') return <OpsSources />;
   if (view === 'ops-quality') return <OpsQuality />;
-  if (view === 'ops-queue') return <ThreatQueue model={model} />;
+  if (view === 'ops-queue') return <ThreatQueue />;
   if (view === 'ops-ai-summary') return <OpsAISummary openRepo={openRepo} openAsset={openAsset} />;
   return <EmptyState title="未知页面" />;
 }
 
-function ThreatToday({ model, openRepo, setView, setFilters }: { model: ThreatViewModel; openRepo: (repo: ThreatRepo) => void; setView: (view: ViewId) => void; setFilters: (filters: FilterState) => void }) {
-  const { summary } = model;
+function ThreatToday({ repos, openRepo, setView, setFilters }: { repos: ThreatRepo[]; openRepo: (repo: ThreatRepo) => void; setView: (view: ViewId) => void; setFilters: (filters: FilterState) => void }) {
+  const highRisk = repos.filter(r => r.score >= 75).length;
+  const withCve = repos.filter(r => r.cve > 0).length;
   const focus = [
-    { type: '高风险仓库', kind: 'repo' as const, repo: model.repos[0], why: 'A 级高风险目标，适合优先进入代码审计和漏洞假设验证。' },
-    { type: '安全线索仓库', kind: 'repo' as const, repo: model.repos.find((repo) => repo.id === 'repo-opengauss-sec') ?? model.repos.find((repo) => repo.cve > 20 || repo.sec > 20) ?? model.repos[1], why: '命中过 CVE / SA / security issue，适合做公告与依赖复核。' },
-    { type: '资产变化', kind: 'asset' as const, asset: model.assets[0], why: '固件 / 镜像 / Hub 资产有版本或规模变化，建议关联代码仓复核。' },
-    { type: '待复核关联', kind: 'asset' as const, asset: model.assets[1] ?? model.assets[0], why: '资产到代码仓关系为 inferred / weak，需要 SBOM 或命名证据确认。' }
-  ].filter((item) => item.kind === 'repo' ? Boolean(item.repo) : Boolean(item.asset));
+    { type: '高风险仓库', kind: 'repo' as const, repo: repos[0], why: 'A 级高风险目标，适合优先进入代码审计和漏洞假设验证。' },
+    { type: '安全线索仓库', kind: 'repo' as const, repo: repos.find((repo) => repo.cve > 20 || repo.sec > 20) ?? repos[1], why: '命中过 CVE / SA / security issue，适合做公告与依赖复核。' },
+  ].filter((item) => item.kind === 'repo' ? Boolean(item.repo) : false);
   const kpiJump = (type: 'gradeA' | 'securitySignals' | 'assetChanges' | 'weakRelations') => {
     if (type === 'gradeA') { setFilters({ search: '', grade: 'A', surface: 'all', onlyCve: false, onlyHigh: false }); setView('repos'); return; }
     if (type === 'securitySignals') { setFilters({ search: '', grade: 'all', surface: 'all', onlyCve: false, onlyHigh: false }); setView('repos'); return; }
@@ -123,40 +131,34 @@ function ThreatToday({ model, openRepo, setView, setFilters }: { model: ThreatVi
   };
   return <div className="grid">
     <div className="grid cols-4">
-      <MetricCard label="A级仓库" value={summary.highRisk} hint="风险评分为 A 的代码仓；点击进入代码仓并筛选 A 级。" tone="red" onClick={() => kpiJump('gradeA')} />
-      <MetricCard label="安全线索项目" value={summary.withCve} hint="命中过 CVE / SA / security issue 的代码仓；点击查看有安全线索的代码仓。" tone="amber" onClick={() => kpiJump('securitySignals')} />
-      <MetricCard label="资产变化" value={summary.assets} hint="今日新增或版本变化的固件/镜像资产；点击查看相关资产。" tone="green" onClick={() => kpiJump('assetChanges')} />
-      <MetricCard label="待复核关联" value={summary.highRisk} hint="inferred / weak 的仓库-资产关系；点击进入关联图谱查看弱关联。" tone="violet" onClick={() => kpiJump('weakRelations')} />
+      <MetricCard label="A级仓库" value={highRisk} hint="风险评分为 A 的代码仓；点击进入代码仓并筛选 A 级。" tone="red" onClick={() => kpiJump('gradeA')} />
+      <MetricCard label="安全线索项目" value={withCve} hint="命中过 CVE / SA / security issue 的代码仓；点击查看有安全线索的代码仓。" tone="amber" onClick={() => kpiJump('securitySignals')} />
+      <MetricCard label="资产变化" value="—" hint="点击查看相关资产。" tone="green" onClick={() => kpiJump('assetChanges')} />
+      <MetricCard label="待复核关联" value="—" hint="点击进入关联图谱查看弱关联。" tone="violet" onClick={() => kpiJump('weakRelations')} />
     </div>
     <div className="grid cols-2">
-      {focus.map((item) => item.kind === 'repo' ? <div className="focus-card" key={`${item.type}-${item.repo.id}`} onClick={() => openRepo(item.repo)}>
+      {focus.map((item) => <div className="focus-card" key={`${item.type}-${item.repo.id}`} onClick={() => openRepo(item.repo)}>
         <div className="row-title"><span className={`badge ${item.repo.grade || 'C'}`}>{item.type}</span><span className="muted small">点击钻取</span></div>
         <h3>{item.repo.org}/{item.repo.name}</h3>
         <p>{item.why}</p>
         <div className="split"><span className={`badge ${item.repo.grade || 'C'}`}>Grade {item.repo.grade}</span><span className="badge">{item.repo.surface}</span><span className="badge">score {Math.round(item.repo.score)}</span></div>
         <div className="split"><button className="btn primary" onClick={(event) => { event.stopPropagation(); openRepo(item.repo); }}>查看详情</button><button className="btn" onClick={(event) => event.stopPropagation()}>加入跟踪</button></div>
-      </div> : <div className="focus-card" key={`${item.type}-${item.asset.id}`} onClick={() => setView('assets')}>
-        <div className="row-title"><span className="badge B">{item.type}</span><span className="muted small">点击钻取</span></div>
-        <h3>{item.asset.title}</h3>
-        <p>{item.why}</p>
-        <div className="split"><span className="badge B">{item.asset.source}</span><span className="badge">{item.asset.sourceType}</span><span className="badge">score {Math.round(item.asset.score)}</span></div>
-        <div className="split"><button className="btn primary" onClick={(event) => { event.stopPropagation(); setView('assets'); }}>查看详情</button><button className="btn" onClick={(event) => event.stopPropagation()}>加入跟踪</button></div>
       </div>)}
     </div>
   </div>;
 }
 
-function ThreatRepos({ model, repos, filters, setFilters, openRepo }: { model: ThreatViewModel; repos: ThreatRepo[]; filters: FilterState; setFilters: (filters: FilterState) => void; openRepo: (repo: ThreatRepo) => void }) {
+function ThreatRepos({ repos, filters, setFilters, openRepo }: { repos: ThreatRepo[]; filters: FilterState; setFilters: (filters: FilterState) => void; openRepo: (repo: ThreatRepo) => void }) {
   return <div className="grid">
     <div className="table-card"><RepoTable repos={repos} openRepo={openRepo} /></div>
   </div>;
 }
 
-function ThreatSurface({ model, openRepo, setFilters, setView }: { model: ThreatViewModel; openRepo: (repo: ThreatRepo) => void; setFilters: (filters: FilterState) => void; setView: (view: ViewId) => void }) {
-  const surfaces = model.surfaces ?? [];
+function ThreatSurface({ repos, openRepo, setFilters, setView }: { repos: ThreatRepo[]; openRepo: (repo: ThreatRepo) => void; setFilters: (filters: FilterState) => void; setView: (view: ViewId) => void }) {
+  const surfaces = staticSurfaces;
   const [activeSurfaceId, setActiveSurfaceId] = useState(surfaces[0]?.id ?? 'kernel');
   const selected = surfaces.find(s => s.id === activeSurfaceId) ?? surfaces[0];
-  const relatedRepos = model.repos.filter(r => r.surface === activeSurfaceId).sort((a, b) => b.score - a.score);
+  const relatedRepos = repos.filter(r => r.surface === activeSurfaceId).sort((a, b) => b.score - a.score);
   const totalRepos = surfaces.reduce((sum, s) => sum + s.count, 0);
   const totalCves = surfaces.reduce((sum, s) => sum + s.cves, 0);
   const totalSec = surfaces.reduce((sum, s) => sum + (s.secItems ?? 0), 0);
@@ -298,8 +300,10 @@ function ImageVersionTags({ tags }: { tags: NonNullable<ThreatAsset['versionTags
   );
 }
 
-function ThreatQueue({ model }: { model: ThreatViewModel }) {
-  const [items, setItems] = useState(model.queue);
+function ThreatQueue() {
+  const { data: queueData } = useQuery({ queryKey: ['threats-queue'], queryFn: () => getJson<{ items: Record<string, unknown>[] }>('/api/threats/tracking-queue') });
+  const [items, setItems] = useState<Record<string, unknown>[]>(queueData?.items ?? []);
+  useEffect(() => { if (queueData?.items) setItems(queueData.items); }, [queueData]);
   const [selectedQueueItem, setSelectedQueueItem] = useState<Record<string, unknown> | null>(null);
   const advance = (index: number) => {
     setItems(prev => prev.map((item, i) => {

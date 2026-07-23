@@ -17,12 +17,12 @@ DOMAIN = "threats"
 
 
 @router.get("/today")
-def today(limit: int = Query(12, ge=1, le=100), conn: sqlite3.Connection = Depends(get_db)) -> dict:
+def today(limit: int = Query(30, ge=1, le=100), conn: sqlite3.Connection = Depends(get_db)) -> dict:
     return domain_items.today(conn, DOMAIN, limit=limit)
 
 
 @router.get("/targets")
-def targets(limit: int = Query(50, ge=1, le=200), conn: sqlite3.Connection = Depends(get_db)) -> dict:
+def targets(limit: int = Query(9999, ge=1, le=99999), conn: sqlite3.Connection = Depends(get_db)) -> dict:
     return domain_items.list_items(conn, DOMAIN, item_type="target", limit=limit)
 
 
