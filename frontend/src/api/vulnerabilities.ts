@@ -17,6 +17,18 @@ export function fetchVulnerabilityMaterials(): Promise<ListResponse<DomainItem<M
   return getJson('/api/vulnerabilities/materials?limit=200');
 }
 
+export function fetchVulnerabilityCandidates(): Promise<ListResponse<DomainItem>> {
+  return getJson('/api/vulnerabilities/candidates?limit=200');
+}
+
+export function fetchVulnerabilityCrawledPages(): Promise<ListResponse<DomainItem>> {
+  return getJson('/api/vulnerabilities/crawled-pages?limit=200');
+}
+
+export function fetchVulnerabilityMaterialReviews(): Promise<ListResponse<DomainItem>> {
+  return getJson('/api/vulnerabilities/material-reviews?limit=200');
+}
+
 export function fetchVulnerabilityEvents(): Promise<ListResponse<DomainItem>> {
   return getJson('/api/vulnerabilities/events?limit=200');
 }

@@ -9,7 +9,7 @@ from ai4sec_platform.domains.capabilities.pipelines import (
 )
 from ai4sec_platform.domains.news.pipelines import ai_for_sec_raw_pipeline
 from ai4sec_platform.domains.threats.pipelines import huawei_asset_pipeline, huawei_attack_surface_pipeline, huawei_collect_sources_pipeline, huawei_cve_scout_pipeline, huawei_full_migration_pipeline, huawei_raw_pipeline, threat_risk_pipeline
-from ai4sec_platform.domains.vulnerabilities.pipelines import vulnerability_event_pipeline, vulnerability_knowledge_pipeline, vulnerability_raw_pipeline
+from ai4sec_platform.domains.vulnerabilities.pipelines import vulnerability_event_pipeline, vulnerability_external_discovery_pipeline, vulnerability_full_discovery_pipeline, vulnerability_knowledge_pipeline, vulnerability_raw_pipeline
 
 
 class PipelineRegistry:
@@ -52,6 +52,8 @@ def default_registry() -> PipelineRegistry:
     vulnerability_raw = vulnerability_raw_pipeline()
     registry.register(vulnerability_raw)
     registry.register_alias("vulnerabilities.material_local_raw_import", vulnerability_raw)
+    registry.register(vulnerability_external_discovery_pipeline())
+    registry.register(vulnerability_full_discovery_pipeline())
     registry.register(vulnerability_event_pipeline())
     registry.register(vulnerability_knowledge_pipeline())
     return registry
