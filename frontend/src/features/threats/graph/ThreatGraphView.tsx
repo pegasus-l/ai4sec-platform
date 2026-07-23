@@ -210,24 +210,6 @@ export function ThreatGraphView({ model, openRepo, openAsset }: ThreatGraphViewP
   const activeNode =
     fullGraph.nodes.find((n) => n.id === activeNodeId) as Node<ThreatGraphData> | undefined;
 
-  const handleNodeClick = useCallback((_evt: unknown, node: Node<ThreatGraphData>) => {
-    const data = node.data;
-    setActiveNodeId(node.id);
-    // Toggle expand for ecosystem, repo, asset-category
-    if (data?.kind === 'ecosystem' || data?.kind === 'repo' || data?.kind === 'asset-category') {
-      setExpandedNodes((prev) => {
-        const next = new Set(prev);
-        if (next.has(node.id)) {
-          // Collapse — also remove descendants
-          next.delete(node.id);
-        } else {
-          next.add(node.id);
-        }
-        return next;
-      });
-    }
-  }, []);
-
   const [popupNode, setPopupNode] = useState<{ node: Node<ThreatGraphData>; x: number; y: number } | null>(null);
 
   const handleNodeClick = useCallback((evt: unknown, node: Node<ThreatGraphData>) => {
