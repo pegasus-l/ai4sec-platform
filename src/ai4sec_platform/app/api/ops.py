@@ -265,3 +265,35 @@ def _pipeline_description(name: str) -> str:
         "threats.risk_reasoning_pipeline": "风险推理：选 Top N 候选 + LLM 语义复核",
     }
     return descs.get(name, "—" + name)
+
+
+@router.get("/stale-items")
+def stale_items(conn: sqlite3.Connection = Depends(get_db)) -> dict:
+    """Check for stale items: domain_items whose last_synced_at is older than the last pipeline run."""
+    # Get the last successful pipeline run time
+    last_run = conn.execute(
+        "SELECT finished_at FROM pipeline_runs WHERE status='success' ORDER BY id DESC LIMIT 1"
+    ).fetchone()
+    last_run_time = last_run[0] if last_run else None
+
+    # Count items that were NOT synced in the last run (last_synced_at is null or older than last run)
+    stale_targets = 0
+    stale_assets = 0
+    if last_run_time:
+        stale_targets = conn.execute(
+            "SELECT COUNT(*) FROM domain_items WHERE domain='threats' AND item_type='target' "
+            "AND (last_synced_at IS NULL OR last_synced_at < ?)",
+            (last_run_time,)
+        ).fetchone()[0]
+        stale_assets = conn.execute(
+            "SELECT COUNT(*) FROM domain_items WHERE domain='threats' AND item_type='asset' "
+            "AND (last_synced_at IS NULL OR last_synced_at < ?)",
+            (last_run_time,)
+        ).fetchone()[0]
+
+    return {
+        "last_run_time": last_run_time,
+        "stale_targets": stale_targets,
+        "stale_assets": stale_assets,
+        "stale_total": stale_targets + stale_assets,
+    }
