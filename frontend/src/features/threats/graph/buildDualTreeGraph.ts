@@ -38,26 +38,26 @@ const ASSET_CATEGORY_ECOIDS = [
   'OpenX_Huawei',
 ];
 
-// Layout constants (from demo v12)
+// Layout constants — increased spacing to reduce overlap
 const LAYOUT = {
   codeRootX: 30,
-  codeRootY: 650,
-  assetRootX: 1100,
-  assetRootY: 650,
+  codeRootY: 800,
+  assetRootX: 1400,
+  assetRootY: 800,
   ecoX: 210,
-  ecoYStart: 26,
-  ecoYStep: 52,
-  repoX: 420,
-  repoYStep: 46,
-  vulnX: 615,
-  vulnYStep: 34,
-  vulnMoreYOffset: 68,
-  assetCatX: 900,
-  assetCatYStart: 430,
-  assetCatYStep: 86,
-  assetX: 700,
-  assetYStep: 48,
-  maxReposPerEco: 10,
+  ecoYStart: 20,
+  ecoYStep: 80,
+  repoX: 460,
+  repoYStep: 60,
+  vulnX: 720,
+  vulnYStep: 44,
+  vulnMoreYOffset: 88,
+  assetCatX: 1180,
+  assetCatYStart: 400,
+  assetCatYStep: 120,
+  assetX: 880,
+  assetYStep: 64,
+  maxReposPerEco: 8,
   maxVulnsPerRepo: 3,
 } as const;
 

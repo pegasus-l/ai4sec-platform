@@ -259,6 +259,7 @@ function OpenxGroupCard({ deviceModel, files, onClick }: { deviceModel: string; 
 
 function ThreatQueue({ model }: { model: ThreatViewModel }) {
   const [items, setItems] = useState(model.queue);
+  const [selectedQueueItem, setSelectedQueueItem] = useState<Record<string, unknown> | null>(null);
   const advance = (index: number) => {
     setItems(prev => prev.map((item, i) => {
       if (i !== index) return item;
@@ -268,7 +269,13 @@ function ThreatQueue({ model }: { model: ThreatViewModel }) {
     }));
   };
   if (!items.length) return <EmptyState title="暂无跟踪队列" />;
-  return <div className="table-card"><table><thead><tr><th>对象</th><th>类型</th><th>优先级</th><th>状态</th><th>负责人</th><th>原因</th><th>操作</th></tr></thead><tbody>{items.map((item, index) => <tr key={index} className="clickable"><td><div className="repo-name">{String(item.name ?? item.title ?? '-')}</div></td><td>{String(item.queue_type ?? item.type ?? '-')}</td><td><span className={`badge ${String(item.priority) === 'P0' ? 'A' : 'B'}`}>{String(item.priority ?? '-')}</span></td><td>{String(item.status ?? '-')}</td><td>{String(item.assignee ?? item.owner ?? '-')}</td><td>{String(item.reason ?? '-')}</td><td><button className="btn" onClick={() => advance(index)}>推进</button></td></tr>)}</tbody></table></div>;
+  return <>
+    <div className="table-card"><table><thead><tr><th>对象</th><th>类型</th><th>优先级</th><th>状态</th><th>原因</th><th>操作</th></tr></thead><tbody>{items.map((item, index) => <tr key={index} className="clickable" onClick={() => setSelectedQueueItem(item)}><td><div className="repo-name">{String(item.name ?? item.title ?? '-')}</div><div className="muted small">{String(item.reason ?? '-')}</div></td><td><span className="badge">{String(item.queue_type ?? item.type ?? '-')}</span></td><td><span className={`badge ${String(item.priority) === 'P0' ? 'A' : 'B'}`}>{String(item.priority ?? '-')}</span></td><td><span className={`badge ${String(item.status).includes('待') ? 'B' : 'A'}`}>{String(item.status ?? '-')}</span></td><td><span className="muted small">{String(item.assignee ?? item.owner ?? '-')}</span></td><td><button className="btn" onClick={(e) => { e.stopPropagation(); advance(index); }}>推进</button></td></tr>)}</tbody></table></div>
+    <Drawer open={Boolean(selectedQueueItem)} title={String(selectedQueueItem?.name ?? selectedQueueItem?.title ?? '跟踪项')} subtitle={String(selectedQueueItem?.queue_type ?? selectedQueueItem?.type ?? '')} onClose={() => setSelectedQueueItem(null)}>{selectedQueueItem && <div className="drawer-grid">
+      <Card><h3>跟踪详情</h3><div className="asset-meta"><div><b>{String(selectedQueueItem.name ?? selectedQueueItem.title ?? '-')}</b><span>对象名称</span></div><div><b>{String(selectedQueueItem.queue_type ?? selectedQueueItem.type ?? '-')}</b><span>类型</span></div><div><b>{String(selectedQueueItem.priority ?? '-')}</b><span>优先级</span></div><div><b>{String(selectedQueueItem.status ?? '-')}</b><span>状态</span></div><div><b>{String(selectedQueueItem.assignee ?? selectedQueueItem.owner ?? '-')}</b><span>负责人</span></div><div><b>{String(selectedQueueItem.created_at ?? '-')}</b><span>创建时间</span></div></div></Card>
+      <Card><h3>跟踪原因</h3><p>{String(selectedQueueItem.reason ?? '暂无说明。')}</p></Card>
+    </div>}</Drawer>
+  </>;
 }
 
 function ThreatOps({ model, kind }: { model: ThreatViewModel; kind: ViewId }) {

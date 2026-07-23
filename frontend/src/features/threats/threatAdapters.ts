@@ -441,7 +441,20 @@ export function adaptThreatContract(contract: FrontendContract): ThreatViewModel
   // v12 static fallback — supplement missing asset types (firmware/image/openx) with demo data
   const realAssetTypes = new Set(realAssets.map(a => a.type));
   const supplementalAssets = staticDemoAssets.filter(a => !realAssetTypes.has(a.type));
-  const assets = [...realAssets, ...supplementalAssets];
+  // Dedup firmware by modelName (merge cannVersion) + filter empty ascendhub
+  const firmwareMap = new Map<string, ThreatAsset>();
+  const dedupedAssets: ThreatAsset[] = [];
+  [...realAssets, ...supplementalAssets].forEach(a => {
+    if (a.source === 'ascendhub' && (a.model === '-' || !a.model)) return;
+    if (a.source === 'firmware') {
+      const key = a.model || a.title;
+      if (firmwareMap.has(key)) {
+        const existing = firmwareMap.get(key)!;
+        if (a.cannVersion && !existing.cannVersion) existing.cannVersion = a.cannVersion;
+      } else { firmwareMap.set(key, a); dedupedAssets.push(a); }
+    } else { dedupedAssets.push(a); }
+  });
+  const assets = dedupedAssets;
   const cveScout = asRecord(threat.cveScout);
   const attackSurface = asRecord(threat.attackSurface);
   const reports = asRecord(threat.reports);
