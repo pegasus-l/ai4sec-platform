@@ -6,6 +6,7 @@ import urllib.error
 import urllib.request
 from typing import Any
 
+from ai4sec_platform.core.env import load_env_file
 from ai4sec_platform.schemas.sources import SourceFetchRequest, SourceHealth
 from ai4sec_platform.sources.result import SourceFetchResult
 
@@ -17,12 +18,14 @@ class AnysearchConnector:
     source_type = "anysearch"
 
     def health_check(self, config: dict) -> SourceHealth:
+        load_env_file()
         api_key = config.get("api_key") or os.getenv("ANYSEARCH_API_KEY", "")
         if api_key:
             return SourceHealth(status="configured", message="ANYSEARCH_API_KEY is set")
         return SourceHealth(status="degraded", message="ANYSEARCH_API_KEY is not set; seed_candidates/offline mode only")
 
     def fetch(self, request: SourceFetchRequest) -> SourceFetchResult:
+        load_env_file()
         params = request.params or {}
         seed_candidates = params.get("seed_candidates") or params.get("items")
         if isinstance(seed_candidates, list):

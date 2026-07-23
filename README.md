@@ -154,6 +154,22 @@ PYTHONPATH=src python3 -m ai4sec_platform.cli.run_pipeline --pipeline vulnerabil
 - 这些 pipeline 都会写 `raw_artifacts`、`normalized_items`、`domain_items`、`evidence_items`、`pipeline_runs`、`task_runs` 和 manifest。
 - 所有 pipeline 仍保持 `production_writes=false`，不写生产路径。
 
+### 漏洞外部发现链路和模型使用
+
+旧 `vul-info/project_demo_0626` 中，AnySearch 负责候选 URL 检索，crawl4ai 负责抓取网页，之后有三个模型阶段：
+
+1. `ContentExtractor`：从抓取 markdown 中抽取正文；
+2. `ContentChecker`：判断是否为高质量漏洞素材，并输出 `is_relevant/confidence/reason/key_findings`；
+3. `UrlClassifier`：对相关 URL 做 PoC/技术分析/内核安全/学术会议等分类。
+
+当前新平台保持能力不降级：
+
+- `extract_crawled_content` 阶段优先使用 OpenAI-compatible 模型抽正文，失败或测试环境回退本地规则；
+- `review_crawled_materials` 阶段优先使用 OpenAI-compatible 模型做素材审核，输出 `accept/needs_review/reject`，失败或测试环境回退本地规则；
+- `extract_vulnerability_knowledge` 阶段优先使用 OpenAI-compatible 模型抽取结构化漏洞知识，失败或测试环境回退 `LocalRuleProvider`。
+
+模型配置从 `.env` 读取，支持 `AI4SEC_OPENAI_*`、`OPENAI_*`、`DEEPSEEK_*`、`DASHSCOPE_*` 等 OpenAI-compatible 配置。`ANYSEARCH_API_KEY` / `ANYSEARCH_BASE_URL` 可从旧漏洞工程 `.env` 同步到本目录 `.env`；这些本地配置被 `.gitignore` 忽略，不提交。
+
 ## 核心数据处理逻辑
 
 当前已实现第一版真实处理逻辑，不再只是字段搬运：

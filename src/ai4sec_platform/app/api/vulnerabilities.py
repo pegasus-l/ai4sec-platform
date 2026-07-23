@@ -40,6 +40,11 @@ def crawled_pages(limit: int = Query(50, ge=1, le=200), conn: sqlite3.Connection
     return domain_items.list_items(conn, DOMAIN, item_type="crawled_page", limit=limit)
 
 
+@router.get("/extracted-content")
+def extracted_content(limit: int = Query(50, ge=1, le=200), conn: sqlite3.Connection = Depends(get_db)) -> dict:
+    return domain_items.list_items(conn, DOMAIN, item_type="extracted_content", limit=limit)
+
+
 @router.get("/material-reviews")
 def material_reviews(limit: int = Query(50, ge=1, le=200), conn: sqlite3.Connection = Depends(get_db)) -> dict:
     return domain_items.list_items(conn, DOMAIN, item_type="material_review", limit=limit)

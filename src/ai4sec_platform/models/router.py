@@ -50,7 +50,7 @@ class LLMRouter:
 
     def _configured_model(self, profile: str) -> ModelConfig | None:
         provider = os.getenv("AI4SEC_MODEL_PROVIDER", profile)
-        candidates = [provider, "AI4SEC_OPENAI", "DEEPSEEK", "LOCAL_LLM", "DASHSCOPE"]
+        candidates = [provider, "AI4SEC_OPENAI", "OPENAI", "DEEPSEEK", "LOCAL_LLM", "DASHSCOPE"]
         for prefix in candidates:
             normalized = prefix.upper().replace("-", "_")
             config = _config_from_prefix(normalized)
