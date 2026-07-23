@@ -42,11 +42,14 @@ def start_run(request: RunPipelineRequest) -> dict:
 
     # Run in background thread (PipelineRunner creates its own DB connection)
     def _run_in_background():
+        import sys
+        print(f"[BG] Starting pipeline: {request.pipeline_name}", file=sys.stderr, flush=True)
         try:
             runner = PipelineRunner()
-            runner.run(request.pipeline_name, params)
-        except Exception:
-            # Pipeline errors are logged in task_runs, not here
+            result = runner.run(request.pipeline_name, params)
+            print(f"[BG] Pipeline finished: {result.get('status', '?')}", file=sys.stderr, flush=True)
+        except Exception as e:
+            print(f"[BG] Pipeline CRASHED: {e}", file=sys.stderr, flush=True)
             traceback.print_exc()
 
     thread = threading.Thread(target=_run_in_background, daemon=True)
