@@ -19,7 +19,7 @@ def page_contract(conn: sqlite3.Connection) -> dict[str, Any]:
     return {
         "manifest": _manifest(conn),
         "news": {
-            "asisPage": _asis_page(news_items),
+            "newsPage": _news_page(news_items),
             "sources": _news_sources(conn, news_items),
             "items": [_news_item(item) for item in news_items],
         },
@@ -61,7 +61,7 @@ def static_file_contract(conn: sqlite3.Connection, path: str) -> Any:
     data = page_contract(conn)
     mapping = {
         "manifest.json": data["manifest"],
-        "news/asis_page.json": data["news"]["asisPage"],
+        "news/page.json": data["news"]["newsPage"],
         "news/sources.json": data["news"]["sources"],
         "news/items.json": data["news"]["items"],
         "capability/today.json": data["capability"]["today"],
@@ -110,11 +110,11 @@ def _manifest(conn: sqlite3.Connection) -> dict[str, Any]:
     }
 
 
-def _asis_page(items: list[dict[str, Any]]) -> dict[str, Any]:
+def _news_page(items: list[dict[str, Any]]) -> dict[str, Any]:
     return {
         "title": "资讯洞察",
-        "subtitle": "复用 ASIS 阅读体验，数据来自本地 AI-for-Sec raw JSON 导入后的新处理链路。",
-        "nav": ["精选", "全部动态", "日报", "论文", "阅读清单", "专题时间线"],
+        "subtitle": "多源 AI 安全资讯采集、精选、阅读和专题追踪。",
+        "nav": ["今日精选", "全部动态", "日报", "专题时间线"],
         "total": len(items),
     }
 

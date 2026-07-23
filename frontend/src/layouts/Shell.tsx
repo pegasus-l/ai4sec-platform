@@ -7,12 +7,12 @@ const topTabs = [
   { id: 'vuln', label: '漏洞洞察' }
 ];
 
-export function Shell({ children }: PropsWithChildren) {
+export function Shell({ children, activeDomain = 'news', onDomainChange }: PropsWithChildren<{ activeDomain?: string; onDomainChange?: (domain: string) => void }>) {
   return <div className="shell">
     <header className="topbar">
-      <div className="brand"><span className="brand-mark">TMG</span><div><strong>AI4SEC TMG · Demo v12</strong><span>威胁洞察：代码仓主干 + 固件/镜像资产 + 关联图谱</span></div></div>
-      <nav className="top-tabs">{topTabs.map(tab => <button key={tab.id} className={`top-tab ${tab.id === 'threat' ? 'active' : ''}`} style={tab.id === 'threat' ? { ['--accent' as string]: '#a78bfa', ['--accent-bg' as string]: 'rgba(167,139,250,0.13)', ['--accent-glow' as string]: 'rgba(167,139,250,0.22)' } : undefined}><span className="dot" />{tab.label}</button>)}</nav>
-      <div className="status"><i /> Connector Pipeline · React V10</div>
+      <div className="brand"><span className="brand-mark">TMG</span><div><strong>AI4SEC TMG · Insight Workbench</strong><span>{activeDomain === 'news' ? '资讯洞察：多源发现 + 精选阅读 + 主题追踪' : '统一 AI 安全洞察工作台'}</span></div></div>
+      <nav className="top-tabs">{topTabs.map(tab => <button key={tab.id} className={`top-tab ${tab.id === activeDomain ? 'active' : ''}`} onClick={() => onDomainChange?.(tab.id)}><span className="dot" />{tab.label}</button>)}</nav>
+      <div className="status"><i /> Shadow Pipeline · React V10</div>
     </header>
     {children}
   </div>;

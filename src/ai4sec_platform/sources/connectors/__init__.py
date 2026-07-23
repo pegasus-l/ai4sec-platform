@@ -3,9 +3,6 @@ from __future__ import annotations
 from ai4sec_platform.sources.connectors.news.arxiv import ArxivConnector
 from ai4sec_platform.sources.connectors.news.github import GithubConnector
 from ai4sec_platform.sources.connectors.news.rss import RssConnector
-from ai4sec_platform.sources.connectors.news.x_feed import XFeedConnector
-from ai4sec_platform.sources.connectors.news.asis import AsisConnector
-from ai4sec_platform.sources.connectors.news.awesome import AwesomeConnector
 from ai4sec_platform.sources.connectors.vulnerabilities.anysearch import AnysearchConnector
 from ai4sec_platform.sources.connectors.vulnerabilities.crawl4ai import Crawl4aiConnector
 from ai4sec_platform.sources.connectors.vulnerabilities.manual_import import ManualImportConnector
@@ -22,7 +19,7 @@ from ai4sec_platform.sources.connectors.threats.openx_huawei import OpenXHuaweiC
 
 def all_connectors():
     return [
-        ArxivConnector(), GithubConnector(), RssConnector(), XFeedConnector(), AsisConnector(), AwesomeConnector(),
+        ArxivConnector(), GithubConnector(), RssConnector(),
         AnysearchConnector(), Crawl4aiConnector(), ManualImportConnector(), HuaweiRepoConnector(), CveConnector(),
         FirmwareConnector(), MirrorConnector(), GitCodeConnector(), AtomGitConnector(), HiAscendConnector(),
         HuaweiMirrorConnector(), OpenXHuaweiConnector(),

@@ -1,16 +1,30 @@
 from __future__ import annotations
 
 from ai4sec_platform.pipelines.base import PipelineDefinition
-from ai4sec_platform.pipelines.steps.news_raw import BuildRawNewsDomainItemsStep, ImportAiForSecRawStep, NormalizeAiForSecRawStep
+from ai4sec_platform.pipelines.steps.news import AuditNewsStep, BuildNewsDailyReportStep, BuildNewsItemsStep, CollectNewsSourcesStep, NormalizeNewsStep
 
 
-def ai_for_sec_raw_pipeline() -> PipelineDefinition:
+def news_pipeline(name: str, mode: str) -> PipelineDefinition:
     return PipelineDefinition(
-        name="news.ai_for_sec_raw_pipeline",
+        name=name,
         domain="news",
         steps=[
-            ImportAiForSecRawStep(),
-            NormalizeAiForSecRawStep(),
-            BuildRawNewsDomainItemsStep(),
+            CollectNewsSourcesStep(),
+            NormalizeNewsStep(),
+            BuildNewsItemsStep(),
+            BuildNewsDailyReportStep(),
+            AuditNewsStep(),
         ],
     )
+
+
+def news_shadow_collect_pipeline() -> PipelineDefinition:
+    return news_pipeline("news.shadow_collect_pipeline", "shadow")
+
+
+def news_legacy_raw_pipeline() -> PipelineDefinition:
+    return news_pipeline("news.legacy_raw_pipeline", "legacy_raw")
+
+
+def news_daily_pipeline() -> PipelineDefinition:
+    return news_pipeline("news.daily_pipeline", "shadow")
