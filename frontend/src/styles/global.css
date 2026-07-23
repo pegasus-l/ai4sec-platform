@@ -157,7 +157,7 @@
     .search input { width: 180px; min-width: 0; border: 0; outline: 0; background: transparent; color: var(--text); }
     .search input::placeholder { color: var(--faint); }
     .select { border-radius: 12px; color: var(--muted); }
-    .view { padding: 16px 18px 48px; min-height: 0; overflow: auto; }
+    .view { padding: 16px 18px 80px; min-height: 0; overflow: auto; }
     .grid { display: grid; gap: 12px; }
     /* V17 table typography */
     .name { font-weight: 900; color: var(--text); }
