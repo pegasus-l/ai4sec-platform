@@ -149,7 +149,12 @@ function ThreatToday({ repos, openRepo, setView, setFilters }: { repos: ThreatRe
 }
 
 function ThreatRepos({ repos, filters, setFilters, openRepo }: { repos: ThreatRepo[]; filters: FilterState; setFilters: (filters: FilterState) => void; openRepo: (repo: ThreatRepo) => void }) {
+  const filteredCount = repos.length;
   return <div className="grid">
+    <div className="row-title" style={{ marginBottom: 8 }}>
+      <span className="muted small">共 {filteredCount} 个代码仓</span>
+      <span className="muted small">{filters.grade !== 'all' ? ` · 筛选 ${filters.grade} 级` : ''}{filters.surface !== 'all' ? ` · ${filters.surface}` : ''}{filters.onlyCve ? ' · 有 CVE' : ''}{filters.onlyHigh ? ' · 高风险' : ''}{filters.search ? ` · 搜索"${filters.search}"` : ''}</span>
+    </div>
     <div className="table-card"><RepoTable repos={repos} openRepo={openRepo} /></div>
   </div>;
 }
