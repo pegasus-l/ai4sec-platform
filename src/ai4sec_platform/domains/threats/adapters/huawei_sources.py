@@ -269,7 +269,7 @@ def _collect_org_repos(registry: SourceRegistry, entry: Any, params: dict[str, A
         org = str(entry.get("org") or "")
     connector = registry.get(platform)
     for page in range(1, page_limit + 1):
-        result = connector.fetch(SourceFetchRequest(source_name=f"{platform}:{org}:repos", params={"resource": "repos", "org": org, "page": page, "per_page": per_page, "timeout_seconds": params.get("timeout_seconds", 15)}))
+        result = connector.fetch(SourceFetchRequest(source_name=f"{platform}:{org}:repos", params={"resource": "repos", "org": org, "page": page, "per_page": per_page, "timeout_seconds": params.get("timeout_seconds", 60)}))
         if result.errors:
             break
         batch = [_normalize_repo_item(item, org=org, platform=platform) for item in result.items]
