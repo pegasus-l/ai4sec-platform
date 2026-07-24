@@ -1,7 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { Card } from '../../../components/ui';
 import { fetchOpsOverview } from '../../../api/opsClient';
-import type { ThreatViewModel } from '../../../types/threat';
 import type { ViewId } from '../ThreatPage';
 
 interface Props {

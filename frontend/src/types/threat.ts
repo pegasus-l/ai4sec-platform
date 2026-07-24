@@ -186,24 +186,6 @@ export type ThreatReactFlowEdge = Edge;
 export type GraphEdgeType = 'direct' | 'inferred' | 'weak';
 
 // ============================================================================
-// W1.5: ThreatOps types (rules + manual queue)
-// ============================================================================
-export interface ThreatOpsRule {
-  id: string;
-  name: string;
-  status: 'active' | 'draft' | 'caution' | string;
-  owner: string;
-  note: string;
-}
-
-export interface ThreatOpsManualQueueItem {
-  id: string;
-  type: string;
-  status: string;
-  title: string;
-  priority: 'P0' | 'P1' | 'P2' | string;
-}
-
 // ============================================================================
 // ThreatViewModel extended with v12 fields (all optional until W1.6 adapter)
 // ============================================================================
@@ -221,6 +203,4 @@ export interface ThreatViewModel {
   vulnDetails?: ThreatVulnDetailMap;
   surfaces?: ThreatSurfaceDetail[];
   activeSurface?: string;
-  opsRules?: ThreatOpsRule[];
-  opsManualQueue?: ThreatOpsManualQueueItem[];
 }
