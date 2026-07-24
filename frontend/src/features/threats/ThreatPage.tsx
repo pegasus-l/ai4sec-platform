@@ -164,19 +164,27 @@ function ThreatSurface({ repos, openRepo, setFilters, setView }: { repos: Threat
   const [activeSurfaceId, setActiveSurfaceId] = useState(surfaces[0]?.id ?? 'kernel');
   const selected = surfaces.find(s => s.id === activeSurfaceId) ?? surfaces[0];
   const relatedRepos = repos.filter(r => r.surface === activeSurfaceId).sort((a, b) => b.score - a.score);
-  const totalRepos = surfaces.reduce((sum, s) => sum + s.count, 0);
-  const totalCves = surfaces.reduce((sum, s) => sum + s.cves, 0);
-  const totalSec = surfaces.reduce((sum, s) => sum + (s.secItems ?? 0), 0);
+  // Real KPIs computed from actual repos data
+  const totalRepos = repos.length;
+  const totalCves = repos.reduce((sum, r) => sum + r.cve, 0);
+  const totalSec = repos.reduce((sum, r) => sum + r.sec, 0);
+  // Per-surface counts from real data
+  const surfaceCounts = surfaces.map(s => ({
+    ...s,
+    realCount: repos.filter(r => r.surface === s.id).length,
+    realCves: repos.filter(r => r.surface === s.id).reduce((sum, r) => sum + r.cve, 0),
+    realSec: repos.filter(r => r.surface === s.id).reduce((sum, r) => sum + r.sec, 0),
+  }));
   return <div className="grid">
     <div className="grid cols-3">
-      <MetricCard label="相关代码仓" value={totalRepos} hint="全量旧数据口径的攻击面聚合数量。" tone="sky" />
-      <MetricCard label="CVE 总量" value={totalCves} hint="各攻击面历史 CVE 聚合计数。" tone="amber" />
+      <MetricCard label="相关代码仓" value={totalRepos} hint="从数据库实时统计的代码仓总数。" tone="sky" />
+      <MetricCard label="CVE 总量" value={totalCves} hint="各代码仓 CVE 合计。" tone="amber" />
       <MetricCard label="安全线索" value={totalSec} hint="CVE / SA / security issue 合计。" tone="green" />
     </div>
     <div className="grid cols-2">
-      <Card><h3>攻击面总览</h3><p className="muted small">点击左侧攻击面只切换本页分析；需要看仓库明细时，再点"查看该攻击面的代码仓"。</p><div className="surface-matrix">{surfaces.map(s => <button key={s.id} className={`surface-matrix-item clickable ${s.id === activeSurfaceId ? 'active' : ''}`} onClick={() => setActiveSurfaceId(s.id)}><div className="row-title"><span><b>{s.icon} {s.title}</b></span><span className={`badge ${s.id === activeSurfaceId ? 'A' : 'C'}`}>{s.id === activeSurfaceId ? '当前' : '查看'}</span></div><p className="muted small">{s.desc}</p><div className="split"><span className="badge">代码仓 {s.count}</span><span className="badge">A级 {s.gradeA}</span><span className="badge">CVE {s.cves}</span><span className="badge">资产 {s.assets}</span></div><div className="score-bar" style={{ marginTop: 9 }}><i style={{ width: `${Math.min(100, Math.round(s.count / Math.max(1, totalRepos) * 300))}%` }} /></div></button>)}</div></Card>
+      <Card><h3>攻击面总览</h3><p className="muted small">点击左侧攻击面只切换本页分析；需要看仓库明细时，再点"查看该攻击面的代码仓"。</p><div className="surface-matrix">{surfaceCounts.map(s => <button key={s.id} className={`surface-matrix-item clickable ${s.id === activeSurfaceId ? 'active' : ''}`} onClick={() => setActiveSurfaceId(s.id)}><div className="row-title"><span><b>{s.icon} {s.title}</b></span><span className={`badge ${s.id === activeSurfaceId ? 'A' : 'C'}`}>{s.id === activeSurfaceId ? '当前' : '查看'}</span></div><p className="muted small">{s.desc}</p><div className="split"><span className="badge">代码仓 {s.realCount}</span><span className="badge">CVE {s.realCves}</span><span className="badge">线索 {s.realSec}</span></div><div className="score-bar" style={{ marginTop: 9 }}><i style={{ width: `${Math.min(100, Math.round(s.realCount / Math.max(1, totalRepos) * 100))}%` }} /></div></button>)}</div></Card>
       <div className="grid">
-        <Card className="detail-card"><h3>{selected?.title} 聚合指标</h3><p>{selected?.purpose}</p><div className="asset-meta"><div><b>{selected?.count}</b><span>相关代码仓</span></div><div><b>{selected?.gradeA}</b><span>A级仓库</span></div><div><b>{selected?.cves}</b><span>CVE</span></div><div><b>{selected?.secItems ?? 0}</b><span>安全线索</span></div><div><b>{selected?.assets}</b><span>关联资产</span></div><div><b>{selected?.score}</b><span>最高风险分</span></div></div></Card>
+        <Card className="detail-card"><h3>{selected?.title} 聚合指标</h3><p>{selected?.purpose}</p><div className="asset-meta"><div><b>{relatedRepos.length}</b><span>相关代码仓</span></div><div><b>{relatedRepos.filter(r => r.grade === 'A').length}</b><span>A级仓库</span></div><div><b>{relatedRepos.reduce((sum, r) => sum + r.cve, 0)}</b><span>CVE</span></div><div><b>{relatedRepos.reduce((sum, r) => sum + r.sec, 0)}</b><span>安全线索</span></div><div><b>{relatedRepos.length ? Math.round(Math.max(...relatedRepos.map(r => r.score))) : 0}</b><span>最高风险分</span></div></div></Card>
         <Card><h3>该攻击面的代码仓样例</h3>{relatedRepos.length ? <div className="timeline">{relatedRepos.slice(0, 5).map(r => <div key={r.id} className="timeline-item clickable" onClick={() => openRepo(r)}><div className="row-title"><b>{r.org}/{r.name}</b><span className={`badge ${r.grade || 'C'}`}>Grade {r.grade || '?'}</span></div><span className="muted small">score {Math.round(r.score)} · CVE {r.cve} · Sec {r.sec} · {r.surface}</span></div>)}</div> : <p className="muted">当前 demo 没有内嵌该攻击面的代码仓详情；正式版从全量数据聚合。</p>}<div className="split" style={{ marginTop: 10 }}><button className="btn primary" onClick={() => { setFilters({ search: '', grade: 'all', surface: activeSurfaceId, onlyCve: false, onlyHigh: false }); setView('repos'); }}>查看代码仓筛选</button></div></Card>
         <div className="grid cols-2"><Card className="detail-card"><h3>挖洞路径</h3><div className="timeline">{(selected?.paths ?? []).map((p, i) => <div key={i} className="timeline-item">{p}</div>)}</div></Card><Card className="detail-card"><h3>代表证据</h3><div className="timeline">{(selected?.evidence ?? []).map((e, i) => <div key={i} className="timeline-item">{e}</div>)}</div></Card></div>
         <Card><h3>下一步研判假设</h3><div className="timeline">{(selected?.hypotheses ?? []).map((h, i) => <div key={i} className="timeline-item">{h}</div>)}</div></Card>
