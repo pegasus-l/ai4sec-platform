@@ -2,6 +2,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState, useCallback } from 'react';
 import { Card, Drawer } from '../../../components/ui';
 import { fetchOpsPipelines, fetchRuns, fetchRunDetail, STEP_TO_PIPELINE, type OpsPipeline } from '../../../api/opsClient';
+import { useToast } from '../../../components/Toast';
 
 const zhPipelineNames: Record<string, string> = {
   'huawei_full_migration_pipeline': '完整威胁链路',
@@ -22,6 +23,7 @@ const SUB_PIPELINES = [
 
 export function OpsTasks() {
   const queryClient = useQueryClient();
+  const { toast, confirm } = useToast();
   const { data: pipelinesData } = useQuery({ queryKey: ['ops-pipelines'], queryFn: fetchOpsPipelines });
   const { data: runsData } = useQuery({ queryKey: ['ops-runs'], queryFn: fetchRuns, refetchInterval: 5000 });
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
@@ -62,20 +64,22 @@ export function OpsTasks() {
 
   const handleRun = async (p: OpsPipeline, forceReset = false) => {
     const highRisk = p.risk === '高';
-    if (highRisk && !forceReset && !window.confirm(`${zhPipelineNames[p.short_name] || p.short_name} 是高风险操作（完整链路 30-60 分钟），确认运行吗？`)) return;
-    if (forceReset && !window.confirm(`清空并重建会删除所有数据（包括 AI 研判结果），确认吗？`)) return;
+    if (highRisk && !forceReset && !await confirm(`${zhPipelineNames[p.short_name] || p.short_name} 是高风险操作（完整链路 30-60 分钟），确认运行吗？`)) return;
+    if (forceReset && !await confirm(`清空并重建会删除所有数据（包括 AI 研判结果），确认吗？`)) return;
     setRunError(null);
     try {
       const params: Record<string, unknown> = { use_source_cache: true, refresh_source_cache: true };
-      await fetch('/api/runs', {
+      const resp = await fetch('/api/runs', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ pipeline_name: p.name, reset: forceReset, params }),
       });
-      // Poll runs immediately and keep polling
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
       queryClient.invalidateQueries({ queryKey: ['ops-runs'] });
+      toast(`已触发: ${zhPipelineNames[p.short_name] || p.short_name}`, 'success');
     } catch (e) {
       setRunError(String(e));
+      toast(`触发失败: ${e}`, 'error');
     }
   };
 

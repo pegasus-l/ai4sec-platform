@@ -23,6 +23,7 @@ import { useState, useEffect, useMemo } from 'react';
 import { useQueryClient, useQuery } from '@tanstack/react-query';
 import { postJson, getJson, trackTarget, fetchTargetDetail, type AiReviewResult } from '../../api/client';
 import { repoFromItem, vulnDetailsFromItem } from './threatAdapters';
+import { useToast } from '../../components/Toast';
 
 interface RepoDrawerContentProps {
   repo: ThreatRepo;
@@ -34,6 +35,7 @@ interface RepoDrawerContentProps {
 
 export function RepoDrawerContent({ repo: initialRepo, onViewGraph, onOpenAsset }: RepoDrawerContentProps) {
   const { push } = useDrawerStack();
+  const { toast } = useToast();
   // Fetch single target detail (full payload) — replaces fetchFrontendContract
   const { data: detailData } = useQuery({ queryKey: ['threats-target-detail', initialRepo.id], queryFn: () => fetchTargetDetail(initialRepo.id) });
   // Build local model from the single item (repos + vulnDetails only)
@@ -200,7 +202,7 @@ export function RepoDrawerContent({ repo: initialRepo, onViewGraph, onOpenAsset 
           )}
           {/* 5. Action buttons */}
           <div className="split" style={{ marginTop: 10 }}>
-            <button className="btn primary" onClick={() => trackTarget(repo.id).then(() => alert(`已加入跟踪: ${repo.org}/${repo.name}`)).catch(e => alert(`跟踪失败: ${e}`))}>
+            <button className="btn primary" onClick={() => trackTarget(repo.id).then(() => toast(`已加入跟踪: ${repo.org}/${repo.name}`, 'success')).catch(e => toast(`跟踪失败: ${e}`, 'error'))}>
               加入跟踪
             </button>
             <button className="btn primary" onClick={handleOpenVulnList}>

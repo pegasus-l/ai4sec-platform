@@ -7,6 +7,7 @@ import { assetFromItem } from './threatAdapters';
 import { surfaces as staticSurfaces } from './threatStaticData';
 import { ThreatGraphView } from './graph/ThreatGraphView';
 import { RepoDrawerContent } from './RepoDrawer';
+import { useToast } from '../../components/Toast';
 import { useDrawerStack } from '../../components/DrawerStack';
 import { OpsOverview } from './ops/OpsOverview';
 import { OpsTasks } from './ops/OpsTasks';
@@ -48,6 +49,7 @@ export function ThreatPage() {
   const [selectedAsset, setSelectedAsset] = useState<ThreatAsset | null>(null);
   const [currentPage, setCurrentPage] = useState(1);
   const { push } = useDrawerStack();
+  const { toast } = useToast();
 
   // Fetch targets with pagination + server-side filtering (summary fields only = ~1KB/item instead of 103KB)
   const { data: targetsData, isLoading, error } = useQuery({
@@ -151,6 +153,7 @@ function renderView(view: ViewId, repos: ThreatRepo[], filters: FilterState, set
 }
 
 function ThreatToday({ repos, openRepo, setView, setFilters }: { repos: ThreatRepo[]; openRepo: (repo: ThreatRepo) => void; setView: (view: ViewId) => void; setFilters: (filters: FilterState) => void }) {
+  const { toast } = useToast();
   const highRisk = repos.filter(r => r.score >= 75).length;
   const withCve = repos.filter(r => r.cve > 0).length;
   const focus = [
@@ -176,7 +179,7 @@ function ThreatToday({ repos, openRepo, setView, setFilters }: { repos: ThreatRe
         <h3>{item.repo.org}/{item.repo.name}</h3>
         <p>{item.why}</p>
         <div className="split"><span className={`badge ${item.repo.grade || 'C'}`}>Grade {item.repo.grade}</span><span className="badge">{item.repo.surface}</span><span className="badge">score {Math.round(item.repo.score)}</span></div>
-        <div className="split"><button className="btn primary" onClick={(event) => { event.stopPropagation(); openRepo(item.repo); }}>查看详情</button><button className="btn" onClick={(event) => { event.stopPropagation(); import('../../api/client').then(m => m.trackTarget(item.repo.id).then(() => alert(`已加入跟踪: ${item.repo.org}/${item.repo.name}`)).catch(e => alert(`跟踪失败: ${e}`))); }}>加入跟踪</button></div>
+        <div className="split"><button className="btn primary" onClick={(event) => { event.stopPropagation(); openRepo(item.repo); }}>查看详情</button><button className="btn" onClick={(event) => { event.stopPropagation(); import('../../api/client').then(m => m.trackTarget(item.repo.id).then(() => toast(`已加入跟踪: ${item.repo.org}/${item.repo.name}`, 'success')).catch(e => toast(`跟踪失败: ${e}`, 'error'))); }}>加入跟踪</button></div>
       </div>)}
     </div>
   </div>;
@@ -405,6 +408,7 @@ function formatNum(n: number): string {
 }
 
 function AssetCard({ asset, onClick }: { asset: ThreatAsset; onClick: () => void }) {
+  const { toast } = useToast();
   const typeLabel = asset.type === 'firmware' ? '固件' : asset.type === 'image' ? '镜像' : asset.type === 'mirror' ? '软件源' : asset.type === 'openx_firmware' ? 'OpenX固件' : asset.type || '未知';
   return <div className="card asset-card" onClick={onClick}>
     <div className="row-title"><span className="badge">{typeLabel}</span>{asset.official && <span className="badge A">官方</span>}</div>
@@ -447,11 +451,12 @@ function AssetCard({ asset, onClick }: { asset: ThreatAsset; onClick: () => void
     ) : (
       <div className="asset-meta"><div><b>{asset.model || '-'}</b><span>型号/名称</span></div><div><b>{asset.version || '-'}</b><span>版本</span></div><div><b>{asset.count || '-'}</b><span>数量</span></div><div><b>{asset.latest || '-'}</b><span>更新</span></div></div>
     )}
-    <div className="split"><button className="btn primary" onClick={(e) => { e.stopPropagation(); onClick(); }}>资产详情</button><button className="btn" onClick={(e) => { e.stopPropagation(); trackAsset(asset.id).then(() => alert(`已加入跟踪: ${asset.title}`)).catch(err => alert(`跟踪失败: ${err}`)); }}>加入跟踪</button></div>
+    <div className="split"><button className="btn primary" onClick={(e) => { e.stopPropagation(); onClick(); }}>资产详情</button><button className="btn" onClick={(e) => { e.stopPropagation(); trackAsset(asset.id).then(() => toast(`已加入跟踪: ${asset.title}`, 'success')).catch(err => toast(`跟踪失败: ${err}`, 'error')); }}>加入跟踪</button></div>
   </div>;
 }
 
 function AssetDrawer({ asset, onClose, openRepo }: { asset: ThreatAsset | null; onClose: () => void; openRepo: (repo: ThreatRepo) => void }) {
+  const { toast } = useToast();
   const typeLabel = asset?.type === 'firmware' ? '固件' : asset?.type === 'image' ? '镜像' : asset?.type === 'mirror' ? '软件源' : asset?.type === 'openx_firmware' ? 'OpenX固件' : asset?.type || '未知';
   const [assocResult, setAssocResult] = useState<AiAssociationResult | null>(null);
   const [assocLoading, setAssocLoading] = useState(false);
@@ -545,7 +550,7 @@ function AssetDrawer({ asset, onClose, openRepo }: { asset: ThreatAsset | null; 
         <button className="btn primary" onClick={handleAssociate}>开始 AI 关联分析</button>
       )}
     </div>
-    <div className="detail-card card"><h3>建议动作</h3><div className="split"><button className="btn primary" onClick={() => trackAsset(asset.id).then(() => alert(`已加入跟踪: ${asset.title}`)).catch(e => alert(`跟踪失败: ${e}`))}>加入跟踪</button><button className="btn">加入解包</button><button className="btn">加入 SBOM</button><button className="btn warn">标记关联待复核</button></div></div>
+    <div className="detail-card card"><h3>建议动作</h3><div className="split"><button className="btn primary" onClick={() => trackAsset(asset.id).then(() => toast(`已加入跟踪: ${asset.title}`, 'success')).catch(e => toast(`跟踪失败: ${e}`, 'error'))}>加入跟踪</button><button className="btn">加入解包</button><button className="btn">加入 SBOM</button><button className="btn warn">标记关联待复核</button></div></div>
   </>}</Drawer>;
 }
 
