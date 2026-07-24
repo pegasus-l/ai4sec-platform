@@ -297,37 +297,3 @@ def stale_items(conn: sqlite3.Connection = Depends(get_db)) -> dict:
         "stale_assets": stale_assets,
         "stale_total": stale_targets + stale_assets,
     }
-
-
-@router.get("/manual-queue")
-def manual_queue(conn: sqlite3.Connection = Depends(get_db)) -> dict:
-    """Manual review queue: pipeline-generated items needing human attention.
-
-    Returns human_queue_items where queue_source='pipeline', JOINed with
-    domain_items for title/url/score so the UI can display target names.
-    """
-    rows = conn.execute(
-        """
-        SELECT q.id, q.domain, q.item_id, q.queue_type, q.status,
-               q.priority, q.reason, q.assignee, q.created_at,
-               d.title, d.source_url, d.score
-        FROM human_queue_items q
-        LEFT JOIN domain_items d ON q.item_id = d.id AND q.domain = d.domain
-        WHERE q.queue_source = 'pipeline'
-        ORDER BY q.priority ASC, q.id DESC
-        LIMIT 200
-        """,
-    ).fetchall()
-    items = []
-    for r in rows:
-        items.append({
-            "id": r[0], "domain": r[1], "item_id": r[2],
-            "queue_type": r[3], "status": r[4], "priority": r[5],
-            "reason": r[6] or "", "assignee": r[7] or "",
-            "created_at": r[8],
-            "title": r[9] or "", "url": r[10] or "", "score": r[11] or 0,
-        })
-    pending = len([i for i in items if i["status"] == "pending"])
-    reviewing = len([i for i in items if "审" in str(i["status"]) or "跟踪" in str(i["status"])])
-    closed = len([i for i in items if "关" in str(i["status"])])
-    return {"items": items, "total": len(items), "kpis": {"pending": pending, "reviewing": reviewing, "closed": closed}}

@@ -89,22 +89,3 @@ export async function fetchOpsPipelines(): Promise<{ items: OpsPipeline[] }> {
 export async function fetchRuns(): Promise<{ items: OpsRun[] }> {
   return getJson('/api/runs');
 }
-
-export interface OpsManualQueueItem {
-  id: number;
-  domain: string;
-  item_id: number;
-  queue_type: string;
-  status: string;
-  priority: number;
-  reason: string;
-  assignee: string;
-  created_at: string;
-  title: string;
-  url: string;
-  score: number;
-}
-
-export async function fetchManualQueue(): Promise<{ items: OpsManualQueueItem[]; total: number; kpis: { pending: number; reviewing: number; closed: number } }> {
-  return getJson('/api/ops/manual-queue');
-}

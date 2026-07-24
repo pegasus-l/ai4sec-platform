@@ -2,7 +2,7 @@ import { useMemo, useState, useEffect, useRef } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { AlertTriangle, Boxes, GitBranch, GitFork, Network, Radar, ShieldCheck, Target, Workflow } from 'lucide-react';
 import { fetchTargets, fetchAssets, fetchTrackingQueue, fetchSurfaceStats, trackAsset, postJson, getJson, type AiAssociationResult } from '../../api/client';
-import { fetchOpsOverview, fetchOpsSources, fetchOpsQuality, fetchOpsAISummary, fetchOpsPipelines, fetchRuns, fetchManualQueue } from '../../api/opsClient';
+import { fetchOpsOverview, fetchOpsSources, fetchOpsQuality, fetchOpsAISummary, fetchOpsPipelines, fetchRuns } from '../../api/opsClient';
 import { Badge, Card, Drawer, EmptyState, MetricCard } from '../../components/ui';
 import type { ThreatAsset, ThreatRepo, ThreatViewModel } from '../../types/threat';
 import { adaptThreatContract, assetFromItem, repoFromItem } from './threatAdapters';
@@ -15,10 +15,9 @@ import { OpsOverview } from './ops/OpsOverview';
 import { OpsTasks } from './ops/OpsTasks';
 import { OpsSources } from './ops/OpsSources';
 import { OpsQuality } from './ops/OpsQuality';
-import { OpsManualQueue } from './ops/OpsManualQueue';
 import { OpsAISummary } from './ops/OpsAISummary';
 
-export type ViewId = 'today' | 'repos' | 'surface' | 'assets' | 'graph' | 'queue' | 'ops-overview' | 'ops-tasks' | 'ops-sources' | 'ops-quality' | 'ops-queue' | 'ops-ai-summary';
+export type ViewId = 'today' | 'repos' | 'surface' | 'assets' | 'graph' | 'queue' | 'ops-overview' | 'ops-tasks' | 'ops-sources' | 'ops-quality' | 'ops-ai-summary';
 
 const navGroups: Array<{ title: string; items: Array<{ id: ViewId; icon: string; title: string }> }> = [
   { title: '开源威胁洞察', items: [
@@ -34,7 +33,6 @@ const navGroups: Array<{ title: string; items: Array<{ id: ViewId; icon: string;
     { id: 'ops-tasks', icon: '↻', title: '采集任务' },
     { id: 'ops-sources', icon: '◇', title: '数据源' },
     { id: 'ops-quality', icon: '◈', title: '质量审计' },
-    { id: 'ops-queue', icon: '▤', title: '人工队列' },
     { id: 'ops-ai-summary', icon: '✦', title: 'AI 分析汇总' }
   ]}
 ];
@@ -151,7 +149,6 @@ function renderView(view: ViewId, repos: ThreatRepo[], filters: FilterState, set
   if (view === 'ops-tasks') return <OpsTasks />;
   if (view === 'ops-sources') return <OpsSources />;
   if (view === 'ops-quality') return <OpsQuality />;
-  if (view === 'ops-queue') return <OpsManualQueue />;
   if (view === 'ops-ai-summary') return <OpsAISummary openRepo={openRepo} openAsset={openAsset} />;
   return <EmptyState title="未知页面" />;
 }
@@ -601,11 +598,11 @@ function filterRepos(repos: ThreatRepo[], filters: FilterState): ThreatRepo[] {
 }
 
 function heroTitle(view: ViewId): string {
-  return ({ today: '今天有哪些目标值得看', repos: '开源代码仓目标库', surface: '攻击面评分与分布', assets: '固件 / 镜像 / Hub 资产库', graph: '代码仓与资产关联图谱', queue: '威胁跟踪队列', 'ops-overview': '运营概览', 'ops-tasks': '采集任务', 'ops-sources': '数据源状态', 'ops-quality': '质量审计', 'ops-queue': '人工队列', 'ops-ai-summary': 'AI 分析汇总' } as Record<ViewId, string>)[view];
+  return ({ today: '今天有哪些目标值得看', repos: '开源代码仓目标库', surface: '攻击面评分与分布', assets: '固件 / 镜像 / Hub 资产库', graph: '代码仓与资产关联图谱', queue: '威胁跟踪队列', 'ops-overview': '运营概览', 'ops-tasks': '采集任务', 'ops-sources': '数据源状态', 'ops-quality': '质量审计', 'ops-ai-summary': 'AI 分析汇总' } as Record<ViewId, string>)[view];
 }
 
 function heroCopy(view: ViewId): string {
-  return ({ today: '优先呈现高风险目标、CVE/SA/security issue 和推荐挖洞方向。', repos: '搜索、过滤、排序所有华为开源仓，并查看证据链。', surface: '按语言、输入面、历史漏洞、复杂度和安全边界拆分评分。', assets: '查看 firmware、AscendHub、mirror、OpenX Huawei 等资产线索。', graph: '用轻量关系图查看组织、仓库、CVE、攻击面和资产。', queue: '承接待研判、待代码审计、持续跟踪等行动项。', 'ops-overview': '系统状态、数据新鲜度、AI 分析进度和快捷操作。', 'ops-tasks': '触发 pipeline、追踪 step 进度和产物。', 'ops-sources': '每个源的健康、记录数和最近采集时间。', 'ops-quality': '质量审计记录与覆盖率。', 'ops-queue': '人工队列，承接待研判和复核事项。', 'ops-ai-summary': 'AI 研判和资产关联的汇总视图。' } as Record<ViewId, string>)[view];
+  return ({ today: '优先呈现高风险目标、CVE/SA/security issue 和推荐挖洞方向。', repos: '搜索、过滤、排序所有华为开源仓，并查看证据链。', surface: '按语言、输入面、历史漏洞、复杂度和安全边界拆分评分。', assets: '查看 firmware、AscendHub、mirror、OpenX Huawei 等资产线索。', graph: '用轻量关系图查看组织、仓库、CVE、攻击面和资产。', queue: '承接待研判、待代码审计、持续跟踪等行动项。', 'ops-overview': '系统状态、数据新鲜度、AI 分析进度和快捷操作。', 'ops-tasks': '触发 pipeline、追踪 step 进度和产物。', 'ops-sources': '每个源的健康、记录数和最近采集时间。', 'ops-quality': '质量审计记录与覆盖率。', 'ops-ai-summary': 'AI 研判和资产关联的汇总视图。' } as Record<ViewId, string>)[view];
 }
 
 function navCount(view: ViewId, model: ThreatViewModel | null): string {
@@ -621,7 +618,6 @@ function navCount(view: ViewId, model: ThreatViewModel | null): string {
     'ops-tasks': '',
     'ops-sources': '',
     'ops-quality': '',
-    'ops-queue': String(model.queue.length),
     'ops-ai-summary': '',
   } as Record<ViewId, string>)[view];
 }
