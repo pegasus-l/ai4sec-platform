@@ -93,6 +93,8 @@ def targets(
                 # Star count + total security items (used in list view)
                 item["stars"] = payload.get("stars") or raw.get("star_count") or 0
                 item["total_sec_items"] = payload.get("total_sec_items") or signals.get("total_sec_items") or 0
+                # AI calibrated flag (badge in list view)
+                item["aiCalibrated"] = bool(calibrated_surface or ai_cal.get("calibrated_attack_surface") or semantic.get("attack_surface_calibration"))
 
     return {"items": items, "total": total, "page": page, "per_page": limit, "pages": (total + limit - 1) // limit}
 
