@@ -90,6 +90,9 @@ export function OpsTasks() {
   const closeRunDetail = useCallback(() => setSelectedRunId(null), []);
   const badgeClass = (s: string) => s === 'success' ? 'success' : s === 'failed' ? 'failed' : s === 'running' ? 'running' : 'queued';
   const zhStatus = (s: string) => ({ success: '成功', running: '运行中', failed: '失败', queued: '排队', pending: '待处理', skipped: '跳过' }[s] || s);
+  const fmtTime = (iso: string | undefined | null) => { if (!iso) return '—'; const d = new Date(iso); return isNaN(d.getTime()) ? '—' : d.toLocaleTimeString('zh-CN', { hour12: false }); };
+  const fmtDate = (iso: string | undefined | null) => { if (!iso) return '从未运行'; const d = new Date(iso); return isNaN(d.getTime()) ? '—' : d.toLocaleDateString('zh-CN'); };
+  const fmtDateTime = (iso: string | undefined | null) => { if (!iso) return '—'; const d = new Date(iso); return isNaN(d.getTime()) ? '—' : d.toLocaleString('zh-CN', { hour12: false }); };
   const lastRunForPipeline = (pipelineName: string) => runs.find(r => r.pipeline_name === pipelineName);
 
   return (
@@ -120,7 +123,7 @@ export function OpsTasks() {
               清空并重建
             </button>
             {running.length > 0 && (
-              <span className="badge running">运行中 · {activeRun?.started_at?.slice(11, 19) ?? ''}</span>
+              <span className="badge running">运行中 · {fmtTime(activeRun?.started_at)}</span>
             )}
           </div>
           {runError && <p className="small" style={{ color: '#fecaca', marginTop: 8 }}>运行失败: {runError}</p>}
@@ -152,7 +155,7 @@ export function OpsTasks() {
                       <span className={`badge ${badgeClass(displayStatus)}`}>{zhStatus(displayStatus)}</span>
                       <div className="sub">{p.risk}风险</div>
                     </td>
-                    <td className="small">{lastRun?.started_at?.slice(11, 19) ?? '—'}<div className="sub">{lastRun?.started_at?.slice(0, 10) ?? '从未运行'}</div></td>
+                    <td className="small">{fmtTime(lastRun?.started_at)}<div className="sub">{fmtDate(lastRun?.started_at)}</div></td>
                     <td className="small">{stepStatus?.detail || (lastRun ? zhStatus(lastRun.status) : '—')}<div className="sub">{lastRun?.run_id?.slice(-8) ?? ''}</div></td>
                     <td className="small muted">{p.description.slice(0, 50)}{p.description.length > 50 ? '...' : ''}</td>
                     <td>
@@ -185,8 +188,8 @@ export function OpsTasks() {
                     <td><div className="name mono" style={{ fontSize: 12 }}>{r.run_id?.slice(-16)}</div></td>
                     <td className="small">{r.pipeline_name?.replace('threats.', '') ?? '—'}</td>
                     <td><span className={`badge ${badgeClass(r.status)}`}>{zhStatus(r.status)}</span></td>
-                    <td className="small">手动<div className="sub">{r.started_at?.slice(0, 10)}</div></td>
-                    <td className="small">{r.started_at && r.finished_at ? `${r.started_at.slice(11, 19)}→${r.finished_at.slice(11, 19)}` : '—'}</td>
+                <td className="small">手动<div className="sub">{fmtDate(r.started_at)}</div></td>
+                <td className="small">{r.started_at && r.finished_at ? `${fmtTime(r.started_at)}→${fmtTime(r.finished_at)}` : '—'}</td>
                     <td className="small">{zhStatus(r.status)}</td>
                     <td className="small" style={{ color: r.status === 'failed' ? '#fecaca' : undefined }}>{r.status === 'failed' ? '运行失败，查看 step 详情' : r.status === 'success' ? '运行成功' : '运行中'}</td>
                   </tr>
@@ -207,8 +210,8 @@ export function OpsTasks() {
               <div className="field"><b>pipeline</b><span className="small">{selectedRun.pipeline_name}</span></div>
               <div className="field"><b>状态</b><span className={`badge ${badgeClass(selectedRun.status)}`}>{zhStatus(selectedRun.status)}</span></div>
               <div className="field"><b>触发</b><span className="small">手动</span></div>
-              <div className="field"><b>开始</b><span className="mono small">{selectedRun.started_at ?? '—'}</span></div>
-              <div className="field"><b>结束</b><span className="mono small">{selectedRun.finished_at ?? '—'}</span></div>
+              <div className="field"><b>开始</b><span className="mono small">{fmtDateTime(selectedRun.started_at)}</span></div>
+              <div className="field"><b>结束</b><span className="mono small">{fmtDateTime(selectedRun.finished_at)}</span></div>
             </Card>
             {selectedRun.tasks && Array.isArray(selectedRun.tasks) && selectedRun.tasks.length > 0 && (
               <Card>
@@ -221,7 +224,7 @@ export function OpsTasks() {
                         <span></span>
                         <div>
                           <div className="step-name mono">{i+1}. {String(task.task_name ?? task.name ?? `Step ${i+1}`)}</div>
-                          <div className="step-meta">{String(task.started_at ?? '—')} → {String(task.finished_at ?? '—')}</div>
+                          <div className="step-meta">{fmtDateTime(String(task.started_at ?? ''))} → {fmtDateTime(String(task.finished_at ?? ''))}</div>
                         </div>
                         <span className={`badge ${badgeClass(status)}`}>{zhStatus(status)}</span>
                       </div>
