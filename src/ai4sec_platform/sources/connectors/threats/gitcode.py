@@ -45,10 +45,11 @@ class GitCodeConnector(LiveJsonConnector):
 
         org = request.params.get("org") or request.config.get("org") or "openharmony"
         per_page = int(request.params.get("per_page") or 100)
-        timeout = int(request.params.get("timeout_seconds") or 30)
-        max_pages = 200  # 200 * 100 = 20000, covers any org
+        timeout = int(request.params.get("timeout_seconds") or 60)
+        max_pages = 200
         max_retries = 3
-        rate_limit_sleep = 30  # seconds to wait on 403/429
+        rate_limit_sleep = 30
+        page_delay = 1  # sleep between successful pages to avoid triggering rate limits
 
         all_items: list[dict[str, Any]] = []
         errors: list[str] = []
@@ -60,7 +61,6 @@ class GitCodeConnector(LiveJsonConnector):
             for retry in range(max_retries):
                 try:
                     req = urllib.request.Request(url, headers={
-                        "User-Agent": "opencode-huawei-scout/1.0",
                         "Accept": "application/json",
                     })
                     resp = urllib.request.urlopen(req, timeout=timeout)  # noqa: S310
@@ -71,7 +71,6 @@ class GitCodeConnector(LiveJsonConnector):
                     break
                 except urllib.error.HTTPError as e:
                     if e.code in (403, 429) and retry < max_retries - 1:
-                        # Rate limited — sleep and retry
                         time.sleep(rate_limit_sleep)
                         continue
                     else:
@@ -86,15 +85,19 @@ class GitCodeConnector(LiveJsonConnector):
                         break
 
             if not success:
-                break
+                # Skip this page and continue to next — don't abandon remaining pages
+                errors.append(f"page {page} skipped after {max_retries} retries, continuing to next page")
+                continue
 
             items = self.extract_items(data) if 'data' in dir() else []
             if not items:
-                break
+                break  # no more data — normal end of pagination
 
             all_items.extend(items)
             if len(items) < per_page:
                 break  # last page
+
+            time.sleep(page_delay)  # small delay between pages to avoid rate limiting
 
         return SourceFetchResult(
             source_name=request.source_name,
