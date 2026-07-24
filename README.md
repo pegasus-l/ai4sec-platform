@@ -166,6 +166,7 @@ PYTHONPATH=src python3 -m ai4sec_platform.cli.run_pipeline --pipeline vulnerabil
 
 - `extract_crawled_content` 阶段优先使用 OpenAI-compatible 模型抽正文，失败或测试环境回退本地规则；
 - `review_crawled_materials` 阶段优先使用 OpenAI-compatible 模型做素材审核，输出 `accept/needs_review/reject`，失败或测试环境回退本地规则；
+- 素材审核对齐旧实现的“高质量漏洞技术分析”口径：CVE/NVD/OpenCVE 页面、厂商公告、补丁列表如果缺少独立根因/触发条件/PoC/利用链/修复分析，不会直接 `accept`；CVE 只作为事件聚合连接键，不作为优质素材通过依据；
 - `extract_vulnerability_knowledge` 阶段优先使用 OpenAI-compatible 模型抽取结构化漏洞知识，失败或测试环境回退 `LocalRuleProvider`。
 
 模型配置从 `.env` 读取，支持 `AI4SEC_OPENAI_*`、`OPENAI_*`、`DEEPSEEK_*`、`DASHSCOPE_*` 等 OpenAI-compatible 配置。`ANYSEARCH_API_KEY` / `ANYSEARCH_BASE_URL` 可从旧漏洞工程 `.env` 同步到本目录 `.env`；这些本地配置被 `.gitignore` 忽略，不提交。
@@ -177,7 +178,7 @@ PYTHONPATH=src python3 -m ai4sec_platform.cli.run_pipeline --pipeline vulnerabil
 - 资讯：按 AI 安全、Agent 安全、漏洞攻防、代码仓库线索分类，并按相关性、代码线索、影响力和新鲜度评分。
 - 能力：从资讯候选中识别可复现代码/论文线索，按复现性、研究价值和安全价值评分。
 - 威胁：从 repo/CVE/固件/镜像 raw 中抽 CVE、security issue、advisory、exploit/PoC、暴露面信号，并输出可解释风险分。
-- 漏洞素材：从搜索/报告 raw 中判断 PoC/Exploit、深度技术分析、漏洞公告、影响范围线索，抽取 CVE、影响版本、PoC 和修复线索，并计算素材有效性分。
+- 漏洞素材：从搜索/报告 raw 中优先保留 PoC/Exploit、深度技术分析和具备完整技术证据的研究文章；CVE/公告/影响范围线索用于聚合和复核，缺少独立分析时不作为展示素材直接通过。
 
 公共结构位于 `schemas/classification.py` 和 `schemas/scoring.py`；公共编排位于 `pipelines/steps/classify.py` 和 `pipelines/steps/score.py`；领域规则继续放在 `domains/*/` 下。
 
