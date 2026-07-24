@@ -196,7 +196,7 @@ def ai_summary(conn: sqlite3.Connection = Depends(get_db)) -> dict:
         review_items.append({
             "item_id": item_id,
             "title": repo_row[0] if repo_row else "?",
-            "score": repo_row[1] if repo_row else 0,
+            "score": semantic.get("calibrated_score") or (repo_row[1] if repo_row else 0),
             "url": repo_row[2] if repo_row else "",
             "summary": semantic.get("summary", ""),
             "calibrated_surface": semantic.get("calibrated_surface", ""),
