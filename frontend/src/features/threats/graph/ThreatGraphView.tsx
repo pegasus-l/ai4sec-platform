@@ -14,15 +14,9 @@ import dagre from '@dagrejs/dagre';
 import { graphNodeTypes } from './GraphNodeTypes';
 import { buildDualTreeGraph } from './buildDualTreeGraph';
 import { useQuery } from '@tanstack/react-query';
-import { fetchTargets, fetchAssets } from '../../../api/client';
+import { fetchAssets, getJson } from '../../../api/client';
 import { assetFromItem, repoFromItem } from '../threatAdapters';
 import type { ThreatGraphData, ThreatRepo, ThreatAsset, ThreatReactFlowNode, ThreatReactFlowEdge } from '../../../types/threat';
-
-interface ThreatGraphViewProps {
-  repos: ThreatRepo[];
-  openRepo: (repo: ThreatRepo) => void;
-  openAsset: (asset: ThreatAsset) => void;
-}
 
 /** Node sizes per kind */
 const NODE_SIZE: Record<string, { w: number; h: number }> = {
@@ -40,73 +34,53 @@ function runDagre(nodes: ThreatReactFlowNode[], edges: ThreatReactFlowEdge[], ra
   const g = new dagre.graphlib.Graph();
   g.setDefaultEdgeLabel(() => ({}));
   g.setGraph({ rankdir, ranksep: 140, nodesep: 25, marginx: 20, marginy: 20 });
-
   nodes.forEach((node) => {
     const kind = (node.data as ThreatGraphData)?.kind ?? 'repo';
     const size = NODE_SIZE[kind] ?? { w: 150, h: 50 };
     g.setNode(node.id, { width: size.w, height: size.h });
   });
-
-  edges.forEach((edge) => {
-    g.setEdge(edge.source, edge.target);
-  });
-
+  edges.forEach((edge) => { g.setEdge(edge.source, edge.target); });
   dagre.layout(g);
-
   return nodes.map((node) => {
     const dagreNode = g.node(node.id);
     const kind = (node.data as ThreatGraphData)?.kind ?? 'repo';
     const size = NODE_SIZE[kind] ?? { w: 150, h: 50 };
-    return {
-      ...node,
-      position: {
-        x: dagreNode.x - size.w / 2 + offsetX,
-        y: dagreNode.y - size.h / 2,
-      },
-    };
+    return { ...node, position: { x: dagreNode.x - size.w / 2 + offsetX, y: dagreNode.y - size.h / 2 } };
   });
 }
 
 /** Apply dual-tree dagre layout: code tree LR (left→right), asset tree RL (right→left). */
 function applyDagreLayout(nodes: ThreatReactFlowNode[], edges: ThreatReactFlowEdge[]) {
-  // Split into code-tree and asset-tree based on node kind
   const codeKinds = new Set(['root', 'ecosystem', 'repo', 'vuln', 'vuln-more']);
   const assetKinds = new Set(['asset-category', 'asset']);
-
-  // Code root vs asset root
-  const codeNodes = nodes.filter((n) => {
-    const kind = (n.data as ThreatGraphData)?.kind;
-    return codeKinds.has(kind ?? '') || n.id === 'g:code-root';
-  });
-  const assetNodes = nodes.filter((n) => {
-    const kind = (n.data as ThreatGraphData)?.kind;
-    return assetKinds.has(kind ?? '') || n.id === 'g:asset-root';
-  });
-
-  // Code edges: both endpoints are code nodes
+  const codeNodes = nodes.filter((n) => { const k = (n.data as ThreatGraphData)?.kind; return codeKinds.has(k ?? '') || n.id === 'g:code-root'; });
+  const assetNodes = nodes.filter((n) => { const k = (n.data as ThreatGraphData)?.kind; return assetKinds.has(k ?? '') || n.id === 'g:asset-root'; });
   const codeNodeIds = new Set(codeNodes.map((n) => n.id));
   const assetNodeIds = new Set(assetNodes.map((n) => n.id));
   const codeEdges = edges.filter((e) => codeNodeIds.has(e.source) && codeNodeIds.has(e.target));
   const assetEdges = edges.filter((e) => assetNodeIds.has(e.source) && assetNodeIds.has(e.target));
-  // Cross-edges (asset → repo) are not used in dagre, just rendered by reactflow
-
-  // Layout code tree: LR (left to right)
   const layoutedCode = runDagre(codeNodes, codeEdges, 'LR', 0);
-
-  // Layout asset tree: RL (right to left), offset to the right
-  // Find max X of code tree to place asset tree to its right
   const maxCodeX = layoutedCode.reduce((max, n) => Math.max(max, n.position.x), 0);
   const layoutedAsset = runDagre(assetNodes, assetEdges, 'RL', maxCodeX + 300);
-
-  return {
-    layoutedNodes: [...layoutedCode, ...layoutedAsset],
-    layoutedEdges: edges, // all edges including cross-edges
-  };
+  return { layoutedNodes: [...layoutedCode, ...layoutedAsset], layoutedEdges: edges };
 }
 
-export function ThreatGraphView({ repos, openRepo, openAsset }: ThreatGraphViewProps) {
+interface ThreatGraphViewProps {
+  openRepo: (repo: ThreatRepo) => void;
+  openAsset: (asset: ThreatAsset) => void;
+}
+
+export function ThreatGraphView({ openRepo, openAsset }: ThreatGraphViewProps) {
   const [activeNodeId, setActiveNodeId] = useState<string | null>(null);
   const [expandedNodes, setExpandedNodes] = useState<Set<string>>(new Set());
+
+  // Graph needs ALL repos with full payload — fetch independently
+  const { data: allTargetsData } = useQuery({
+    queryKey: ['threats-targets-all'],
+    queryFn: () => getJson<{ items: Record<string, unknown>[] }>('/api/threats/targets?limit=9999&fields=full'),
+    staleTime: 300_000,
+  });
+  const repos = useMemo(() => (allTargetsData?.items ?? []).map(repoFromItem).sort((a, b) => b.score - a.score), [allTargetsData]);
 
   // Fetch assets separately
   const { data: assetsData } = useQuery({ queryKey: ['threats-assets'], queryFn: fetchAssets });

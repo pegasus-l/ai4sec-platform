@@ -124,7 +124,7 @@ export function ThreatPage() {
         <div className="content-title"><span className="label">{navGroups.flatMap(g => g.items).find(i => i.id === view)?.title ?? '威胁洞察'}</span><h1>{heroTitle(view)}</h1><p>{heroCopy(view)}</p></div>
         <div className="head-actions">{view === 'repos' ? <FiltersBar filters={filters} setFilters={setFilters} grades={repoGrades} surfaces={repoSurfaces} /> : <><label className="search"><span>⌕</span><input placeholder="搜索标题 / CVE / 仓库 / 资产" onChange={() => {}} /></label><button className="btn primary" onClick={() => location.reload()}>刷新数据</button><a className="btn" href="/api/threats/reports" target="_blank">查看报告 API</a></>}</div>
       </section>
-      <div className="content-body view">
+      <div className="content-body view" key={view} ref={(el) => { if (el) el.scrollTop = 0; }}>
         {isLoading && <EmptyState title="正在加载" description="从 /api/threats/targets 拉取数据。" />}
         {error && <EmptyState title="加载失败" description={(error as Error).message} />}
         {!isLoading && !error && renderView(view, repos, filters, setFilters, openRepo, setSelectedAsset, setView, currentPage, totalPages, totalRepos, setCurrentPage)}
@@ -139,7 +139,7 @@ function renderView(view: ViewId, repos: ThreatRepo[], filters: FilterState, set
   if (view === 'repos') return <ThreatRepos repos={repos} filters={filters} setFilters={setFilters} openRepo={openRepo} currentPage={currentPage} totalPages={totalPages} totalRepos={totalRepos} setCurrentPage={setCurrentPage} />;
   if (view === 'surface') return <ThreatSurface repos={repos} openRepo={openRepo} setFilters={setFilters} setView={setView} />;
   if (view === 'assets') return <ThreatAssets openAsset={openAsset} />;
-  if (view === 'graph') return <ThreatGraphView repos={repos} openRepo={openRepo} openAsset={openAsset} />;
+  if (view === 'graph') return <ThreatGraphView openRepo={openRepo} openAsset={openAsset} />;
   if (view === 'queue') return <ThreatQueue />;
   if (view === 'ops-overview') return <OpsOverview setView={setView} />;
   if (view === 'ops-tasks') return <OpsTasks />;
