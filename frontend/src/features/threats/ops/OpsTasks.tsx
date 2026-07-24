@@ -68,7 +68,10 @@ export function OpsTasks() {
     if (forceReset && !await confirm(`清空并重建会删除所有数据（包括 AI 研判结果），确认吗？`)) return;
     setRunError(null);
     try {
-      const params: Record<string, unknown> = { use_source_cache: true, refresh_source_cache: true };
+      // When reset=true, don't use cache — force fresh collection from GitCode API
+      const params: Record<string, unknown> = forceReset
+        ? { use_source_cache: false, refresh_source_cache: true }
+        : { use_source_cache: true, refresh_source_cache: true };
       const resp = await fetch('/api/runs', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
