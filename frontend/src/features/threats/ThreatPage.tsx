@@ -2,7 +2,7 @@ import { useMemo, useState, useEffect, useRef } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { AlertTriangle, Boxes, GitBranch, GitFork, Network, Radar, ShieldCheck, Target, Workflow } from 'lucide-react';
 import { fetchTargets, fetchAssets, fetchTrackingQueue, fetchSurfaceStats, trackAsset, postJson, getJson, type AiAssociationResult } from '../../api/client';
-import { fetchOpsOverview, fetchOpsSources, fetchOpsQuality, fetchOpsAISummary, fetchOpsPipelines, fetchRuns } from '../../api/opsClient';
+import { fetchOpsOverview, fetchOpsSources, fetchOpsQuality, fetchOpsAISummary, fetchOpsPipelines, fetchRuns, fetchManualQueue } from '../../api/opsClient';
 import { Badge, Card, Drawer, EmptyState, MetricCard } from '../../components/ui';
 import type { ThreatAsset, ThreatRepo, ThreatViewModel } from '../../types/threat';
 import { adaptThreatContract, assetFromItem, repoFromItem } from './threatAdapters';
@@ -15,6 +15,7 @@ import { OpsOverview } from './ops/OpsOverview';
 import { OpsTasks } from './ops/OpsTasks';
 import { OpsSources } from './ops/OpsSources';
 import { OpsQuality } from './ops/OpsQuality';
+import { OpsManualQueue } from './ops/OpsManualQueue';
 import { OpsAISummary } from './ops/OpsAISummary';
 
 export type ViewId = 'today' | 'repos' | 'surface' | 'assets' | 'graph' | 'queue' | 'ops-overview' | 'ops-tasks' | 'ops-sources' | 'ops-quality' | 'ops-queue' | 'ops-ai-summary';
@@ -150,7 +151,7 @@ function renderView(view: ViewId, repos: ThreatRepo[], filters: FilterState, set
   if (view === 'ops-tasks') return <OpsTasks />;
   if (view === 'ops-sources') return <OpsSources />;
   if (view === 'ops-quality') return <OpsQuality />;
-  if (view === 'ops-queue') return <OpsQuality />;
+  if (view === 'ops-queue') return <OpsManualQueue />;
   if (view === 'ops-ai-summary') return <OpsAISummary openRepo={openRepo} openAsset={openAsset} />;
   return <EmptyState title="未知页面" />;
 }
