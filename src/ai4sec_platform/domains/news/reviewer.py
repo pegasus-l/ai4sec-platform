@@ -2,8 +2,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+import random
 import sqlite3
 import time
+import urllib.error
+import socket
 from pathlib import Path
 from typing import Any
 
@@ -14,6 +17,9 @@ from ai4sec_platform.models.router import LLMRouter
 
 GATE_PROMPT_VERSION = "news-tech-map-gate-v1"
 REVIEW_PROMPT_VERSION = "news-deep-review-v2"
+MODEL_MAX_ATTEMPTS = 3
+MODEL_RETRY_BASE_SECONDS = 1.0
+MODEL_RETRY_JITTER_SECONDS = 0.5
 
 
 def gate_candidates(
@@ -291,15 +297,34 @@ def _fallback_review(item: dict[str, Any], tech_map: AgentTechMap, reason: str) 
 
 
 def _call_model(conn: sqlite3.Connection, router: LLMRouter, *, run_id: str, agent_name: str, model_profile: str, prompt: str, input_payload: dict[str, Any]) -> tuple[dict[str, Any], bool]:
-    started = time.monotonic()
-    try:
-        output = router.complete_json(profile=model_profile, prompt=prompt, payload=input_payload)
-        repo.create_model_call(conn, run_id=run_id, agent_name=agent_name, model_profile=model_profile, provider=str(output.get("provider") or "unknown"), status="success", input_payload=input_payload, output_payload=output, latency_ms=int((time.monotonic() - started) * 1000))
-        return output.get("result") or output.get("parsed") or {}, False
-    except Exception as exc:
-        error = str(exc)
-        repo.create_model_call(conn, run_id=run_id, agent_name=agent_name, model_profile=model_profile, provider="fallback", status="failed", input_payload=input_payload, output_payload={}, latency_ms=int((time.monotonic() - started) * 1000), error_message=error)
-        return {"error": error}, True
+    overall_started = time.monotonic()
+    provider = str(router.active_config(model_profile).get("provider") or "unknown")
+    for attempt in range(1, MODEL_MAX_ATTEMPTS + 1):
+        attempt_started = time.monotonic()
+        try:
+            output = router.complete_json(profile=model_profile, prompt=prompt, payload=input_payload)
+            output = {**output, "retry_count": attempt - 1, "total_latency_ms": int((time.monotonic() - overall_started) * 1000)}
+            repo.create_model_call(conn, run_id=run_id, agent_name=agent_name, model_profile=model_profile, provider=str(output.get("provider") or provider), status="success", input_payload=input_payload, output_payload=output, latency_ms=int((time.monotonic() - attempt_started) * 1000))
+            return output.get("result") or output.get("parsed") or {}, False
+        except Exception as exc:
+            error = str(exc)
+            retryable = _is_retryable_model_error(exc)
+            has_next_attempt = retryable and attempt < MODEL_MAX_ATTEMPTS
+            repo.create_model_call(conn, run_id=run_id, agent_name=agent_name, model_profile=model_profile, provider=provider, status="retryable_failure" if has_next_attempt else "failed", input_payload=input_payload, output_payload={"attempt": attempt, "retryable": retryable}, latency_ms=int((time.monotonic() - attempt_started) * 1000), error_message=error)
+            if not has_next_attempt:
+                return {"error": error, "attempts": attempt}, True
+            delay = MODEL_RETRY_BASE_SECONDS * (2 ** (attempt - 1)) + random.uniform(0, MODEL_RETRY_JITTER_SECONDS)
+            time.sleep(delay)
+    return {"error": "model retry loop exhausted"}, True
+
+
+def _is_retryable_model_error(exc: Exception) -> bool:
+    if isinstance(exc, urllib.error.HTTPError):
+        return exc.code == 429 or 500 <= exc.code <= 599
+    if isinstance(exc, (TimeoutError, socket.timeout, urllib.error.URLError, ConnectionError)):
+        return True
+    message = str(exc).lower()
+    return any(marker in message for marker in ["timed out", "timeout", "connection reset", "connection aborted", "temporarily unavailable", "service unavailable", "http error 429", "http error 5", "rate limit"])
 
 
 def _cached_stage(conn: sqlite3.Connection, item_key: str, field: str, input_hash: str, prompt_version: str) -> dict[str, Any] | None:

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import sqlite3
 
+from ai4sec_platform.core.time import utc_now
+from ai4sec_platform.db import repositories as repo
 from ai4sec_platform.db.models import init_db
 from ai4sec_platform.core.config import PROJECT_ROOT
 from ai4sec_platform.domains.news.builders import build_news_items
@@ -10,6 +12,7 @@ from ai4sec_platform.domains.news.normalizers import normalize_raw_item
 from ai4sec_platform.domains.news.references import extract_reference_items
 from ai4sec_platform.domains.news.tech_map import AgentTechMap
 from ai4sec_platform.domains.news.links import resolve_candidate_links
+from ai4sec_platform.domains.news import reviewer
 from ai4sec_platform.domains.news.reviewer import _input_hash, _normalize_breakdown, _normalize_deep_review, _normalize_gate, _percentage
 from ai4sec_platform.domains.news import service
 
@@ -59,6 +62,43 @@ def test_tech_map_contract_and_discovery_reference_extraction() -> None:
     assert _normalize_breakdown({"ability_to_execute": 76})["engineering_value"] == 76
     repeated = tech_map.validate_paths(tech_map.catalog()[:8])
     assert len(repeated) == 8
+
+
+def test_model_call_retries_transient_errors_only(monkeypatch) -> None:
+    class FakeRouter:
+        def __init__(self, outcomes):
+            self.outcomes = list(outcomes)
+            self.calls = 0
+
+        def active_config(self, profile: str):
+            return {"provider": "dashscope", "model": "glm-5.2"}
+
+        def complete_json(self, **kwargs):
+            self.calls += 1
+            outcome = self.outcomes.pop(0)
+            if isinstance(outcome, Exception):
+                raise outcome
+            return outcome
+
+    conn = connection()
+    repo.create_pipeline_run(conn, run_id="retry-run", domain="news", pipeline_name="test.retry", status="running", started_at=utc_now(), finished_at="", production_writes=False, summary={})
+    pauses: list[float] = []
+    monkeypatch.setattr(reviewer.random, "uniform", lambda *_: 0.0)
+    monkeypatch.setattr(reviewer.time, "sleep", pauses.append)
+    transient_router = FakeRouter([TimeoutError("read timed out"), TimeoutError("read timed out"), {"provider": "dashscope", "result": {"decision": "pass"}}])
+    result, failed = reviewer._call_model(conn, transient_router, run_id="retry-run", agent_name="news_tech_map_gate", model_profile="DASHSCOPE", prompt="gate", input_payload={"candidate": "a"})
+    assert not failed
+    assert result == {"decision": "pass"}
+    assert transient_router.calls == 3
+    assert pauses == [1.0, 2.0]
+    statuses = [row["status"] for row in conn.execute("SELECT status FROM model_calls ORDER BY id").fetchall()]
+    assert statuses == ["retryable_failure", "retryable_failure", "success"]
+
+    permanent_router = FakeRouter([RuntimeError("HTTP Error 401: Unauthorized")])
+    result, failed = reviewer._call_model(conn, permanent_router, run_id="retry-run", agent_name="news_deep_review", model_profile="DASHSCOPE", prompt="review", input_payload={"candidate": "b"})
+    assert failed
+    assert result["attempts"] == 1
+    assert permanent_router.calls == 1
 
 
 def test_dedupe_merges_sources_and_complementary_fields() -> None:
