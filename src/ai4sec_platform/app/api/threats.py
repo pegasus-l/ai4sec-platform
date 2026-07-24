@@ -96,10 +96,26 @@ def target_detail(item_id: int, conn: sqlite3.Connection = Depends(get_db)) -> d
 def tracking_queue(conn: sqlite3.Connection = Depends(get_db)) -> dict:
     """User-initiated tracking items only (queue_source='user')."""
     rows = conn.execute(
-        "SELECT * FROM human_queue_items WHERE domain=? AND (queue_source='user' OR queue_source IS NULL AND queue_type LIKE 'user%') ORDER BY id DESC",
+        """
+        SELECT h.*, d.title as target_title, d.source_url as target_url, d.score as target_score,
+               d.source as target_source, d.item_type as target_type
+        FROM human_queue_items h
+        LEFT JOIN domain_items d ON h.item_id = d.id
+        WHERE h.domain=? AND (h.queue_source='user' OR (h.queue_source IS NULL AND h.queue_type LIKE 'user%'))
+        ORDER BY h.id DESC
+        """,
         (DOMAIN,),
     ).fetchall()
-    items = [repo.row_to_dict(row) for row in rows]
+    items = []
+    for row in rows:
+        item = repo.row_to_dict(row)
+        # Add target info from JOIN
+        item["title"] = item.pop("target_title", "") or item.get("reason", "")
+        item["url"] = item.pop("target_url", "")
+        item["score"] = item.pop("target_score", 0)
+        item["source"] = item.pop("target_source", "")
+        item["type"] = item.pop("target_type", "")
+        items.append(item)
     return {"items": items}
 
 
