@@ -9,29 +9,57 @@ from ai4sec_platform.domains.vulnerabilities.relevance_scorers import score_mate
 from ai4sec_platform.models.local_rules import LocalRuleProvider
 from ai4sec_platform.models.router import LLMRouter
 
-MATERIAL_REVIEW_PROMPT = """你是一个资深安全研究员和技术内容审核专家。请判断网页是否值得作为“优质漏洞知识素材”展示和沉淀。
-请优先保留高质量漏洞技术分析、可复现 PoC/Exploit、带完整根因/触发条件/利用链/修复分析的研究文章。
-审核标准：
-- 技术深度：包含具体代码片段、真实 payload、调用链/数据流、漏洞根因、修复前后对比或原理说明。
-- 方法论价值：描述发现路径、复现步骤、调试/分析工具链、绕过或防护机制突破。
-- 利用分析：说明利用原语、能力边界、利用链构建、稳定性或限制条件。
-排除项：
-- 仅以 CVE/NVD/OpenCVE 编号页、厂商公告、补丁列表、新闻、营销、百科介绍为主线，缺少独立技术分析的内容，不应 accept；最多 needs_review 或 reject。
-- CVE 编号只能作为聚合连接键，不能单独作为优质素材通过依据。
-请以 JSON 返回：
-{
-  "is_relevant": true/false,
+MATERIAL_REVIEW_PROMPT = """你是一个资深安全研究员和技术内容审核专家。请分析用户消息 JSON 中 content 字段提供的网页正文内容，判断是否属于“高质量漏洞技术分析”文章。
+
+检查要求：
+  同时满足基础要求和评估标准
+
+  基础要求：
+    {requirements}
+    - 是否为安全社区/技术平台发布的分析非转载文章，或者为漏洞利用代码仓库/Exploit 数据库，或者出处为安全学术顶会/工业顶会，或者为内核安全学习资源。
+    - 是否为原创内容非转载。
+
+  评估标准：
+    技术深度（权重 40%）
+    - [ ] 包含具体代码片段（非伪代码，可验证）
+    - [ ] 展示完整调用链或数据流
+    - [ ] 解释漏洞根因（为什么错，而非哪里错）
+    - [ ] 有修复前后代码对比或原理说明
+
+    方法论价值（权重 30%）
+    - [ ] 描述发现路径（如何找到这个漏洞）
+    - [ ] 提供可复现的步骤或环境配置
+    - [ ] 分析工具链使用或调试技巧
+    - [ ] 讨论绕过技术或防护机制突破
+
+    利用分析（权重 20%）
+    - [ ] 说明利用原语和能力边界
+    - [ ] 分析利用链构建逻辑
+    - [ ] 讨论利用稳定性/限制条件
+    - [ ] 不是单纯说“可导致 RCE”，而是解释如何导致
+
+    排除项（出现任意一项直接判定为不合格）
+    - [ ] 以 CVE 编号或厂商公告为主线
+    - [ ] 新闻体（“某公司发布补丁修复某漏洞”）
+    - [ ] 营销体（“某产品采用先进技术保障安全”）
+    - [ ] AI 摘要体（泛泛而谈，无代码，无细节）
+    - [ ] 仅复述官方公告，无独立分析
+    - [ ] 无技术细节的威胁恐吓文
+
+请只返回 JSON，保持以下 schema；其中扩展字段用于新平台事件聚合和证据追溯，但不能降低上述审核标准：
+{{
+  "is_relevant": true,
   "decision": "accept|needs_review|reject",
-  "confidence": 0.0-1.0,
-  "reason": "简短审核理由",
-  "key_findings": ["发现1"],
-  "material_type": "poc_exploit|tech_analysis|advisory|patch|discussion|other",
-  "quality_signals": ["code", "payload", "root_cause", "exploit_chain", "repro_steps", "fix_analysis", "methodology"],
+  "confidence": 0.0,
+  "reason": "判断理由的简要说明",
+  "key_findings": ["关键发现1", "关键发现2"],
+  "material_type": "poc_exploit|tech_analysis|kernel_security|academic_conf|other",
+  "quality_signals": ["code", "call_chain", "data_flow", "root_cause", "fix_analysis", "discovery_method", "repro_steps", "tooling", "bypass", "exploit_primitive", "exploit_chain", "stability_limit"],
   "cve_ids": ["CVE-YYYY-NNNN"],
   "cwe_ids": ["CWE-NNN"],
   "affected_products": ["产品或组件"],
-  "evidence_snippets": [{"snippet_type":"root_cause|trigger|poc|patch|summary", "content":"证据片段"}]
-}。"""
+  "evidence_snippets": [{{"snippet_type":"root_cause|trigger|poc|patch|summary", "content":"证据片段"}}]
+}}"""
 
 
 def review_crawled_material(page: dict[str, Any], *, requirements: str = "", confidence_threshold: float = 0.55) -> dict[str, Any]:
@@ -57,7 +85,8 @@ def _try_llm_review(normalized: dict[str, Any], *, requirements: str, confidence
         if isinstance(provider, LocalRuleProvider):
             return None
         payload = {"url": normalized.get("url"), "title": normalized.get("title"), "requirements": requirements, "content": str(normalized.get("cleaned_text") or normalized.get("summary") or "")[:24000]}
-        response = provider.complete_json(prompt=MATERIAL_REVIEW_PROMPT, payload=payload)
+        prompt = MATERIAL_REVIEW_PROMPT.format(requirements=requirements or "- 无额外要求")
+        response = provider.complete_json(prompt=prompt, payload=payload)
         result = response.get("result") or response.get("parsed") or {}
         confidence = _safe_float(result.get("confidence"), 0.0)
         decision = str(result.get("decision") or ("accept" if result.get("is_relevant") and confidence >= confidence_threshold else "needs_review" if result.get("is_relevant") else "reject"))
@@ -77,7 +106,7 @@ def _try_llm_review(normalized: dict[str, Any], *, requirements: str, confidence
             decision=decision,
             reason=str(result.get("reason") or "模型完成漏洞素材审核。"),
             key_findings=_list_str(result.get("key_findings")),
-            extra={"classification": {"category": result.get("material_type") or "llm_review", "confidence": confidence}, "scoring": {"score": round(confidence * 100, 2), "priority": "high" if decision == "accept" else "medium" if decision == "needs_review" else "low"}, "extracted_evidence": extra_evidence, "reviewer": response.get("provider"), "review_model": response.get("model"), "model_used": True, "prompt": MATERIAL_REVIEW_PROMPT, "llm_output": result, "quality_gate": _quality_gate_reason(result, decision)},
+            extra={"classification": {"category": result.get("material_type") or "llm_review", "confidence": confidence}, "scoring": {"score": round(confidence * 100, 2), "priority": "high" if decision == "accept" else "medium" if decision == "needs_review" else "low"}, "extracted_evidence": extra_evidence, "reviewer": response.get("provider"), "review_model": response.get("model"), "model_used": True, "prompt": prompt, "llm_output": result, "quality_gate": _quality_gate_reason(result, decision)},
         )
     except Exception as exc:  # pragma: no cover - external model dependent
         normalized["llm_review_error"] = str(exc)[:300]
@@ -170,11 +199,11 @@ def _enforce_quality_gate(result: dict[str, Any], decision: str) -> str:
     quality = set(_list_str(result.get("quality_signals")))
     material_type = str(result.get("material_type") or "").lower()
     evidence = result.get("evidence_snippets") or []
-    has_deep_signal = bool(quality & {"code", "payload", "root_cause", "exploit_chain", "repro_steps", "fix_analysis", "methodology"})
+    has_deep_signal = bool(quality & {"code", "payload", "call_chain", "data_flow", "root_cause", "exploit_chain", "exploit_primitive", "repro_steps", "fix_analysis", "discovery_method", "tooling", "bypass", "stability_limit", "methodology"})
     has_deep_evidence = any(str(item.get("snippet_type", "")).lower() in {"root_cause", "trigger", "poc", "patch"} for item in evidence if isinstance(item, dict))
     if material_type in {"advisory", "patch", "other"} and not (has_deep_signal or has_deep_evidence):
         return "needs_review"
-    if not (has_deep_signal or has_deep_evidence or material_type in {"poc_exploit", "tech_analysis"}):
+    if not (has_deep_signal or has_deep_evidence or material_type in {"poc_exploit", "tech_analysis", "kernel_security", "academic_conf"}):
         return "needs_review"
     return decision
 
