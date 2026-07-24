@@ -97,7 +97,7 @@ function AllView({ data, filters, setFilters, onSelect, onAction }: { data?: { i
     <div className="list-meta"><span>共 {data?.total || 0} 条</span><span>{selectedTechCount ? `匹配${filters.tech_match === 'all' ? '全部' : '任一'}已选技术分类` : filters.topic ? `已按「${filters.topic}」筛选` : '仅展示论文与项目'}</span></div>
     {!data?.items.length ? <EmptyState title="没有匹配的资讯" description="请调整筛选条件或等待下一次采集。" /> : <div className="news-list">{data.items.map(item => <NewsListRow key={item.id} item={item} onSelect={onSelect} onAction={onAction} onTechPoint={togglePoint} />)}</div>}
     {data && (data.total || 0) > (data.page_size || 24) && <div className="pagination"><button disabled={(data.page || 1) <= 1} onClick={() => update('page', String((data.page || 1) - 1))}>上一页</button><span>第 {data.page || 1} 页</span><button disabled={(data.page || 1) * (data.page_size || 24) >= (data.total || 0)} onClick={() => update('page', String((data.page || 1) + 1))}>下一页</button></div>}
-    <TechFilterDrawer open={techOpen} close={() => setTechOpen(false)} items={techMapQuery.data?.items || []} filters={filters} updateTech={updateTech} clearTech={() => setFilters({ ...filters, tech_dimensions: [], tech_categories: [], tech_points: [], tech_match: 'any', page: 1 })} setMatch={value => setFilters({ ...filters, tech_match: value, page: 1 })} resultCount={data?.total || 0} />
+    <TechFilterDrawer open={techOpen} close={() => setTechOpen(false)} items={techMapQuery.data?.items || []} filters={filters} apply={selection => { setFilters({ ...filters, ...selection, page: 1 }); setTechOpen(false); }} />
   </div>;
 }
 
@@ -110,8 +110,19 @@ function SelectedTechFilters({ filters, updateTech }: { filters: NewsFilters; up
   return <div className="selected-tech-filters"><span>已选</span>{groups.flatMap(group => group.values.map(value => <button key={`${group.key}/${value}`} onClick={() => updateTech(group.key, group.values.filter(item => item !== value))}><small>{group.label}</small>{value}<X size={12} /></button>))}</div>;
 }
 
-function TechFilterDrawer({ open, close, items, filters, updateTech, clearTech, setMatch, resultCount }: { open: boolean; close: () => void; items: TechMapItem[]; filters: NewsFilters; updateTech: (key: 'tech_dimensions' | 'tech_categories' | 'tech_points', values: string[]) => void; clearTech: () => void; setMatch: (value: 'any' | 'all') => void; resultCount: number }) {
+function TechFilterDrawer({ open, close, items, filters, apply }: { open: boolean; close: () => void; items: TechMapItem[]; filters: NewsFilters; apply: (selection: Pick<NewsFilters, 'tech_dimensions' | 'tech_categories' | 'tech_points' | 'tech_match'>) => void }) {
   const [search, setSearch] = useState('');
+  const [draftDimensions, setDraftDimensions] = useState<string[]>([]);
+  const [draftCategories, setDraftCategories] = useState<string[]>([]);
+  const [draftPoints, setDraftPoints] = useState<string[]>([]);
+  const [draftMatch, setDraftMatch] = useState<'any' | 'all'>('any');
+  useEffect(() => {
+    if (!open) return;
+    setDraftDimensions(filters.tech_dimensions);
+    setDraftCategories(filters.tech_categories);
+    setDraftPoints(filters.tech_points);
+    setDraftMatch(filters.tech_match);
+  }, [open, filters.tech_dimensions, filters.tech_categories, filters.tech_points, filters.tech_match]);
   const filtered = useMemo(() => {
     const keyword = search.trim().toLowerCase();
     return keyword ? items.filter(item => `${item.dimension} ${item.category} ${item.point}`.toLowerCase().includes(keyword)) : items;
@@ -126,23 +137,23 @@ function TechFilterDrawer({ open, close, items, filters, updateTech, clearTech, 
     });
     return grouped;
   }, [filtered]);
-  const selectedCount = filters.tech_dimensions.length + filters.tech_categories.length + filters.tech_points.length;
+  const selectedCount = draftDimensions.length + draftCategories.length + draftPoints.length;
   return <Drawer open={open} title="技术分类" subtitle={`AI Agent 技术地图 · ${items.length} 个技术点`} onClose={close}>
     <div className="tech-filter-panel">
       <div className="tech-filter-search"><Search size={16} /><input value={search} onChange={event => setSearch(event.target.value)} placeholder="搜索 MCP、记忆、规划……" />{search && <button onClick={() => setSearch('')}><X size={14} /></button>}</div>
-      <div className="tech-match-mode"><div><strong>匹配方式</strong><span>选择多个分类时如何组合</span></div><div><button className={filters.tech_match === 'any' ? 'active' : ''} onClick={() => setMatch('any')}>任一</button><button className={filters.tech_match === 'all' ? 'active' : ''} onClick={() => setMatch('all')}>全部</button></div></div>
+      <div className="tech-match-mode"><div><strong>匹配方式</strong><span>选择多个分类时如何组合</span></div><div><button className={draftMatch === 'any' ? 'active' : ''} onClick={() => setDraftMatch('any')}>任一</button><button className={draftMatch === 'all' ? 'active' : ''} onClick={() => setDraftMatch('all')}>全部</button></div></div>
       <div className="tech-tree">
         {[...dimensions.entries()].map(([dimension, categories]) => {
           const dimensionItems = [...categories.values()].flat();
           const dimensionCount = dimensionItems.reduce((sum, item) => sum + item.count, 0);
-          return <details key={dimension} open={Boolean(search) || filters.tech_dimensions.includes(dimension)}>
-            <summary><label onClick={event => event.stopPropagation()}><input type="checkbox" checked={filters.tech_dimensions.includes(dimension)} onChange={() => updateTech('tech_dimensions', toggleValue(filters.tech_dimensions, dimension))} /><span>{dimension}</span></label><b>{dimensionCount}</b></summary>
-            <div className="tech-categories">{[...categories.entries()].map(([category, points]) => <div className="tech-category" key={`${dimension}/${category}`}><label className="tech-category-head"><input type="checkbox" checked={filters.tech_categories.includes(category)} onChange={() => updateTech('tech_categories', toggleValue(filters.tech_categories, category))} /><span>{category}</span><b>{points.reduce((sum, item) => sum + item.count, 0)}</b></label><div className="tech-points">{points.map(item => <label className={item.count ? '' : 'empty'} key={`${item.category}/${item.point}`}><input type="checkbox" checked={filters.tech_points.includes(item.point)} onChange={() => updateTech('tech_points', toggleValue(filters.tech_points, item.point))} /><span>{item.point}</span><b>{item.count}</b></label>)}</div></div>)}</div>
+          return <details key={dimension} open={Boolean(search) || draftDimensions.includes(dimension)}>
+            <summary><input type="checkbox" checked={draftDimensions.includes(dimension)} onClick={event => event.stopPropagation()} onChange={() => setDraftDimensions(toggleValue(draftDimensions, dimension))} /><span>{dimension}</span><b>{dimensionCount}</b></summary>
+            <div className="tech-categories">{[...categories.entries()].map(([category, points]) => <div className="tech-category" key={`${dimension}/${category}`}><div className="tech-category-head"><input type="checkbox" checked={draftCategories.includes(category)} onChange={() => setDraftCategories(toggleValue(draftCategories, category))} /><span>{category}</span><b>{points.reduce((sum, item) => sum + item.count, 0)}</b></div><div className="tech-points">{points.map(item => <div className={item.count ? '' : 'empty'} key={`${item.category}/${item.point}`}><input type="checkbox" checked={draftPoints.includes(item.point)} onChange={() => setDraftPoints(toggleValue(draftPoints, item.point))} /><span>{item.point}</span><b>{item.count}</b></div>)}</div></div>)}</div>
           </details>;
         })}
         {!dimensions.size && <EmptyState title="没有匹配的技术分类" description="尝试使用更短的关键词。" />}
       </div>
-      <div className="tech-filter-footer"><button className="reset" disabled={!selectedCount} onClick={clearTech}>重置</button><button className="confirm" onClick={close}>查看 {resultCount} 条结果</button></div>
+      <div className="tech-filter-footer"><button className="reset" disabled={!selectedCount} onClick={() => { setDraftDimensions([]); setDraftCategories([]); setDraftPoints([]); setDraftMatch('any'); }}>重置</button><button className="confirm" onClick={() => apply({ tech_dimensions: draftDimensions, tech_categories: draftCategories, tech_points: draftPoints, tech_match: draftMatch })}>应用筛选{selectedCount ? ` · ${selectedCount}` : ''}</button></div>
     </div>
   </Drawer>;
 }
