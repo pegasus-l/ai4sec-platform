@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { Card } from '../../../components/ui';
-import { fetchOpsSources, type OpsSourceItem } from '../../../api/opsClient';
+import { fetchOpsSources } from '../../../api/opsClient';
 
 export function OpsSources() {
   const { data, isLoading } = useQuery({ queryKey: ['ops-sources'], queryFn: fetchOpsSources, staleTime: 10000 });

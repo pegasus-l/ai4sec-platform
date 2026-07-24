@@ -1,20 +1,8 @@
-import type { FrontendContract } from '../../types/frontend';
 import type {
   ThreatAsset,
-  ThreatGraphEdge,
-  ThreatGraphNode,
   ThreatRepo,
-  ThreatSummary,
-  ThreatViewModel,
   ThreatVulnDetail,
-  ThreatVulnDetailMap,
 } from '../../types/threat';
-import {
-  surfaces as staticSurfaces,
-  opsRules as staticOpsRules,
-  opsManualQueue as staticOpsManualQueue,
-  staticDemoAssets,
-} from './threatStaticData';
 
 // ============================================================================
 // Helpers
@@ -122,23 +110,6 @@ function vulnDetailFromBroadSec(entry: Record<string, unknown>): ThreatVulnDetai
     patch_refs: asArray<string>(entry.patch_refs),
     analysis: description.slice(0, 200),
   };
-}
-
-/**
- * Build ThreatVulnDetailMap (repoId → [ThreatVulnDetail]) from contract's repos.
- * Reads signals.cves + signals.sa_items + signals.broad_sec_items per repo.
- */
-function buildVulnDetails(repos: ThreatRepo[], repoItems: Array<Record<string, unknown>>): ThreatVulnDetailMap {
-  const map: ThreatVulnDetailMap = {};
-  repoItems.forEach((item, index) => {
-    const repo = repos[index];
-    if (!repo) return;
-    const details = vulnDetailsFromItem(item);
-    if (details.length > 0) {
-      map[repo.id] = details;
-    }
-  });
-  return map;
 }
 
 /** Build vuln details for a single domain_item (used by RepoDrawer). */
@@ -353,151 +324,7 @@ export function assetFromItem(item: Record<string, unknown>): ThreatAsset {
 }
 
 // ============================================================================
-// buildSummary / buildGraph (unchanged logic, kept for backward compat)
+// Re-export static data for graph builder
 // ============================================================================
 
-function artifactData(source: unknown): Record<string, unknown> {
-  return asRecord(asRecord(source).data);
-}
-
-function buildSummary(
-  repos: ThreatRepo[],
-  assets: ThreatAsset[],
-  cveScout: Record<string, unknown>,
-  attackSurface: Record<string, unknown>,
-): ThreatSummary {
-  const scoutMeta = asRecord(artifactData(cveScout).meta);
-  const attackReport = asRecord(artifactData(attackSurface).report);
-  const grades = asRecord(attackReport.by_grade) as Record<string, number>;
-  return {
-    totalRepos: asNumber(scoutMeta.total_projects_in, repos.length),
-    highRisk: repos.filter((repo) => repo.score >= 75 || repo.status.includes('高风险')).length,
-    withCve: repos.filter((repo) => repo.cve > 0).length,
-    totalCve: asNumber(scoutMeta.total_cve_ids, repos.reduce((sum, repo) => sum + repo.cve, 0)),
-    uniqueCve: asNumber(scoutMeta.unique_cve_ids),
-    totalSa: asNumber(scoutMeta.total_sa_ids, repos.reduce((sum, repo) => sum + repo.sa, 0)),
-    broadSecurity: asNumber(scoutMeta.total_broad_sec_items),
-    assets: assets.length,
-    grades,
-    scanModes: asRecord(scoutMeta.scan_mode_stats) as Record<string, number>,
-    sourceStats: asRecord(scoutMeta.source_stats) as Record<string, number>,
-  };
-}
-
-function buildGraph(
-  repos: ThreatRepo[],
-  assets: ThreatAsset[],
-): { nodes: ThreatGraphNode[]; edges: ThreatGraphEdge[] } {
-  const nodes = new Map<string, ThreatGraphNode>();
-  const edges: ThreatGraphEdge[] = [];
-  const addNode = (node: ThreatGraphNode) => nodes.set(node.id, node);
-  repos.slice(0, 40).forEach((repo) => {
-    const orgId = `org:${repo.org}`;
-    const repoId = `repo:${repo.id}`;
-    const surfaceId = `surface:${repo.surface || 'unknown'}`;
-    addNode({ id: orgId, label: repo.org, type: 'org' });
-    addNode({
-      id: repoId,
-      label: repo.name,
-      type: 'repo',
-      score: repo.score,
-      meta: { status: repo.status, url: repo.url },
-    });
-    addNode({ id: surfaceId, label: repo.surface || 'unknown', type: 'surface' });
-    edges.push({ id: `${orgId}->${repoId}`, source: orgId, target: repoId });
-    edges.push({
-      id: `${repoId}->${surfaceId}`,
-      source: repoId,
-      target: surfaceId,
-      label: 'surface',
-    });
-    if (repo.cve > 0) {
-      const cveId = `cve:${repo.id}`;
-      addNode({ id: cveId, label: `${repo.cve} CVE`, type: 'cve', score: repo.cve });
-      edges.push({ id: `${repoId}->${cveId}`, source: repoId, target: cveId, label: 'CVE' });
-    }
-  });
-  assets.slice(0, 20).forEach((asset) => {
-    const assetId = `asset:${asset.id}`;
-    addNode({
-      id: assetId,
-      label: asset.title,
-      type: 'asset',
-      score: asset.score,
-      meta: { source: asset.source },
-    });
-    const related = repos.find(
-      (repo) =>
-        asset.summary.toLowerCase().includes(repo.name.toLowerCase()) ||
-        asset.title.toLowerCase().includes(repo.name.toLowerCase()),
-    );
-    if (related) {
-      const repoId = `repo:${related.id}`;
-      edges.push({ id: `${repoId}->${assetId}`, source: repoId, target: assetId, label: 'asset' });
-    }
-  });
-  return { nodes: Array.from(nodes.values()), edges };
-}
-
-// ============================================================================
-// adaptThreatContract — merge contract data + v12 static fallback
-// ============================================================================
-
-export function adaptThreatContract(contract: FrontendContract): ThreatViewModel {
-  const threat = asRecord(contract.threat);
-  const repoItems = asArray<Record<string, unknown>>(threat.targets);
-  const reposUnsorted = repoItems.map(repoFromItem);
-  // Build vulnDetails BEFORE sorting — index must match repoItems
-  const vulnDetails = buildVulnDetails(reposUnsorted, repoItems);
-  const repos = reposUnsorted.sort((a, b) => b.score - a.score);
-  const todayItems = asArray<Record<string, unknown>>(threat.today);
-  const today = todayItems.map(repoFromItem).sort((a, b) => b.score - a.score);
-  const realAssets = asArray<Record<string, unknown>>(threat.assets)
-    .map(assetFromItem)
-    .sort((a, b) => b.score - a.score);
-  // v12 static fallback — supplement missing asset types (firmware/image/openx) with demo data
-  const realAssetTypes = new Set(realAssets.map(a => a.type));
-  const supplementalAssets = staticDemoAssets.filter(a => !realAssetTypes.has(a.type));
-  // Dedup firmware by modelName (merge cannVersion) + filter empty ascendhub
-  const firmwareMap = new Map<string, ThreatAsset>();
-  const dedupedAssets: ThreatAsset[] = [];
-  [...realAssets, ...supplementalAssets].forEach(a => {
-    if (a.source === 'ascendhub' && (a.model === '-' || !a.model)) return;
-    if (a.source === 'firmware') {
-      const key = a.model || a.title;
-      if (firmwareMap.has(key)) {
-        const existing = firmwareMap.get(key)!;
-        if (a.cannVersion && !existing.cannVersion) existing.cannVersion = a.cannVersion;
-      } else { firmwareMap.set(key, a); dedupedAssets.push(a); }
-    } else { dedupedAssets.push(a); }
-  });
-  const assets = dedupedAssets;
-  const cveScout = asRecord(threat.cveScout);
-  const attackSurface = asRecord(threat.attackSurface);
-  const reports = asRecord(threat.reports);
-
-  return {
-    summary: buildSummary(repos, assets, cveScout, attackSurface),
-    repos,
-    today: today.length ? today : repos.slice(0, 12),
-    assets,
-    queue: asArray<Record<string, unknown>>(threat.tracking),
-    cveScout,
-    attackSurface,
-    reports,
-    graph: buildGraph(repos, assets),
-    // v12 additions — fixed 11 attack surfaces (matches backend enum)
-    vulnDetails,
-    surfaces: staticSurfaces,
-    activeSurface: staticSurfaces[0]?.id ?? 'kernel',
-    opsRules: staticOpsRules, // v12 static fallback — contract ops.rules is dict, not list
-    opsManualQueue: staticOpsManualQueue, // v12 static fallback — contract ops.queue has different structure
-  };
-}
-
-// ============================================================================
-// Re-export static data for W2.3 (graph builder) and W3.1 (ops pages)
-// ============================================================================
-
-export { opsTasks, opsSources } from './threatStaticData';
 export { ecosystemSecondLevel } from './threatStaticData';

@@ -18,7 +18,7 @@ import { useDrawerStack } from '../../components/DrawerStack';
 import { VulnListDrawer } from './VulnListDrawer';
 import { VulnDetailDrawer } from './VulnDetailDrawer';
 import { severityBadgeClass } from './severityBadge';
-import { Card, MetricCard } from '../../components/ui';
+import { Card } from '../../components/ui';
 import { useState, useEffect, useMemo } from 'react';
 import { useQueryClient, useQuery } from '@tanstack/react-query';
 import { postJson, getJson, trackTarget, fetchTargetDetail, type AiReviewResult } from '../../api/client';

@@ -1,13 +1,10 @@
 import { useMemo, useState, useEffect, useRef } from 'react';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { AlertTriangle, Boxes, GitBranch, GitFork, Network, Radar, ShieldCheck, Target, Workflow } from 'lucide-react';
+import { useQuery } from '@tanstack/react-query';
 import { fetchTargets, fetchAssets, fetchTrackingQueue, fetchSurfaceStats, trackAsset, postJson, getJson, type AiAssociationResult } from '../../api/client';
-import { fetchOpsOverview, fetchOpsSources, fetchOpsQuality, fetchOpsAISummary, fetchOpsPipelines, fetchRuns } from '../../api/opsClient';
-import { Badge, Card, Drawer, EmptyState, MetricCard } from '../../components/ui';
-import type { ThreatAsset, ThreatRepo, ThreatViewModel } from '../../types/threat';
-import { adaptThreatContract, assetFromItem, repoFromItem } from './threatAdapters';
+import { Card, Drawer, EmptyState, MetricCard } from '../../components/ui';
+import type { ThreatAsset, ThreatRepo } from '../../types/threat';
+import { assetFromItem } from './threatAdapters';
 import { surfaces as staticSurfaces } from './threatStaticData';
-import { opsTasks, opsSources } from './threatStaticData';
 import { ThreatGraphView } from './graph/ThreatGraphView';
 import { RepoDrawerContent } from './RepoDrawer';
 import { useDrawerStack } from '../../components/DrawerStack';
@@ -367,7 +364,6 @@ function ImageVersionTags({ tags }: { tags: NonNullable<ThreatAsset['versionTags
 }
 
 function ThreatQueue() {
-  const queryClient = useQueryClient();
   const { data: queueData } = useQuery({ queryKey: ['threats-queue'], queryFn: fetchTrackingQueue });
   const [items, setItems] = useState<Record<string, unknown>[]>(queueData?.items ?? []);
   useEffect(() => { if (queueData?.items) setItems(queueData.items); }, [queueData]);
@@ -399,11 +395,6 @@ function RepoTable({ repos, openRepo }: { repos: ThreatRepo[]; openRepo: (repo: 
     <td style={{ minWidth: 150 }}><ScoreBreakdown breakdown={repo.breakdown} mini /></td>
     <td><button className="btn primary" onClick={(event) => { event.stopPropagation(); openRepo(repo); }}>详情</button><button className="btn" onClick={(event) => event.stopPropagation()}>跟踪</button></td>
   </tr>)}</tbody></table>;
-}
-
-function RepoList({ repos, openRepo, compact = false }: { repos: ThreatRepo[]; openRepo: (repo: ThreatRepo) => void; compact?: boolean }) {
-  if (!repos.length) return <EmptyState title="暂无目标" />;
-  return <div className={compact ? 'mini-list' : 'repo-list'}>{repos.map(repo => <button key={repo.id} onClick={() => openRepo(repo)}><strong>{repo.title}</strong><span>{repo.surface} · CVE {repo.cve} · Sec {repo.sec}</span><em>{Math.round(repo.score)}</em></button>)}</div>;
 }
 
 function formatNum(n: number): string {
@@ -572,31 +563,6 @@ function scoreLabel(key: string): string {
   return ({ attack_surface: '攻击面', cve: '历史 CVE', security_advisory: '安全公告', broad_security: '安全线索', severity: '严重性', exploit: 'Exploit', exposure: '暴露面', inherited: '继承分', language_vuln倾向: '语言风险', untrusted_input: '不可信输入', historical_cve: '历史 CVE', complexity_stars: '复杂度', security_boundary: '安全边界' } as Record<string, string>)[key] || key;
 }
 
-function EvidenceList({ items }: { items: string[] }) {
-  return items.length ? <ul className="evidence-list">{items.map((item, index) => <li key={`${item}-${index}`}>{item}</li>)}</ul> : <EmptyState title="暂无证据" />;
-}
-
-function StatsGrid({ data }: { data: Record<string, unknown> }) {
-  const entries = Object.entries(data ?? {}).filter(([, value]) => typeof value === 'number' || typeof value === 'string').slice(0, 12);
-  return <div className="stats-grid">{entries.map(([key, value]) => <div key={key}><span>{key}</span><strong>{String(value)}</strong></div>)}</div>;
-}
-
-function PanelTitle({ icon, title, hint }: { icon?: React.ReactNode; title: string; hint?: string }) {
-  return <div className="panel-title"><div>{icon}<h3>{title}</h3></div>{hint && <span>{hint}</span>}</div>;
-}
-
-function filterRepos(repos: ThreatRepo[], filters: FilterState): ThreatRepo[] {
-  const query = filters.search.trim().toLowerCase();
-  return repos.filter(repo => {
-    if (query && !`${repo.title} ${repo.org} ${repo.name} ${repo.surface} ${repo.url} ${repo.evidence.join(' ')}`.toLowerCase().includes(query)) return false;
-    if (filters.grade !== 'all' && String(repo.grade) !== filters.grade) return false;
-    if (filters.surface !== 'all' && repo.surface !== filters.surface) return false;
-    if (filters.onlyCve && repo.cve <= 0) return false;
-    if (filters.onlyHigh && repo.score < 75 && !repo.status.includes('高风险')) return false;
-    return true;
-  }).sort((a, b) => b.score - a.score);
-}
-
 function heroTitle(view: ViewId): string {
   return ({ today: '今天有哪些目标值得看', repos: '开源代码仓目标库', surface: '攻击面评分与分布', assets: '固件 / 镜像 / Hub 资产库', graph: '代码仓与资产关联图谱', queue: '威胁跟踪队列', 'ops-overview': '运营概览', 'ops-tasks': '采集任务', 'ops-sources': '数据源状态', 'ops-quality': '质量审计', 'ops-ai-summary': 'AI 分析汇总' } as Record<ViewId, string>)[view];
 }
@@ -605,27 +571,4 @@ function heroCopy(view: ViewId): string {
   return ({ today: '优先呈现高风险目标、CVE/SA/security issue 和推荐挖洞方向。', repos: '搜索、过滤、排序所有华为开源仓，并查看证据链。', surface: '按语言、输入面、历史漏洞、复杂度和安全边界拆分评分。', assets: '查看 firmware、AscendHub、mirror、OpenX Huawei 等资产线索。', graph: '用轻量关系图查看组织、仓库、CVE、攻击面和资产。', queue: '承接待研判、待代码审计、持续跟踪等行动项。', 'ops-overview': '系统状态、数据新鲜度、AI 分析进度和快捷操作。', 'ops-tasks': '触发 pipeline、追踪 step 进度和产物。', 'ops-sources': '每个源的健康、记录数和最近采集时间。', 'ops-quality': '质量审计记录与覆盖率。', 'ops-ai-summary': 'AI 研判和资产关联的汇总视图。' } as Record<ViewId, string>)[view];
 }
 
-function navCount(view: ViewId, model: ThreatViewModel | null): string {
-  if (!model) return '';
-  return ({
-    today: String(model.today.length),
-    repos: String(model.summary.totalRepos || model.repos.length),
-    surface: String(Object.keys(groupBy(model.repos, repo => repo.surface || 'unknown')).length),
-    assets: '',
-    graph: String(model.graph.nodes.length),
-    queue: String(model.queue.length),
-    'ops-overview': '',
-    'ops-tasks': '',
-    'ops-sources': '',
-    'ops-quality': '',
-    'ops-ai-summary': '',
-  } as Record<ViewId, string>)[view];
-}
-
-function navMeta(view: ViewId): string {
-  return '' as string;
-}
-
 function unique(values: string[]): string[] { return Array.from(new Set(values)).filter(Boolean).sort(); }
-function groupBy<T>(items: T[], keyFn: (item: T) => string): Record<string, T[]> { return items.reduce<Record<string, T[]>>((acc, item) => { const key = keyFn(item); acc[key] = acc[key] ?? []; acc[key].push(item); return acc; }, {}); }
-function avg(values: number[]): number { return values.length ? values.reduce((a, b) => a + b, 0) / values.length : 0; }

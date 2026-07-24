@@ -1,8 +1,7 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState, useCallback } from 'react';
 import { Card, Drawer } from '../../../components/ui';
-import { fetchOpsPipelines, fetchRuns, fetchRunDetail, STEP_TO_PIPELINE, type OpsPipeline, type OpsRun } from '../../../api/opsClient';
-import { postJson } from '../../../api/client';
+import { fetchOpsPipelines, fetchRuns, fetchRunDetail, STEP_TO_PIPELINE, type OpsPipeline } from '../../../api/opsClient';
 
 const zhPipelineNames: Record<string, string> = {
   'huawei_full_migration_pipeline': '完整威胁链路',
