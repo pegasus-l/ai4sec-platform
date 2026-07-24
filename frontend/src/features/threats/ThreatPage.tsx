@@ -56,7 +56,7 @@ export function ThreatPage() {
   // Fetch targets with pagination + server-side filtering (summary fields only = ~1KB/item instead of 103KB)
   const { data: targetsData, isLoading, error } = useQuery({
     queryKey: ['threats-targets', currentPage, filters],
-    queryFn: () => fetchTargets(currentPage, 50, filters.surface !== 'all' ? filters.surface : '', filters.grade !== 'all' ? filters.grade : '', filters.search),
+    queryFn: () => fetchTargets(currentPage, 20, filters.surface !== 'all' ? filters.surface : '', filters.grade !== 'all' ? filters.grade : '', filters.search),
     staleTime: 300_000, // 5 minutes
   });
 
@@ -77,14 +77,14 @@ export function ThreatPage() {
         grade: String(as.grade ?? ''),
         status: String(i.status ?? 'active'),
         surface: String(as.surface ?? ''),
-        stars: 0,
+        stars: Number(i.stars ?? 0),
         cve: Number(signals.cve_count ?? 0),
         sa: Number(signals.sa_count ?? 0),
         sec: Number(signals.broad_sec_count ?? 0),
         filtered: false,
         filteredReason: '',
-        breakdown: {} as Record<string, number>,
-        reasons: [] as string[],
+        breakdown: (i.breakdown as Record<string, number>) ?? {},
+        reasons: (i.reasons as string[]) ?? [],
         evidence: [] as string[],
         assets: [] as string[],
         raw: {} as Record<string, unknown>,
@@ -188,23 +188,25 @@ function ThreatToday({ repos, openRepo, setView, setFilters }: { repos: ThreatRe
 }
 
 function ThreatRepos({ repos, filters, setFilters, openRepo, currentPage, totalPages, totalRepos, setCurrentPage }: { repos: ThreatRepo[]; filters: FilterState; setFilters: (filters: FilterState) => void; openRepo: (repo: ThreatRepo) => void; currentPage: number; totalPages: number; totalRepos: number; setCurrentPage: (page: number) => void; }) {
+  const pageNav = totalPages > 1 ? <div className="split" style={{ justifyContent: 'center', gap: 6 }}>
+    <button className="btn sm" disabled={currentPage <= 1} onClick={() => setCurrentPage(currentPage - 1)}>上一页</button>
+    {Array.from({ length: Math.min(totalPages, 10) }, (_, i) => {
+      const p = i + 1;
+      const showP = totalPages <= 10 ? p : (currentPage <= 5 ? p : (currentPage + (p - 6) > totalPages ? totalPages - 9 + i : currentPage - 5 + i));
+      if (showP < 1 || showP > totalPages) return null;
+      return <button key={showP} className={`btn sm ${showP === currentPage ? 'primary' : ''}`} onClick={() => setCurrentPage(showP)}>{showP}</button>;
+    })}
+    {totalPages > 10 && currentPage < totalPages - 5 && <span className="muted small">...{totalPages}</span>}
+    <button className="btn sm" disabled={currentPage >= totalPages} onClick={() => setCurrentPage(currentPage + 1)}>下一页</button>
+  </div> : null;
   return <div className="grid">
     <div className="row-title" style={{ marginBottom: 8 }}>
       <span className="muted small">共 {totalRepos} 个代码仓 · 第 {currentPage}/{totalPages} 页</span>
       <span className="muted small">{filters.grade !== 'all' ? ` · ${filters.grade} 级` : ''}{filters.surface !== 'all' ? ` · ${filters.surface}` : ''}{filters.search ? ` · 搜索"${filters.search}"` : ''}</span>
     </div>
+    {pageNav}
     <div className="table-card"><RepoTable repos={repos} openRepo={openRepo} /></div>
-    {totalPages > 1 && <div className="split" style={{ marginTop: 12, justifyContent: 'center', gap: 6 }}>
-      <button className="btn sm" disabled={currentPage <= 1} onClick={() => setCurrentPage(currentPage - 1)}>上一页</button>
-      {Array.from({ length: Math.min(totalPages, 10) }, (_, i) => {
-        const p = i + 1;
-        const showP = totalPages <= 10 ? p : (currentPage <= 5 ? p : (currentPage + (p - 6) > totalPages ? totalPages - 9 + i : currentPage - 5 + i));
-        if (showP < 1 || showP > totalPages) return null;
-        return <button key={showP} className={`btn sm ${showP === currentPage ? 'primary' : ''}`} onClick={() => setCurrentPage(showP)}>{showP}</button>;
-      })}
-      {totalPages > 10 && currentPage < totalPages - 5 && <span className="muted small">...{totalPages}</span>}
-      <button className="btn sm" disabled={currentPage >= totalPages} onClick={() => setCurrentPage(currentPage + 1)}>下一页</button>
-    </div>}
+    {pageNav}
   </div>;
 }
 
@@ -395,7 +397,7 @@ function RepoTable({ repos, openRepo }: { repos: ThreatRepo[]; openRepo: (repo: 
     <td style={{ maxWidth: 320 }}><div className="repo-name">{repo.org}/{repo.name}</div><div className="repo-url">{repo.url}</div><div className="muted small" style={{ maxHeight: '2.6em', overflow: 'hidden' }}>{repo.summary}</div></td>
     <td><span className={`badge ${repo.grade || 'C'}`}>Grade {repo.grade || '?'}</span>{repo.aiCalibrated && <span className="badge badge-sky" style={{ marginLeft: 4 }}>AI</span>}<div style={{ height: 7 }} /><div className="score-bar"><i style={{ width: `${Math.min(100, repo.score)}%` }} /></div><div className="small muted">{Math.round(repo.score)}</div></td>
     <td><span className="badge">{repo.surface}</span></td>
-    <td>CVE {repo.cve}<br />SA {repo.sa}<br />Sec items {repo.sec}<div style={{ height: 7 }} />{repo.evidence.length ? <button className="btn" onClick={(event) => { event.stopPropagation(); openRepo(repo); }}>{repo.evidence.length} 条详情</button> : <span className="muted small">暂无详情</span>}</td>
+    <td>CVE {repo.cve}<br />SA {repo.sa}<br />Sec items {repo.sec}<div style={{ height: 7 }} />{(repo.cve + repo.sa + repo.sec) > 0 ? <button className="btn" onClick={(event) => { event.stopPropagation(); openRepo(repo); }}>{repo.cve + repo.sa + repo.sec} 条详情</button> : <span className="muted small">暂无详情</span>}</td>
     <td style={{ minWidth: 150 }}><ScoreBreakdown breakdown={repo.breakdown} mini /></td>
     <td><button className="btn primary" onClick={(event) => { event.stopPropagation(); openRepo(repo); }}>详情</button><button className="btn" onClick={(event) => event.stopPropagation()}>跟踪</button></td>
   </tr>)}</tbody></table>;

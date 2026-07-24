@@ -133,16 +133,21 @@ function buildVulnDetails(repos: ThreatRepo[], repoItems: Array<Record<string, u
   repoItems.forEach((item, index) => {
     const repo = repos[index];
     if (!repo) return;
-    const payload = payloadOf(item);
-    const cves = asArray<Record<string, unknown>>(payload.cves).map(vulnDetailFromCve);
-    const saItems = asArray<Record<string, unknown>>(payload.sa_items).map(vulnDetailFromSa);
-    const broadSec = asArray<Record<string, unknown>>(payload.broad_sec_items).map(vulnDetailFromBroadSec);
-    const all = [...cves, ...saItems, ...broadSec];
-    if (all.length > 0) {
-      map[repo.id] = all;
+    const details = vulnDetailsFromItem(item);
+    if (details.length > 0) {
+      map[repo.id] = details;
     }
   });
   return map;
+}
+
+/** Build vuln details for a single domain_item (used by RepoDrawer). */
+export function vulnDetailsFromItem(item: Record<string, unknown>): ThreatVulnDetail[] {
+  const payload = payloadOf(item);
+  const cves = asArray<Record<string, unknown>>(payload.cves).map(vulnDetailFromCve);
+  const saItems = asArray<Record<string, unknown>>(payload.sa_items).map(vulnDetailFromSa);
+  const broadSec = asArray<Record<string, unknown>>(payload.broad_sec_items).map(vulnDetailFromBroadSec);
+  return [...cves, ...saItems, ...broadSec];
 }
 
 // ============================================================================

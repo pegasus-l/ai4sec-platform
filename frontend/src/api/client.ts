@@ -47,6 +47,10 @@ export async function trackAsset(itemId: string | number, priority: string = 'P1
   return postJson(`/api/threats/assets/${itemId}/track`, { priority, reason });
 }
 
+export async function fetchTargetDetail(itemId: string | number): Promise<Record<string, unknown>> {
+  return getJson(`/api/threats/targets/${itemId}`);
+}
+
 export async function fetchGraph(): Promise<{ nodes: unknown[]; edges: unknown[] }> {
   return getJson('/api/threats/graph');
 }

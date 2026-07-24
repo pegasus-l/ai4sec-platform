@@ -21,9 +21,8 @@ import { severityBadgeClass } from './severityBadge';
 import { Card, MetricCard } from '../../components/ui';
 import { useState, useEffect, useMemo } from 'react';
 import { useQueryClient, useQuery } from '@tanstack/react-query';
-import { postJson, getJson, trackTarget, type AiReviewResult } from '../../api/client';
-import { fetchFrontendContract } from '../../api/frontendContract';
-import { adaptThreatContract } from './threatAdapters';
+import { postJson, getJson, trackTarget, fetchTargetDetail, type AiReviewResult } from '../../api/client';
+import { repoFromItem, vulnDetailsFromItem } from './threatAdapters';
 
 interface RepoDrawerContentProps {
   repo: ThreatRepo;
@@ -35,9 +34,26 @@ interface RepoDrawerContentProps {
 
 export function RepoDrawerContent({ repo: initialRepo, onViewGraph, onOpenAsset }: RepoDrawerContentProps) {
   const { push } = useDrawerStack();
-  // Self-fetch model via useQuery — re-renders automatically when cache updates (invalidateQueries)
-  const { data } = useQuery({ queryKey: ['frontend-contract'], queryFn: fetchFrontendContract });
-  const model = useMemo(() => data ? adaptThreatContract(data) : null, [data]);
+  // Fetch single target detail (full payload) — replaces fetchFrontendContract
+  const { data: detailData } = useQuery({ queryKey: ['threats-target-detail', initialRepo.id], queryFn: () => fetchTargetDetail(initialRepo.id) });
+  // Build local model from the single item (repos + vulnDetails only)
+  const model = useMemo<ThreatViewModel | null>(() => {
+    if (!detailData) return null;
+    const r = repoFromItem(detailData);
+    const v = vulnDetailsFromItem(detailData);
+    return {
+      summary: { totalRepos: 0, highRisk: 0, withCve: 0, totalCve: 0, uniqueCve: 0, totalSa: 0, broadSecurity: 0, assets: 0, grades: {}, scanModes: {}, sourceStats: {} },
+      repos: [r],
+      today: [r],
+      assets: [],
+      queue: [],
+      cveScout: {},
+      attackSurface: {},
+      reports: {},
+      graph: { nodes: [], edges: [] },
+      vulnDetails: { [r.id]: v },
+    };
+  }, [detailData]);
   // Always use latest repo from model (updates after AI calibration)
   const repo = model?.repos.find(r => r.id === initialRepo.id) ?? initialRepo;
   const vulns = model?.vulnDetails?.[repo.id] ?? [];
@@ -59,7 +75,8 @@ export function RepoDrawerContent({ repo: initialRepo, onViewGraph, onOpenAsset 
     try {
       const result = await postJson<AiReviewResult>(`/api/threats/${repo.id}/ai-review`);
       setAiReview(result);
-      queryClient.invalidateQueries({ queryKey: ['frontend-contract'] });
+      queryClient.invalidateQueries({ queryKey: ['threats-target-detail', repo.id] });
+      queryClient.invalidateQueries({ queryKey: ['threats-targets'] });
     } catch (e) {
       setAiError(String(e));
     } finally {
