@@ -224,6 +224,9 @@ def _serialize_row(row: sqlite3.Row) -> dict[str, Any]:
     item["item_type"] = "project" if item.get("item_type") == "repo" else item.get("item_type")
     classification = payload.get("classification") or {}
     display_topic = payload.get("display_topic") or classification.get("category") or "待复核"
+    review = payload.get("review") if isinstance(payload.get("review"), dict) else {}
+    payload["display_work_name"] = payload.get("display_work_name") or review.get("work_name") or ""
+    payload["display_theme_descriptor"] = payload.get("display_theme_descriptor") or review.get("theme_descriptor") or ""
     payload["display_theme"] = payload.get("display_theme") or item.get("title", "")
     payload["display_topic"] = display_topic
     payload["one_liner"] = payload.get("one_liner") or _one_liner(item["item_type"], display_topic, item.get("title", ""))

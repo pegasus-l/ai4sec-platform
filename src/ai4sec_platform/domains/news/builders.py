@@ -29,6 +29,8 @@ def build_news_items(conn: sqlite3.Connection, items: list[dict[str, Any]], *, r
         tech_paths = review.get("tech_paths") if isinstance(review.get("tech_paths"), list) else []
         technical_points = list(dict.fromkeys(review.get("technical_points") or [path.get("point") for path in tech_paths if isinstance(path, dict)]))[:10]
         display_topic = str(review.get("topic") or fallback_classification.category)
+        display_work_name = str(review.get("work_name") or "")
+        display_theme_descriptor = str(review.get("theme_descriptor") or "")
         display_theme = str(review.get("theme") or payload.get("title") or "未命名条目")
         one_liner = str(review.get("promo_line") or _one_liner(item_type, display_topic, payload.get("title") or ""))
         summary = str(review.get("summary_zh") or payload.get("summary") or "暂无摘要")
@@ -55,6 +57,8 @@ def build_news_items(conn: sqlite3.Connection, items: list[dict[str, Any]], *, r
             "summary": summary,
             "highlight": str(review.get("highlight_line") or _highlight(summary or payload.get("title") or "")),
             "display_topic": display_topic,
+            "display_work_name": display_work_name,
+            "display_theme_descriptor": display_theme_descriptor,
             "display_theme": display_theme,
             "one_liner": one_liner,
             "technical_points": technical_points,

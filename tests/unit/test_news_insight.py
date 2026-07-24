@@ -48,10 +48,15 @@ def test_tech_map_contract_and_discovery_reference_extraction() -> None:
     assert {item["source_type"] for item in references} == {"paper", "project"}
     gate = _normalize_gate({"decision": "pass", "map_relevance_score": 88, "potential_value_score": 72, "provisional_tech_paths": valid}, {"title": "MCP"}, tech_map)
     assert gate["decision"] == "pass"
-    review = _normalize_deep_review({"score_breakdown": {"map_relevance": 90, "novelty": 80, "technical_depth": 80, "engineering_value": 70, "reproducibility": 70, "influence": 60, "freshness": 80}, "tech_paths": valid}, {"title": "MCP", "source_type": "paper", "gate_review": gate}, tech_map)
+    review = _normalize_deep_review({"score_breakdown": {"map_relevance": 90, "novelty": 80, "technical_depth": 80, "engineering_value": 70, "reproducibility": 70, "influence": 60, "freshness": 80}, "tech_paths": valid, "work_name": "MCPGuard", "theme_descriptor": "面向 Agent 工具调用的协议安全护栏"}, {"title": "MCP", "source_type": "paper", "gate_review": gate}, tech_map)
     assert review["decision"] == "selected"
     assert review["relevance_score"] == 90
     assert review["score"] == 80.0
+    assert review["work_name"] == "MCPGuard"
+    assert review["theme_descriptor"] == "面向 Agent 工具调用的协议安全护栏"
+    assert review["theme"] == "MCPGuard：面向 Agent 工具调用的协议安全护栏"
+    legacy_theme = _normalize_deep_review({"score_breakdown": {"map_relevance": 90, "novelty": 80, "technical_depth": 80, "engineering_value": 70, "reproducibility": 70, "influence": 60, "freshness": 80}, "tech_paths": valid, "theme": "ScopeJudge：面向进攻性安全 Agent 的执行前门控系统"}, {"title": "ScopeJudge: Cost-Aware Pre-Execution Gating", "source_type": "paper", "gate_review": gate}, tech_map)
+    assert legacy_theme["theme"] == "ScopeJudge：面向进攻性安全 Agent 的执行前门控系统"
     assert _percentage(8) == 8
     assert _percentage(0.7) == 0.7
     assert _percentage(101) == 0
@@ -137,7 +142,7 @@ def test_news_filters_actions_reports_and_promotion() -> None:
     conn = connection()
     paper = normalize_raw_item("arxiv", {"id": "2501.01234", "title": "Prompt Injection Defense", "summary": "AI security prompt injection defense", "published": "2026-07-20", "authors": ["Ada"]})
     project = normalize_raw_item("github", {"html_url": "https://github.com/acme/scanner", "full_name": "acme/scanner", "description": "agent security scanner", "updated_at": "2026-07-21", "stargazers_count": 500})
-    paper["review"] = {"score": 82, "topic": "工具集成总线", "tech_paths": [{"dimension": "工具调用", "category": "工具集成总线", "point": "MCP 协议"}], "technical_points": ["MCP 协议"]}
+    paper["review"] = {"score": 82, "topic": "工具集成总线", "work_name": "MCPGuard", "theme_descriptor": "面向 Agent 工具调用的协议安全护栏", "theme": "MCPGuard：面向 Agent 工具调用的协议安全护栏", "tech_paths": [{"dimension": "工具调用", "category": "工具集成总线", "point": "MCP 协议"}], "technical_points": ["MCP 协议"]}
     project["review"] = {"score": 78, "topic": "长期记忆", "tech_paths": [{"dimension": "记忆与上下文管理", "category": "长期记忆", "point": "RAG / 混合检索"}], "technical_points": ["RAG / 混合检索"]}
     result = build_news_items(conn, [paper, project], run_id="run-1")
     paper_id, project_id = result["item_ids"]
@@ -148,6 +153,9 @@ def test_news_filters_actions_reports_and_promotion() -> None:
     assert service.list_news(conn, topic=topic["topic"])["total"] == topic["item_count"]
     assert all(item["item_type"] in {"paper", "project"} for item in service.list_news(conn)["items"])
     assert all(item["payload"]["one_liner"] for item in service.list_news(conn)["items"])
+    stored_paper = service.list_news(conn, item_type="paper")["items"][0]
+    assert stored_paper["payload"]["display_work_name"] == "MCPGuard"
+    assert stored_paper["payload"]["display_theme"] == "MCPGuard：面向 Agent 工具调用的协议安全护栏"
     assert service.list_news(conn, tech_dimensions=["工具调用"])["total"] == 1
     assert service.list_news(conn, tech_categories=["长期记忆"])["total"] == 1
     assert service.list_news(conn, tech_points=["MCP 协议", "RAG / 混合检索"], tech_match="any")["total"] == 2

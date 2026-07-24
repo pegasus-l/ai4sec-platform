@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import random
+import re
 import sqlite3
 import time
 import urllib.error
@@ -16,7 +17,7 @@ from ai4sec_platform.domains.news.tech_map import AgentTechMap
 from ai4sec_platform.models.router import LLMRouter
 
 GATE_PROMPT_VERSION = "news-tech-map-gate-v1"
-REVIEW_PROMPT_VERSION = "news-deep-review-v2"
+REVIEW_PROMPT_VERSION = "news-deep-review-v3"
 MODEL_MAX_ATTEMPTS = 3
 MODEL_RETRY_BASE_SECONDS = 1.0
 MODEL_RETRY_JITTER_SECONDS = 0.5
@@ -132,8 +133,10 @@ def _review_prompt() -> str:
 3. 项目综合真实代码、README、活跃度、关联论文、工程价值和可复现性，stars 只影响少量影响力分。
 4. 论文综合地图相关性、新颖性、技术深度、实验可信度、工程价值和对技术地图的推进作用。
 5. 中文摘要说明问题、方法、结果和价值，不得编造输入中没有的事实。
-6. theme 是中文主题标题；promo_line 说明“它是什么”；highlight_line 说明“为什么值得看”。
-7. 不需要计算 final_score，平台会按各维度百分制分数和论文/项目权重确定最终分。
+6. 必须生成工作名与技术定位：work_name 是条目的工作名、系统名、框架名、论文简称或项目名；优先从标题、摘要、仓库名中提取已有名称并保留原始大小写，例如 ScopeJudge、agentUniverse、GhidrAssistMCP。只有原始资料没有可用名称时，才生成不超过 4 个英文单词或 12 个汉字的可检索工作名，不能编造看似正式的论文缩写。
+7. theme_descriptor 是不含 work_name 的中文技术定位，需说明核心对象、方法和技术价值；不得以 work_name 或冒号开头。平台会固定拼成“work_name：theme_descriptor”。例如 work_name=AHE，theme_descriptor=可观测性驱动的编码Agent编排层自动进化框架。
+8. promo_line 说明“它是什么”；highlight_line 说明“为什么值得看”。中文摘要说明问题、方法、结果和价值，不得编造输入中没有的事实。
+9. 不需要计算 final_score，平台会按各维度百分制分数和论文/项目权重确定最终分。
 
 输出：
 {
@@ -148,7 +151,8 @@ def _review_prompt() -> str:
   },
   "tech_paths": [{"dimension": "", "category": "", "point": ""}],
   "topic": "技术地图二级分类",
-  "theme": "中文主题标题",
+  "work_name": "工作名或项目名",
+  "theme_descriptor": "不含工作名的中文技术定位",
   "summary_zh": "100到250字中文摘要",
   "promo_line": "宣传一句话",
   "highlight_line": "亮点一句话",
@@ -242,6 +246,8 @@ def _normalize_deep_review(value: Any, item: dict[str, Any], tech_map: AgentTech
     breakdown = _normalize_breakdown(result.get("score_breakdown"))
     score = _weighted_score(str(item.get("source_type") or ""), breakdown)
     decision = "selected" if paths and score >= 70 else "watch" if paths and score >= 55 else "rejected"
+    work_name = _work_name(result.get("work_name"), item)
+    theme_descriptor = _theme_descriptor(result.get("theme_descriptor") or result.get("theme"), work_name, item)
     return {
         "decision": decision,
         "relevance_score": breakdown.get("map_relevance", 0),
@@ -249,7 +255,9 @@ def _normalize_deep_review(value: Any, item: dict[str, Any], tech_map: AgentTech
         "score_breakdown": breakdown,
         "tech_paths": paths,
         "topic": str(result.get("topic") or (paths[0]["category"] if paths else "")),
-        "theme": str(result.get("theme") or item.get("title") or "").strip(),
+        "work_name": work_name,
+        "theme_descriptor": theme_descriptor,
+        "theme": _compose_theme(work_name, theme_descriptor),
         "summary_zh": str(result.get("summary_zh") or "").strip(),
         "promo_line": str(result.get("promo_line") or "").strip(),
         "highlight_line": str(result.get("highlight_line") or "").strip(),
@@ -279,6 +287,8 @@ def _fallback_review(item: dict[str, Any], tech_map: AgentTechMap, reason: str) 
     topic = paths[0]["category"] if paths else ""
     breakdown = {"map_relevance": 70, "novelty": 65, "technical_depth": 65, "engineering_value": 70, "reproducibility": 70, "influence": 50, "freshness": 70} if paths else {}
     score = _weighted_score(str(item.get("source_type") or ""), breakdown) if paths else 0
+    work_name = _work_name("", item)
+    theme_descriptor = _theme_descriptor(title, work_name, item)
     return {
         "decision": "selected" if paths else "rejected",
         "relevance_score": breakdown.get("map_relevance", 0),
@@ -286,7 +296,9 @@ def _fallback_review(item: dict[str, Any], tech_map: AgentTechMap, reason: str) 
         "score_breakdown": breakdown,
         "tech_paths": paths,
         "topic": topic,
-        "theme": title,
+        "work_name": work_name,
+        "theme_descriptor": theme_descriptor,
+        "theme": _compose_theme(work_name, theme_descriptor),
         "summary_zh": str(item.get("summary") or ""),
         "promo_line": f"该条目围绕「{topic}」展开：{title[:70]}" if paths else "",
         "highlight_line": "模型不可用，当前内容由技术地图降级匹配生成，建议人工复核。" if paths else "",
@@ -294,6 +306,35 @@ def _fallback_review(item: dict[str, Any], tech_map: AgentTechMap, reason: str) 
         "technical_points": [path["point"] for path in paths],
         "confidence": 0.25 if paths else 0.0,
     }
+
+
+def _work_name(value: Any, item: dict[str, Any]) -> str:
+    name = " ".join(str(value or "").split()).strip(" ：:")
+    if name:
+        return name[:80]
+    title = " ".join(str(item.get("title") or "").split())
+    raw = item.get("raw") if isinstance(item.get("raw"), dict) else {}
+    repo_name = str(item.get("repo_full_name") or raw.get("full_name") or "")
+    if str(item.get("source_type")) == "project" and repo_name:
+        return repo_name.rsplit("/", 1)[-1][:80]
+    prefix = re.split(r"[:：]", title, maxsplit=1)[0].strip()
+    return (prefix or title)[:80]
+
+
+def _theme_descriptor(value: Any, work_name: str, item: dict[str, Any]) -> str:
+    descriptor = " ".join(str(value or "").split()).strip(" ：:")
+    if descriptor.startswith(work_name):
+        descriptor = descriptor[len(work_name):].lstrip(" ：:")
+    if not descriptor:
+        title = " ".join(str(item.get("title") or "").split())
+        descriptor = re.split(r"[:：]", title, maxsplit=1)[-1].strip() if re.search(r"[:：]", title) else title
+    return descriptor[:160]
+
+
+def _compose_theme(work_name: str, descriptor: str) -> str:
+    if work_name and descriptor:
+        return f"{work_name}：{descriptor}"
+    return work_name or descriptor
 
 
 def _call_model(conn: sqlite3.Connection, router: LLMRouter, *, run_id: str, agent_name: str, model_profile: str, prompt: str, input_payload: dict[str, Any]) -> tuple[dict[str, Any], bool]:
