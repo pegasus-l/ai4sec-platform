@@ -52,3 +52,16 @@ export interface TopicSummary {
   latest_at: string;
   items: number[];
 }
+
+export interface TechMapItem {
+  dimension: string;
+  category: string;
+  point: string;
+  count: number;
+}
+
+export interface TechMapResponse {
+  name: string;
+  version: string;
+  items: TechMapItem[];
+}

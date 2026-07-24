@@ -18,6 +18,10 @@ def list_news(
     item_type: str = "",
     source: str = "",
     topic: str = "",
+    tech_dimensions: list[str] | None = None,
+    tech_categories: list[str] | None = None,
+    tech_points: list[str] | None = None,
+    tech_match: str = "any",
     status: str = "",
     date_from: str = "",
     date_to: str = "",
@@ -43,6 +47,22 @@ def list_news(
         clauses.append("(LOWER(di.tags_json) LIKE ? OR LOWER(di.payload_json) LIKE ?)")
         value = f"%{topic.lower()}%"
         params.extend([value, value])
+    tech_filters = [
+        ("dimension", value)
+        for value in (tech_dimensions or [])
+    ] + [
+        ("category", value)
+        for value in (tech_categories or [])
+    ] + [
+        ("point", value)
+        for value in (tech_points or [])
+    ]
+    if tech_filters:
+        predicates = []
+        for field, value in tech_filters:
+            predicates.append(f"EXISTS (SELECT 1 FROM json_each(di.payload_json, '$.tech_paths') AS tech_path WHERE json_extract(tech_path.value, '$.{field}') = ?)")
+            params.append(value)
+        clauses.append(f"({' AND '.join(predicates) if tech_match == 'all' else ' OR '.join(predicates)})")
     if status:
         if status in {"unread", "read", "bookmarked", "later", "ignored"}:
             clauses.append("COALESCE(us.reading_state, 'unread') = ?")
@@ -72,7 +92,24 @@ def list_news(
         f"SELECT di.*, COALESCE(us.reading_state, 'unread') AS reading_state, COALESCE(us.feedback_value, '') AS feedback_value, COALESCE(us.feedback_reason, '') AS feedback_reason FROM domain_items di LEFT JOIN news_user_states us ON us.domain_item_id = di.id AND us.operator = ? WHERE {where} ORDER BY {order_by} LIMIT ? OFFSET ?",
         [operator, *params, page_size, offset],
     ).fetchall()
-    return {"domain": DOMAIN, "items": [_serialize_row(row) for row in rows], "page": page, "page_size": page_size, "total": total, "filters": {"query": query, "item_type": item_type, "source": source, "topic": topic, "status": status, "date_from": date_from, "date_to": date_to, "min_score": min_score, "sort": sort}}
+    return {"domain": DOMAIN, "items": [_serialize_row(row) for row in rows], "page": page, "page_size": page_size, "total": total, "filters": {"query": query, "item_type": item_type, "source": source, "topic": topic, "tech_dimensions": tech_dimensions or [], "tech_categories": tech_categories or [], "tech_points": tech_points or [], "tech_match": tech_match, "status": status, "date_from": date_from, "date_to": date_to, "min_score": min_score, "sort": sort}}
+
+
+def tech_path_counts(conn: sqlite3.Connection) -> dict[tuple[str, str, str], int]:
+    counts: Counter[tuple[str, str, str]] = Counter()
+    rows = conn.execute("SELECT payload_json FROM domain_items WHERE domain = 'news'").fetchall()
+    for row in rows:
+        payload = repo.loads(row["payload_json"], {})
+        paths = payload.get("tech_paths") if isinstance(payload.get("tech_paths"), list) else []
+        seen: set[tuple[str, str, str]] = set()
+        for path in paths:
+            if not isinstance(path, dict):
+                continue
+            key = (str(path.get("dimension") or ""), str(path.get("category") or ""), str(path.get("point") or ""))
+            if all(key) and key not in seen:
+                counts[key] += 1
+                seen.add(key)
+    return dict(counts)
 
 
 def today(conn: sqlite3.Connection, *, limit: int = 12, operator: str = "operator") -> dict[str, Any]:

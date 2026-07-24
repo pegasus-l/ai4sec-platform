@@ -20,8 +20,8 @@ def today(limit: int = Query(12, ge=1, le=100), operator: str = Query("operator"
 
 
 @router.get("/items")
-def items(query: str = "", item_type: str = "", source: str = "", topic: str = "", status: str = "", date_from: str = "", date_to: str = "", min_score: float | None = Query(None, ge=0, le=100), sort: str = "score", page: int = Query(1, ge=1), page_size: int = Query(30, ge=1, le=100), operator: str = "operator", conn: sqlite3.Connection = Depends(get_db)) -> dict:
-    return service.list_news(conn, query=query, item_type=item_type, source=source, topic=topic, status=status, date_from=date_from, date_to=date_to, min_score=min_score, sort=sort, page=page, page_size=page_size, operator=operator)
+def items(query: str = "", item_type: str = "", source: str = "", topic: str = "", tech_dimension: list[str] = Query(default=[]), tech_category: list[str] = Query(default=[]), tech_point: list[str] = Query(default=[]), tech_match: str = Query("any", pattern="^(any|all)$"), status: str = "", date_from: str = "", date_to: str = "", min_score: float | None = Query(None, ge=0, le=100), sort: str = "score", page: int = Query(1, ge=1), page_size: int = Query(30, ge=1, le=100), operator: str = "operator", conn: sqlite3.Connection = Depends(get_db)) -> dict:
+    return service.list_news(conn, query=query, item_type=item_type, source=source, topic=topic, tech_dimensions=tech_dimension, tech_categories=tech_category, tech_points=tech_point, tech_match=tech_match, status=status, date_from=date_from, date_to=date_to, min_score=min_score, sort=sort, page=page, page_size=page_size, operator=operator)
 
 
 @router.get("/items/{item_id}")
@@ -61,9 +61,11 @@ def sources(conn: sqlite3.Connection = Depends(get_db)) -> dict:
 
 
 @router.get("/tech-map")
-def tech_map() -> dict:
+def tech_map(conn: sqlite3.Connection = Depends(get_db)) -> dict:
     taxonomy = AgentTechMap.load(PROJECT_ROOT)
-    return {"domain": "news", "name": taxonomy.name, "version": taxonomy.version, "items": taxonomy.catalog()}
+    counts = service.tech_path_counts(conn)
+    items = [{**path, "count": counts.get((path["dimension"], path["category"], path["point"]), 0)} for path in taxonomy.catalog()]
+    return {"domain": "news", "name": taxonomy.name, "version": taxonomy.version, "items": items}
 
 
 @router.post("/items/{item_id}/read")

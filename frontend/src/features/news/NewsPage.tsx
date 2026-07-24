@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { BookOpen, CalendarDays, Check, ExternalLink, Heart, Inbox, Layers3, MessageSquare, Network, Newspaper, Search, Sparkles, Star } from 'lucide-react';
+import { BookOpen, CalendarDays, Check, ExternalLink, Filter, Heart, Inbox, Layers3, MessageSquare, Network, Newspaper, Search, Sparkles, Star, X } from 'lucide-react';
 import { Badge, Card, Drawer, EmptyState, MetricCard } from '../../components/ui';
-import { fetchNews, fetchReport, postNewsAction, type NewsFilters } from './newsQueries';
-import type { NewsItem, NewsView, Report, TodayResponse, TopicSummary } from './newsTypes';
+import { fetchNews, fetchReport, fetchTechMap, postNewsAction, type NewsFilters } from './newsQueries';
+import type { NewsItem, NewsView, Report, TechMapItem, TodayResponse, TopicSummary } from './newsTypes';
 
 const views: Array<{ id: NewsView; title: string; icon: typeof Newspaper }> = [
   { id: 'today', title: '今日精选', icon: Sparkles },
@@ -14,7 +14,7 @@ const views: Array<{ id: NewsView; title: string; icon: typeof Newspaper }> = [
 
 function initialFilters(): NewsFilters {
   const params = new URLSearchParams(window.location.search);
-  return { query: '', item_type: '', source: '', topic: params.get('topic') || '', status: '', sort: 'score', page: 1 };
+  return { query: '', item_type: '', source: '', topic: params.get('topic') || '', tech_dimensions: params.getAll('tech_dimension'), tech_categories: params.getAll('tech_category'), tech_points: params.getAll('tech_point'), tech_match: params.get('tech_match') === 'all' ? 'all' : 'any', status: '', sort: 'score', page: 1 };
 }
 
 export function NewsPage() {
@@ -36,8 +36,13 @@ export function NewsPage() {
     const url = new URL(window.location.href);
     if (filters.topic) url.searchParams.set('topic', filters.topic);
     else url.searchParams.delete('topic');
+    ['tech_dimension', 'tech_category', 'tech_point', 'tech_match'].forEach(key => url.searchParams.delete(key));
+    filters.tech_dimensions.forEach(value => url.searchParams.append('tech_dimension', value));
+    filters.tech_categories.forEach(value => url.searchParams.append('tech_category', value));
+    filters.tech_points.forEach(value => url.searchParams.append('tech_point', value));
+    if (filters.tech_dimensions.length + filters.tech_categories.length + filters.tech_points.length > 1) url.searchParams.set('tech_match', filters.tech_match);
     window.history.replaceState({}, '', url);
-  }, [filters.topic]);
+  }, [filters.topic, filters.tech_dimensions, filters.tech_categories, filters.tech_points, filters.tech_match]);
 
   const openTopic = (topic: string) => {
     setFilters(current => ({ ...current, topic, page: 1 }));
@@ -78,14 +83,68 @@ function TodayView({ data, onSelect }: { data?: TodayResponse; onSelect: (item: 
 }
 
 function AllView({ data, filters, setFilters, onSelect, onAction }: { data?: { items: NewsItem[]; total?: number; page?: number; page_size?: number }; filters: NewsFilters; setFilters: (filters: NewsFilters) => void; onSelect: (item: NewsItem) => void; onAction: (id: number, name: string) => void }) {
-  const update = (key: keyof NewsFilters, value: string) => setFilters({ ...filters, [key]: value, page: key === 'page' ? Number(value) : 1 });
+  const [techOpen, setTechOpen] = useState(false);
+  const techMapQuery = useQuery({ queryKey: ['news-tech-map'], queryFn: fetchTechMap });
+  const update = (key: keyof NewsFilters, value: string | number) => setFilters({ ...filters, [key]: key === 'page' ? Number(value) : value, page: key === 'page' ? Number(value) : 1 } as NewsFilters);
+  const updateTech = (key: 'tech_dimensions' | 'tech_categories' | 'tech_points', values: string[]) => setFilters({ ...filters, [key]: values, page: 1 });
+  const selectedTechCount = filters.tech_dimensions.length + filters.tech_categories.length + filters.tech_points.length;
+  const togglePoint = (point: string) => updateTech('tech_points', toggleValue(filters.tech_points, point));
+  const hotPoints = [...(techMapQuery.data?.items || [])].filter(item => item.count > 0).sort((left, right) => right.count - left.count).slice(0, 6);
+  const clearFilters = () => setFilters({ ...initialFilters(), topic: '', tech_dimensions: [], tech_categories: [], tech_points: [], tech_match: 'any' });
   return <div className="news-content">
     {filters.topic && <div className="active-topic"><div><span>当前专题</span><strong>{filters.topic}</strong></div><button onClick={() => update('topic', '')}>清除专题筛选</button></div>}
-    <Card className="news-filter-card"><div className="filter-search"><Search size={17} /><input value={filters.query} onChange={event => update('query', event.target.value)} placeholder="搜索论文、项目、摘要或技术主题" /></div><div className="filter-row"><select value={filters.item_type} onChange={event => update('item_type', event.target.value)}><option value="">全部类型</option><option value="paper">论文</option><option value="project">项目</option></select><select value={filters.source} onChange={event => update('source', event.target.value)}><option value="">全部来源</option><option value="arxiv">arXiv</option><option value="github">GitHub</option></select><select value={filters.status} onChange={event => update('status', event.target.value)}><option value="">全部状态</option><option value="unread">未读</option><option value="read">已读</option><option value="bookmarked">已收藏</option><option value="later">稍后阅读</option><option value="ignored">已忽略</option></select><select value={filters.sort} onChange={event => update('sort', event.target.value)}><option value="score">按推荐分</option><option value="published_at">按发布时间</option><option value="updated_at">按更新时间</option></select>{Object.values(filters).some(value => value && value !== 'score' && value !== 1) && <button className="filter-clear" onClick={() => setFilters(initialFilters())}>清除筛选</button>}</div></Card>
-    <div className="list-meta"><span>共 {data?.total || 0} 条</span><span>{filters.topic ? `已按「${filters.topic}」筛选` : '仅展示论文与项目'}</span></div>
-    {!data?.items.length ? <EmptyState title="没有匹配的资讯" description="请调整筛选条件或等待下一次采集。" /> : <div className="news-list">{data.items.map(item => <NewsListRow key={item.id} item={item} onSelect={onSelect} onAction={onAction} />)}</div>}
+    <Card className="news-filter-card"><div className="filter-search"><Search size={17} /><input value={filters.query} onChange={event => update('query', event.target.value)} placeholder="搜索论文、项目、摘要或技术主题" /></div><div className="filter-row"><select value={filters.item_type} onChange={event => update('item_type', event.target.value)}><option value="">全部类型</option><option value="paper">论文</option><option value="project">项目</option></select><select value={filters.source} onChange={event => update('source', event.target.value)}><option value="">全部来源</option><option value="arxiv">arXiv</option><option value="github">GitHub</option></select><select value={filters.status} onChange={event => update('status', event.target.value)}><option value="">全部状态</option><option value="unread">未读</option><option value="read">已读</option><option value="bookmarked">已收藏</option><option value="later">稍后阅读</option><option value="ignored">已忽略</option></select><select value={filters.sort} onChange={event => update('sort', event.target.value)}><option value="score">按推荐分</option><option value="published_at">按发布时间</option><option value="updated_at">按更新时间</option></select><button className={`tech-filter-trigger ${selectedTechCount ? 'active' : ''}`} onClick={() => setTechOpen(true)}><Filter size={14} />技术分类{selectedTechCount ? ` · ${selectedTechCount}` : ''}</button>{Object.values(filters).some(value => Array.isArray(value) ? value.length : value && value !== 'score' && value !== 'any' && value !== 1) && <button className="filter-clear" onClick={clearFilters}>清除筛选</button>}</div>{hotPoints.length > 0 && <div className="quick-tech"><span>热门技术点</span>{hotPoints.map(item => <button className={filters.tech_points.includes(item.point) ? 'active' : ''} key={`${item.category}/${item.point}`} onClick={() => togglePoint(item.point)}>{item.point}<b>{item.count}</b></button>)}<button className="more-tech" onClick={() => setTechOpen(true)}>更多分类 →</button></div>}{selectedTechCount > 0 && <SelectedTechFilters filters={filters} updateTech={updateTech} />}</Card>
+    <div className="list-meta"><span>共 {data?.total || 0} 条</span><span>{selectedTechCount ? `匹配${filters.tech_match === 'all' ? '全部' : '任一'}已选技术分类` : filters.topic ? `已按「${filters.topic}」筛选` : '仅展示论文与项目'}</span></div>
+    {!data?.items.length ? <EmptyState title="没有匹配的资讯" description="请调整筛选条件或等待下一次采集。" /> : <div className="news-list">{data.items.map(item => <NewsListRow key={item.id} item={item} onSelect={onSelect} onAction={onAction} onTechPoint={togglePoint} />)}</div>}
     {data && (data.total || 0) > (data.page_size || 24) && <div className="pagination"><button disabled={(data.page || 1) <= 1} onClick={() => update('page', String((data.page || 1) - 1))}>上一页</button><span>第 {data.page || 1} 页</span><button disabled={(data.page || 1) * (data.page_size || 24) >= (data.total || 0)} onClick={() => update('page', String((data.page || 1) + 1))}>下一页</button></div>}
+    <TechFilterDrawer open={techOpen} close={() => setTechOpen(false)} items={techMapQuery.data?.items || []} filters={filters} updateTech={updateTech} clearTech={() => setFilters({ ...filters, tech_dimensions: [], tech_categories: [], tech_points: [], tech_match: 'any', page: 1 })} setMatch={value => setFilters({ ...filters, tech_match: value, page: 1 })} resultCount={data?.total || 0} />
   </div>;
+}
+
+function SelectedTechFilters({ filters, updateTech }: { filters: NewsFilters; updateTech: (key: 'tech_dimensions' | 'tech_categories' | 'tech_points', values: string[]) => void }) {
+  const groups: Array<{ key: 'tech_dimensions' | 'tech_categories' | 'tech_points'; label: string; values: string[] }> = [
+    { key: 'tech_dimensions', label: '维度', values: filters.tech_dimensions },
+    { key: 'tech_categories', label: '分类', values: filters.tech_categories },
+    { key: 'tech_points', label: '技术点', values: filters.tech_points }
+  ];
+  return <div className="selected-tech-filters"><span>已选</span>{groups.flatMap(group => group.values.map(value => <button key={`${group.key}/${value}`} onClick={() => updateTech(group.key, group.values.filter(item => item !== value))}><small>{group.label}</small>{value}<X size={12} /></button>))}</div>;
+}
+
+function TechFilterDrawer({ open, close, items, filters, updateTech, clearTech, setMatch, resultCount }: { open: boolean; close: () => void; items: TechMapItem[]; filters: NewsFilters; updateTech: (key: 'tech_dimensions' | 'tech_categories' | 'tech_points', values: string[]) => void; clearTech: () => void; setMatch: (value: 'any' | 'all') => void; resultCount: number }) {
+  const [search, setSearch] = useState('');
+  const filtered = useMemo(() => {
+    const keyword = search.trim().toLowerCase();
+    return keyword ? items.filter(item => `${item.dimension} ${item.category} ${item.point}`.toLowerCase().includes(keyword)) : items;
+  }, [items, search]);
+  const dimensions = useMemo(() => {
+    const grouped = new Map<string, Map<string, TechMapItem[]>>();
+    filtered.forEach(item => {
+      if (!grouped.has(item.dimension)) grouped.set(item.dimension, new Map());
+      const categories = grouped.get(item.dimension)!;
+      if (!categories.has(item.category)) categories.set(item.category, []);
+      categories.get(item.category)!.push(item);
+    });
+    return grouped;
+  }, [filtered]);
+  const selectedCount = filters.tech_dimensions.length + filters.tech_categories.length + filters.tech_points.length;
+  return <Drawer open={open} title="技术分类" subtitle={`AI Agent 技术地图 · ${items.length} 个技术点`} onClose={close}>
+    <div className="tech-filter-panel">
+      <div className="tech-filter-search"><Search size={16} /><input value={search} onChange={event => setSearch(event.target.value)} placeholder="搜索 MCP、记忆、规划……" />{search && <button onClick={() => setSearch('')}><X size={14} /></button>}</div>
+      <div className="tech-match-mode"><div><strong>匹配方式</strong><span>选择多个分类时如何组合</span></div><div><button className={filters.tech_match === 'any' ? 'active' : ''} onClick={() => setMatch('any')}>任一</button><button className={filters.tech_match === 'all' ? 'active' : ''} onClick={() => setMatch('all')}>全部</button></div></div>
+      <div className="tech-tree">
+        {[...dimensions.entries()].map(([dimension, categories]) => {
+          const dimensionItems = [...categories.values()].flat();
+          const dimensionCount = dimensionItems.reduce((sum, item) => sum + item.count, 0);
+          return <details key={dimension} open={Boolean(search) || filters.tech_dimensions.includes(dimension)}>
+            <summary><label onClick={event => event.stopPropagation()}><input type="checkbox" checked={filters.tech_dimensions.includes(dimension)} onChange={() => updateTech('tech_dimensions', toggleValue(filters.tech_dimensions, dimension))} /><span>{dimension}</span></label><b>{dimensionCount}</b></summary>
+            <div className="tech-categories">{[...categories.entries()].map(([category, points]) => <div className="tech-category" key={`${dimension}/${category}`}><label className="tech-category-head"><input type="checkbox" checked={filters.tech_categories.includes(category)} onChange={() => updateTech('tech_categories', toggleValue(filters.tech_categories, category))} /><span>{category}</span><b>{points.reduce((sum, item) => sum + item.count, 0)}</b></label><div className="tech-points">{points.map(item => <label className={item.count ? '' : 'empty'} key={`${item.category}/${item.point}`}><input type="checkbox" checked={filters.tech_points.includes(item.point)} onChange={() => updateTech('tech_points', toggleValue(filters.tech_points, item.point))} /><span>{item.point}</span><b>{item.count}</b></label>)}</div></div>)}</div>
+          </details>;
+        })}
+        {!dimensions.size && <EmptyState title="没有匹配的技术分类" description="尝试使用更短的关键词。" />}
+      </div>
+      <div className="tech-filter-footer"><button className="reset" disabled={!selectedCount} onClick={clearTech}>重置</button><button className="confirm" onClick={close}>查看 {resultCount} 条结果</button></div>
+    </div>
+  </Drawer>;
 }
 
 function ReportsView({ data, onOpen }: { data?: { items: Report[] }; onOpen: (date: string) => void }) {
@@ -106,8 +165,8 @@ function NewsCard({ item, onSelect }: { item: NewsItem; onSelect: (item: NewsIte
   return <button className="news-card" onClick={() => onSelect(item)}><div className="news-card-top"><Badge tone={item.item_type === 'paper' ? 'green' : 'violet'}>{typeLabel(item.item_type)}</Badge><span>{displayTopic(item)}</span></div><h3>{displayTheme(item)}</h3>{displayTheme(item) !== item.title && <div className="original-title">{item.title}</div>}<div className="content-line"><b>宣传</b><span>{promoLine(item)}</span></div><div className="content-line highlight-line"><b>亮点</b><span>{highlightLine(item)}</span></div><div className="tag-line">{item.technical_points.map(point => <span key={point}>{point}</span>)}</div><div className="news-card-bottom"><span>{formatDate(item.primary_date)}</span><strong>{Math.round(item.score || 0)}</strong></div></button>;
 }
 
-function NewsListRow({ item, onSelect, onAction }: { item: NewsItem; onSelect: (item: NewsItem) => void; onAction: (id: number, name: string) => void }) {
-  return <article className={`news-list-row ${item.user_state?.reading_state === 'read' ? 'read' : ''}`}><button className="row-main" onClick={() => onSelect(item)}><div className="news-card-top"><Badge tone={item.item_type === 'paper' ? 'green' : 'violet'}>{typeLabel(item.item_type)}</Badge><span>{displayTopic(item)} · {item.source} · {formatDate(item.primary_date)}</span></div><h3>{displayTheme(item)}</h3>{displayTheme(item) !== item.title && <div className="original-title">{item.title}</div>}<div className="content-line"><b>宣传</b><span>{promoLine(item)}</span></div><div className="content-line highlight-line"><b>亮点</b><span>{highlightLine(item)}</span></div><div className="tag-line">{item.technical_points.map(tag => <span key={tag}>{tag}</span>)}</div></button><div className="row-side"><strong>{Math.round(item.score || 0)}</strong><div><button title="收藏" onClick={() => onAction(item.id, 'bookmark')}><Heart size={15} fill={item.user_state?.reading_state === 'bookmarked' ? 'currentColor' : 'none'} /></button><button title="已读" onClick={() => onAction(item.id, 'read')}><Check size={15} /></button></div></div></article>;
+function NewsListRow({ item, onSelect, onAction, onTechPoint }: { item: NewsItem; onSelect: (item: NewsItem) => void; onAction: (id: number, name: string) => void; onTechPoint: (point: string) => void }) {
+  return <article className={`news-list-row ${item.user_state?.reading_state === 'read' ? 'read' : ''}`}><div className="row-main" role="button" tabIndex={0} onClick={() => onSelect(item)} onKeyDown={event => { if (event.key === 'Enter') onSelect(item); }}><div className="news-card-top"><Badge tone={item.item_type === 'paper' ? 'green' : 'violet'}>{typeLabel(item.item_type)}</Badge><span>{displayTopic(item)} · {item.source} · {formatDate(item.primary_date)}</span></div><h3>{displayTheme(item)}</h3>{displayTheme(item) !== item.title && <div className="original-title">{item.title}</div>}<div className="content-line"><b>宣传</b><span>{promoLine(item)}</span></div><div className="content-line highlight-line"><b>亮点</b><span>{highlightLine(item)}</span></div><div className="tag-line">{item.technical_points.map(tag => <button className="tech-tag" key={tag} onClick={event => { event.stopPropagation(); onTechPoint(tag); }}>{tag}</button>)}</div></div><div className="row-side"><strong>{Math.round(item.score || 0)}</strong><div><button title="收藏" onClick={() => onAction(item.id, 'bookmark')}><Heart size={15} fill={item.user_state?.reading_state === 'bookmarked' ? 'currentColor' : 'none'} /></button><button title="已读" onClick={() => onAction(item.id, 'read')}><Check size={15} /></button></div></div></article>;
 }
 
 function NewsDetail({ item, close, onAction }: { item: NewsItem | null; close: () => void; onAction: (id: number, name: string) => void }) {
@@ -134,3 +193,4 @@ function viewDescription(view: NewsView): string { return ({ today: '先看今�
 function typeLabel(type: string): string { return type === 'paper' ? '论文' : '项目'; }
 function formatDate(value: string): string { return value ? value.slice(0, 10) : '未知日期'; }
 function scoreReasons(item: NewsItem): string { const scoring = item.payload.scoring; if (!scoring || typeof scoring !== 'object') return '基于相关性、安全价值、新鲜度和信息完整度综合评分。'; const reasons = (scoring as { reasons?: unknown }).reasons; return Array.isArray(reasons) ? reasons.map(String).join('；') : '基于相关性、安全价值、新鲜度和信息完整度综合评分。'; }
+function toggleValue(values: string[], value: string): string[] { return values.includes(value) ? values.filter(item => item !== value) : [...values, value]; }

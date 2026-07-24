@@ -92,15 +92,23 @@ def test_news_filters_actions_reports_and_promotion() -> None:
     conn = connection()
     paper = normalize_raw_item("arxiv", {"id": "2501.01234", "title": "Prompt Injection Defense", "summary": "AI security prompt injection defense", "published": "2026-07-20", "authors": ["Ada"]})
     project = normalize_raw_item("github", {"html_url": "https://github.com/acme/scanner", "full_name": "acme/scanner", "description": "agent security scanner", "updated_at": "2026-07-21", "stargazers_count": 500})
+    paper["review"] = {"score": 82, "topic": "工具集成总线", "tech_paths": [{"dimension": "工具调用", "category": "工具集成总线", "point": "MCP 协议"}], "technical_points": ["MCP 协议"]}
+    project["review"] = {"score": 78, "topic": "长期记忆", "tech_paths": [{"dimension": "记忆与上下文管理", "category": "长期记忆", "point": "RAG / 混合检索"}], "technical_points": ["RAG / 混合检索"]}
     result = build_news_items(conn, [paper, project], run_id="run-1")
     paper_id, project_id = result["item_ids"]
     assert service.list_news(conn, item_type="paper")["total"] == 1
     topics = service.topic_summary(conn)
-    assert {topic["topic"] for topic in topics} <= {"Agent 安全", "漏洞与攻防", "安全工具与代码", "AI 安全研究", "待复核", "规划与意图"}
+    assert {topic["topic"] for topic in topics} == {"工具集成总线", "长期记忆"}
     topic = topics[0]
     assert service.list_news(conn, topic=topic["topic"])["total"] == topic["item_count"]
     assert all(item["item_type"] in {"paper", "project"} for item in service.list_news(conn)["items"])
     assert all(item["payload"]["one_liner"] for item in service.list_news(conn)["items"])
+    assert service.list_news(conn, tech_dimensions=["工具调用"])["total"] == 1
+    assert service.list_news(conn, tech_categories=["长期记忆"])["total"] == 1
+    assert service.list_news(conn, tech_points=["MCP 协议", "RAG / 混合检索"], tech_match="any")["total"] == 2
+    assert service.list_news(conn, tech_points=["MCP 协议", "RAG / 混合检索"], tech_match="all")["total"] == 0
+    counts = service.tech_path_counts(conn)
+    assert counts[("工具调用", "工具集成总线", "MCP 协议")] == 1
     assert service.list_news(conn, query="scanner")["items"][0]["id"] == project_id
     state = service.apply_action(conn, paper_id, "bookmark", operator="tester")
     assert state["reading_state"] == "bookmarked"
