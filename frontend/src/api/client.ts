@@ -51,6 +51,17 @@ export async function fetchGraph(): Promise<{ nodes: unknown[]; edges: unknown[]
   return getJson('/api/threats/graph');
 }
 
+export interface SurfaceStats {
+  total_repos: number;
+  total_cves: number;
+  total_sec: number;
+  per_surface: Record<string, { count: number; cves: number; sec: number }>;
+}
+
+export async function fetchSurfaceStats(): Promise<SurfaceStats> {
+  return getJson('/api/threats/surface-stats');
+}
+
 export interface AiAssociationResult {
   item_id: number;
   status: 'success' | 'cached';

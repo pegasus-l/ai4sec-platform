@@ -1,7 +1,7 @@
 import { useMemo, useState, useEffect, useRef } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { AlertTriangle, Boxes, GitBranch, GitFork, Network, Radar, ShieldCheck, Target, Workflow } from 'lucide-react';
-import { fetchTargets, fetchAssets, fetchTrackingQueue, trackAsset, postJson, getJson, type AiAssociationResult } from '../../api/client';
+import { fetchTargets, fetchAssets, fetchTrackingQueue, fetchSurfaceStats, trackAsset, postJson, getJson, type AiAssociationResult } from '../../api/client';
 import { fetchOpsOverview, fetchOpsSources, fetchOpsQuality, fetchOpsAISummary, fetchOpsPipelines, fetchRuns } from '../../api/opsClient';
 import { Badge, Card, Drawer, EmptyState, MetricCard } from '../../components/ui';
 import type { ThreatAsset, ThreatRepo, ThreatViewModel } from '../../types/threat';
@@ -209,21 +209,25 @@ function ThreatRepos({ repos, filters, setFilters, openRepo, currentPage, totalP
 }
 
 function ThreatSurface({ repos, openRepo, setFilters, setView }: { repos: ThreatRepo[]; openRepo: (repo: ThreatRepo) => void; setFilters: (filters: FilterState) => void; setView: (view: ViewId) => void }) {
+  const { data: stats } = useQuery({ queryKey: ['threats-surface-stats'], queryFn: fetchSurfaceStats, staleTime: 300_000 });
   const surfaces = staticSurfaces;
   const [activeSurfaceId, setActiveSurfaceId] = useState(surfaces[0]?.id ?? 'kernel');
   const selected = surfaces.find(s => s.id === activeSurfaceId) ?? surfaces[0];
   const relatedRepos = repos.filter(r => r.surface === activeSurfaceId).sort((a, b) => b.score - a.score);
-  // Real KPIs computed from actual repos data
-  const totalRepos = repos.length;
-  const totalCves = repos.reduce((sum, r) => sum + r.cve, 0);
-  const totalSec = repos.reduce((sum, r) => sum + r.sec, 0);
-  // Per-surface counts from real data
-  const surfaceCounts = surfaces.map(s => ({
-    ...s,
-    realCount: repos.filter(r => r.surface === s.id).length,
-    realCves: repos.filter(r => r.surface === s.id).reduce((sum, r) => sum + r.cve, 0),
-    realSec: repos.filter(r => r.surface === s.id).reduce((sum, r) => sum + r.sec, 0),
-  }));
+  // Real KPIs from aggregate stats endpoint (not limited to current page of 50)
+  const totalRepos = stats?.total_repos ?? repos.length;
+  const totalCves = stats?.total_cves ?? repos.reduce((sum, r) => sum + r.cve, 0);
+  const totalSec = stats?.total_sec ?? repos.reduce((sum, r) => sum + r.sec, 0);
+  // Per-surface counts from real aggregate stats
+  const surfaceCounts = surfaces.map(s => {
+    const st = stats?.per_surface?.[s.id];
+    return {
+      ...s,
+      realCount: st?.count ?? repos.filter(r => r.surface === s.id).length,
+      realCves: st?.cves ?? repos.filter(r => r.surface === s.id).reduce((sum, r) => sum + r.cve, 0),
+      realSec: st?.sec ?? repos.filter(r => r.surface === s.id).reduce((sum, r) => sum + r.sec, 0),
+    };
+  });
   return <div className="grid">
     <div className="grid cols-3">
       <MetricCard label="相关代码仓" value={totalRepos} hint="从数据库实时统计的代码仓总数。" tone="sky" />

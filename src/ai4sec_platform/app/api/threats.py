@@ -445,3 +445,54 @@ def get_ai_associate(item_id: int, conn: sqlite3.Connection = Depends(get_db)) -
         raise HTTPException(status_code=404, detail="no cached association")
     data = repo.row_to_dict(row)
     return {"item_id": item_id, "status": "cached", "associations": data.get("payload", {})}
+
+
+@router.get("/surface-stats")
+def surface_stats(conn: sqlite3.Connection = Depends(get_db)) -> dict:
+    """Aggregate stats per attack surface — used by attack-surface view KPIs.
+
+    Returns total_repos, total_cves, total_sec, and per_surface breakdown.
+    Queries payload_json via json_extract — one pass over domain_items.
+    """
+    rows = conn.execute(
+        """
+        SELECT
+            COALESCE(
+                json_extract(payload_json, '$.attack_surface.signals.primary_attack_surface'),
+                json_extract(payload_json, '$.attack_surface.primary_attack_surface'),
+                'unknown'
+            ) as surface,
+            COUNT(*) as count,
+            COALESCE(SUM(
+                COALESCE(json_extract(payload_json, '$.vulnerability_signals.cve_count'), 0)
+            ), 0) as cves,
+            COALESCE(SUM(
+                COALESCE(json_extract(payload_json, '$.vulnerability_signals.broad_sec_count'), 0)
+            ), 0) as sec
+        FROM domain_items
+        WHERE domain = ? AND item_type = 'target'
+        GROUP BY surface
+        """,
+        (DOMAIN,),
+    ).fetchall()
+
+    per_surface = {}
+    total_repos = 0
+    total_cves = 0
+    total_sec = 0
+    for row in rows:
+        surface = row[0] or "unknown"
+        count = row[1] or 0
+        cves = row[2] or 0
+        sec = row[3] or 0
+        per_surface[surface] = {"count": count, "cves": cves, "sec": sec}
+        total_repos += count
+        total_cves += cves
+        total_sec += sec
+
+    return {
+        "total_repos": total_repos,
+        "total_cves": total_cves,
+        "total_sec": total_sec,
+        "per_surface": per_surface,
+    }
