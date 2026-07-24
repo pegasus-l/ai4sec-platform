@@ -183,9 +183,13 @@ export function repoFromItem(item: Record<string, unknown>): ThreatRepo {
   const sa = asNumber(payload.sa_count);
   const broad = asNumber(payload.broad_sec_count);
   // AI calibration overrides original rule scores if present
+  // Fallback: pipeline writes to risk_assessment.semantic_review, API writes to ai_calibration
   const aiCal = asRecord(payload.ai_calibration);
-  const calibratedSurface = asString(aiCal.calibrated_surface);
-  const calibratedScore = aiCal.calibrated_score != null ? asNumber(aiCal.calibrated_score) : undefined;
+  const riskAssessment = asRecord(payload.risk_assessment);
+  const semanticReview = asRecord(riskAssessment.semantic_review);
+  const calibratedSurface = asString(aiCal.calibrated_surface || semanticReview.calibrated_surface);
+  const calibratedScore = (aiCal.calibrated_score != null ? asNumber(aiCal.calibrated_score) : undefined)
+    ?? (semanticReview.calibrated_score != null ? asNumber(semanticReview.calibrated_score) : undefined);
   // Use attack_surface score + grade (same scoring system, consistent A/B/C)
   // If AI calibrated score exists, use it instead
   const score = calibratedScore ?? asNumber(attackSurface.score ?? item.score ?? scoring.score);
@@ -229,7 +233,7 @@ export function repoFromItem(item: Record<string, unknown>): ThreatRepo {
     evidence,
     assets: asArray<string>(payload.assets),
     riskAssessment: asRecord(payload.risk_assessment),
-    aiCalibrated: Boolean(calibratedSurface || aiCal.calibrated_attack_surface || aiCal.calibrated_score != null),
+    aiCalibrated: Boolean(calibratedSurface || aiCal.calibrated_attack_surface || semanticReview.attack_surface_calibration || aiCal.calibrated_score != null || semanticReview.calibrated_score != null),
     raw: payload,
   };
 }

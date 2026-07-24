@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any
 
 from ai4sec_platform.db import repositories as repo
@@ -86,13 +87,27 @@ class ReasonThreatRiskStep:
                 confidence=score / 100 if score else None,
                 payload=assessment,
             )
+            # Also write ai_calibration so frontend + summary mode can find calibrated surface
+            ai_cal_payload = {
+                "risk_assessment": assessment,
+                "ai_calibration": {
+                    "calibrated_surface": semantic.get("calibrated_surface", ""),
+                    "calibrated_score": semantic.get("calibrated_score"),
+                    "calibrated_attack_surface": semantic.get("attack_surface_calibration", ""),
+                    "score_assessment": semantic.get("rule_score_assessment", ""),
+                    "hypotheses": semantic.get("hypotheses", []),
+                    "cve_priority": semantic.get("cve_priority", []),
+                    "false_positives": semantic.get("false_positives", []),
+                    "reviewed_at": datetime.now().isoformat(),
+                },
+            }
             repo.update_domain_item(
                 context.conn,
                 item_id=item_id,
                 status=status,
                 score=score,
                 metrics={"risk_reasoned": True, "risk_pipeline_run": context.run_id, "semantic_confidence": semantic.get("confidence")},
-                payload={"risk_assessment": assessment},
+                payload=ai_cal_payload,
             )
             if score >= 80:
                 repo.create_human_queue_item(

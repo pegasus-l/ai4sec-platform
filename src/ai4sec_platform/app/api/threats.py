@@ -72,11 +72,17 @@ def targets(
                     "sa_count": signals.get("sa_count") or payload.get("sa_count") or 0,
                     "broad_sec_count": signals.get("broad_sec_count") or payload.get("broad_sec_count") or 0,
                 }
+                # AI calibration takes priority over rule-based surface
+                ai_cal = payload.get("ai_calibration") or {}
+                risk_assessment = payload.get("risk_assessment") or {}
+                semantic = risk_assessment.get("semantic_review") or {}
+                calibrated_surface = ai_cal.get("calibrated_surface") or semantic.get("calibrated_surface") or ""
+                rule_surface = (attack_surface.get("signals") or {}).get("primary_attack_surface", "") \
+                    if isinstance(attack_surface.get("signals"), dict) else attack_surface.get("primary_attack_surface", "")
                 item["attack_surface_summary"] = {
                     "score": attack_surface.get("score", 0),
                     "grade": attack_surface.get("grade", ""),
-                    "surface": (attack_surface.get("signals") or {}).get("primary_attack_surface", "")
-                        if isinstance(attack_surface.get("signals"), dict) else attack_surface.get("primary_attack_surface", ""),
+                    "surface": calibrated_surface or rule_surface,
                 }
                 item["raw_name"] = raw.get("name", "")
                 item["raw_org"] = raw.get("org", "")
