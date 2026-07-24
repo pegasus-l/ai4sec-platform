@@ -37,10 +37,19 @@ class LiveJsonConnector(JsonFileConnector):
         with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310 - explicit configured source
             return json.loads(resp.read().decode("utf-8"))
 
-    def get_text(self, url: str, *, timeout: int = 30) -> str:
-        req = urllib.request.Request(url, headers={"User-Agent": "ai4sec-platform/0.1", "Accept": "text/html,*/*"})
-        with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310 - explicit configured source
-            return resp.read().decode("utf-8", errors="replace")
+    def get_text(self, url: str, *, timeout: int = 30, retries: int = 3) -> str:
+        import time
+        last_exc: Exception | None = None
+        for attempt in range(retries):
+            try:
+                req = urllib.request.Request(url, headers={"Accept": "text/html,*/*"})
+                with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310
+                    return resp.read().decode("utf-8", errors="replace")
+            except Exception as exc:
+                last_exc = exc
+                if attempt < retries - 1:
+                    time.sleep(5)
+        raise last_exc  # type: ignore[misc]
 
     def request_headers(self) -> dict[str, str]:
         return {"User-Agent": "ai4sec-platform/0.1", "Accept": "application/json"}
