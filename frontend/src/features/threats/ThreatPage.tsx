@@ -121,7 +121,7 @@ export function ThreatPage() {
     </aside>
     <section className="content">
       <section className="content-head">
-        <div className="content-title"><span className="label">{activeTitle}</span><h1>{heroTitle(view)}</h1><p>{heroCopy(view)}</p></div>
+        <div className="content-title"><span className="label">{navGroups.flatMap(g => g.items).find(i => i.id === view)?.title ?? '威胁洞察'}</span><h1>{heroTitle(view)}</h1><p>{heroCopy(view)}</p></div>
         <div className="head-actions">{view === 'repos' ? <FiltersBar filters={filters} setFilters={setFilters} grades={repoGrades} surfaces={repoSurfaces} /> : <><label className="search"><span>⌕</span><input placeholder="搜索标题 / CVE / 仓库 / 资产" onChange={() => {}} /></label><button className="btn primary" onClick={() => location.reload()}>刷新数据</button><a className="btn" href="/api/threats/reports" target="_blank">查看报告 API</a></>}</div>
       </section>
       <div className="content-body view">
