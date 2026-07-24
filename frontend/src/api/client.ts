@@ -6,8 +6,13 @@ export async function getJson<T>(path: string): Promise<T> {
   return response.json() as Promise<T>;
 }
 
-export async function postJson<T>(path: string): Promise<T> {
-  const response = await fetch(path, { method: 'POST', cache: 'no-store' });
+export async function postJson<T>(path: string, body?: unknown): Promise<T> {
+  const response = await fetch(path, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    cache: 'no-store',
+    body: body ? JSON.stringify(body) : undefined,
+  });
   if (!response.ok) {
     throw new Error(`${path}: ${response.status}`);
   }
@@ -32,6 +37,14 @@ export async function fetchTargets(page: number = 1, perPage: number = 50, surfa
 
 export async function fetchTrackingQueue(): Promise<{ items: Record<string, unknown>[] }> {
   return getJson('/api/threats/tracking-queue');
+}
+
+export async function trackTarget(itemId: string | number, priority: string = 'P1', reason: string = ''): Promise<{ status: string; title: string }> {
+  return postJson(`/api/threats/targets/${itemId}/track`, { priority, reason });
+}
+
+export async function trackAsset(itemId: string | number, priority: string = 'P1', reason: string = ''): Promise<{ status: string; title: string }> {
+  return postJson(`/api/threats/assets/${itemId}/track`, { priority, reason });
 }
 
 export async function fetchGraph(): Promise<{ nodes: unknown[]; edges: unknown[] }> {

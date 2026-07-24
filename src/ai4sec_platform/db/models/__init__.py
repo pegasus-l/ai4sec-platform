@@ -202,11 +202,11 @@ CREATE INDEX IF NOT EXISTS idx_cap_repro_created ON capability_repro_tasks(creat
 
 def init_db(conn: sqlite3.Connection) -> None:
     conn.executescript(SCHEMA_SQL)
-    # Migration: add last_synced_at column if not exists
-    try:
-        conn.execute("ALTER TABLE domain_items ADD COLUMN last_synced_at TEXT")
-    except Exception:
-        pass  # Column already exists
+    # Migrations
+    try: conn.execute("ALTER TABLE domain_items ADD COLUMN last_synced_at TEXT")
+    except Exception: pass
+    try: conn.execute("ALTER TABLE human_queue_items ADD COLUMN queue_source TEXT DEFAULT 'pipeline'")
+    except Exception: pass
     conn.commit()
 
 

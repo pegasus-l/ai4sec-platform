@@ -21,7 +21,7 @@ import { severityBadgeClass } from './severityBadge';
 import { Card, MetricCard } from '../../components/ui';
 import { useState, useEffect, useMemo } from 'react';
 import { useQueryClient, useQuery } from '@tanstack/react-query';
-import { postJson, getJson, type AiReviewResult } from '../../api/client';
+import { postJson, getJson, trackTarget, type AiReviewResult } from '../../api/client';
 import { fetchFrontendContract } from '../../api/frontendContract';
 import { adaptThreatContract } from './threatAdapters';
 
@@ -183,6 +183,9 @@ export function RepoDrawerContent({ repo: initialRepo, onViewGraph, onOpenAsset 
           )}
           {/* 5. Action buttons */}
           <div className="split" style={{ marginTop: 10 }}>
+            <button className="btn primary" onClick={() => trackTarget(repo.id).then(() => alert(`已加入跟踪: ${repo.org}/${repo.name}`)).catch(e => alert(`跟踪失败: ${e}`))}>
+              加入跟踪
+            </button>
             <button className="btn primary" onClick={handleOpenVulnList}>
               查看全部漏洞
             </button>

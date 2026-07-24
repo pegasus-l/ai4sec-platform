@@ -1,7 +1,7 @@
 import { useMemo, useState, useEffect, useRef } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { AlertTriangle, Boxes, GitBranch, GitFork, Network, Radar, ShieldCheck, Target, Workflow } from 'lucide-react';
-import { fetchTargets, fetchAssets, postJson, getJson, type AiAssociationResult } from '../../api/client';
+import { fetchTargets, fetchAssets, fetchTrackingQueue, trackAsset, postJson, getJson, type AiAssociationResult } from '../../api/client';
 import { fetchOpsOverview, fetchOpsSources, fetchOpsQuality, fetchOpsAISummary, fetchOpsPipelines, fetchRuns } from '../../api/opsClient';
 import { Badge, Card, Drawer, EmptyState, MetricCard } from '../../components/ui';
 import type { ThreatAsset, ThreatRepo, ThreatViewModel } from '../../types/threat';
@@ -150,7 +150,7 @@ function renderView(view: ViewId, repos: ThreatRepo[], filters: FilterState, set
   if (view === 'ops-tasks') return <OpsTasks />;
   if (view === 'ops-sources') return <OpsSources />;
   if (view === 'ops-quality') return <OpsQuality />;
-  if (view === 'ops-queue') return <ThreatQueue />;
+  if (view === 'ops-queue') return <OpsQuality />;
   if (view === 'ops-ai-summary') return <OpsAISummary openRepo={openRepo} openAsset={openAsset} />;
   return <EmptyState title="未知页面" />;
 }
@@ -181,7 +181,7 @@ function ThreatToday({ repos, openRepo, setView, setFilters }: { repos: ThreatRe
         <h3>{item.repo.org}/{item.repo.name}</h3>
         <p>{item.why}</p>
         <div className="split"><span className={`badge ${item.repo.grade || 'C'}`}>Grade {item.repo.grade}</span><span className="badge">{item.repo.surface}</span><span className="badge">score {Math.round(item.repo.score)}</span></div>
-        <div className="split"><button className="btn primary" onClick={(event) => { event.stopPropagation(); openRepo(item.repo); }}>查看详情</button><button className="btn" onClick={(event) => event.stopPropagation()}>加入跟踪</button></div>
+        <div className="split"><button className="btn primary" onClick={(event) => { event.stopPropagation(); openRepo(item.repo); }}>查看详情</button><button className="btn" onClick={(event) => { event.stopPropagation(); import('../../api/client').then(m => m.trackTarget(item.repo.id).then(() => alert(`已加入跟踪: ${item.repo.org}/${item.repo.name}`)).catch(e => alert(`跟踪失败: ${e}`))); }}>加入跟踪</button></div>
       </div>)}
     </div>
   </div>;
@@ -363,7 +363,8 @@ function ImageVersionTags({ tags }: { tags: NonNullable<ThreatAsset['versionTags
 }
 
 function ThreatQueue() {
-  const { data: queueData } = useQuery({ queryKey: ['threats-queue'], queryFn: () => getJson<{ items: Record<string, unknown>[] }>('/api/threats/tracking-queue') });
+  const queryClient = useQueryClient();
+  const { data: queueData } = useQuery({ queryKey: ['threats-queue'], queryFn: fetchTrackingQueue });
   const [items, setItems] = useState<Record<string, unknown>[]>(queueData?.items ?? []);
   useEffect(() => { if (queueData?.items) setItems(queueData.items); }, [queueData]);
   const [selectedQueueItem, setSelectedQueueItem] = useState<Record<string, unknown> | null>(null);
@@ -451,7 +452,7 @@ function AssetCard({ asset, onClick }: { asset: ThreatAsset; onClick: () => void
     ) : (
       <div className="asset-meta"><div><b>{asset.model || '-'}</b><span>型号/名称</span></div><div><b>{asset.version || '-'}</b><span>版本</span></div><div><b>{asset.count || '-'}</b><span>数量</span></div><div><b>{asset.latest || '-'}</b><span>更新</span></div></div>
     )}
-    <div className="split"><button className="btn primary" onClick={(e) => { e.stopPropagation(); onClick(); }}>资产详情</button><button className="btn" onClick={(e) => e.stopPropagation()}>加入跟踪</button></div>
+    <div className="split"><button className="btn primary" onClick={(e) => { e.stopPropagation(); onClick(); }}>资产详情</button><button className="btn" onClick={(e) => { e.stopPropagation(); trackAsset(asset.id).then(() => alert(`已加入跟踪: ${asset.title}`)).catch(err => alert(`跟踪失败: ${err}`)); }}>加入跟踪</button></div>
   </div>;
 }
 
@@ -549,7 +550,7 @@ function AssetDrawer({ asset, onClose, openRepo }: { asset: ThreatAsset | null; 
         <button className="btn primary" onClick={handleAssociate}>开始 AI 关联分析</button>
       )}
     </div>
-    <div className="detail-card card"><h3>建议动作</h3><div className="split"><button className="btn primary">加入跟踪</button><button className="btn">加入解包</button><button className="btn">加入 SBOM</button><button className="btn warn">标记关联待复核</button></div></div>
+    <div className="detail-card card"><h3>建议动作</h3><div className="split"><button className="btn primary" onClick={() => trackAsset(asset.id).then(() => alert(`已加入跟踪: ${asset.title}`)).catch(e => alert(`跟踪失败: ${e}`))}>加入跟踪</button><button className="btn">加入解包</button><button className="btn">加入 SBOM</button><button className="btn warn">标记关联待复核</button></div></div>
   </>}</Drawer>;
 }
 

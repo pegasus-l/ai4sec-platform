@@ -93,7 +93,48 @@ def target_detail(item_id: int, conn: sqlite3.Connection = Depends(get_db)) -> d
 
 @router.get("/tracking-queue")
 def tracking_queue(conn: sqlite3.Connection = Depends(get_db)) -> dict:
-    return operations.human_queue(conn, DOMAIN)
+    """User-initiated tracking items only (queue_source='user')."""
+    rows = conn.execute(
+        "SELECT * FROM human_queue_items WHERE domain=? AND (queue_source='user' OR queue_source IS NULL AND queue_type LIKE 'user%') ORDER BY id DESC",
+        (DOMAIN,),
+    ).fetchall()
+    items = [repo.row_to_dict(row) for row in rows]
+    return {"items": items}
+
+
+class TrackRequest(BaseModel):
+    priority: str = "P1"
+    reason: str = ""
+
+
+@router.post("/targets/{item_id}/track")
+def track_target(item_id: int, request: TrackRequest, conn: sqlite3.Connection = Depends(get_db)) -> dict:
+    """Add a target to the user's tracking queue."""
+    item = conn.execute("SELECT title FROM domain_items WHERE id=? AND domain=?", (item_id, DOMAIN)).fetchone()
+    if not item:
+        raise HTTPException(status_code=404, detail="target not found")
+    now = datetime.now().isoformat()
+    conn.execute(
+        "INSERT INTO human_queue_items (domain, item_id, queue_type, status, priority, reason, assignee, payload_json, created_at, updated_at, queue_source) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (DOMAIN, item_id, "user_track", "待研判", request.priority, request.reason, "", "{}", now, now, "user"),
+    )
+    conn.commit()
+    return {"status": "tracked", "item_id": item_id, "title": item[0], "priority": request.priority, "reason": request.reason}
+
+
+@router.post("/assets/{item_id}/track")
+def track_asset(item_id: int, request: TrackRequest, conn: sqlite3.Connection = Depends(get_db)) -> dict:
+    """Add an asset to the user's tracking queue."""
+    item = conn.execute("SELECT title FROM domain_items WHERE id=? AND domain=?", (item_id, DOMAIN)).fetchone()
+    if not item:
+        raise HTTPException(status_code=404, detail="asset not found")
+    now = datetime.now().isoformat()
+    conn.execute(
+        "INSERT INTO human_queue_items (domain, item_id, queue_type, status, priority, reason, assignee, payload_json, created_at, updated_at, queue_source) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (DOMAIN, item_id, "user_track", "待研判", request.priority, request.reason, "", "{}", now, now, "user"),
+    )
+    conn.commit()
+    return {"status": "tracked", "item_id": item_id, "title": item[0], "priority": request.priority, "reason": request.reason}
 
 
 @router.get("/audits")
