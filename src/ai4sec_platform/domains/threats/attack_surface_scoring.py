@@ -6,17 +6,17 @@ from typing import Any
 from ai4sec_platform.schemas.scoring import ScoreResult
 
 INPUT_SURFACE_HINTS = [
-    (r"网络|net_|_net_|http|tcp|udp|websocket|grpc|quic|ssl|tls|openssl|boringssl", 25, "network protocol"),
-    (r"蓝牙|bluetooth|wifi|wlan|nearlink|nfc", 22, "wireless"),
-    (r"usb|hid|midi|uart|i2c|spi|gpio|外设", 18, "peripheral"),
-    (r"codec|parser|解码|解析|json|xml|yaml|protobuf|cbor|avro|压缩|zip|tar|7z|rar", 22, "parser/codec"),
-    (r"camera|v4l2|video|audio|h264|h265|av1|aac|mp4|mp3|mpeg|mms", 22, "media"),
-    (r"chromium|webkit|webview|cef|skia|v8|blink", 20, "browser engine"),
-    (r"sql|sqlite|mysql|opengauss|postgres", 18, "database"),
-    (r"shell|cmd|exec|fork|execve|权限|permission|access", 18, "exec/permission"),
-    (r"驱动|driver|hal|hdf", 18, "driver"),
-    (r"内核|kernel|syscalls?|调度|进程|虚拟内存|vm_|mm_|进程|signal", 22, "kernel"),
-    (r"容器|sandbox|沙箱|jail", 20, "sandbox"),
+    (r"网络|net_|_net_|http|tcp|udp|websocket|grpc|quic|ssl|tls|openssl|boringssl|socket|rpc|rest|gateway|proxy|代理|nginx|haproxy|消息队列|kafka|mqtt|amqp|redfish|snmp|webhook|api网关|负载均衡", 25, "network protocol"),
+    (r"蓝牙|bluetooth|wifi|wlan|nearlink|nfc|rfid|zigbee|lora|蜂窝|cellular|lte|5g|4g|基带|baseband", 22, "wireless"),
+    (r"usb|hid|midi|uart|i2c|spi|gpio|外设|pci|pcie|sata|scsi|sdio|can总线|canbus", 18, "peripheral"),
+    (r"codec|parser|解码|解析|json|xml|yaml|protobuf|cbor|avro|压缩|zip|tar|7z|rar|序列化|serialize|deserialize|反序列化|marshal|mindspore|tensorflow|pytorch|paddle|onnx|caffe|mindir|inference|推理|训练|training|model|深度学习|机器学习|neural|transformer|llm|大模型|agent.*core|agent.*runtime|deepsearch|nlp|tokenizer|embedding|attention", 22, "parser/codec"),
+    (r"camera|v4l2|video|audio|h264|h265|av1|aac|mp4|mp3|mpeg|mms|图像|image|渲染|render|opengl|vulkan|cuda|图形|graphic|display|drm|gpu|npu|视觉|cv|image.*process", 22, "media"),
+    (r"chromium|webkit|webview|cef|skia|v8|blink|浏览器|browser|html.*dom|css.*engine", 20, "browser engine"),
+    (r"sql|sqlite|mysql|opengauss|postgres|redis|mongo|cassandra|elasticsearch|数据库|database|orm|mybatis|jdbc|odbc|索引|index|事务|transaction|集群|cluster", 18, "database"),
+    (r"shell|cmd|exec|fork|execve|权限|permission|access|selinux|apparmor|capability|seccomp|审计|audit|认证|auth|鉴权|rbac|acl|访问控制|identity|token|jwt|oauth|sso|security.*adapter|runtime|运行时|sandbox|安全框架", 18, "exec/permission"),
+    (r"驱动|driver|hal|hdf|固件|firmware|bootloader|bios|uefi|bmc|ipmi|硬件|hardware|芯片|chip|寄存器|register|dma|电源管理|设备树|device.tree|cann|ascend|npu|accelerator|加速器|redfish|snmp|ipmi", 18, "driver"),
+    (r"内核|kernel|syscalls?|调度|进程|虚拟内存|vm_|mm_|signal|文件系统|filesystem|ext[234]|fat|ntfs|page|swap|中断|interrupt|系统调用|syscall|内存管理|slab|buddy|页表|page.table|调度器|scheduler|cgroup", 22, "kernel"),
+    (r"容器|sandbox|沙箱|jail|docker|podman|runc|containerd|namespace|隔离|isolation|虚拟化|virtual|kvm|qemu|hypervisor", 20, "sandbox"),
 ]
 HISTORICAL_CVE = [
     r"^chromium", r"^webkit", r"^sqlite", r"^openssl", r"^boringssl",
