@@ -10,6 +10,7 @@
 
 import { useMemo, useState, useCallback, useEffect, useRef } from 'react';
 import ReactFlow, { Background, Controls, MiniMap, type Node, type ReactFlowInstance } from 'reactflow';
+import 'reactflow/dist/style.css';
 import dagre from '@dagrejs/dagre';
 import { graphNodeTypes } from './GraphNodeTypes';
 import { buildDualTreeGraph } from './buildDualTreeGraph';
