@@ -5,7 +5,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 
-NewsItemType = Literal["paper", "project", "article", "tool", "report"]
+NewsItemType = Literal["paper", "project"]
 ReadingState = Literal["unread", "read", "bookmarked", "later", "ignored"]
 
 
@@ -28,6 +28,9 @@ class NormalizedNewsItem(BaseModel):
     forks: int = 0
     language: str = ""
     discovered_from: list[str] = Field(default_factory=list)
+    related_paper_ids: list[str] = Field(default_factory=list)
+    related_project_names: list[str] = Field(default_factory=list)
+    linked_item_keys: list[str] = Field(default_factory=list)
     raw: dict[str, Any] = Field(default_factory=dict)
 
 

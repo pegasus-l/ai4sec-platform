@@ -8,15 +8,17 @@ from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 from ai4sec_platform.domains.news.schemas import NormalizedNewsItem
 
 
-def normalize_raw_item(source: str, item: dict[str, Any]) -> dict[str, Any]:
+def normalize_raw_item(source: str, item: dict[str, Any]) -> dict[str, Any] | None:
     if source == "arxiv":
         normalized = _normalize_arxiv(source, item)
     elif source == "github":
         normalized = _normalize_github(source, item)
     elif source == "rss":
-        normalized = _normalize_rss(source, item)
+        normalized = _normalize_reference(source, item)
     else:
         normalized = _normalize_reference(source, item)
+    if normalized.get("source_type") not in {"paper", "project"}:
+        return None
     return NormalizedNewsItem.model_validate(normalized).model_dump()
 
 
@@ -38,7 +40,8 @@ def _normalize_arxiv(source: str, item: dict[str, Any]) -> dict[str, Any]:
         "summary": _clean_text(item.get("summary") or item.get("abstract")),
         "authors": [author for author in authors if author],
         "topics": _string_list(categories),
-        "code_url": item.get("code_url") or item.get("code") or "",
+        "code_url": item.get("code_url") or item.get("code") or next(iter(item.get("code_urls") or item.get("github_repos") or []), ""),
+        "related_project_names": [_github_full_name(value) for value in item.get("code_urls") or item.get("github_repos") or [] if _github_full_name(value)],
         "external_id": arxiv_id,
         "discovered_from": [source],
         "raw": item,
@@ -68,6 +71,7 @@ def _normalize_github(source: str, item: dict[str, Any]) -> dict[str, Any]:
         "stars": _int(item.get("stargazers_count") or item.get("stars")),
         "forks": _int(item.get("forks_count") or item.get("forks")),
         "language": str(item.get("language") or ""),
+        "related_paper_ids": [value for value in (_arxiv_id(str(item_id)) for item_id in item.get("arxiv_ids") or []) if value],
         "discovered_from": [source],
         "raw": item,
     }
@@ -99,8 +103,8 @@ def _normalize_reference(source: str, item: dict[str, Any]) -> dict[str, Any]:
     source_type = "project" if repo_name else "paper" if arxiv_id or item.get("paper_url") else str(item.get("source_type") or "article")
     if source_type == "repo":
         source_type = "project"
-    if source_type not in {"paper", "project", "article", "tool", "report"}:
-        source_type = "article"
+    if source_type not in {"paper", "project"}:
+        source_type = ""
     if arxiv_id:
         key = f"paper:arxiv:{arxiv_id}"
     elif repo_name:

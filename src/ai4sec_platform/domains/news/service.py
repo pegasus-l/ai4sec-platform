@@ -130,9 +130,10 @@ def topic_summary(conn: sqlite3.Connection, *, limit: int = 30) -> list[dict[str
     rows = conn.execute("SELECT id, primary_date, tags_json, payload_json FROM domain_items WHERE domain = 'news'").fetchall()
     for row in rows:
         payload = repo.loads(row["payload_json"], {})
-        topics = list(dict.fromkeys([*(payload.get("topics") or []), *(repo.loads(row["tags_json"], []) or [])]))
+        classification = payload.get("classification") or {}
+        topics = [payload.get("display_topic") or classification.get("category") or "待复核"]
         for topic in topics:
-            if not topic or topic in {"paper", "project", "article", "tool", "report"}:
+            if not topic:
                 continue
             counter[str(topic)] += 1
             item_map[str(topic)].append(int(row["id"]))
@@ -184,9 +185,20 @@ def _serialize_row(row: sqlite3.Row) -> dict[str, Any]:
     item = repo.row_to_dict(row)
     payload = item.get("payload") or {}
     item["item_type"] = "project" if item.get("item_type") == "repo" else item.get("item_type")
+    classification = payload.get("classification") or {}
+    display_topic = payload.get("display_topic") or classification.get("category") or "待复核"
+    payload["display_theme"] = payload.get("display_theme") or item.get("title", "")
+    payload["display_topic"] = display_topic
+    payload["one_liner"] = payload.get("one_liner") or _one_liner(item["item_type"], display_topic, item.get("title", ""))
+    item["payload"] = payload
     item["highlight"] = payload.get("highlight") or item.get("summary", "")[:180]
     item["technical_points"] = payload.get("technical_points") or payload.get("topics") or []
     item["paper"] = {"arxiv_id": payload.get("external_id", ""), "authors": payload.get("authors", []), "abstract": payload.get("summary", ""), "code_url": payload.get("code_url", "")} if item["item_type"] == "paper" else None
     item["project"] = {"repo_full_name": payload.get("repo_full_name", ""), "stars": payload.get("stars", 0), "forks": payload.get("forks", 0), "language": payload.get("language", ""), "updated_at": payload.get("updated_at", ""), "linked_paper_ids": payload.get("linked_paper_ids", [])} if item["item_type"] == "project" else None
     item["user_state"] = {"reading_state": item.pop("reading_state", "unread"), "feedback_value": item.pop("feedback_value", ""), "feedback_reason": item.pop("feedback_reason", "")}
     return item
+
+
+def _one_liner(item_type: str, topic: str, title: str) -> str:
+    subject = "前沿论文" if item_type == "paper" else "开源项目"
+    return f"{subject}聚焦「{topic}」：{' '.join(title.split())[:72]}"

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from ai4sec_platform.pipelines.base import PipelineDefinition
-from ai4sec_platform.pipelines.steps.news import AuditNewsStep, BuildNewsDailyReportStep, BuildNewsItemsStep, CollectNewsSourcesStep, NormalizeNewsStep
+from ai4sec_platform.pipelines.steps.news import AuditNewsStep, BuildNewsDailyReportStep, BuildNewsItemsStep, CollectNewsSourcesStep, DeduplicateNewsStep, EnrichNewsCandidatesStep, ExtractNewsReferencesStep, GateNewsCandidatesStep, NormalizeNewsStep, ResolveNewsLinksStep
 
 
 def news_pipeline(name: str, mode: str) -> PipelineDefinition:
@@ -10,7 +10,12 @@ def news_pipeline(name: str, mode: str) -> PipelineDefinition:
         domain="news",
         steps=[
             CollectNewsSourcesStep(),
+            ExtractNewsReferencesStep(),
             NormalizeNewsStep(),
+            DeduplicateNewsStep(),
+            ResolveNewsLinksStep(),
+            GateNewsCandidatesStep(),
+            EnrichNewsCandidatesStep(),
             BuildNewsItemsStep(),
             BuildNewsDailyReportStep(),
             AuditNewsStep(),

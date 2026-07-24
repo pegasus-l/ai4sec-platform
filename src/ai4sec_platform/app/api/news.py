@@ -7,6 +7,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from ai4sec_platform.app.dependencies import get_db
 from ai4sec_platform.domains.news import service
 from ai4sec_platform.domains.news.schemas import NewsActionRequest
+from ai4sec_platform.domains.news.tech_map import AgentTechMap
+from ai4sec_platform.core.config import PROJECT_ROOT
 from ai4sec_platform.services import operations
 
 router = APIRouter(prefix="/news", tags=["news"])
@@ -56,6 +58,12 @@ def topic_detail(topic: str, operator: str = "operator", conn: sqlite3.Connectio
 @router.get("/sources")
 def sources(conn: sqlite3.Connection = Depends(get_db)) -> dict:
     return {"domain": "news", "items": service.source_summary(conn)}
+
+
+@router.get("/tech-map")
+def tech_map() -> dict:
+    taxonomy = AgentTechMap.load(PROJECT_ROOT)
+    return {"domain": "news", "name": taxonomy.name, "version": taxonomy.version, "items": taxonomy.catalog()}
 
 
 @router.post("/items/{item_id}/read")

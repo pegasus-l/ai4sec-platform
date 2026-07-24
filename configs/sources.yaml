@@ -3,6 +3,9 @@ sources:
     - arxiv
     - github
     - rss
+    - x
+    - asis
+    - awesome
   capabilities:
     - github
     - manual_import

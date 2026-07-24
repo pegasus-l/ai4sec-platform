@@ -113,7 +113,7 @@ def test_raw_pipeline_builds_from_source_raw_files() -> None:
     assert data["status"] == "success"
     assert data["pipeline_name"] == "news.legacy_raw_pipeline"
     step_names = [step["name"] for step in data["summary"]["steps"]]
-    assert step_names == ["collect_news_sources", "normalize_news_items", "build_news_items", "build_news_daily_report", "audit_news_quality"]
+    assert step_names == ["collect_news_sources", "extract_news_references", "normalize_news_items", "deduplicate_news_candidates", "resolve_news_candidate_links", "gate_news_candidates_with_tech_map", "enrich_news_candidates_with_model", "build_news_items", "build_news_daily_report", "audit_news_quality"]
 
     detail = client.get(f"/api/runs/{data['run_id']}").json()
     artifact_types = {item["artifact_type"] for item in detail["artifacts"]}

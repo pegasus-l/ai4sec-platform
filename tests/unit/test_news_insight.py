@@ -3,9 +3,14 @@ from __future__ import annotations
 import sqlite3
 
 from ai4sec_platform.db.models import init_db
+from ai4sec_platform.core.config import PROJECT_ROOT
 from ai4sec_platform.domains.news.builders import build_news_items
 from ai4sec_platform.domains.news.dedupe import dedupe_normalized_items
 from ai4sec_platform.domains.news.normalizers import normalize_raw_item
+from ai4sec_platform.domains.news.references import extract_reference_items
+from ai4sec_platform.domains.news.tech_map import AgentTechMap
+from ai4sec_platform.domains.news.links import resolve_candidate_links
+from ai4sec_platform.domains.news.reviewer import _normalize_deep_review, _normalize_gate, _percentage
 from ai4sec_platform.domains.news import service
 
 
@@ -25,6 +30,30 @@ def test_normalizers_produce_stable_paper_and_project_keys() -> None:
     assert project["item_key"] == "project:github:acme/security-agent"
     assert project["source_type"] == "project"
     assert project["stars"] == 42
+    assert normalize_raw_item("rss", {"title": "ordinary article", "url": "https://example.com/article"}) is None
+
+
+def test_tech_map_contract_and_discovery_reference_extraction() -> None:
+    tech_map = AgentTechMap.load(PROJECT_ROOT)
+    assert len(tech_map.paths) == 72
+    valid = tech_map.validate_paths([
+        {"dimension": "工具调用", "category": "工具集成总线", "point": "MCP 协议"},
+        {"dimension": "工具调用", "category": "虚构分类", "point": "虚构技术"},
+    ])
+    assert valid == [{"dimension": "工具调用", "category": "工具集成总线", "point": "MCP 协议"}]
+    references = extract_reference_items("rss", {"title": "weekly", "summary": "See https://arxiv.org/abs/2501.01234 and https://github.com/acme/scanner"})
+    assert {item["source_type"] for item in references} == {"paper", "project"}
+    gate = _normalize_gate({"decision": "pass", "map_relevance_score": 88, "potential_value_score": 72, "provisional_tech_paths": valid}, {"title": "MCP"}, tech_map)
+    assert gate["decision"] == "pass"
+    review = _normalize_deep_review({"score_breakdown": {"map_relevance": 90, "novelty": 80, "technical_depth": 80, "engineering_value": 70, "reproducibility": 70, "influence": 60, "freshness": 80}, "tech_paths": valid}, {"title": "MCP", "source_type": "paper", "gate_review": gate}, tech_map)
+    assert review["decision"] == "selected"
+    assert review["relevance_score"] == 90
+    assert review["score"] == 80.0
+    assert _percentage(8) == 8
+    assert _percentage(0.7) == 0.7
+    assert _percentage(101) == 0
+    repeated = tech_map.validate_paths(tech_map.catalog()[:8])
+    assert len(repeated) == 8
 
 
 def test_dedupe_merges_sources_and_complementary_fields() -> None:
@@ -36,6 +65,15 @@ def test_dedupe_merges_sources_and_complementary_fields() -> None:
     assert items[0]["summary"] == "security paper"
     assert items[0]["authors"] == ["Ada", "Bob"]
     assert items[0]["discovered_from"] == ["arxiv", "rss"]
+
+
+def test_explicit_paper_project_links_are_bidirectional() -> None:
+    paper = normalize_raw_item("arxiv", {"id": "2501.01234", "title": "Agent Planning", "summary": "agent planning", "code_urls": ["https://github.com/acme/agent"]})
+    project = normalize_raw_item("github", {"html_url": "https://github.com/acme/agent", "full_name": "acme/agent", "description": "agent planning", "arxiv_ids": ["2501.01234"]})
+    resolved, count = resolve_candidate_links([paper, project])
+    assert count == 2
+    assert resolved[0]["linked_item_keys"] == ["project:github:acme/agent"]
+    assert resolved[1]["linked_item_keys"] == ["paper:arxiv:2501.01234"]
 
 
 def test_builder_is_idempotent_across_runs() -> None:
@@ -57,6 +95,12 @@ def test_news_filters_actions_reports_and_promotion() -> None:
     result = build_news_items(conn, [paper, project], run_id="run-1")
     paper_id, project_id = result["item_ids"]
     assert service.list_news(conn, item_type="paper")["total"] == 1
+    topics = service.topic_summary(conn)
+    assert {topic["topic"] for topic in topics} <= {"Agent 安全", "漏洞与攻防", "安全工具与代码", "AI 安全研究", "待复核", "规划与意图"}
+    topic = topics[0]
+    assert service.list_news(conn, topic=topic["topic"])["total"] == topic["item_count"]
+    assert all(item["item_type"] in {"paper", "project"} for item in service.list_news(conn)["items"])
+    assert all(item["payload"]["one_liner"] for item in service.list_news(conn)["items"])
     assert service.list_news(conn, query="scanner")["items"][0]["id"] == project_id
     state = service.apply_action(conn, paper_id, "bookmark", operator="tester")
     assert state["reading_state"] == "bookmarked"

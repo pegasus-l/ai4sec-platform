@@ -28,6 +28,10 @@ export function fetchNews(view: NewsView, filters: NewsFilters): Promise<NewsRes
   return getJson<NewsResponse>(newsUrl(view, filters));
 }
 
+export function fetchReport(reportDate: string): Promise<Report> {
+  return getJson<Report>(`/api/news/reports/${encodeURIComponent(reportDate)}`);
+}
+
 export function postNewsAction(itemId: number, action: string): Promise<Record<string, unknown>> {
   return postJson(`/api/news/items/${itemId}/${action}`);
 }

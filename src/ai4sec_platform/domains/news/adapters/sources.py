@@ -21,9 +21,10 @@ def collect_news_sources(settings: Settings, params: dict[str, Any]) -> list[dic
         return [{**record, "mode": mode, "errors": []} for record in load_raw_sources(raw_dir, date)]
     config = _load_config(settings.project_root)
     registry = SourceRegistry()
-    requested = set(params["sources"]) if "sources" in params else {"arxiv", "github", "rss"}
+    source_names = ["arxiv", "github", "rss", "x", "asis", "awesome"]
+    requested = set(params["sources"]) if "sources" in params else set(source_names)
     records: list[dict[str, Any]] = []
-    for source in ["arxiv", "github", "rss"]:
+    for source in source_names:
         source_config = config.get("sources", {}).get(source, {})
         if source not in requested or not source_config.get("enabled", True):
             continue

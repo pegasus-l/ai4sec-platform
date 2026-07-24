@@ -1,5 +1,5 @@
 export type NewsView = 'today' | 'all' | 'reports' | 'topics';
-export type NewsType = 'paper' | 'project' | 'article' | 'tool' | 'report';
+export type NewsType = 'paper' | 'project';
 
 export interface NewsItem {
   id: number;
@@ -43,6 +43,7 @@ export interface Report {
   highlights: number[];
   topic_sections: Array<{ topic: string; summary: string; item_ids: number[] }>;
   metrics: Record<string, number>;
+  items?: NewsItem[];
 }
 
 export interface TopicSummary {

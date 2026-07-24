@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import json
 import os
 import urllib.parse
@@ -30,6 +31,17 @@ class GithubConnector(NewsLiveConnector):
         try:
             raw_text = self.get_bytes(url, timeout=int(request.params.get("timeout_seconds") or 30), headers=headers).decode("utf-8")
             raw = json.loads(raw_text)
-            return SourceFetchResult(source_name=request.source_name, connector_name=self.connector_name, items=[item for item in raw.get("items", []) if isinstance(item, dict)], raw_text=raw_text, metadata={"url": url, "query": query, "total_count": raw.get("total_count", 0)})
+            items = [item for item in raw.get("items", []) if isinstance(item, dict)]
+            readme_limit = min(len(items), int(request.config.get("readme_limit") or 0))
+            for item in items[:readme_limit]:
+                full_name = item.get("full_name")
+                if not full_name:
+                    continue
+                try:
+                    readme_raw = json.loads(self.get_bytes(f"https://api.github.com/repos/{full_name}/readme", timeout=int(request.params.get("timeout_seconds") or 30), headers=headers).decode("utf-8"))
+                    item["readme_text"] = base64.b64decode(readme_raw.get("content") or "").decode("utf-8", errors="replace")[:30000]
+                except Exception:
+                    item["readme_text"] = ""
+            return SourceFetchResult(source_name=request.source_name, connector_name=self.connector_name, items=items, raw_text=raw_text, metadata={"url": url, "query": query, "total_count": raw.get("total_count", 0), "readmes_loaded": sum(bool(item.get("readme_text")) for item in items)})
         except Exception as exc:
             return SourceFetchResult(source_name=request.source_name, connector_name=self.connector_name, metadata={"url": url, "query": query}, errors=[str(exc)])

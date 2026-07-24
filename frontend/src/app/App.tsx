@@ -1,10 +1,14 @@
 import { Shell } from '../layouts/Shell';
 import { ThreatPage } from '../features/threats/ThreatPage';
 import { NewsPage } from '../features/news/NewsPage';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 
 export function App() {
   const [domain, setDomain] = useState(() => new URLSearchParams(window.location.search).get('domain') || 'news');
+  useEffect(() => {
+    document.body.classList.toggle('news-document', domain === 'news');
+    return () => document.body.classList.remove('news-document');
+  }, [domain]);
   const changeDomain = (next: string) => {
     setDomain(next);
     const url = new URL(window.location.href);

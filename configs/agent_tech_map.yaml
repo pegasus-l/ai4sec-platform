@@ -1,0 +1,67 @@
+version: "2026-Q2-v3"
+name: AI Agent 技术全景图
+dimensions:
+  - name: 推理与规划
+    categories:
+      - name: 规划与意图
+        points: [任务分解与编排, 搜索策略规划]
+      - name: 推理模式
+        points: [并行推理与发散收敛, 链式推理（CoT）, Tree-of-Thought]
+      - name: 反思与纠正
+        points: [Reflexion 自评分, 错误归因与回溯, 过程纠偏审查]
+  - name: 记忆与上下文管理
+    categories:
+      - name: 短期记忆
+        points: [上下文窗口管理, 阈值触发压缩, Token 预算追踪]
+      - name: 长期记忆
+        points: [跨 session 持久化, 检索优先架构, 知识图谱, RAG / 混合检索]
+      - name: 情景记忆
+        points: [原始轨迹保留, 事件级存储与回放, 查询时检索（六层管道）]
+      - name: 环境感知
+        points: [代码库结构建模, 运行时状态观测]
+  - name: 工具调用
+    categories:
+      - name: 工具集成总线
+        points: [MCP 协议, Function Call, Code Interpreter]
+      - name: 工具选择与执行
+        points: [语义匹配选择, 结构化输出约束, 结果摘要回灌]
+      - name: 工具编排
+        points: [工具链配置进化, 并行工具执行, 工具创建与合成]
+  - name: 技能管理
+    categories:
+      - name: 技能库构建
+        points: [经验自提炼, 人类反馈学习]
+      - name: 技能检索与选择
+        points: [语义召回, 效用排序, Skill 索引]
+      - name: 技能优化与策展
+        points: [边界探测 + GRPO 优化, RL 训练 Curator, 技能合并/淘汰/元技能提炼]
+  - name: 自进化
+    categories:
+      - name: 框架级进化
+        points: [组件级可编辑表示, 合约驱动组件淘汰, 闭环迭代 + 可回滚]
+      - name: Prompt 自动优化
+        points: [Prompt 自动改写, DSPy / TextGrad, 无梯度进化]
+      - name: 经验蒸馏与沉淀
+        points: [轨迹→分层证据语料, 经验→共享 notes/skills, 任务流→策展策略]
+      - name: 能力内化
+        points: [深度思考模式内化, 推理深度/宽度 RL 扩展, 自进化 LLM]
+  - name: 多Agent协作
+    categories:
+      - name: 调度与执行
+        points: [Manager 进程调度, 心跳干预机制, 独立 worktree 隔离]
+      - name: 知识共享
+        points: [共享持久化知识库, Leaderboard 排名, 成功策略传播]
+      - name: 对抗与共识
+        points: [多角色对抗审查, 反证质疑机制, 独立裁决]
+  - name: 验证与评估
+    categories:
+      - name: 自验证
+        points: [自动测试生成, 输出反证验证, 新旧版本对比]
+      - name: 对抗式验证
+        points: [Hunter-Skeptic-Referee, 三级审查过滤, 误报压制]
+      - name: 形式化验证
+        points: [SMT 求解, 资产状态模拟, 双阶段验证]
+      - name: 可观测性
+        points: [合约驱动决策审计, 组件/经验/决策三层归因, 进化效果追踪]
+      - name: 安全护栏
+        points: [危险操作拦截, 权限分级控制]
