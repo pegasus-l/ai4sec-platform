@@ -3,6 +3,7 @@ from __future__ import annotations
 import sqlite3
 from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel
 
 from ai4sec_platform.app.dependencies import get_db
 from ai4sec_platform.domains.threats import service as threat_service
