@@ -29,7 +29,7 @@ def extract_page_content(page: dict[str, Any], *, use_model: bool = True) -> dic
                         "content_length": len(body),
                         "published_at": result.get("published_date") or page.get("published_at") or "",
                         "content_quality": result.get("content_quality") or _quality(body),
-                        "content_extraction": {"provider": response.get("provider"), "model": response.get("model"), "model_used": True, "status": "success", "reason": result.get("reason", "")},
+                        "content_extraction": {"provider": response.get("provider"), "model": response.get("model"), "model_used": True, "status": "success", "prompt": CONTENT_EXTRACT_PROMPT, "llm_output": result, "reason": result.get("reason", "")},
                     }
         except Exception as exc:  # pragma: no cover - external model dependent
             page = {**page, "content_extraction_error": str(exc)[:300]}

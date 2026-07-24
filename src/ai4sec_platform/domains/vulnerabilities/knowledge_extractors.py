@@ -31,7 +31,7 @@ def extract_knowledge(item: dict[str, Any]) -> dict[str, Any]:
             response = provider.complete_json(prompt=KNOWLEDGE_EXTRACT_PROMPT, payload=_knowledge_payload(item))
             result = response.get("result") or response.get("parsed") or {}
             if isinstance(result, dict) and result:
-                return {"provider": response.get("provider"), "status": "success", "agent": "knowledge_extract", "model": response.get("model"), "result": {**result, "model_used": True}}
+                return {"provider": response.get("provider"), "status": "success", "agent": "knowledge_extract", "model": response.get("model"), "prompt": KNOWLEDGE_EXTRACT_PROMPT, "result": {**result, "model_used": True}}
     except Exception as exc:  # pragma: no cover - external model dependent
         local = LocalRuleProvider().complete_json(prompt="漏洞知识抽取", payload=item)
         local["result"] = {**(local.get("result") or {}), "model_used": False, "llm_error": str(exc)[:300]}
