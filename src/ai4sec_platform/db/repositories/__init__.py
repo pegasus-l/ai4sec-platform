@@ -269,6 +269,12 @@ def update_domain_item(
     score: float | None = None,
     metrics: dict[str, Any] | None = None,
     payload: dict[str, Any] | None = None,
+    title: str | None = None,
+    summary: str | None = None,
+    source: str | None = None,
+    source_url: str | None = None,
+    primary_date: str | None = None,
+    tags: list[str] | None = None,
 ) -> None:
     existing = conn.execute("SELECT metrics_json, payload_json FROM domain_items WHERE id = ?", (item_id,)).fetchone()
     if not existing:
@@ -287,6 +293,24 @@ def update_domain_item(
     if score is not None:
         fields.append("score = ?")
         params.append(score)
+    if title is not None:
+        fields.append("title = ?")
+        params.append(title)
+    if summary is not None:
+        fields.append("summary = ?")
+        params.append(summary)
+    if source is not None:
+        fields.append("source = ?")
+        params.append(source)
+    if source_url is not None:
+        fields.append("source_url = ?")
+        params.append(source_url)
+    if primary_date is not None:
+        fields.append("primary_date = ?")
+        params.append(primary_date)
+    if tags is not None:
+        fields.append("tags_json = ?")
+        params.append(dumps(tags))
     params.append(item_id)
     conn.execute(f"UPDATE domain_items SET {', '.join(fields)} WHERE id = ?", params)
 

@@ -43,21 +43,46 @@ def build_threat_items(
         payload = _finalize_summary(payload)
         payload = {**payload, "scoring": scoring.as_payload(), "vulnerability_signals": scoring.signals, "attack_surface": scoring.signals.get("attack_surface")}
         filtered = bool(scoring.signals.get("filtered"))
-        domain_id = repo.create_domain_item(
-            conn,
-            domain="threats",
-            item_type=item_type,
-            title=payload.get("title") or "未命名威胁对象",
-            summary=payload.get("summary") or "来自威胁 raw pipeline，待风险研判。",
-            score=scoring.score,
-            status="平台规则过滤" if filtered else "高风险待研判" if scoring.priority in {"critical", "high"} and item_type == "target" else "待研判" if item_type == "target" else "资产线索",
-            source=payload.get("source") or "huawei_raw",
-            source_url=payload.get("url") or "",
-            primary_date=payload.get("primary_date") or "",
-            tags=["connector_pipeline", payload.get("source_type") or "asset", scoring.grade, scoring.signals.get("attack_surface_grade"), payload.get("risk_grade") or ""],
-            metrics={"pipeline_run": run_id, "risk_score": scoring.score, "score_breakdown": scoring.breakdown, "filtered": filtered, "filtered_reason": scoring.signals.get("filtered_reason")},
-            payload=payload,
-        )
+        # Upsert: check if item with same item_key + domain already exists
+        item_key = str(payload.get("item_key") or payload.get("title") or "").lower()
+        existing = conn.execute(
+            "SELECT id FROM domain_items WHERE domain='threats' AND item_type=? AND LOWER(title)=? LIMIT 1",
+            (item_type, (payload.get("title") or "未命名威胁对象").lower()),
+        ).fetchone() if item_key else None
+        if existing:
+            # Update existing item
+            repo.update_domain_item(
+                conn,
+                item_id=existing[0],
+                title=payload.get("title") or "未命名威胁对象",
+                summary=payload.get("summary") or "来自威胁 raw pipeline，待风险研判。",
+                score=scoring.score,
+                status="平台规则过滤" if filtered else "高风险待研判" if scoring.priority in {"critical", "high"} and item_type == "target" else "待研判" if item_type == "target" else "资产线索",
+                source=payload.get("source") or "huawei_raw",
+                source_url=payload.get("url") or "",
+                primary_date=payload.get("primary_date") or "",
+                tags=["connector_pipeline", payload.get("source_type") or "asset", scoring.grade, scoring.signals.get("attack_surface_grade"), payload.get("risk_grade") or ""],
+                metrics={"pipeline_run": run_id, "risk_score": scoring.score, "score_breakdown": scoring.breakdown, "filtered": filtered, "filtered_reason": scoring.signals.get("filtered_reason")},
+                payload=payload,
+            )
+            domain_id = existing[0]
+        else:
+            # Create new item
+            domain_id = repo.create_domain_item(
+                conn,
+                domain="threats",
+                item_type=item_type,
+                title=payload.get("title") or "未命名威胁对象",
+                summary=payload.get("summary") or "来自威胁 raw pipeline，待风险研判。",
+                score=scoring.score,
+                status="平台规则过滤" if filtered else "高风险待研判" if scoring.priority in {"critical", "high"} and item_type == "target" else "待研判" if item_type == "target" else "资产线索",
+                source=payload.get("source") or "huawei_raw",
+                source_url=payload.get("url") or "",
+                primary_date=payload.get("primary_date") or "",
+                tags=["connector_pipeline", payload.get("source_type") or "asset", scoring.grade, scoring.signals.get("attack_surface_grade"), payload.get("risk_grade") or ""],
+                metrics={"pipeline_run": run_id, "risk_score": scoring.score, "score_breakdown": scoring.breakdown, "filtered": filtered, "filtered_reason": scoring.signals.get("filtered_reason")},
+                payload=payload,
+            )
         targets += 1
         repo.create_evidence(
             conn,

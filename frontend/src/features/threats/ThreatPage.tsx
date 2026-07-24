@@ -1,4 +1,4 @@
-import { useMemo, useState, useEffect } from 'react';
+import { useMemo, useState, useEffect, useRef } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { AlertTriangle, Boxes, GitBranch, GitFork, Network, Radar, ShieldCheck, Target, Workflow } from 'lucide-react';
 import { fetchTargets, fetchAssets, postJson, getJson, type AiAssociationResult } from '../../api/client';
@@ -96,6 +96,11 @@ export function ThreatPage() {
   const totalPages = targetsData?.pages ?? 1;
   const totalRepos = targetsData?.total ?? 0;
 
+  const viewRef = useRef<HTMLDivElement>(null);
+
+  // Reset scroll only when view (page) changes, not on every re-render
+  useEffect(() => { if (viewRef.current) viewRef.current.scrollTop = 0; }, [view]);
+
   const openRepo = (repo: ThreatRepo) => {
     push({
       title: `${repo.org}/${repo.name}`,
@@ -124,7 +129,7 @@ export function ThreatPage() {
         <div className="content-title"><span className="label">{navGroups.flatMap(g => g.items).find(i => i.id === view)?.title ?? '威胁洞察'}</span><h1>{heroTitle(view)}</h1><p>{heroCopy(view)}</p></div>
         <div className="head-actions">{view === 'repos' ? <FiltersBar filters={filters} setFilters={setFilters} grades={repoGrades} surfaces={repoSurfaces} /> : <><label className="search"><span>⌕</span><input placeholder="搜索标题 / CVE / 仓库 / 资产" onChange={() => {}} /></label><button className="btn primary" onClick={() => location.reload()}>刷新数据</button><a className="btn" href="/api/threats/reports" target="_blank">查看报告 API</a></>}</div>
       </section>
-      <div className="content-body view" key={view} ref={(el) => { if (el) el.scrollTop = 0; }}>
+      <div className="content-body view" ref={viewRef}>
         {isLoading && <EmptyState title="正在加载" description="从 /api/threats/targets 拉取数据。" />}
         {error && <EmptyState title="加载失败" description={(error as Error).message} />}
         {!isLoading && !error && renderView(view, repos, filters, setFilters, openRepo, setSelectedAsset, setView, currentPage, totalPages, totalRepos, setCurrentPage)}
