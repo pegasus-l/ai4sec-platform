@@ -155,7 +155,7 @@ class GateNewsCandidatesStep:
             selected_candidates,
             run_id=context.run_id,
             project_root=context.settings.project_root,
-            model_profile=str(context.params.get("model_profile") or "configured_model"),
+            model_profile=str(context.params.get("gate_model_profile") or context.params.get("model_profile") or "configured_model"),
         )
         context.outputs["gated_news_items"] = gated
         artifact = context.artifact_store.write_json(context.conn, run_id=context.run_id, artifact_type="gated_news_candidates", name="gated/news_candidates.json", data=gated)
@@ -174,7 +174,7 @@ class EnrichNewsCandidatesStep:
             candidates,
             run_id=context.run_id,
             project_root=context.settings.project_root,
-            model_profile=str(context.params.get("model_profile") or "configured_model"),
+            model_profile=str(context.params.get("review_model_profile") or context.params.get("model_profile") or "configured_model"),
         )
         context.outputs["reviewed_news_items"] = reviewed
         artifact = context.artifact_store.write_json(context.conn, run_id=context.run_id, artifact_type="reviewed_news_candidates", name="reviewed/news_candidates.json", data=reviewed)

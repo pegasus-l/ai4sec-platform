@@ -13,7 +13,7 @@ from ai4sec_platform.domains.news.tech_map import AgentTechMap
 from ai4sec_platform.models.router import LLMRouter
 
 GATE_PROMPT_VERSION = "news-tech-map-gate-v1"
-REVIEW_PROMPT_VERSION = "news-deep-review-v1"
+REVIEW_PROMPT_VERSION = "news-deep-review-v2"
 
 
 def gate_candidates(
@@ -26,10 +26,11 @@ def gate_candidates(
 ) -> tuple[list[dict[str, Any]], dict[str, int]]:
     tech_map = AgentTechMap.load(project_root)
     router = LLMRouter()
+    model_identity = router.active_config(model_profile)
     passed: list[dict[str, Any]] = []
     metrics = {"candidates": len(items), "model_calls": 0, "cache_hits": 0, "passed": 0, "needs_review": 0, "rejected": 0, "failed": 0}
     for item in items:
-        input_payload = _gate_payload(item, tech_map)
+        input_payload = {**_gate_payload(item, tech_map), "model_identity": model_identity}
         input_hash = _input_hash(input_payload)
         gate = _cached_stage(conn, str(item.get("item_key") or ""), "gate_review", input_hash, GATE_PROMPT_VERSION)
         if not gate:
@@ -42,7 +43,7 @@ def gate_candidates(
             metrics["model_calls"] += 1
             metrics["failed"] += int(failed)
             gate = _normalize_gate(output, item, tech_map) if not failed else _fallback_gate(item, tech_map, output.get("error", "model call failed"))
-        gate = {**gate, "input_hash": input_hash, "prompt_version": GATE_PROMPT_VERSION, "tech_map_version": tech_map.version}
+        gate = {**gate, "input_hash": input_hash, "prompt_version": GATE_PROMPT_VERSION, "tech_map_version": tech_map.version, "model_identity": model_identity}
         enriched = {**item, "gate_review": gate}
         decision = gate["decision"]
         if decision in {"pass", "needs_review"}:
@@ -63,10 +64,11 @@ def enrich_candidates(
 ) -> tuple[list[dict[str, Any]], dict[str, int]]:
     tech_map = AgentTechMap.load(project_root)
     router = LLMRouter()
+    model_identity = router.active_config(model_profile)
     selected: list[dict[str, Any]] = []
     metrics = {"candidates": len(items), "model_calls": 0, "cache_hits": 0, "selected": 0, "watch": 0, "rejected": 0, "failed": 0}
     for item in items:
-        input_payload = _review_payload(item, tech_map)
+        input_payload = {**_review_payload(item, tech_map), "model_identity": model_identity}
         input_hash = _input_hash(input_payload)
         review = _cached_stage(conn, str(item.get("item_key") or ""), "review", input_hash, REVIEW_PROMPT_VERSION)
         if not review:
@@ -79,7 +81,7 @@ def enrich_candidates(
             metrics["model_calls"] += 1
             metrics["failed"] += int(failed)
             review = _normalize_deep_review(output, item, tech_map) if not failed else _fallback_review(item, tech_map, output.get("error", "model call failed"))
-        review = {**review, "input_hash": input_hash, "prompt_version": REVIEW_PROMPT_VERSION, "tech_map_version": tech_map.version}
+        review = {**review, "input_hash": input_hash, "prompt_version": REVIEW_PROMPT_VERSION, "tech_map_version": tech_map.version, "model_identity": model_identity}
         enriched = {**item, "review": review}
         decision = review["decision"]
         metrics[decision] += 1
@@ -120,7 +122,7 @@ def _review_prompt() -> str:
 
 要求：
 1. tech_paths 必须逐字选自技术地图，重新核验并列出所有实际涉及的技术路径，不要只返回一个。
-2. 所有 score_breakdown 维度必须使用 0–100 的整数百分制，禁止 0–1 或 0–10 分制。
+2. score_breakdown 必须完整保留示例中的七个英文字段名，不得改名、翻译、遗漏或增加字段；所有维度必须使用 0–100 的整数百分制，禁止 0–1 或 0–10 分制。
 3. 项目综合真实代码、README、活跃度、关联论文、工程价值和可复现性，stars 只影响少量影响力分。
 4. 论文综合地图相关性、新颖性、技术深度、实验可信度、工程价值和对技术地图的推进作用。
 5. 中文摘要说明问题、方法、结果和价值，不得编造输入中没有的事实。
@@ -332,7 +334,8 @@ def _normalize_breakdown(value: Any) -> dict[str, float]:
     if not isinstance(value, dict):
         return {}
     fields = ["map_relevance", "novelty", "technical_depth", "engineering_value", "reproducibility", "influence", "freshness"]
-    return {field: _percentage(value.get(field)) for field in fields}
+    aliases = {"engineering_value": ["ability_to_execute", "engineering_feasibility"]}
+    return {field: _percentage(next((value.get(alias) for alias in [field, *aliases.get(field, [])] if value.get(alias) is not None), None)) for field in fields}
 
 
 def _weighted_score(item_type: str, breakdown: dict[str, float]) -> float:

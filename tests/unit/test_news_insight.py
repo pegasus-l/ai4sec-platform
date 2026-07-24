@@ -10,7 +10,7 @@ from ai4sec_platform.domains.news.normalizers import normalize_raw_item
 from ai4sec_platform.domains.news.references import extract_reference_items
 from ai4sec_platform.domains.news.tech_map import AgentTechMap
 from ai4sec_platform.domains.news.links import resolve_candidate_links
-from ai4sec_platform.domains.news.reviewer import _normalize_deep_review, _normalize_gate, _percentage
+from ai4sec_platform.domains.news.reviewer import _input_hash, _normalize_breakdown, _normalize_deep_review, _normalize_gate, _percentage
 from ai4sec_platform.domains.news import service
 
 
@@ -52,6 +52,11 @@ def test_tech_map_contract_and_discovery_reference_extraction() -> None:
     assert _percentage(8) == 8
     assert _percentage(0.7) == 0.7
     assert _percentage(101) == 0
+    deepseek_hash = _input_hash({"candidate": {"item_key": "paper:1"}, "model_identity": {"provider": "deepseek", "model": "deepseek-v4-flash"}})
+    dashscope_hash = _input_hash({"candidate": {"item_key": "paper:1"}, "model_identity": {"provider": "dashscope", "model": "glm-5.2"}})
+    assert deepseek_hash != dashscope_hash
+    assert _normalize_breakdown({"engineering_value": 81})["engineering_value"] == 81
+    assert _normalize_breakdown({"ability_to_execute": 76})["engineering_value"] == 76
     repeated = tech_map.validate_paths(tech_map.catalog()[:8])
     assert len(repeated) == 8
 
