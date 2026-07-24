@@ -50,18 +50,51 @@ export function ThreatPage() {
   const [view, setView] = useState<ViewId>('today');
   const [filters, setFilters] = useState<FilterState>({ search: '', grade: 'all', surface: 'all', onlyCve: false, onlyHigh: false });
   const [selectedAsset, setSelectedAsset] = useState<ThreatAsset | null>(null);
+  const [currentPage, setCurrentPage] = useState(1);
   const { push } = useDrawerStack();
 
-  // Fetch targets separately (not through frontend_v9)
-  const { data: targetsData, isLoading, error } = useQuery({ queryKey: ['threats-targets'], queryFn: () => fetchTargets() });
+  // Fetch targets with pagination + server-side filtering (summary fields only = ~1KB/item instead of 103KB)
+  const { data: targetsData, isLoading, error } = useQuery({
+    queryKey: ['threats-targets', currentPage, filters],
+    queryFn: () => fetchTargets(currentPage, 50, filters.surface !== 'all' ? filters.surface : '', filters.grade !== 'all' ? filters.grade : '', filters.search),
+    staleTime: 300_000, // 5 minutes
+  });
+
+  // Convert summary items to ThreatRepo (lightweight — no full payload)
   const repos = useMemo(() => {
-    const items = (targetsData?.items ?? []).map(item => {
-      // Use repoFromItem logic via adapter
-      const payload = (item as Record<string, unknown>).payload ?? (item as Record<string, unknown>).signals;
-      return { item: item as Record<string, unknown>, payload: payload as Record<string, unknown> };
-    }).map(({ item }) => item as Record<string, unknown>);
-    return items.map(repoFromItem).sort((a, b) => b.score - a.score);
+    return (targetsData?.items ?? []).map(item => {
+      const i = item as Record<string, unknown>;
+      const signals = i.signals_summary as Record<string, unknown> ?? {};
+      const as = i.attack_surface_summary as Record<string, unknown> ?? {};
+      return {
+        id: String(i.id ?? ''),
+        title: String(i.title ?? ''),
+        org: String(i.raw_org ?? ''),
+        name: String(i.raw_name ?? ''),
+        url: String(i.source_url ?? ''),
+        summary: String(i.summary ?? ''),
+        score: Number(as.score ?? i.score ?? 0),
+        grade: String(as.grade ?? ''),
+        status: String(i.status ?? 'active'),
+        surface: String(as.surface ?? ''),
+        stars: 0,
+        cve: Number(signals.cve_count ?? 0),
+        sa: Number(signals.sa_count ?? 0),
+        sec: Number(signals.broad_sec_count ?? 0),
+        filtered: false,
+        filteredReason: '',
+        breakdown: {} as Record<string, number>,
+        reasons: [] as string[],
+        evidence: [] as string[],
+        assets: [] as string[],
+        raw: {} as Record<string, unknown>,
+        aiCalibrated: Boolean(i.aiCalibrated),
+      } as ThreatRepo;
+    });
   }, [targetsData]);
+
+  const totalPages = targetsData?.pages ?? 1;
+  const totalRepos = targetsData?.total ?? 0;
 
   const openRepo = (repo: ThreatRepo) => {
     push({
@@ -71,10 +104,11 @@ export function ThreatPage() {
     });
   };
 
-  const visibleRepos = useMemo(() => filterRepos(repos, filters), [repos, filters]);
-  const activeTitle = navGroups.flatMap(group => group.items).find(item => item.id === view)?.title ?? '威胁洞察';
-  const repoGrades = unique(repos.map(repo => repo.grade).filter(Boolean));
-  const repoSurfaces = unique(repos.map(repo => repo.surface).filter(Boolean));
+  // Reset page when filters change
+  useEffect(() => { setCurrentPage(1); }, [filters.grade, filters.surface, filters.search]);
+
+  const repoGrades = unique(['A', 'B', 'C', 'D']);
+  const repoSurfaces = unique(staticSurfaces.map(s => s.id));
 
   return <main className="main">
     <aside className="sidebar">
@@ -93,16 +127,16 @@ export function ThreatPage() {
       <div className="content-body view">
         {isLoading && <EmptyState title="正在加载" description="从 /api/threats/targets 拉取数据。" />}
         {error && <EmptyState title="加载失败" description={(error as Error).message} />}
-        {!isLoading && !error && renderView(view, repos, visibleRepos, filters, setFilters, openRepo, setSelectedAsset, setView)}
+        {!isLoading && !error && renderView(view, repos, filters, setFilters, openRepo, setSelectedAsset, setView, currentPage, totalPages, totalRepos, setCurrentPage)}
         <AssetDrawer asset={selectedAsset} onClose={() => setSelectedAsset(null)} openRepo={openRepo} />
       </div>
     </section>
   </main>;
 }
 
-function renderView(view: ViewId, repos: ThreatRepo[], visibleRepos: ThreatRepo[], filters: FilterState, setFilters: (filters: FilterState) => void, openRepo: (repo: ThreatRepo) => void, openAsset: (asset: ThreatAsset) => void, setView: (view: ViewId) => void) {
+function renderView(view: ViewId, repos: ThreatRepo[], filters: FilterState, setFilters: (filters: FilterState) => void, openRepo: (repo: ThreatRepo) => void, openAsset: (asset: ThreatAsset) => void, setView: (view: ViewId) => void, currentPage: number, totalPages: number, totalRepos: number, setCurrentPage: (page: number) => void) {
   if (view === 'today') return <ThreatToday repos={repos} openRepo={openRepo} setView={setView} setFilters={setFilters} />;
-  if (view === 'repos') return <ThreatRepos repos={visibleRepos} filters={filters} setFilters={setFilters} openRepo={openRepo} />;
+  if (view === 'repos') return <ThreatRepos repos={repos} filters={filters} setFilters={setFilters} openRepo={openRepo} currentPage={currentPage} totalPages={totalPages} totalRepos={totalRepos} setCurrentPage={setCurrentPage} />;
   if (view === 'surface') return <ThreatSurface repos={repos} openRepo={openRepo} setFilters={setFilters} setView={setView} />;
   if (view === 'assets') return <ThreatAssets openAsset={openAsset} />;
   if (view === 'graph') return <ThreatGraphView repos={repos} openRepo={openRepo} openAsset={openAsset} />;
@@ -148,14 +182,24 @@ function ThreatToday({ repos, openRepo, setView, setFilters }: { repos: ThreatRe
   </div>;
 }
 
-function ThreatRepos({ repos, filters, setFilters, openRepo }: { repos: ThreatRepo[]; filters: FilterState; setFilters: (filters: FilterState) => void; openRepo: (repo: ThreatRepo) => void }) {
-  const filteredCount = repos.length;
+function ThreatRepos({ repos, filters, setFilters, openRepo, currentPage, totalPages, totalRepos, setCurrentPage }: { repos: ThreatRepo[]; filters: FilterState; setFilters: (filters: FilterState) => void; openRepo: (repo: ThreatRepo) => void; currentPage: number; totalPages: number; totalRepos: number; setCurrentPage: (page: number) => void; }) {
   return <div className="grid">
     <div className="row-title" style={{ marginBottom: 8 }}>
-      <span className="muted small">共 {filteredCount} 个代码仓</span>
-      <span className="muted small">{filters.grade !== 'all' ? ` · 筛选 ${filters.grade} 级` : ''}{filters.surface !== 'all' ? ` · ${filters.surface}` : ''}{filters.onlyCve ? ' · 有 CVE' : ''}{filters.onlyHigh ? ' · 高风险' : ''}{filters.search ? ` · 搜索"${filters.search}"` : ''}</span>
+      <span className="muted small">共 {totalRepos} 个代码仓 · 第 {currentPage}/{totalPages} 页</span>
+      <span className="muted small">{filters.grade !== 'all' ? ` · ${filters.grade} 级` : ''}{filters.surface !== 'all' ? ` · ${filters.surface}` : ''}{filters.search ? ` · 搜索"${filters.search}"` : ''}</span>
     </div>
     <div className="table-card"><RepoTable repos={repos} openRepo={openRepo} /></div>
+    {totalPages > 1 && <div className="split" style={{ marginTop: 12, justifyContent: 'center', gap: 6 }}>
+      <button className="btn sm" disabled={currentPage <= 1} onClick={() => setCurrentPage(currentPage - 1)}>上一页</button>
+      {Array.from({ length: Math.min(totalPages, 10) }, (_, i) => {
+        const p = i + 1;
+        const showP = totalPages <= 10 ? p : (currentPage <= 5 ? p : (currentPage + (p - 6) > totalPages ? totalPages - 9 + i : currentPage - 5 + i));
+        if (showP < 1 || showP > totalPages) return null;
+        return <button key={showP} className={`btn sm ${showP === currentPage ? 'primary' : ''}`} onClick={() => setCurrentPage(showP)}>{showP}</button>;
+      })}
+      {totalPages > 10 && currentPage < totalPages - 5 && <span className="muted small">...{totalPages}</span>}
+      <button className="btn sm" disabled={currentPage >= totalPages} onClick={() => setCurrentPage(currentPage + 1)}>下一页</button>
+    </div>}
   </div>;
 }
 

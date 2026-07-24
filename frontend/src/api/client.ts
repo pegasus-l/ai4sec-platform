@@ -22,8 +22,12 @@ export async function fetchToday(): Promise<{ items: Record<string, unknown>[] }
   return getJson('/api/threats/today?limit=30');
 }
 
-export async function fetchTargets(): Promise<{ items: Record<string, unknown>[] }> {
-  return getJson('/api/threats/targets?limit=9999');
+export async function fetchTargets(page: number = 1, perPage: number = 50, surface: string = '', grade: string = '', search: string = ''): Promise<{ items: Record<string, unknown>[]; total: number; page: number; per_page: number; pages: number }> {
+  const params = new URLSearchParams({ page: String(page), per_page: String(perPage), fields: 'summary' });
+  if (surface) params.set('surface', surface);
+  if (grade) params.set('grade', grade);
+  if (search) params.set('search', search);
+  return getJson(`/api/threats/targets?${params.toString()}`);
 }
 
 export async function fetchTrackingQueue(): Promise<{ items: Record<string, unknown>[] }> {

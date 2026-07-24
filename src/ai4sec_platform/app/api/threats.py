@@ -22,8 +22,65 @@ def today(limit: int = Query(30, ge=1, le=100), conn: sqlite3.Connection = Depen
 
 
 @router.get("/targets")
-def targets(limit: int = Query(9999, ge=1, le=99999), conn: sqlite3.Connection = Depends(get_db)) -> dict:
-    return domain_items.list_items(conn, DOMAIN, item_type="target", limit=limit)
+def targets(
+    limit: int = Query(50, ge=1, le=99999),
+    page: int = Query(1, ge=1),
+    fields: str = Query("summary", description="summary=lightweight, full=complete payload"),
+    surface: str = Query("", description="filter by attack surface"),
+    grade: str = Query("", description="filter by grade (A/B/C/D)"),
+    search: str = Query("", description="search in title/org"),
+    conn: sqlite3.Connection = Depends(get_db),
+) -> dict:
+    """Paginated targets with optional filtering. Returns lightweight summary by default."""
+    offset = (page - 1) * limit
+
+    # Build query with filters
+    where_clauses = ["domain = ?", "item_type = ?"]
+    params = [DOMAIN, "target"]
+    if surface:
+        where_clauses.append("json_extract(payload_json, '$.attack_surface.signals.primary_attack_surface') = ?")
+        params.append(surface)
+    if grade:
+        where_clauses.append("json_extract(payload_json, '$.attack_surface.grade') = ?")
+        params.append(grade)
+    if search:
+        where_clauses.append("(title LIKE ? OR source LIKE ?)")
+        params.extend([f"%{search}%", f"%{search}%"])
+    where_sql = " AND ".join(where_clauses)
+
+    # Get total count
+    total = conn.execute(f"SELECT COUNT(*) FROM domain_items WHERE {where_sql}", params).fetchone()[0]
+
+    # Get items
+    rows = conn.execute(
+        f"SELECT * FROM domain_items WHERE {where_sql} ORDER BY score DESC LIMIT ? OFFSET ?",
+        [*params, limit, offset],
+    ).fetchall()
+    items = [repo.row_to_dict(row) for row in rows]
+
+    # Strip payload for summary mode (list view doesn't need full payload)
+    if fields == "summary":
+        for item in items:
+            payload = item.pop("payload", {})
+            if isinstance(payload, dict):
+                signals = payload.get("vulnerability_signals") or payload.get("signals") or {}
+                attack_surface = payload.get("attack_surface") or {}
+                raw = payload.get("raw") or {}
+                item["signals_summary"] = {
+                    "cve_count": signals.get("cve_count") or payload.get("cve_count") or 0,
+                    "sa_count": signals.get("sa_count") or payload.get("sa_count") or 0,
+                    "broad_sec_count": signals.get("broad_sec_count") or payload.get("broad_sec_count") or 0,
+                }
+                item["attack_surface_summary"] = {
+                    "score": attack_surface.get("score", 0),
+                    "grade": attack_surface.get("grade", ""),
+                    "surface": (attack_surface.get("signals") or {}).get("primary_attack_surface", "")
+                        if isinstance(attack_surface.get("signals"), dict) else attack_surface.get("primary_attack_surface", ""),
+                }
+                item["raw_name"] = raw.get("name", "")
+                item["raw_org"] = raw.get("org", "")
+
+    return {"items": items, "total": total, "page": page, "per_page": limit, "pages": (total + limit - 1) // limit}
 
 
 @router.get("/targets/{item_id}")
