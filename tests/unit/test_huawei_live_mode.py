@@ -108,15 +108,15 @@ def test_huawei_source_cache_refreshes_selected_sources(monkeypatch, tmp_path) -
     settings = load_settings().model_copy(update={"output_dir": tmp_path})
     calls = {"repos": 0, "firmware": 0}
 
-    def fake_repo_record(registry, params):
+    def fake_repo_records(registry, params):
         calls["repos"] += 1
-        return {"source": "repos", "path": "fake:repos", "exists": True, "items": [{"name": f"repo-{calls['repos']}", "org": "o", "url": "https://gitcode.com/o/repo"}], "raw": {}, "mode": "live"}
+        return [{"source": "repos", "path": "fake:repos", "exists": True, "items": [{"name": f"repo-{calls['repos']}", "org": "o", "url": "https://gitcode.com/o/repo"}], "raw": {}, "mode": "live"}]
 
     def fake_firmware(registry, params):
         calls["firmware"] += 1
         return {"source": "firmware", "path": "fake:firmware", "exists": True, "items": [{"name": f"fw-{calls['firmware']}"}], "raw": {}, "mode": "live"}
 
-    monkeypatch.setattr(huawei_sources, "_collect_repo_record", fake_repo_record)
+    monkeypatch.setattr(huawei_sources, "_collect_repo_records", fake_repo_records)
     monkeypatch.setattr(huawei_sources, "_collect_firmware_assets", fake_firmware)
 
     params = {"use_source_cache": True, "sources": ["repos", "firmware"]}
@@ -128,3 +128,63 @@ def test_huawei_source_cache_refreshes_selected_sources(monkeypatch, tmp_path) -
     assert [record["items"][0]["name"] for record in first] == ["repo-1", "fw-1"]
     assert [record["items"][0]["name"] for record in second] == ["repo-1", "fw-1"]
     assert [record["items"][0]["name"] for record in refreshed] == ["repo-2", "fw-1"]
+
+
+def test_full_scan_repo_collection_uses_deep_page_limit() -> None:
+    requested_pages = []
+
+    class FakeConnector:
+        def fetch(self, request):
+            page = request.params["page"]
+            requested_pages.append(page)
+            if page <= 4:
+                items = [{"name": f"repo-{page}-{idx}", "web_url": f"https://gitcode.com/openharmony/repo-{page}-{idx}", "star_count": idx} for idx in range(100)]
+            else:
+                items = []
+            return type("Result", (), {"errors": [], "items": items})()
+
+    class FakeRegistry:
+        def get(self, platform):
+            return FakeConnector()
+
+    repos = huawei_sources._collect_live_repos(FakeRegistry(), {"scan_profile": "full", "orgs": ["gitcode:openharmony"], "max_workers": 1})
+
+    assert len(repos) == 400
+    assert max(requested_pages) == 5
+
+
+def test_security_materials_are_org_level_not_project_copies(monkeypatch) -> None:
+    fetches = []
+
+    class FakeConnector:
+        def fetch(self, request):
+            fetches.append(request.params)
+            resource = request.params.get("resource")
+            if resource == "issues":
+                return type("Result", (), {"errors": [], "items": [{"title": "telephony_sms_mms CVE-2026-33333", "description": "高危"}]})()
+            if resource == "pull_requests":
+                return type("Result", (), {"errors": [], "items": []})()
+            if resource == "contents":
+                return type("Result", (), {"errors": [], "items": [{"type": "file", "path": "security-disclosure/2026-07.md", "name": "2026-07.md"}]})()
+            if resource == "file":
+                return type("Result", (), {"errors": [], "items": [], "raw_text": "| Component | ID | Severity |\n| telephony_sms_mms | CVE-2026-44444 | 高危 |"})()
+            return type("Result", (), {"errors": [], "items": []})()
+
+    class FakeRegistry:
+        def get(self, platform):
+            return FakeConnector()
+
+    repos = [
+        {"platform": "gitcode", "org": "openharmony", "name": "security", "url": "https://gitcode.com/openharmony/security", "description": "security", "star_count": 10},
+        {"platform": "gitcode", "org": "openharmony", "name": "telephony_sms_mms", "url": "https://gitcode.com/openharmony/telephony_sms_mms", "description": "telephony", "star_count": 20},
+    ]
+    monkeypatch.setattr(huawei_sources, "_collect_live_repos", lambda registry, params: repos)
+    monkeypatch.setattr(huawei_sources, "_enrich_project_issues", lambda registry, repos, params: repos)
+
+    records = huawei_sources._collect_repo_records(FakeRegistry(), {"security_file_limit": 5})
+    repo_record = next(record for record in records if record["source"] == "repos")
+    materials_record = next(record for record in records if record["source"] == "org_security_materials")
+
+    assert "org_security_materials" not in repo_record["items"][1]
+    assert len(materials_record["items"]) == 2
+    assert {item["material_type"] for item in materials_record["items"]} == {"security_repo_issue", "security_repo_file"}

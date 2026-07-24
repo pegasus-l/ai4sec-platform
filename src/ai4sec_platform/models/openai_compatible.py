@@ -23,6 +23,7 @@ class OpenAICompatibleProvider:
                 {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
             ],
             "response_format": {"type": "json_object"},
+            "temperature": 0,
         }
         data = self._post(body)
         content = data.get("choices", [{}])[0].get("message", {}).get("content", "{}")

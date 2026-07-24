@@ -3,6 +3,7 @@ from __future__ import annotations
 import sqlite3
 
 from ai4sec_platform.db import repositories as repo
+from ai4sec_platform.domains.vulnerabilities.entity_normalizers import enrich_material_entities
 from ai4sec_platform.domains.vulnerabilities.evidence_extractors import extract_material_evidence
 from ai4sec_platform.domains.vulnerabilities.material_classifiers import classify_material
 from ai4sec_platform.domains.vulnerabilities.relevance_scorers import score_material
@@ -17,10 +18,12 @@ def build_vulnerability_items(conn: sqlite3.Connection, items: list[dict], *, ru
     knowledge_candidates = 0
     for item in items:
         payload = repo.loads(item.get("normalized_json"), {}) if "normalized_json" in item else item
+        payload = enrich_material_entities(payload)
         classification = classify_material(payload)
         extracted = extract_material_evidence(payload)
         scoring = score_material({**payload, "classification": classification.as_payload()})
-        payload = {**payload, "classification": classification.as_payload(), "scoring": scoring.as_payload(), "extracted_evidence": extracted}
+        material_type = _material_type(classification.category)
+        payload = {**payload, "material_type": material_type, "classification": classification.as_payload(), "scoring": scoring.as_payload(), "extracted_evidence": extracted}
         item_id = repo.create_domain_item(
             conn,
             domain="vulnerabilities",
@@ -32,8 +35,8 @@ def build_vulnerability_items(conn: sqlite3.Connection, items: list[dict], *, ru
             source="raw_pipeline",
             source_url=payload.get("url") or "",
             primary_date=payload.get("primary_date") or "",
-            tags=["raw_pipeline", payload.get("category") or "素材", classification.category, scoring.grade],
-            metrics={"pipeline_run": run_id, "confidence": payload.get("confidence"), "markdown_length": payload.get("markdown_length"), "score_breakdown": scoring.breakdown},
+            tags=["raw_pipeline", material_type, payload.get("category") or "素材", classification.category, scoring.grade, *payload.get("cve_ids", [])[:3]],
+            metrics={"pipeline_run": run_id, "confidence": payload.get("confidence"), "markdown_length": payload.get("markdown_length"), "score_breakdown": scoring.breakdown, "cve_count": len(payload.get("cve_ids", [])), "snippet_count": len(extracted.get("evidence_snippets", []))},
             payload=payload,
         )
         materials += 1
@@ -49,6 +52,18 @@ def build_vulnerability_items(conn: sqlite3.Connection, items: list[dict], *, ru
             confidence=min(1.0, scoring.score / 100),
             payload={"run_id": run_id, "item_key": payload.get("item_key"), "classification": classification.as_payload(), "scoring": scoring.as_payload(), "extracted_evidence": extracted},
         )
+        for snippet in extracted.get("evidence_snippets", []):
+            repo.create_evidence(
+                conn,
+                domain="vulnerabilities",
+                domain_item_id=item_id,
+                evidence_type=f"material_{snippet.get('snippet_type') or 'snippet'}",
+                title=snippet.get("title") or "漏洞素材证据片段",
+                content=snippet.get("content") or "",
+                source_url=snippet.get("source_url") or payload.get("url") or "",
+                confidence=snippet.get("confidence"),
+                payload={"run_id": run_id, "item_key": payload.get("item_key"), **snippet},
+            )
         if scoring.score >= 45 or payload.get("is_relevant") or (_safe_float(payload.get("confidence")) or 0) >= 0.7:
             knowledge_candidates += 1
             repo.create_human_queue_item(
@@ -68,3 +83,13 @@ def _safe_float(value) -> float | None:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def _material_type(category: str) -> str:
+    mapping = {
+        "PoC/Exploit": "poc_exploit",
+        "深度技术分析": "tech_analysis",
+        "漏洞公告": "advisory",
+        "影响范围线索": "affected_version",
+    }
+    return mapping.get(category, "unknown")

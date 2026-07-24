@@ -51,6 +51,7 @@ def test_pipeline_registry_has_all_domain_entries() -> None:
     assert "threats.risk_reasoning_pipeline" in names
     assert "vulnerabilities.material_raw_pipeline" in names
     assert "vulnerabilities.material_local_raw_import" in names
+    assert "vulnerabilities.event_aggregation_pipeline" in names
     assert "vulnerabilities.knowledge_extraction_pipeline" in names
     assert "legacy.sample_import" not in names
 

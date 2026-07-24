@@ -15,12 +15,13 @@ def discover_security_repos(projects_by_org: dict[str, list[dict[str, Any]]]) ->
             name = str(project.get("name") or "")
             url = str(project.get("url") or "")
             desc = str(project.get("description") or "")
-            text = f"{name} {url} {desc}"
-            if not SECURITY_REPO_RE.search(text):
+            name_match = bool(SECURITY_REPO_RE.search(name))
+            metadata_match = bool(SECURITY_REPO_RE.search(f"{url} {desc}"))
+            if not name_match and not metadata_match:
                 continue
             is_primary = bool(PRIMARY_REPO_RE.search(name))
-            candidates.append({**project, "is_primary": is_primary, "discovery_reason": "primary_name" if is_primary else "security_keyword"})
-        candidates.sort(key=lambda item: (not item["is_primary"], -int(item.get("star_count") or 0), item.get("name") or ""))
+            candidates.append({**project, "is_primary": is_primary, "name_keyword_match": name_match, "discovery_reason": "primary_name" if is_primary else "name_keyword" if name_match else "metadata_keyword"})
+        candidates.sort(key=lambda item: (not item["is_primary"], not item.get("name_keyword_match"), -int(item.get("star_count") or 0), item.get("name") or ""))
         discovered[org] = {
             "has_security_repo": bool(candidates),
             "primary_repo": candidates[0] if candidates else {},

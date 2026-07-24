@@ -15,6 +15,7 @@ class CollectHuaweiSourcesStep:
     def run(self, context: PipelineContext) -> StepResult:
         records = load_huawei_sources(context.settings, context.params)
         context.outputs["huawei_source_records"] = records
+        artifacts = []
         artifact = context.artifact_store.write_json(
             context.conn,
             run_id=context.run_id,
@@ -22,5 +23,23 @@ class CollectHuaweiSourcesStep:
             name="threats/huawei_source_records.json",
             data={"records": records, "params": context.params},
         )
+        artifacts.append(artifact)
+        org_security_materials = _items(records, "org_security_materials")
+        if org_security_materials:
+            org_artifact = context.artifact_store.write_json(
+                context.conn,
+                run_id=context.run_id,
+                artifact_type="huawei_org_security_materials",
+                name="threats/huawei_org_security_materials.json",
+                data={"items": org_security_materials, "params": context.params},
+            )
+            artifacts.append(org_artifact)
         metrics = {"sources": len(records), "items": sum(len(record.get("items") or []) for record in records), "items_by_source": {record.get("source", "unknown"): len(record.get("items") or []) for record in records}}
-        return StepResult(metrics=metrics, artifacts=[artifact])
+        return StepResult(metrics=metrics, artifacts=artifacts)
+
+
+def _items(records: list[dict], source: str) -> list[dict]:
+    for record in records:
+        if record.get("source") == source:
+            return record.get("items") or []
+    return []

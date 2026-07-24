@@ -210,11 +210,38 @@ CREATE TABLE IF NOT EXISTS news_daily_reports (
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS capability_repro_tasks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    item_id INTEGER NOT NULL,
+    repo_url TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'queued',
+    container_name TEXT NOT NULL DEFAULT '',
+    workspace_path TEXT NOT NULL DEFAULT '',
+    log TEXT NOT NULL DEFAULT '',
+    result TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    finished_at TEXT NOT NULL DEFAULT '',
+    cleaned_at TEXT NOT NULL DEFAULT '',
+    trigger TEXT NOT NULL DEFAULT 'manual',
+    report_json TEXT NOT NULL DEFAULT '{}',
+    web_port INTEGER,
+    web_url TEXT NOT NULL DEFAULT '',
+    FOREIGN KEY (item_id) REFERENCES domain_items(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_cap_repro_item ON capability_repro_tasks(item_id);
+CREATE INDEX IF NOT EXISTS idx_cap_repro_status ON capability_repro_tasks(status);
+CREATE INDEX IF NOT EXISTS idx_cap_repro_created ON capability_repro_tasks(created_at DESC);
 """
 
 
 def init_db(conn: sqlite3.Connection) -> None:
     conn.executescript(SCHEMA_SQL)
+    # Migrations
+    try: conn.execute("ALTER TABLE domain_items ADD COLUMN last_synced_at TEXT")
+    except Exception: pass
+    try: conn.execute("ALTER TABLE human_queue_items ADD COLUMN queue_source TEXT DEFAULT 'pipeline'")
+    except Exception: pass
     conn.commit()
 
 
@@ -223,6 +250,7 @@ def reset_db(conn: sqlite3.Connection) -> None:
         "news_daily_reports",
         "news_user_states",
         "news_item_index",
+        "capability_repro_tasks",
         "human_queue_items",
         "quality_audits",
         "normalized_items",

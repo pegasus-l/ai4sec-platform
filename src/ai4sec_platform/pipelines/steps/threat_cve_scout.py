@@ -20,8 +20,9 @@ class HuaweiCveScoutStep:
         records = context.outputs.get("huawei_source_records") or load_huawei_sources(context.settings, context.params)
         context.outputs["huawei_source_records"] = records
         repos = _items(records, "repos")
+        org_security_materials = _items(records, "org_security_materials")
         validation = validate_repo_projects(repos)
-        cve_scout = build_cve_scout_from_local_records(repos, None)
+        cve_scout = build_cve_scout_from_local_records(repos, None, org_security_materials)
         cve_validation = validate_cve_scout_output(cve_scout)
         report = build_cve_scout_report(cve_scout)
         artifact = context.artifact_store.write_json(context.conn, run_id=context.run_id, artifact_type="huawei_cve_scout", name="threats/huawei_cve_scout.json", data=cve_scout)
