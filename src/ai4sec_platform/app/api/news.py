@@ -136,7 +136,7 @@ def promote(item_id: int, request: NewsActionRequest | None = None, conn: sqlite
 
 
 @router.get("/operations")
-def news_operations(conn: sqlite3.Connection = Depends(get_db)) -> dict:
+def legacy_news_operations(conn: sqlite3.Connection = Depends(get_db)) -> dict:
     return {"domain": "news", "tasks": operations.tasks(conn, "news")["items"], "sources": operations.sources(conn, "news")["items"], "audits": operations.audits(conn, "news")["items"]}
 
 
