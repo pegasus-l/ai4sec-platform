@@ -5,7 +5,7 @@ import { useToast } from '../../components/Toast';
 import { useDrawerStack } from '../../components/DrawerStack';
 import {
   fetchToday, fetchLibrary, fetchReproRuns, fetchConversions, fetchClassifyStats,
-  startRepro, stopRepro, cleanupRepro, markConversion, classifyBatch,
+  fetchDetail, startRepro, stopRepro, cleanupRepro, markConversion, classifyBatch,
   streamReproLogs, classifyLogLine,
 } from './capabilityQueries';
 import type { CapabilityItem, ReproTask, ConversionRecord, CapabilityView } from './capabilityTypes';
@@ -21,6 +21,8 @@ const navGroups = [
 ];
 
 const conversionGroups = ['待评估', '待复现', '复现中', '复现成功', '待集成', '持续观察', '已采用'];
+
+interface ConvertFormData { status: string; scenario: string; owner: string; next_action: string; notes: string; }
 
 export function CapabilityPage() {
   const [view, setView] = useState<CapabilityView>('today');
@@ -43,15 +45,16 @@ export function CapabilityPage() {
   const viewRef = useRef<HTMLDivElement>(null);
   useEffect(() => { if (viewRef.current) viewRef.current.scrollTop = 0; }, [view]);
 
+  // 【改动 4】抽屉打开时调 fetchDetail 获取完整 payload
   const openDetail = useCallback((item: CapabilityItem) => {
     push({
       title: item.title,
       subtitle: `${item.payload?.source_type ?? ''} · score ${item.score}`,
-      render: () => <CapabilityDetailContent item={item} onRepro={async () => {
+      render: () => <CapabilityDetailContent itemId={item.id} initialItem={item} onRepro={async () => {
         try { await startRepro(item.id, item.payload?.is_web ?? false); toast('已加入复现队列', 'success'); qc.invalidateQueries({ queryKey: ['cap-repro'] }); }
         catch (e) { toast(`复现失败: ${e}`, 'error'); }
-      }} onConvert={async () => {
-        try { await markConversion(item.id, { status: '持续观察', scenario: '', owner: '', next_action: '', notes: '' }); toast('已标记转化', 'success'); qc.invalidateQueries({ queryKey: ['cap-conversions'] }); }
+      }} onConvert={async (data: ConvertFormData) => {
+        try { await markConversion(item.id, data); toast('已标记转化', 'success'); qc.invalidateQueries({ queryKey: ['cap-conversions'] }); }
         catch (e) { toast(`转化失败: ${e}`, 'error'); }
       }} />,
     });
@@ -134,7 +137,7 @@ function CapabilityToday({ items, stats, openDetail }: { items: CapabilityItem[]
   </div>;
 }
 
-function CapabilityCard({ item, rank, onClick, onRepro }: { item: CapabilityItem; rank: number; onClick: () => void; onRepro: () => void }) {
+function CapabilityCard({ item, rank, onClick }: { item: CapabilityItem; rank: number; onClick: () => void; onRepro: () => void }) {
   const p = item.payload ?? {};
   const reproTag = p.repro_status === 'candidate' ? 'green' : p.repro_status === 'in_progress' ? 'sky' : p.repro_status === 'no_code' ? 'slate' : 'amber';
   const reproText = { candidate: '可复现', in_progress: '复现中', no_code: '无代码', success: '已复现', failed: '复现失败' }[p.repro_status ?? ''] ?? p.repro_status;
@@ -154,15 +157,50 @@ function CapabilityCard({ item, rank, onClick, onRepro }: { item: CapabilityItem
   </div>;
 }
 
-// ========== 能力库 ==========
+// ========== 能力库（改动 1: 4 个视图 + 改动 3: classifyBatch 按钮）==========
 function CapabilityLibrary({ items, openDetail }: { items: CapabilityItem[]; openDetail: (item: CapabilityItem) => void }) {
+  const { toast } = useToast();
+  const qc = useQueryClient();
   const [viewMode, setViewMode] = useState<'列表视图' | '能力分类' | '应用场景' | '代码可用性'>('列表视图');
+
+  // 【改动 3】classifyBatch 触发
+  const handleClassify = async () => {
+    try { toast('开始批量 Web 分类…', 'info'); const r = await classifyBatch(); toast(`分类完成: ${r.classified} 成功, ${r.failed} 失败`, r.failed > 0 ? 'error' : 'success'); qc.invalidateQueries({ queryKey: ['cap-'] }); }
+    catch (e) { toast(`分类失败: ${e}`, 'error'); }
+  };
+
+  // 【改动 1】能力分类视图：按 capability_type 分组
+  const typeGroups = useMemo(() => {
+    const g: Record<string, CapabilityItem[]> = {};
+    items.forEach(item => { const t = item.payload?.capability_type || '未分类'; (g[t] ??= []).push(item); });
+    return g;
+  }, [items]);
+
+  // 【改动 1】应用场景视图：按 application_scenarios 分组
+  const scenarioGroups = useMemo(() => {
+    const g: Record<string, CapabilityItem[]> = {};
+    items.forEach(item => { (item.payload?.application_scenarios ?? ['未标注']).forEach(s => { (g[s] ??= []).push(item); }); });
+    return g;
+  }, [items]);
+
+  // 【改动 1】代码可用性视图：按 has_real_code 分组
+  const codeGroups = useMemo(() => ({
+    '有代码': items.filter(i => i.payload?.implementation_depth?.has_real_code),
+    '无代码': items.filter(i => !i.payload?.implementation_depth?.has_real_code),
+  }), [items]);
+
   return <div className="grid">
-    <div className="view-switch">
-      {(['列表视图', '能力分类', '应用场景', '代码可用性'] as const).map(v => <span key={v} className={`view-pill ${viewMode === v ? 'active' : ''}`} onClick={() => setViewMode(v)}>{v}</span>)}
+    <div className="split">
+      <div className="view-switch" style={{ marginBottom: 0 }}>
+        {(['列表视图', '能力分类', '应用场景', '代码可用性'] as const).map(v => <span key={v} className={`view-pill ${viewMode === v ? 'active' : ''}`} onClick={() => setViewMode(v)}>{v}</span>)}
+      </div>
+      {/* 【改动 3】批量 Web 分类按钮 */}
+      <button className="btn primary" onClick={handleClassify}>批量 Web 分类</button>
     </div>
     {items.length === 0 && <EmptyState title="能力库为空" description="先跑 capabilities.from_news_pipeline 生成能力卡" />}
-    {items.length > 0 && <div className="table-card"><table className="data-table"><thead><tr><th>能力</th><th>场景</th><th>技术点</th><th>评分</th><th>复现</th><th>转化</th></tr></thead><tbody>
+
+    {/* 列表视图 */}
+    {items.length > 0 && viewMode === '列表视图' && <div className="table-card"><table className="data-table"><thead><tr><th>能力</th><th>场景</th><th>技术点</th><th>评分</th><th>复现</th><th>转化</th></tr></thead><tbody>
       {items.map(item => { const p = item.payload ?? {}; return <tr key={item.id} className="clickable" onClick={() => openDetail(item)}>
         <td><div className="table-title">{item.title}</div><div className="table-sub">{p.source_type ?? ''} · {item.source_url?.split('/')[2] ?? ''}</div></td>
         <td>{(p.application_scenarios ?? []).join(' / ')}</td>
@@ -172,6 +210,39 @@ function CapabilityLibrary({ items, openDetail }: { items: CapabilityItem[]; ope
         <td><Badge tone="violet">{p.conversion_status ?? '待评估'}</Badge></td>
       </tr>; })}
     </tbody></table></div>}
+
+    {/* 能力分类视图 */}
+    {items.length > 0 && viewMode === '能力分类' && Object.entries(typeGroups).map(([type, groupItems]) => (
+      <div className="panel" key={type}>
+        <div className="panel-head"><h3>{type}</h3><span>{groupItems.length} 个</span></div>
+        <div className="panel-body"><div className="asis-list">
+          {groupItems.map((item, i) => <CapabilityCard key={item.id} item={item} rank={i + 1} onClick={() => openDetail(item)} onRepro={() => {}} />)}
+        </div></div>
+      </div>
+    ))}
+
+    {/* 应用场景视图 */}
+    {items.length > 0 && viewMode === '应用场景' && Object.entries(scenarioGroups).map(([scenario, groupItems]) => (
+      <div className="panel" key={scenario}>
+        <div className="panel-head"><h3>{scenario}</h3><span>{groupItems.length} 个</span></div>
+        <div className="panel-body"><div className="asis-list">
+          {groupItems.map((item, i) => <CapabilityCard key={item.id} item={item} rank={i + 1} onClick={() => openDetail(item)} onRepro={() => {}} />)}
+        </div></div>
+      </div>
+    ))}
+
+    {/* 代码可用性视图 */}
+    {items.length > 0 && viewMode === '代码可用性' && <div className="grid cols-2">
+      {Object.entries(codeGroups).map(([label, groupItems]) => (
+        <div className="panel" key={label}>
+          <div className="panel-head"><h3>{label}</h3><span>{groupItems.length} 个</span></div>
+          <div className="panel-body"><div className="asis-list">
+            {groupItems.length === 0 && <div className="empty-hint">暂无</div>}
+            {groupItems.map((item, i) => <CapabilityCard key={item.id} item={item} rank={i + 1} onClick={() => openDetail(item)} onRepro={() => {}} />)}
+          </div></div>
+        </div>
+      ))}
+    </div>}
   </div>;
 }
 
@@ -235,6 +306,7 @@ function ReproDetailContent({ task, capabilityItem, openDetail }: { task: ReproT
   return <div className="grid">
     {streaming && <div className="log-stream" ref={logRef}>{logs.map((l, i) => <div key={i} className={`log-line log-${l.kind}`}>{l.line}</div>)}{logs.length === 0 && <div className="muted small">等待日志输出…</div>}</div>}
     {!streaming && (task.log_excerpt || task.result) && <div className="log-stream">{(task.log_excerpt || task.result || '').split('\n').map((line, i) => <div key={i} className={`log-line log-${classifyLogLine(line)}`}>{line}</div>)}</div>}
+    {!streaming && !task.log_excerpt && !task.result && task.status === 'queued' && <div className="empty-hint">任务已排队，等待复现调度…</div>}
     {report && <div className="field-grid">
       <div className="cap-field"><span>报告状态</span><b style={{ color: report.status === 'success' ? 'var(--green)' : 'var(--rose)' }}>{report.status}</b></div>
       <div className="cap-field"><span>Level</span><b>{report.level ?? '-'}</b></div>
@@ -267,11 +339,31 @@ function CapabilityConversion({ conversions, openConversion }: { conversions: Co
   </div>;
 }
 
-// ========== 能力详情抽屉内容 ==========
-function CapabilityDetailContent({ item, onRepro, onConvert }: { item: CapabilityItem; onRepro: () => void; onConvert: () => void }) {
-  const p = item.payload ?? {};
+// ========== 能力详情抽屉内容（改动 2: 转化表单 + 改动 4: fetchDetail）==========
+function CapabilityDetailContent({ itemId, initialItem, onRepro, onConvert }: { itemId: number; initialItem: CapabilityItem; onRepro: () => void; onConvert: (data: ConvertFormData) => Promise<void> }) {
+  // 【改动 4】调 fetchDetail 获取完整 payload
+  const { data: item } = useQuery({
+    queryKey: ['cap-detail', itemId],
+    queryFn: () => fetchDetail(itemId),
+    initialData: initialItem,
+    staleTime: 0,
+  });
+  const p = item?.payload ?? initialItem.payload ?? {};
+
+  // 【改动 2】转化表单状态
+  const [showConvertForm, setShowConvertForm] = useState(false);
+  const [convertData, setConvertData] = useState<ConvertFormData>({ status: '持续观察', scenario: '', owner: '', next_action: '', notes: '' });
+  const [submitting, setSubmitting] = useState(false);
+
+  const handleConvert = async () => {
+    setSubmitting(true);
+    await onConvert(convertData);
+    setSubmitting(false);
+    setShowConvertForm(false);
+  };
+
   return <div className="grid">
-    <div className="drawer-section"><h3>项目摘要</h3><p>{item.summary}</p></div>
+    <div className="drawer-section"><h3>项目摘要</h3><p>{item?.summary ?? initialItem.summary}</p></div>
     {p.repro_summary && <div className="drawer-section"><h3>复现摘要</h3><p style={{ color: 'var(--green)' }}>{p.repro_summary}</p></div>}
     <div className="drawer-section"><h3>能力类型</h3><div className="badges">{p.capability_type && <Badge tone="green">{p.capability_type}</Badge>}{p.sub_type && <Badge tone="sky">{p.sub_type}</Badge>}</div></div>
     {p.application_scenarios && p.application_scenarios.length > 0 && <div className="drawer-section"><h3>应用场景</h3><div className="badges">{p.application_scenarios.map(s => <Badge key={s} tone="violet">{s}</Badge>)}</div></div>}
@@ -280,9 +372,44 @@ function CapabilityDetailContent({ item, onRepro, onConvert }: { item: Capabilit
     {p.implementation_depth && <div className="drawer-section"><h3>实现深度</h3><p>有真实代码: {p.implementation_depth.has_real_code ? '✓' : '✗'} | 有测试: {p.implementation_depth.has_tests ? '✓' : '✗'} | 有评估: {p.implementation_depth.has_eval ? '✓' : '✗'}</p></div>}
     <div className="drawer-section"><h3>复现 & 转化</h3><div className="badges"><Badge tone={p.repro_status === 'candidate' ? 'green' : 'amber'}>{p.repro_status ?? '未知'}</Badge><Badge tone="violet">{p.conversion_status ?? '待评估'}</Badge></div>{p.code_url && <p style={{ marginTop: 6 }}><a href={p.code_url} target="_blank" rel="noopener" style={{ color: 'var(--sky)' }}>{p.code_url}</a></p>}</div>
     {p.usage && Object.keys(p.usage).length > 0 && <div className="drawer-section"><h3>使用说明</h3><p><b>是什么:</b> {p.usage.what ?? ''}</p><p><b>怎么用:</b> {p.usage.how_to_use ?? ''}</p>{p.usage.prerequisites && <p><b>前提:</b> {p.usage.prerequisites}</p>}{p.usage.limitations && <p><b>限制:</b> {p.usage.limitations}</p>}</div>}
+
+    {/* 【改动 2】转化表单 */}
+    {showConvertForm && <div className="drawer-section">
+      <h3>转化信息</h3>
+      <div style={{ display: 'grid', gap: 10 }}>
+        <div>
+          <span className="muted small">状态</span>
+          <select className="select" style={{ width: '100%', marginTop: 4 }} value={convertData.status} onChange={e => setConvertData(d => ({ ...d, status: e.target.value }))}>
+            <option value="待评估">待评估</option>
+            <option value="待复现">待复现</option>
+            <option value="复现中">复现中</option>
+            <option value="持续观察">持续观察</option>
+            <option value="已采用">已采用</option>
+          </select>
+        </div>
+        <div>
+          <span className="muted small">应用场景</span>
+          <input className="search" style={{ width: '100%', marginTop: 4 }} placeholder="如：代码审计 / Agent 工作流" value={convertData.scenario} onChange={e => setConvertData(d => ({ ...d, scenario: e.target.value }))} />
+        </div>
+        <div>
+          <span className="muted small">负责人</span>
+          <input className="search" style={{ width: '100%', marginTop: 4 }} placeholder="分配负责人" value={convertData.owner} onChange={e => setConvertData(d => ({ ...d, owner: e.target.value }))} />
+        </div>
+        <div>
+          <span className="muted small">下一步动作</span>
+          <input className="search" style={{ width: '100%', marginTop: 4 }} placeholder="如：接入 CI pipeline" value={convertData.next_action} onChange={e => setConvertData(d => ({ ...d, next_action: e.target.value }))} />
+        </div>
+        <div>
+          <span className="muted small">备注</span>
+          <input className="search" style={{ width: '100%', marginTop: 4 }} placeholder="补充说明" value={convertData.notes} onChange={e => setConvertData(d => ({ ...d, notes: e.target.value }))} />
+        </div>
+      </div>
+    </div>}
+
     <div className="drawer-actions">
-      <button className="btn primary" onClick={onRepro}>加入复现</button>
-      <button className="btn" onClick={onConvert}>加入转化</button>
+      <button className="pill-button primary" onClick={onRepro}>加入复现</button>
+      {!showConvertForm && <button className="pill-button" onClick={() => setShowConvertForm(true)}>加入转化</button>}
+      {showConvertForm && <button className="pill-button primary" onClick={handleConvert} disabled={submitting}>{submitting ? '提交中…' : '确认转化'}</button>}
     </div>
   </div>;
 }
