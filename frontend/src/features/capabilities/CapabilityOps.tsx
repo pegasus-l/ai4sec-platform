@@ -1,6 +1,7 @@
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import { Card, MetricCard, EmptyState, Drawer } from '../../components/ui';
+import { useToast } from '../../components/Toast';
 import { getJson } from '../../api/client';
 import { fetchRuns, fetchRunDetail, type OpsRun } from '../../api/opsClient';
 import '../../styles/capability.css';
@@ -128,9 +129,20 @@ const capPipelineNames: Record<string, string> = {
   'capabilities.conversion_pipeline': '能力转化（状态推进）',
 };
 
+const capPipelines = [
+  { name: 'capabilities.from_news_pipeline', label: '从资讯派生能力候选（评分+Web分类）' },
+  { name: 'capabilities.web_classify_pipeline', label: 'Web 分类（规则+DeepSeek）' },
+  { name: 'capabilities.repro_pipeline', label: '复现验证（需要 docker+sysbox）' },
+  { name: 'capabilities.conversion_pipeline', label: '能力转化状态推进' },
+];
+
 export function CapabilityOpsRuns() {
+  const qc = useQueryClient();
+  const { toast } = useToast();
   const { data, isLoading } = useQuery({ queryKey: ['cap-ops-runs'], queryFn: fetchRuns, staleTime: 5000 });
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
+  const [selectedPipeline, setSelectedPipeline] = useState('capabilities.from_news_pipeline');
+  const [starting, setStarting] = useState(false);
   const { data: runDetail, isLoading: detailLoading } = useQuery({
     queryKey: ['cap-ops-run-detail', selectedRunId],
     queryFn: () => selectedRunId ? fetchRunDetail(selectedRunId) : Promise.resolve(null as unknown as OpsRun),
@@ -139,14 +151,37 @@ export function CapabilityOpsRuns() {
 
   // 过滤 capabilities 域的运行
   const capRuns = (data?.items ?? []).filter((r) => r.pipeline_name?.includes('capabilit'));
-  const running = capRuns.filter((r) => r.status === 'running');
+  const activeRun = capRuns.find((r) => r.status === 'running');
   const failed = capRuns.filter((r) => r.status === 'failed');
   const succeeded = capRuns.filter((r) => r.status === 'success');
 
+  const handleRun = async () => {
+    setStarting(true);
+    try {
+      const resp = await fetch('/api/runs', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pipeline_name: selectedPipeline, reset: false }) });
+      await resp.json();
+      toast('Pipeline 已启动', 'success');
+      qc.invalidateQueries({ queryKey: ['cap-ops-runs'] });
+    } catch (e) { toast(`启动失败: ${e}`, 'error'); }
+    setStarting(false);
+  };
+
   return <div className="grid" style={{ paddingBottom: 48 }}>
+    {/* Pipeline 触发器 */}
+    <div className="panel">
+      <div className="panel-head"><h3>运行 Pipeline</h3>{activeRun && <span className="status-tag good">运行中: {activeRun.pipeline_name.replace('capabilities.', '')}</span>}</div>
+      <div className="panel-body">
+        <div className="split">
+          <select className="select" value={selectedPipeline} onChange={(e) => setSelectedPipeline(e.target.value)}>
+            {capPipelines.map((p) => <option key={p.name} value={p.name}>{p.label}</option>)}
+          </select>
+          <button className="btn primary" disabled={starting || !!activeRun} onClick={handleRun}>{starting ? '启动中…' : activeRun ? '已有运行中' : '运行 Pipeline'}</button>
+        </div>
+      </div>
+    </div>
     <div className="grid cols-4">
       <MetricCard label="总运行" value={capRuns.length} hint="能力洞察 pipeline" tone="sky" />
-      <MetricCard label="运行中" value={running.length} hint="当前活跃" tone="green" />
+      <MetricCard label="运行中" value={activeRun ? 1 : 0} hint="当前活跃" tone="green" />
       <MetricCard label="成功" value={succeeded.length} hint="已完成" tone="green" />
       <MetricCard label="失败" value={failed.length} hint="需检查" tone="red" />
     </div>
