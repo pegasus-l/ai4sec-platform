@@ -9,6 +9,7 @@ import {
   streamReproLogs, classifyLogLine,
 } from './capabilityQueries';
 import type { CapabilityItem, ReproTask, ConversionRecord, CapabilityView } from './capabilityTypes';
+import '../../styles/capability.css';
 
 const navGroups = [
   { title: '能力洞察', items: [
@@ -235,13 +236,13 @@ function ReproDetailContent({ task, capabilityItem, openDetail }: { task: ReproT
     {streaming && <div className="log-stream" ref={logRef}>{logs.map((l, i) => <div key={i} className={`log-line log-${l.kind}`}>{l.line}</div>)}{logs.length === 0 && <div className="muted small">等待日志输出…</div>}</div>}
     {!streaming && (task.log_excerpt || task.result) && <div className="log-stream">{(task.log_excerpt || task.result || '').split('\n').map((line, i) => <div key={i} className={`log-line log-${classifyLogLine(line)}`}>{line}</div>)}</div>}
     {report && <div className="field-grid">
-      <div className="field"><span>报告状态</span><b style={{ color: report.status === 'success' ? 'var(--green)' : 'var(--rose)' }}>{report.status}</b></div>
-      <div className="field"><span>Level</span><b>{report.level ?? '-'}</b></div>
-      <div className="field"><span>项目类型</span><b>{report.project_type ?? '-'}</b></div>
-      <div className="field"><span>摘要</span><b style={{ fontSize: 11, fontWeight: 400 }}>{report.summary}</b></div>
+      <div className="cap-field"><span>报告状态</span><b style={{ color: report.status === 'success' ? 'var(--green)' : 'var(--rose)' }}>{report.status}</b></div>
+      <div className="cap-field"><span>Level</span><b>{report.level ?? '-'}</b></div>
+      <div className="cap-field"><span>项目类型</span><b>{report.project_type ?? '-'}</b></div>
+      <div className="cap-field"><span>摘要</span><b style={{ fontSize: 11, fontWeight: 400 }}>{report.summary}</b></div>
     </div>}
-    {report?.blockers && report.blockers.length > 0 && <div className="field"><span>Blockers</span>{report.blockers.map((b, i) => <div key={i} style={{ color: 'var(--rose)', fontSize: 11 }}>• {b}</div>)}</div>}
-    {report?.gotchas && report.gotchas.length > 0 && <div className="field"><span>Gotchas</span>{report.gotchas.map((g, i) => <div key={i} style={{ color: 'var(--amber)', fontSize: 11 }}>• {g}</div>)}</div>}
+    {report?.blockers && report.blockers.length > 0 && <div className="cap-field"><span>Blockers</span>{report.blockers.map((b, i) => <div key={i} style={{ color: 'var(--rose)', fontSize: 11 }}>• {b}</div>)}</div>}
+    {report?.gotchas && report.gotchas.length > 0 && <div className="cap-field"><span>Gotchas</span>{report.gotchas.map((g, i) => <div key={i} style={{ color: 'var(--amber)', fontSize: 11 }}>• {g}</div>)}</div>}
     <div className="split">
       <button className="btn primary" onClick={async () => { if (capabilityItem) { try { await startRepro(capabilityItem.id, p.is_web ?? false); toast('已重跑复现', 'success'); qc.invalidateQueries({ queryKey: ['cap-repro'] }); } catch (e) { toast(`重跑失败: ${e}`, 'error'); } } }}>重跑</button>
       <button className="btn" onClick={async () => { try { await stopRepro(task.id); toast('已停止', 'success'); qc.invalidateQueries({ queryKey: ['cap-repro'] }); } catch (e) { toast(`停止失败: ${e}`, 'error'); } }}>停止</button>
@@ -275,7 +276,7 @@ function CapabilityDetailContent({ item, onRepro, onConvert }: { item: Capabilit
     <div className="drawer-section"><h3>能力类型</h3><div className="badges">{p.capability_type && <Badge tone="green">{p.capability_type}</Badge>}{p.sub_type && <Badge tone="sky">{p.sub_type}</Badge>}</div></div>
     {p.application_scenarios && p.application_scenarios.length > 0 && <div className="drawer-section"><h3>应用场景</h3><div className="badges">{p.application_scenarios.map(s => <Badge key={s} tone="violet">{s}</Badge>)}</div></div>}
     {p.tech_points && p.tech_points.length > 0 && <div className="drawer-section"><h3>技术点</h3>{p.tech_points.map((t, i) => <p key={i}>• {t}</p>)}</div>}
-    {p.score_breakdown && Object.keys(p.score_breakdown).length > 0 && <div className="drawer-section"><h3>评分依据</h3><div className="field-grid">{Object.entries(p.score_breakdown).map(([k, v]) => { const pct = Math.round(v * 100); const color = v >= 0.8 ? 'var(--green)' : v >= 0.5 ? 'var(--sky)' : 'var(--amber)'; return <div className="field" key={k}><span>{k}</span><b style={{ color }}>{pct}%</b></div>; })}</div></div>}
+    {p.score_breakdown && Object.keys(p.score_breakdown).length > 0 && <div className="drawer-section"><h3>评分依据</h3><div className="field-grid">{Object.entries(p.score_breakdown).map(([k, v]) => { const pct = Math.round(v * 100); const color = v >= 0.8 ? 'var(--green)' : v >= 0.5 ? 'var(--sky)' : 'var(--amber)'; return <div className="cap-field" key={k}><span>{k}</span><b style={{ color }}>{pct}%</b></div>; })}</div></div>}
     {p.implementation_depth && <div className="drawer-section"><h3>实现深度</h3><p>有真实代码: {p.implementation_depth.has_real_code ? '✓' : '✗'} | 有测试: {p.implementation_depth.has_tests ? '✓' : '✗'} | 有评估: {p.implementation_depth.has_eval ? '✓' : '✗'}</p></div>}
     <div className="drawer-section"><h3>复现 & 转化</h3><div className="badges"><Badge tone={p.repro_status === 'candidate' ? 'green' : 'amber'}>{p.repro_status ?? '未知'}</Badge><Badge tone="violet">{p.conversion_status ?? '待评估'}</Badge></div>{p.code_url && <p style={{ marginTop: 6 }}><a href={p.code_url} target="_blank" rel="noopener" style={{ color: 'var(--sky)' }}>{p.code_url}</a></p>}</div>
     {p.usage && Object.keys(p.usage).length > 0 && <div className="drawer-section"><h3>使用说明</h3><p><b>是什么:</b> {p.usage.what ?? ''}</p><p><b>怎么用:</b> {p.usage.how_to_use ?? ''}</p>{p.usage.prerequisites && <p><b>前提:</b> {p.usage.prerequisites}</p>}{p.usage.limitations && <p><b>限制:</b> {p.usage.limitations}</p>}</div>}
