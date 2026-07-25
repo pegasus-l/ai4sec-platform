@@ -1,98 +1,289 @@
 /**
- * ThreatGraphView — reactflow-based dual-root tree graph.
+ * ThreatGraphView — reactflow-based dual-root tree graph with expand/collapse + dagre auto-layout.
  *
- * Replaces the old two-column list layout with a real graph visualization.
- * Uses buildDualTreeGraph (W2.3) for node/edge generation and
- * graphNodeTypes (W2.4) for custom node rendering.
- *
- * Layout: .graph-layout (graph card + detail panel)
- * Click node → updates right detail panel (does NOT open drawer directly,
- * matching demo v12 behavior).
+ * Features:
+ * - Default collapsed (only roots + ecosystems + asset-categories visible)
+ * - Click ecosystem → expand repos, click repo → expand CVEs
+ * - dagre auto-layout (no manual x/y coordinates)
+ * - Right-side detail panel with node info
  */
 
-import { useMemo, useState } from 'react';
-import ReactFlow, { Background, Controls, type Node } from 'reactflow';
+import { useMemo, useState, useCallback, useEffect, useRef } from 'react';
+import ReactFlow, { Background, Controls, MiniMap, type Node, type ReactFlowInstance } from 'reactflow';
+import 'reactflow/dist/style.css';
+import dagre from '@dagrejs/dagre';
 import { graphNodeTypes } from './GraphNodeTypes';
 import { buildDualTreeGraph } from './buildDualTreeGraph';
-import type {
-  ThreatViewModel,
-  ThreatGraphData,
-  ThreatRepo,
-  ThreatAsset,
-} from '../../../types/threat';
-import 'reactflow/dist/style.css';
+import { useQuery } from '@tanstack/react-query';
+import { fetchAssets, getJson } from '../../../api/client';
+import { assetFromItem, repoFromItem } from '../threatAdapters';
+import type { ThreatGraphData, ThreatRepo, ThreatAsset, ThreatReactFlowNode, ThreatReactFlowEdge } from '../../../types/threat';
+
+/** Node sizes per kind */
+const NODE_SIZE: Record<string, { w: number; h: number }> = {
+  root: { w: 120, h: 60 },
+  ecosystem: { w: 160, h: 50 },
+  repo: { w: 170, h: 50 },
+  vuln: { w: 140, h: 40 },
+  'vuln-more': { w: 140, h: 35 },
+  'asset-category': { w: 160, h: 50 },
+  asset: { w: 150, h: 50 },
+};
+
+/** Run dagre on a subgraph and return positioned nodes. */
+function runDagre(nodes: ThreatReactFlowNode[], edges: ThreatReactFlowEdge[], rankdir: 'LR' | 'RL', offsetX: number) {
+  const g = new dagre.graphlib.Graph();
+  g.setDefaultEdgeLabel(() => ({}));
+  g.setGraph({ rankdir, ranksep: 140, nodesep: 25, marginx: 20, marginy: 20 });
+  nodes.forEach((node) => {
+    const kind = (node.data as ThreatGraphData)?.kind ?? 'repo';
+    const size = NODE_SIZE[kind] ?? { w: 150, h: 50 };
+    g.setNode(node.id, { width: size.w, height: size.h });
+  });
+  edges.forEach((edge) => { g.setEdge(edge.source, edge.target); });
+  dagre.layout(g);
+  return nodes.map((node) => {
+    const dagreNode = g.node(node.id);
+    const kind = (node.data as ThreatGraphData)?.kind ?? 'repo';
+    const size = NODE_SIZE[kind] ?? { w: 150, h: 50 };
+    return { ...node, position: { x: dagreNode.x - size.w / 2 + offsetX, y: dagreNode.y - size.h / 2 } };
+  });
+}
+
+/** Apply dual-tree dagre layout: code tree LR (left→right), asset tree RL (right→left). */
+function applyDagreLayout(nodes: ThreatReactFlowNode[], edges: ThreatReactFlowEdge[]) {
+  const codeKinds = new Set(['root', 'ecosystem', 'repo', 'vuln', 'vuln-more']);
+  const assetKinds = new Set(['asset-category', 'asset']);
+  const codeNodes = nodes.filter((n) => { const k = (n.data as ThreatGraphData)?.kind; return codeKinds.has(k ?? '') || n.id === 'g:code-root'; });
+  const assetNodes = nodes.filter((n) => { const k = (n.data as ThreatGraphData)?.kind; return assetKinds.has(k ?? '') || n.id === 'g:asset-root'; });
+  const codeNodeIds = new Set(codeNodes.map((n) => n.id));
+  const assetNodeIds = new Set(assetNodes.map((n) => n.id));
+  const codeEdges = edges.filter((e) => codeNodeIds.has(e.source) && codeNodeIds.has(e.target));
+  const assetEdges = edges.filter((e) => assetNodeIds.has(e.source) && assetNodeIds.has(e.target));
+  const layoutedCode = runDagre(codeNodes, codeEdges, 'LR', 0);
+  const maxCodeX = layoutedCode.reduce((max, n) => Math.max(max, n.position.x), 0);
+  const layoutedAsset = runDagre(assetNodes, assetEdges, 'RL', maxCodeX + 300);
+  return { layoutedNodes: [...layoutedCode, ...layoutedAsset], layoutedEdges: edges };
+}
 
 interface ThreatGraphViewProps {
-  model: ThreatViewModel;
   openRepo: (repo: ThreatRepo) => void;
   openAsset: (asset: ThreatAsset) => void;
 }
 
-export function ThreatGraphView({ model, openRepo, openAsset }: ThreatGraphViewProps) {
+export function ThreatGraphView({ openRepo, openAsset }: ThreatGraphViewProps) {
   const [activeNodeId, setActiveNodeId] = useState<string | null>(null);
+  const [expandedNodes, setExpandedNodes] = useState<Set<string>>(new Set());
 
-  const graph = useMemo(
-    () => buildDualTreeGraph(model.repos, model.assets, model.vulnDetails ?? {}),
-    [model.repos, model.assets, model.vulnDetails],
+  // Graph needs ALL repos with full payload — fetch independently
+  const { data: allTargetsData } = useQuery({
+    queryKey: ['threats-targets-all'],
+    queryFn: () => getJson<{ items: Record<string, unknown>[] }>('/api/threats/targets?limit=9999&fields=full'),
+    staleTime: 300_000,
+  });
+  const repos = useMemo(() => (allTargetsData?.items ?? []).map(repoFromItem).sort((a, b) => b.score - a.score), [allTargetsData]);
+
+  // Fetch assets separately
+  const { data: assetsData } = useQuery({ queryKey: ['threats-assets'], queryFn: fetchAssets });
+  const assets = useMemo(() => (assetsData?.items ?? []).map(assetFromItem), [assetsData]);
+
+  // Build vulnDetails from repos' payload
+  const vulnDetails = useMemo(() => {
+    const map: Record<string, unknown[]> = {};
+    repos.forEach((r) => {
+      const payload = r.raw as Record<string, unknown>;
+      const cves = Array.isArray(payload.cves) ? payload.cves : [];
+      if (cves.length > 0) map[r.id] = cves;
+    });
+    return map;
+  }, [repos]);
+
+  // Full graph (all nodes/edges)
+  const fullGraph = useMemo(
+    () => buildDualTreeGraph(repos, assets, vulnDetails as Record<string, { id: string; kind: string; severity: string; title: string; description: string; source_type: string; source_url: string; source_path: string; published_date: string; matched_keywords: string[]; patch_refs: string[]; analysis: string; }[]>),
+    [repos, assets, vulnDetails],
   );
 
-  const activeNode =
-    graph.nodes.find((n) => n.id === activeNodeId) as Node<ThreatGraphData> | undefined;
+  // Determine visible node IDs based on expandedNodes
+  const visibleNodeIds = useMemo(() => {
+    const visible = new Set<string>();
 
-  const handleNodeClick = (_evt: unknown, node: Node<ThreatGraphData>) => {
+    // Build a children map: parentId → childIds
+    const childrenMap = new Map<string, string[]>();
+    fullGraph.edges.forEach((edge) => {
+      if (!childrenMap.has(edge.source)) childrenMap.set(edge.source, []);
+      childrenMap.get(edge.source)!.push(edge.target);
+    });
+
+    // Roots always visible
+    visible.add('g:code-root');
+    visible.add('g:asset-root');
+
+    // Always-visible kinds: ecosystem + asset-category
+    fullGraph.nodes.forEach((node) => {
+      const data = node.data as ThreatGraphData;
+      if (data?.kind === 'ecosystem' || data?.kind === 'asset-category') {
+        visible.add(node.id);
+      }
+    });
+
+    // For each expanded node, add its children
+    const expandRecursively = (parentId: string, depth: number) => {
+      const children = childrenMap.get(parentId) || [];
+      children.forEach((childId) => {
+        visible.add(childId);
+        // If child is also expanded, recurse
+        if (expandedNodes.has(childId) && depth < 3) {
+          expandRecursively(childId, depth + 1);
+        }
+      });
+    };
+
+    expandedNodes.forEach((nodeId) => {
+      expandRecursively(nodeId, 0);
+    });
+
+    return visible;
+  }, [fullGraph, expandedNodes]);
+
+  // Filter visible nodes and edges
+  const visibleNodes = useMemo(
+    () => fullGraph.nodes.filter((n) => visibleNodeIds.has(n.id)),
+    [fullGraph, visibleNodeIds],
+  );
+  const visibleEdges = useMemo(
+    () => fullGraph.edges.filter((e) => visibleNodeIds.has(e.source) && visibleNodeIds.has(e.target)),
+    [fullGraph, visibleNodeIds],
+  );
+
+  // Apply dagre layout to visible nodes
+  const { layoutedNodes, layoutedEdges } = useMemo(
+    () => applyDagreLayout(visibleNodes, visibleEdges),
+    [visibleNodes, visibleEdges],
+  );
+
+  // Count children for display
+  const childCount = useMemo(() => {
+    const counts = new Map<string, number>();
+    fullGraph.edges.forEach((edge) => {
+      counts.set(edge.source, (counts.get(edge.source) || 0) + 1);
+    });
+    return counts;
+  }, [fullGraph]);
+
+  // Enhance nodes with expand indicator
+  const enhancedNodes = useMemo(() => {
+    return layoutedNodes.map((node) => {
+      const data = node.data as ThreatGraphData;
+      if (!data) return node;
+      const kind = data.kind;
+      const isExpandable = kind === 'ecosystem' || kind === 'repo' || kind === 'asset-category';
+      const isExpanded = expandedNodes.has(node.id);
+      const count = childCount.get(node.id) || 0;
+      return {
+        ...node,
+        data: {
+          ...data,
+          meta: isExpandable
+            ? (isExpanded ? `▼ ${count}` : `▶ ${count}`)
+            : data.meta,
+        },
+      };
+    });
+  }, [layoutedNodes, expandedNodes, childCount]);
+
+  const activeNode =
+    fullGraph.nodes.find((n) => n.id === activeNodeId) as Node<ThreatGraphData> | undefined;
+
+  const rfRef = useRef<ReactFlowInstance | null>(null);
+
+  // Auto-fit view after expand/collapse changes
+  useEffect(() => {
+    if (rfRef.current) {
+      const timer = setTimeout(() => {
+        rfRef.current?.fitView({ padding: 0.15, duration: 400 });
+      }, 80);
+      return () => clearTimeout(timer);
+    }
+  }, [expandedNodes, layoutedNodes]);
+
+  const handleNodeClick = useCallback((_evt: unknown, node: Node<ThreatGraphData>) => {
+    const data = node.data;
     setActiveNodeId(node.id);
-  };
+    // Directly open drawer for repo/asset nodes
+    if (data?.kind === 'repo' && data.repoId) {
+      const repo = repos.find((r) => r.id === data.repoId);
+      if (repo) { openRepo(repo); return; }
+    }
+    if (data?.kind === 'asset' && data.assetId) {
+      const asset = assets.find((a) => a.id === data.assetId);
+      if (asset) { openAsset(asset); return; }
+    }
+    // Toggle expand for ecosystem, repo, asset-category
+    if (data?.kind === 'ecosystem' || data?.kind === 'repo' || data?.kind === 'asset-category') {
+      setExpandedNodes((prev) => {
+        const next = new Set(prev);
+        if (next.has(node.id)) { next.delete(node.id); } else { next.add(node.id); }
+        return next;
+      });
+    }
+  }, [repos, assets, openRepo, openAsset]);
 
   return (
     <div className="graph-layout">
       <div className="card">
-        <h3>生态树图</h3>
+        <div className="row-title">
+          <h3>生态树图</h3>
+          <div className="split">
+            <button className="btn" onClick={() => {
+              setExpandedNodes(new Set(fullGraph.nodes
+                .filter(n => { const k = (n.data as ThreatGraphData)?.kind; return k === 'ecosystem' || k === 'repo' || k === 'asset-category'; })
+                .map(n => n.id)));
+            }}>一键展开</button>
+            <button className="btn" onClick={() => setExpandedNodes(new Set())}>一键折叠</button>
+          </div>
+        </div>
         <p className="muted small">
-          左侧是代码仓树：代码仓 → 生态/组织 → repo → CVE/issue；右侧是资产树：资产 → 资产源 →
-          具体资产。中间虚线表示推断/弱关联。
+          点击节点展开/折叠，展开/折叠后自动回到内容区域。拖拽平移，滚轮缩放。
         </p>
         <div className="graph-wrap">
           <ReactFlow
-            nodes={graph.nodes}
-            edges={graph.edges}
+            nodes={enhancedNodes}
+            edges={layoutedEdges}
             nodeTypes={graphNodeTypes}
             onNodeClick={handleNodeClick}
+            onInit={(inst) => { rfRef.current = inst; }}
             fitView
             panOnScroll
             zoomOnScroll
             nodesDraggable={false}
             nodesConnectable={false}
+            minZoom={0.1}
+            maxZoom={3}
           >
             <Background gap={48} />
             <Controls showInteractive={false} />
+            <MiniMap
+              nodeColor={(node) => {
+                const kind = (node.data as ThreatGraphData)?.kind;
+                switch (kind) {
+                  case 'root': return '#8b5cf6';
+                  case 'ecosystem': return '#38bdf8';
+                  case 'repo': return '#34d399';
+                  case 'vuln': return '#fb7185';
+                  case 'asset-category': return '#38bdf8';
+                  case 'asset': return '#f59e0b';
+                  default: return '#94a3b8';
+                }
+              }}
+              style={{ background: 'rgba(2,6,23,0.9)' }}
+            />
           </ReactFlow>
           <div className="graph-legend">
             <span className="badge direct">direct</span>
             <span className="badge inferred">inferred</span>
             <span className="badge weak">weak</span>
           </div>
-        </div>
-      </div>
-      <div className="grid">
-        <div className="card">
-          <h3>节点详情</h3>
-          {activeNode?.data ? (
-            <NodeDetail
-              data={activeNode.data}
-              model={model}
-              openRepo={openRepo}
-              openAsset={openAsset}
-            />
-          ) : (
-            <p className="muted">请选择节点。</p>
-          )}
-        </div>
-        <div className="card">
-          <h3>使用方式</h3>
-          <p className="muted small">
-            先从左右两个根节点开始看结构；点生态/组织看下面有哪些样例 repo；点 repo
-            看风险和漏洞；点 CVE/issue 看漏洞详情；点资产看资产详情。资产到代码仓的关系不作为确定父子关系，只以虚线显示。
-          </p>
         </div>
       </div>
     </div>
@@ -102,12 +293,14 @@ export function ThreatGraphView({ model, openRepo, openAsset }: ThreatGraphViewP
 /** Right-panel detail content — 7 cases based on node.data.kind. */
 function NodeDetail({
   data,
-  model,
+  repos,
+  assets,
   openRepo,
   openAsset,
 }: {
   data: ThreatGraphData;
-  model: ThreatViewModel;
+  repos: ThreatRepo[];
+  assets: ThreatAsset[];
   openRepo: (r: ThreatRepo) => void;
   openAsset: (a: ThreatAsset) => void;
 }) {
@@ -117,14 +310,8 @@ function NodeDetail({
         <p>{data.title}根节点。</p>
         <p className="muted small">{data.meta}</p>
         <div className="asset-meta" style={{ marginTop: 12 }}>
-          <div>
-            <b>{model.repos.length}</b>
-            <span>demo repo</span>
-          </div>
-          <div>
-            <b>{model.assets.length}</b>
-            <span>demo asset</span>
-          </div>
+          <div><b>{repos.length}</b><span>repo</span></div>
+          <div><b>{assets.length}</b><span>asset</span></div>
         </div>
       </div>
     );
@@ -132,7 +319,7 @@ function NodeDetail({
 
   if (data.kind === 'ecosystem') {
     const ecoId = data.ecoId ?? '';
-    const ecoRepos = model.repos.filter(
+    const ecoRepos = repos.filter(
       (r) => r.org.toLowerCase() === ecoId.toLowerCase(),
     );
     return (
@@ -141,107 +328,63 @@ function NodeDetail({
           <h3>{data.title}</h3>
           <span className="badge">{ecoRepos.length} repo</span>
         </div>
-        <p className="muted small">
-          二级节点来自华为开源生态组织分类。
-        </p>
+        <p className="muted small">{data.meta}</p>
         {ecoRepos.length > 0 ? (
           <div className="timeline">
             {ecoRepos.slice(0, 5).map((repo) => (
-              <div
-                key={repo.id}
-                className="timeline-item clickable"
-                onClick={() => openRepo(repo)}
-              >
-                <b>{repo.org}/{repo.name}</b>
-                <br />
-                <span className="muted small">
-                  {repo.surface} · Grade {repo.grade || '?'} · CVE {repo.cve}
-                </span>
+              <div key={repo.id} className="timeline-item clickable" onClick={() => openRepo(repo)}>
+                <b>{repo.org}/{repo.name}</b><br />
+                <span className="muted small">{repo.surface} · Grade {repo.grade || '?'} · CVE {repo.cve}</span>
               </div>
             ))}
           </div>
-        ) : (
-          <p className="muted">当前暂无该生态的样例 repo。</p>
-        )}
+        ) : <p className="muted">当前暂无该生态的样例 repo。</p>}
       </div>
     );
   }
 
   if (data.kind === 'repo' && data.repoId) {
-    const repo = model.repos.find((r) => r.id === data.repoId);
+    const repo = repos.find((r) => r.id === data.repoId);
     if (!repo) return <p className="muted">仓库不存在。</p>;
     return (
       <div>
-        <div className="row-title">
-          <h3>{repo.org}/{repo.name}</h3>
-          <span className="badge">{repo.grade || '?'}</span>
-        </div>
-        <p className="muted small">
-          {repo.surface} · score {Math.round(repo.score)} · CVE {repo.cve} · Sec {repo.sec}
-        </p>
-        <p className="muted small" style={{ marginTop: 8 }}>
-          {repo.summary}
-        </p>
+        <div className="row-title"><h3>{repo.org}/{repo.name}</h3><span className="badge">{repo.grade || '?'}</span></div>
+        <p className="muted small">{repo.surface} · score {Math.round(repo.score)} · CVE {repo.cve} · Sec {repo.sec}</p>
+        <p className="muted small" style={{ marginTop: 8 }}>{repo.summary}</p>
         <div className="split" style={{ marginTop: 10 }}>
-          <button className="btn primary" onClick={() => openRepo(repo)}>
-            查看详情
-          </button>
+          <button className="btn primary" onClick={() => openRepo(repo)}>查看详情</button>
         </div>
       </div>
     );
   }
 
   if (data.kind === 'vuln') {
-    return (
-      <div>
-        <h3>{data.title}</h3>
-        <p className="muted small">严重级别: {data.meta}</p>
-      </div>
-    );
+    return <div><h3>{data.title}</h3><p className="muted small">严重级别: {data.meta}</p></div>;
   }
 
   if (data.kind === 'vuln-more') {
-    return (
-      <div>
-        <p>{data.title}</p>
-        <p className="muted small">该仓库还有更多漏洞/安全线索未在图上展开。</p>
-      </div>
-    );
+    return <div><p>{data.title}</p><p className="muted small">该仓库还有更多漏洞/安全线索未在图上展开。</p></div>;
   }
 
   if (data.kind === 'asset-category') {
     return (
       <div>
-        <div className="row-title">
-          <h3>{data.title}</h3>
-          <span className="badge">{data.meta}</span>
-        </div>
-        <p className="muted small">
-          资产分支和代码仓分支分开展示。资产到代码仓的边为 inferred/weak，需要人工复核。
-        </p>
+        <div className="row-title"><h3>{data.title}</h3><span className="badge">{data.meta}</span></div>
+        <p className="muted small">资产分支和代码仓分支分开展示。资产到代码仓的边为 inferred/weak，需要人工复核。</p>
       </div>
     );
   }
 
   if (data.kind === 'asset' && data.assetId) {
-    const asset = model.assets.find((a) => a.id === data.assetId);
+    const asset = assets.find((a) => a.id === data.assetId);
     if (!asset) return <p className="muted">资产不存在。</p>;
     return (
       <div>
-        <div className="row-title">
-          <h3>{asset.title}</h3>
-          <span className="badge">{asset.confidence || 'unknown'}</span>
-        </div>
-        <p className="muted small">
-          {asset.source} · {asset.sourceType} · {asset.label ?? asset.category}
-        </p>
-        <p className="muted small" style={{ marginTop: 8 }}>
-          {asset.summary}
-        </p>
+        <div className="row-title"><h3>{asset.title}</h3><span className="badge">{asset.confidence || 'unknown'}</span></div>
+        <p className="muted small">{asset.source} · {asset.sourceType} · {asset.label ?? asset.category}</p>
+        <p className="muted small" style={{ marginTop: 8 }}>{asset.summary}</p>
         <div className="split" style={{ marginTop: 10 }}>
-          <button className="btn primary" onClick={() => openAsset(asset)}>
-            查看详情
-          </button>
+          <button className="btn primary" onClick={() => openAsset(asset)}>查看详情</button>
         </div>
       </div>
     );

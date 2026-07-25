@@ -86,14 +86,14 @@ def test_run_pipeline_endpoint_triggers_import() -> None:
     client = TestClient(app)
     pipelines = client.get("/api/runs/pipelines")
     assert pipelines.status_code == 200
-    assert any(item["name"] == "news.ai_for_sec_local_raw_import" for item in pipelines.json()["items"])
+    assert any(item["name"] == "news.legacy_raw_pipeline" for item in pipelines.json()["items"])
     assert not any(item["name"] == "legacy.sample_import" for item in pipelines.json()["items"])
 
-    response = client.post("/api/runs", json={"pipeline_name": "news.ai_for_sec_local_raw_import", "reset": True, "params": {"date": "2026-07-10"}})
+    response = client.post("/api/runs", json={"pipeline_name": "news.legacy_raw_pipeline", "reset": True, "params": {"date": "2026-07-10"}})
     assert response.status_code == 200
     data = response.json()
     assert data["status"] == "success"
-    assert data["pipeline_name"] == "news.ai_for_sec_local_raw_import"
+    assert data["pipeline_name"] == "news.legacy_raw_pipeline"
 
     detail = client.get(f"/api/runs/{data['run_id']}")
     assert detail.status_code == 200
@@ -106,25 +106,24 @@ def test_raw_pipeline_builds_from_source_raw_files() -> None:
     client = TestClient(app)
     response = client.post(
         "/api/runs",
-        json={"pipeline_name": "news.ai_for_sec_local_raw_import", "reset": True, "params": {"date": "2026-07-10"}},
+        json={"pipeline_name": "news.legacy_raw_pipeline", "reset": True, "params": {"date": "2026-07-10"}},
     )
     assert response.status_code == 200
     data = response.json()
     assert data["status"] == "success"
-    assert data["pipeline_name"] == "news.ai_for_sec_local_raw_import"
+    assert data["pipeline_name"] == "news.legacy_raw_pipeline"
     step_names = [step["name"] for step in data["summary"]["steps"]]
-    assert step_names == ["import_ai_for_sec_raw", "normalize_ai_for_sec_raw", "build_raw_news_domain_items"]
+    assert step_names == ["collect_news_sources", "extract_news_references", "normalize_news_items", "deduplicate_news_candidates", "resolve_news_candidate_links", "gate_news_candidates_with_tech_map", "enrich_news_candidates_with_model", "build_news_items", "build_news_daily_report", "audit_news_quality"]
 
     detail = client.get(f"/api/runs/{data['run_id']}").json()
     artifact_types = {item["artifact_type"] for item in detail["artifacts"]}
-    assert "raw_arxiv" in artifact_types
+    assert "raw_news_arxiv" in artifact_types
     assert "normalized_news_items" in artifact_types
     assert "manifest" in artifact_types
 
     news = client.get("/api/news/today").json()
-    assert news["items"]
-    first = news["items"][0]
-    assert "raw_pipeline" in first["tags"]
+    assert news["highlights"]
+    assert news["kpis"]["new_count"] > 0
 
 
 def test_v9_contract_endpoint_aliases_exist() -> None:
@@ -182,7 +181,7 @@ def test_capability_pipeline_assesses_news_candidates() -> None:
     client = TestClient(app)
     news_run = client.post(
         "/api/runs",
-        json={"pipeline_name": "news.ai_for_sec_raw_pipeline", "reset": True, "params": {"date": "2026-07-10"}},
+        json={"pipeline_name": "news.legacy_raw_pipeline", "reset": True, "params": {"date": "2026-07-10"}},
     )
     assert news_run.status_code == 200
     response = client.post("/api/runs", json={"pipeline_name": "capabilities.from_news_pipeline", "params": {"limit": 10}})
@@ -252,7 +251,7 @@ def test_huawei_full_migration_pipeline_runs_and_exposes_reports(monkeypatch) ->
 def test_frontend_v9_contract_returns_all_page_blocks(monkeypatch) -> None:
     _patch_threat_connector_records(monkeypatch)
     client = TestClient(app)
-    client.post("/api/runs", json={"pipeline_name": "news.ai_for_sec_local_raw_import", "reset": True, "params": {"date": "2026-07-10"}})
+    client.post("/api/runs", json={"pipeline_name": "news.legacy_raw_pipeline", "reset": True, "params": {"date": "2026-07-10"}})
     client.post("/api/runs", json={"pipeline_name": "capabilities.from_news_pipeline", "params": {"limit": 3}})
     client.post("/api/runs", json={"pipeline_name": "threats.huawei_raw_pipeline", "params": {"limit": 10}})
     client.post("/api/runs", json={"pipeline_name": "vulnerabilities.material_local_raw_import", "params": {"report_limit": 1, "item_limit": 10}})

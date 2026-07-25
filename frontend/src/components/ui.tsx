@@ -1,7 +1,7 @@
-import type { PropsWithChildren, ReactNode } from 'react';
+import type { PropsWithChildren, ReactNode, CSSProperties } from 'react';
 
-export function Card({ children, className = '', onClick }: PropsWithChildren<{ className?: string; onClick?: () => void }>) {
-  return <section className={`card ${className}`} onClick={onClick}>{children}</section>;
+export function Card({ children, className = '', onClick, style }: PropsWithChildren<{ className?: string; onClick?: () => void; style?: CSSProperties }>) {
+  return <section className={`card ${className}`} onClick={onClick} style={style}>{children}</section>;
 }
 
 export function Badge({ children, tone = 'slate' }: PropsWithChildren<{ tone?: 'slate' | 'sky' | 'green' | 'amber' | 'red' | 'violet' }>) {

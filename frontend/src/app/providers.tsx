@@ -1,6 +1,7 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { PropsWithChildren } from 'react';
 import { DrawerStackProvider } from '../components/DrawerStack';
+import { ToastProvider } from '../components/Toast';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -11,7 +12,9 @@ const queryClient = new QueryClient({
 export function Providers({ children }: PropsWithChildren) {
   return (
     <QueryClientProvider client={queryClient}>
-      <DrawerStackProvider>{children}</DrawerStackProvider>
+      <ToastProvider>
+        <DrawerStackProvider>{children}</DrawerStackProvider>
+      </ToastProvider>
     </QueryClientProvider>
   );
 }

@@ -41,7 +41,7 @@ def extract_items(source: str, data: Any) -> list[dict[str, Any]]:
         return [item for item in data["repositories"] if isinstance(item, dict)]
     if source in {"rss", "x", "asis", "awesome"}:
         refs: list[dict[str, Any]] = []
-        for key in ["paper_refs", "repo_refs", "high_value_items"]:
+        for key in ["new_papers", "new_repos", "paper_refs", "repo_refs", "high_value_items"]:
             value = data.get(key)
             if isinstance(value, list):
                 refs.extend(item for item in value if isinstance(item, dict))

@@ -1,8 +1,55 @@
 from __future__ import annotations
 
-from ai4sec_platform.sources.connectors.base_file import JsonFileConnector
+import urllib.parse
+import xml.etree.ElementTree as ET
+
+from ai4sec_platform.schemas.sources import SourceFetchRequest, SourceHealth
+from ai4sec_platform.sources.connectors.news.base_live import NewsLiveConnector
+from ai4sec_platform.sources.result import SourceFetchResult
 
 
-class ArxivConnector(JsonFileConnector):
+class ArxivConnector(NewsLiveConnector):
     connector_name = "arxiv"
-    source_type = "arxiv"
+    source_type = "paper"
+    api_url = "https://export.arxiv.org/api/query"
+
+    def health_check(self, config: dict) -> SourceHealth:
+        return SourceHealth(status="ok", message=self.api_url)
+
+    def fetch(self, request: SourceFetchRequest) -> SourceFetchResult:
+        if self.has_local_path(request):
+            return super().fetch(request)
+        query = str(request.params.get("query") or request.config.get("query") or 'all:"AI security"')
+        max_results = min(100, int(request.params.get("max_results") or request.config.get("max_results") or 30))
+        url = f"{self.api_url}?{urllib.parse.urlencode({'search_query': query, 'start': 0, 'max_results': max_results, 'sortBy': 'submittedDate', 'sortOrder': 'descending'})}"
+        try:
+            raw = self.get_bytes(url, timeout=int(request.params.get("timeout_seconds") or 30))
+            items = _parse_feed(raw)
+            return SourceFetchResult(source_name=request.source_name, connector_name=self.connector_name, items=items, raw_text=raw.decode("utf-8", errors="replace"), metadata={"url": url, "query": query})
+        except Exception as exc:
+            return SourceFetchResult(source_name=request.source_name, connector_name=self.connector_name, metadata={"url": url, "query": query}, errors=[str(exc)])
+
+
+def _parse_feed(raw: bytes) -> list[dict]:
+    root = ET.fromstring(raw)
+    namespace = {"atom": "http://www.w3.org/2005/Atom"}
+    items = []
+    for entry in root.findall("atom:entry", namespace):
+        links = {link.attrib.get("rel", "alternate"): link.attrib.get("href", "") for link in entry.findall("atom:link", namespace)}
+        categories = [node.attrib.get("term", "") for node in entry.findall("atom:category", namespace)]
+        items.append({
+            "id": _text(entry, "atom:id", namespace),
+            "title": _text(entry, "atom:title", namespace),
+            "summary": _text(entry, "atom:summary", namespace),
+            "published": _text(entry, "atom:published", namespace),
+            "updated": _text(entry, "atom:updated", namespace),
+            "url": links.get("alternate") or _text(entry, "atom:id", namespace),
+            "authors": [_text(author, "atom:name", namespace) for author in entry.findall("atom:author", namespace)],
+            "categories": [category for category in categories if category],
+        })
+    return items
+
+
+def _text(node: ET.Element, path: str, namespace: dict[str, str]) -> str:
+    child = node.find(path, namespace)
+    return " ".join((child.text or "").split()) if child is not None else ""

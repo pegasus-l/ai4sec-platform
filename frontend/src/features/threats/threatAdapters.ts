@@ -1,24 +1,24 @@
-import type { FrontendContract } from '../../types/frontend';
 import type {
   ThreatAsset,
-  ThreatGraphEdge,
-  ThreatGraphNode,
   ThreatRepo,
-  ThreatSummary,
-  ThreatViewModel,
   ThreatVulnDetail,
-  ThreatVulnDetailMap,
 } from '../../types/threat';
-import {
-  surfaces as staticSurfaces,
-  opsRules as staticOpsRules,
-  opsManualQueue as staticOpsManualQueue,
-  staticDemoAssets,
-} from './threatStaticData';
 
 // ============================================================================
 // Helpers
 // ============================================================================
+function formatBytes(bytes: number): string {
+  if (!bytes || bytes <= 0) return '';
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  let value = bytes;
+  let unitIndex = 0;
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024;
+    unitIndex++;
+  }
+  return `${value.toFixed(1)} ${units[unitIndex]}`;
+}
+
 const asRecord = (value: unknown): Record<string, unknown> =>
   value && typeof value === 'object' && !Array.isArray(value)
     ? (value as Record<string, unknown>)
@@ -112,25 +112,13 @@ function vulnDetailFromBroadSec(entry: Record<string, unknown>): ThreatVulnDetai
   };
 }
 
-/**
- * Build ThreatVulnDetailMap (repoId → [ThreatVulnDetail]) from contract's repos.
- * Reads signals.cves + signals.sa_items + signals.broad_sec_items per repo.
- */
-function buildVulnDetails(repos: ThreatRepo[], repoItems: Array<Record<string, unknown>>): ThreatVulnDetailMap {
-  const map: ThreatVulnDetailMap = {};
-  repoItems.forEach((item, index) => {
-    const repo = repos[index];
-    if (!repo) return;
-    const payload = payloadOf(item);
-    const cves = asArray<Record<string, unknown>>(payload.cves).map(vulnDetailFromCve);
-    const saItems = asArray<Record<string, unknown>>(payload.sa_items).map(vulnDetailFromSa);
-    const broadSec = asArray<Record<string, unknown>>(payload.broad_sec_items).map(vulnDetailFromBroadSec);
-    const all = [...cves, ...saItems, ...broadSec];
-    if (all.length > 0) {
-      map[repo.id] = all;
-    }
-  });
-  return map;
+/** Build vuln details for a single domain_item (used by RepoDrawer). */
+export function vulnDetailsFromItem(item: Record<string, unknown>): ThreatVulnDetail[] {
+  const payload = payloadOf(item);
+  const cves = asArray<Record<string, unknown>>(payload.cves).map(vulnDetailFromCve);
+  const saItems = asArray<Record<string, unknown>>(payload.sa_items).map(vulnDetailFromSa);
+  const broadSec = asArray<Record<string, unknown>>(payload.broad_sec_items).map(vulnDetailFromBroadSec);
+  return [...cves, ...saItems, ...broadSec];
 }
 
 // ============================================================================
@@ -149,7 +137,7 @@ function inferSurface(org: string, name: string, summary: string): string {
   return 'unknown';
 }
 
-function repoFromItem(item: Record<string, unknown>): ThreatRepo {
+export function repoFromItem(item: Record<string, unknown>): ThreatRepo {
   const payload = payloadOf(item);
   const scoring = scoringOf(payload);
   const attackSurface = attackSurfaceOf(payload);
@@ -165,8 +153,17 @@ function repoFromItem(item: Record<string, unknown>): ThreatRepo {
   const cve = asNumber(payload.cve_count);
   const sa = asNumber(payload.sa_count);
   const broad = asNumber(payload.broad_sec_count);
-  // Prefer attack_surface.score (v12 nested), fall back to scoring.score, then item.score
-  const score = asNumber(item.score ?? attackSurface.score ?? scoring.score);
+  // AI calibration overrides original rule scores if present
+  // Fallback: pipeline writes to risk_assessment.semantic_review, API writes to ai_calibration
+  const aiCal = asRecord(payload.ai_calibration);
+  const riskAssessment = asRecord(payload.risk_assessment);
+  const semanticReview = asRecord(riskAssessment.semantic_review);
+  const calibratedSurface = asString(aiCal.calibrated_surface || semanticReview.calibrated_surface);
+  const calibratedScore = (aiCal.calibrated_score != null ? asNumber(aiCal.calibrated_score) : undefined)
+    ?? (semanticReview.calibrated_score != null ? asNumber(semanticReview.calibrated_score) : undefined);
+  // Use attack_surface score + grade (same scoring system, consistent A/B/C)
+  // If AI calibrated score exists, use it instead
+  const score = calibratedScore ?? asNumber(attackSurface.score ?? item.score ?? scoring.score);
   // Prefer attack_surface.reasons (v12 nested), fall back to scoring.reasons
   const reasons = asArray<string>(attackSurface.reasons ?? scoring.reasons).slice(0, 8);
   const evidence = [
@@ -186,10 +183,13 @@ function repoFromItem(item: Record<string, unknown>): ThreatRepo {
     url: sourceUrl,
     summary: asString(item.summary ?? payload.summary),
     score,
-    // Prefer attack_surface.grade (v12 nested: "B"), fall back to scoring.grade, then risk_grade
-    grade: asString(attackSurface.grade ?? scoring.grade ?? item.risk_grade ?? payload.risk_grade ?? ''),
+    // If AI calibrated score exists, recompute grade from it
+    grade: calibratedScore != null
+      ? (calibratedScore >= 70 ? 'A' : calibratedScore >= 50 ? 'B' : calibratedScore >= 30 ? 'C' : 'D')
+      : asString(attackSurface.grade ?? item.risk_grade ?? payload.risk_grade ?? ''),
     status: asString(item.status, 'active'),
-    surface: (asString(attackSurface.primary_attack_surface) || asString(asRecord(attackSurface.signals).primary_attack_surface)) || inferSurface(inferredOrg, inferredName, asString(item.summary ?? payload.summary)),
+    // AI calibrated surface takes priority over rule-based surface
+    surface: calibratedSurface || (asString(attackSurface.primary_attack_surface) || asString(asRecord(attackSurface.signals).primary_attack_surface)) || inferSurface(inferredOrg, inferredName, asString(item.summary ?? payload.summary)),
     stars: asNumber(raw.star_count ?? raw.stargazers_count ?? payload.stars),
     cve,
     sa,
@@ -204,6 +204,7 @@ function repoFromItem(item: Record<string, unknown>): ThreatRepo {
     evidence,
     assets: asArray<string>(payload.assets),
     riskAssessment: asRecord(payload.risk_assessment),
+    aiCalibrated: Boolean(calibratedSurface || aiCal.calibrated_attack_surface || semanticReview.attack_surface_calibration || aiCal.calibrated_score != null || semanticReview.calibrated_score != null),
     raw: payload,
   };
 }
@@ -214,10 +215,10 @@ function repoFromItem(item: Record<string, unknown>): ThreatRepo {
 
 function inferAssetType(source: string, raw: Record<string, unknown>): string {
   const sourceLower = source.toLowerCase();
-  if (sourceLower.includes('firmware') || sourceLower.includes('openx')) return 'openx_firmware';
+  if (sourceLower.includes('openx')) return 'openx_firmware';
+  if (sourceLower.includes('firmware')) return 'firmware';
   if (sourceLower.includes('ascendhub') || sourceLower.includes('image')) return 'image';
   if (sourceLower.includes('mirror')) return 'mirror';
-  if (sourceLower.includes('firmware')) return 'firmware';
   return asString(raw.type ?? raw.source_type, 'unknown');
 }
 
@@ -229,171 +230,101 @@ function inferAssetConfidence(raw: Record<string, unknown>): 'direct' | 'inferre
   return 'unknown';
 }
 
-function assetFromItem(item: Record<string, unknown>): ThreatAsset {
+export function assetFromItem(item: Record<string, unknown>): ThreatAsset {
   const payload = payloadOf(item);
   const raw = asRecord(payload.raw);
   const source = asString(item.source ?? payload.source, 'asset');
   const inferredType = inferAssetType(source, raw);
+  // Different sources have different field names — map per source
+  const isMirror = source === 'mirrors';
+  const isAscendhub = source === 'ascendhub';
+  const isFirmware = source === 'firmware';
+  const isOpenx = source === 'openx_huawei';
+
+  // model/name: mirrors→displayName, firmware→modelName, ascendhub→name, openx→name
+  const modelField = isMirror ? raw.displayName
+    : isFirmware ? raw.modelName ?? raw.productName
+    : isAscendhub ? raw.name
+    : isOpenx ? raw.name
+    : raw.displayName ?? raw.name;
+
+  // version: only ascendhub.tag is a real version (e.g. "3.0.0-800I-A3")
+  // mirrors.tag is a category label ("gitcode"), NOT a version — skip it
+  const versionField = isAscendhub
+    ? asString(raw.tag)
+    : isMirror
+      ? (raw.releaseCount && raw.releaseCount !== 0 ? String(raw.releaseCount) : '')
+      : '';
+
+  // count: mirrors→packageCount, ascendhub→downloads (different field name!)
+  const packageCount = isMirror ? asNumber(raw.packageCount) : 0;
+  const downloadCount = isMirror ? asNumber(raw.downloadCount) : isAscendhub ? asNumber(raw.downloads) : 0;
+  const storageBytes = isMirror ? asNumber(raw.storageSize) : 0;
+
+  // latest: mirrors→validateTime, ascendhub→updateTime, openx→last_modified
+  const latestField = isMirror ? asString(raw.validateTime)
+    : isAscendhub ? asString(raw.updateTime)
+    : isOpenx ? asString(raw.last_modified)
+    : '';
+
   return {
     id: asString(item.id ?? payload.item_key ?? item.title),
-    title: asString(item.title ?? payload.title ?? raw.name ?? raw.displayName, '未命名资产'),
+    title: asString(item.title ?? payload.title ?? modelField, '未命名资产'),
     source,
     sourceType: asString(payload.source_type ?? raw.source_type ?? source),
     category: asString(raw.category ?? raw.catalog ?? source),
-    url: asString(item.source_url ?? payload.url ?? raw.url ?? raw.downloadUrl ?? raw.webUrl),
+    url: asString(item.source_url ?? payload.url ?? raw.url ?? raw.webUrl),
     summary: asString(item.summary ?? payload.summary ?? raw.description ?? raw.msg),
     score: asNumber(item.score ?? payload.risk_score),
     status: asString(item.status, 'active'),
     tags: asArray<string>(item.tags),
     raw: payload,
-    // v12 extended fields (mapped from raw)
+    // v12 extended fields — mapped per source
     type: inferredType,
-    label: asString(raw.label ?? raw.displayName, source),
-    model: asString(raw.model ?? raw.name ?? raw.displayName),
-    version: asString(raw.version ?? raw.tag ?? raw.releaseCount),
-    count: asString(raw.count ?? raw.storageSize ?? raw.downloadCount),
-    latest: asString(raw.latest ?? raw.validateTime ?? raw.updated_at),
-    meta: asString(raw.meta ?? raw.msg),
-    link: asString(raw.webUrl ?? raw.url ?? raw.downloadUrl),
+    label: asString(modelField, source),
+    model: asString(modelField, '-'),
+    version: asString(versionField) || '-',
+    count: packageCount > 0 ? String(packageCount) : (storageBytes > 0 ? formatBytes(storageBytes) : '-'),
+    latest: asString(latestField) || '-',
+    meta: asString(raw.msg ?? raw.description),
+    link: asString(raw.mirrorPath ?? raw.webUrl ?? raw.url),
     confidence: inferAssetConfidence(raw),
-    repos: asArray<string>(raw.repos),
-    evidence: asString(raw.evidence ?? raw.msg ?? payload.summary),
+    repos: (() => {
+      // If AI association was done, use those repo_ids
+      const aiAssoc = asRecord(payload.ai_association);
+      const associations = asArray<Record<string, unknown>>(aiAssoc.associations);
+      if (associations.length > 0) {
+        return associations.map(a => asString(a.repo_id)).filter(Boolean);
+      }
+      return asArray<string>(raw.repos);
+    })(),
+    evidence: asString(raw.msg ?? raw.description ?? payload.summary),
+    // Per-source rich fields
+    catalog: isMirror ? asArray<string>(raw.catalog) : isAscendhub ? asArray<string>(raw.labelNames) : [],
+    syncState: isMirror ? asString(raw.syncState) : '',
+    upstreamUrl: isMirror ? asString(asArray<Record<string, unknown>>(raw.sources)[0]?.webUrl) : '',
+    mirrorPath: isMirror ? asString(raw.mirrorPath) : '',
+    publisher: isAscendhub ? asString(raw.publisher) : '',
+    labelNames: isAscendhub ? asArray<string>(raw.labelNames) : [],
+    size: isAscendhub ? asString(raw.size) : isOpenx ? asString(raw.size) : '',
+    fullDescription: isAscendhub ? asString(raw.fullDescription ?? raw.description) : '',
+    cannVersion: isFirmware ? asString(raw.cannVersion) : '',
+    online: isMirror ? Boolean(raw.online) : isAscendhub ? Boolean(raw.open) : undefined,
+    official: isMirror ? Boolean(raw.official) : undefined,
+    downloadCount: isMirror ? (asNumber(raw.downloadCount) || undefined) : isAscendhub ? (asNumber(raw.downloads) || undefined) : undefined,
+    deviceModel: isOpenx ? asString(payload.device_model) : (isFirmware ? asString(raw.modelName) : ''),
+    softwareVersion: isOpenx ? asString(payload.software_version) : '',
+    fileType: isOpenx ? asString(payload.file_type) : '',
+    hubId: isAscendhub ? asString(payload.hub_id ?? raw.hub_id) : '',
+    versionTags: isAscendhub ? asArray<Record<string, unknown>>(payload.version_tags).map((t) => ({
+      tag: asString(t.tag), size: asString(t.size), update_time: asString(t.update_time),
+      architectures: asArray<string>(t.architectures),
+    })) : [],
   };
 }
 
 // ============================================================================
-// buildSummary / buildGraph (unchanged logic, kept for backward compat)
+// Re-export static data for graph builder
 // ============================================================================
 
-function artifactData(source: unknown): Record<string, unknown> {
-  return asRecord(asRecord(source).data);
-}
-
-function buildSummary(
-  repos: ThreatRepo[],
-  assets: ThreatAsset[],
-  cveScout: Record<string, unknown>,
-  attackSurface: Record<string, unknown>,
-): ThreatSummary {
-  const scoutMeta = asRecord(artifactData(cveScout).meta);
-  const attackReport = asRecord(artifactData(attackSurface).report);
-  const grades = asRecord(attackReport.by_grade) as Record<string, number>;
-  return {
-    totalRepos: asNumber(scoutMeta.total_projects_in, repos.length),
-    highRisk: repos.filter((repo) => repo.score >= 75 || repo.status.includes('高风险')).length,
-    withCve: repos.filter((repo) => repo.cve > 0).length,
-    totalCve: asNumber(scoutMeta.total_cve_ids, repos.reduce((sum, repo) => sum + repo.cve, 0)),
-    uniqueCve: asNumber(scoutMeta.unique_cve_ids),
-    totalSa: asNumber(scoutMeta.total_sa_ids, repos.reduce((sum, repo) => sum + repo.sa, 0)),
-    broadSecurity: asNumber(scoutMeta.total_broad_sec_items),
-    assets: assets.length,
-    grades,
-    scanModes: asRecord(scoutMeta.scan_mode_stats) as Record<string, number>,
-    sourceStats: asRecord(scoutMeta.source_stats) as Record<string, number>,
-  };
-}
-
-function buildGraph(
-  repos: ThreatRepo[],
-  assets: ThreatAsset[],
-): { nodes: ThreatGraphNode[]; edges: ThreatGraphEdge[] } {
-  const nodes = new Map<string, ThreatGraphNode>();
-  const edges: ThreatGraphEdge[] = [];
-  const addNode = (node: ThreatGraphNode) => nodes.set(node.id, node);
-  repos.slice(0, 40).forEach((repo) => {
-    const orgId = `org:${repo.org}`;
-    const repoId = `repo:${repo.id}`;
-    const surfaceId = `surface:${repo.surface || 'unknown'}`;
-    addNode({ id: orgId, label: repo.org, type: 'org' });
-    addNode({
-      id: repoId,
-      label: repo.name,
-      type: 'repo',
-      score: repo.score,
-      meta: { status: repo.status, url: repo.url },
-    });
-    addNode({ id: surfaceId, label: repo.surface || 'unknown', type: 'surface' });
-    edges.push({ id: `${orgId}->${repoId}`, source: orgId, target: repoId });
-    edges.push({
-      id: `${repoId}->${surfaceId}`,
-      source: repoId,
-      target: surfaceId,
-      label: 'surface',
-    });
-    if (repo.cve > 0) {
-      const cveId = `cve:${repo.id}`;
-      addNode({ id: cveId, label: `${repo.cve} CVE`, type: 'cve', score: repo.cve });
-      edges.push({ id: `${repoId}->${cveId}`, source: repoId, target: cveId, label: 'CVE' });
-    }
-  });
-  assets.slice(0, 20).forEach((asset) => {
-    const assetId = `asset:${asset.id}`;
-    addNode({
-      id: assetId,
-      label: asset.title,
-      type: 'asset',
-      score: asset.score,
-      meta: { source: asset.source },
-    });
-    const related = repos.find(
-      (repo) =>
-        asset.summary.toLowerCase().includes(repo.name.toLowerCase()) ||
-        asset.title.toLowerCase().includes(repo.name.toLowerCase()),
-    );
-    if (related) {
-      const repoId = `repo:${related.id}`;
-      edges.push({ id: `${repoId}->${assetId}`, source: repoId, target: assetId, label: 'asset' });
-    }
-  });
-  return { nodes: Array.from(nodes.values()), edges };
-}
-
-// ============================================================================
-// adaptThreatContract — merge contract data + v12 static fallback
-// ============================================================================
-
-export function adaptThreatContract(contract: FrontendContract): ThreatViewModel {
-  const threat = asRecord(contract.threat);
-  const repoItems = asArray<Record<string, unknown>>(threat.targets);
-  const reposUnsorted = repoItems.map(repoFromItem);
-  // Build vulnDetails BEFORE sorting — index must match repoItems
-  const vulnDetails = buildVulnDetails(reposUnsorted, repoItems);
-  const repos = reposUnsorted.sort((a, b) => b.score - a.score);
-  const todayItems = asArray<Record<string, unknown>>(threat.today);
-  const today = todayItems.map(repoFromItem).sort((a, b) => b.score - a.score);
-  const realAssets = asArray<Record<string, unknown>>(threat.assets)
-    .map(assetFromItem)
-    .sort((a, b) => b.score - a.score);
-  // v12 static fallback — supplement missing asset types (firmware/image/openx) with demo data
-  const realAssetTypes = new Set(realAssets.map(a => a.type));
-  const supplementalAssets = staticDemoAssets.filter(a => !realAssetTypes.has(a.type));
-  const assets = [...realAssets, ...supplementalAssets];
-  const cveScout = asRecord(threat.cveScout);
-  const attackSurface = asRecord(threat.attackSurface);
-  const reports = asRecord(threat.reports);
-
-  return {
-    summary: buildSummary(repos, assets, cveScout, attackSurface),
-    repos,
-    today: today.length ? today : repos.slice(0, 12),
-    assets,
-    queue: asArray<Record<string, unknown>>(threat.tracking),
-    cveScout,
-    attackSurface,
-    reports,
-    graph: buildGraph(repos, assets),
-    // v12 additions — static fallback (contract doesn't provide these)
-    vulnDetails,
-    surfaces: staticSurfaces, // v12 static fallback — demo v12 surface matrix
-    activeSurface: staticSurfaces[0]?.id ?? 'kernel',
-    opsRules: staticOpsRules, // v12 static fallback — contract ops.rules is dict, not list
-    opsManualQueue: staticOpsManualQueue, // v12 static fallback — contract ops.queue has different structure
-  };
-}
-
-// ============================================================================
-// Re-export static data for W2.3 (graph builder) and W3.1 (ops pages)
-// ============================================================================
-
-export { opsTasks, opsSources } from './threatStaticData';
 export { ecosystemSecondLevel } from './threatStaticData';

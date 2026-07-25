@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any
 
 from ai4sec_platform.db import repositories as repo
@@ -86,13 +87,27 @@ class ReasonThreatRiskStep:
                 confidence=score / 100 if score else None,
                 payload=assessment,
             )
+            # Also write ai_calibration so frontend + summary mode can find calibrated surface
+            ai_cal_payload = {
+                "risk_assessment": assessment,
+                "ai_calibration": {
+                    "calibrated_surface": semantic.get("calibrated_surface", ""),
+                    "calibrated_score": semantic.get("calibrated_score"),
+                    "calibrated_attack_surface": semantic.get("attack_surface_calibration", ""),
+                    "score_assessment": semantic.get("rule_score_assessment", ""),
+                    "hypotheses": semantic.get("hypotheses", []),
+                    "cve_priority": semantic.get("cve_priority", []),
+                    "false_positives": semantic.get("false_positives", []),
+                    "reviewed_at": datetime.now().isoformat(),
+                },
+            }
             repo.update_domain_item(
                 context.conn,
                 item_id=item_id,
                 status=status,
                 score=score,
                 metrics={"risk_reasoned": True, "risk_pipeline_run": context.run_id, "semantic_confidence": semantic.get("confidence")},
-                payload={"risk_assessment": assessment},
+                payload=ai_cal_payload,
             )
             if score >= 80:
                 repo.create_human_queue_item(
@@ -167,25 +182,27 @@ def _build_assessment(target: dict[str, Any], output: dict[str, Any]) -> dict[st
 
 def _semantic_review_prompt() -> str:
     return """
-你是威胁情报分析员，需要复核华为开源仓库/组件的威胁价值。请只输出 JSON。
+你是漏洞挖掘专家。payload 里有仓库的攻击面评分数据（attack_surface）和 CVE 列表（cves）。
 
-你需要基于当前平台 connector 获取到的仓库、issue、安全文件、CVE/SA、固件和镜像线索完成判断：
-1. 判断 broad_sec_items / issue 标题是否是真安全问题，还是普通 bug/误报。
-2. 解释该项目的主要攻击面，例如 kernel、driver、network protocol、parser/codec、sandbox、security boundary。
-3. 根据 CVE/SA、security repo 来源、项目自身 issue、平台攻击面评分和仓库描述，给出漏洞挖掘价值判断。
-4. 给出下一步动作：跟踪、人工复核、补充 GitHub 搜索、验证高危 CVE 是否已修复、关注 security 仓库。
+请做 3 件事：
 
-输出 JSON schema：
+1. 攻击面校准：payload 的 attack_surface.primary_attack_surface 是规则关键词匹配出的攻击面，score/grade 是规则评分。你看仓库描述和 CVE 数据，判断规则评分的攻击面分类是否准确。如果不准，给出正确分类和原因。
+
+2. CVE 优先级筛选：从 payload 的 cves 列表里，筛选最值得深挖的 3-5 个，说明理由。同时指出哪些可能是误报或低价值。
+
+3. 挖洞建议：给出 2-3 个具体的漏洞研究方向。不要泛泛说"建议跟踪"或"建议人工复核"，要具体到"从哪个模块/功能/接口入手，可能的漏洞类型是什么"。
+
+输出 JSON：
 {
-  "summary": "一句话风险结论",
-  "is_real_security_target": true,
-  "valid_security_findings": ["有效安全线索"],
-  "false_positive_risks": ["可能误报或普通 bug 的线索"],
-  "attack_surface_summary": "主要攻击面解释",
-  "vulnerability_hypotheses": ["可能的漏洞研究方向"],
-  "recommended_tracking_level": "高风险跟踪|持续观察|低优先级观察",
-  "recommended_actions": ["下一步动作"],
-  "confidence": 0.0
+  "calibrated_surface": "从以下选项中选择一个：kernel / network protocol / database / driver / parser/codec / exec/permission / sandbox / wireless / peripheral / media / browser engine / unknown",
+  "calibrated_score": 75,
+  "attack_surface_calibration": "规则说 XX，实际应该是 YY，因为...",
+  "rule_score_assessment": "规则评分偏高/偏低/合理，因为...",
+  "cve_priority": [{"cve_id": "CVE-xxx", "value": "high|medium|low", "reason": "..."}],
+  "false_positives": ["CVE-yyy 可能是误报因为..."],
+  "hypotheses": ["具体挖洞方向1", "具体挖洞方向2"],
+  "summary": "一句话风险总结",
+  "confidence": 0.8
 }
 """.strip()
 
@@ -193,39 +210,58 @@ def _semantic_review_prompt() -> str:
 def _semantic_review_payload(target: dict[str, Any]) -> dict[str, Any]:
     payload = target.get("payload") or {}
     signals = payload.get("vulnerability_signals") or {}
+    attack_surface = payload.get("attack_surface") or {}
+    raw = payload.get("raw") if isinstance(payload.get("raw"), dict) else {}
+    cves = payload.get("cves") or []
+    # Send up to 20 CVEs with full description (not truncated to 8)
+    cves_full = [
+        {"cve_id": c.get("cve_id"), "severity": c.get("severity"), "description": str(c.get("description", ""))[:300]}
+        for c in cves[:20] if isinstance(c, dict)
+    ]
+    broad_sec = payload.get("broad_sec_items") or signals.get("sample_security_items") or []
+    broad_sec_full = [
+        {"description": str(b.get("description", ""))[:200], "severity": b.get("severity")}
+        for b in broad_sec[:15] if isinstance(b, dict)
+    ]
     return {
         "id": target.get("id"),
         "title": target.get("title"),
         "summary": target.get("summary"),
         "score": target.get("score"),
-        "status": target.get("status"),
         "source_url": target.get("source_url"),
-        "attack_surface": payload.get("attack_surface"),
-        "scoring": payload.get("scoring"),
-        "vulnerability_signals": signals,
-        "cves": _compact_list(payload.get("cves") or [], 8),
-        "sa_items": _compact_list(payload.get("sa_items") or [], 5),
-        "broad_sec_items": _compact_list(payload.get("broad_sec_items") or signals.get("sample_security_items") or [], 8),
-        "raw_description": (payload.get("raw") or {}).get("description") if isinstance(payload.get("raw"), dict) else "",
+        "repo_description": raw.get("description") or "",
+        "repo_name": raw.get("name") or "",
+        "repo_org": raw.get("org") or "",
+        "stars": raw.get("star_count") or raw.get("stars") or 0,
+        "attack_surface": {
+            "score": attack_surface.get("score"),
+            "grade": attack_surface.get("grade"),
+            "primary_attack_surface": (attack_surface.get("signals") or {}).get("primary_attack_surface") if isinstance(attack_surface.get("signals"), dict) else "",
+            "reasons": attack_surface.get("reasons") or [],
+            "breakdown": attack_surface.get("breakdown") or {},
+        },
+        "cve_count": payload.get("cve_count") or len(cves),
+        "cves": cves_full,
+        "broad_sec_items": broad_sec_full,
+        "sa_count": payload.get("sa_count") or 0,
     }
 
 
 def _normalize_semantic_review(value: Any) -> dict[str, Any]:
     if not isinstance(value, dict):
         return {"summary": "模型未返回结构化研判结果。", "confidence": 0.0}
-    result = value.get("result") if isinstance(value.get("result"), dict) else value
-    actions = result.get("recommended_actions") or []
-    if not isinstance(actions, list):
-        actions = [str(actions)]
+    result: dict[str, Any] = value.get("result") if isinstance(value.get("result"), dict) else value
+    if not isinstance(result, dict):
+        result = {}
     return {
-        "summary": result.get("summary") or result.get("reason") or "已完成语义复核。",
-        "is_real_security_target": bool(result.get("is_real_security_target", True)),
-        "valid_security_findings": _as_list(result.get("valid_security_findings")),
-        "false_positive_risks": _as_list(result.get("false_positive_risks")),
-        "attack_surface_summary": result.get("attack_surface_summary") or "",
-        "vulnerability_hypotheses": _as_list(result.get("vulnerability_hypotheses")),
-        "recommended_tracking_level": result.get("recommended_tracking_level") or "",
-        "recommended_actions": actions,
+        "summary": result.get("summary") or "已完成语义复核。",
+        "calibrated_surface": result.get("calibrated_surface") or "",
+        "calibrated_score": result.get("calibrated_score"),
+        "attack_surface_calibration": result.get("attack_surface_calibration") or "",
+        "rule_score_assessment": result.get("rule_score_assessment") or "",
+        "cve_priority": result.get("cve_priority") if isinstance(result.get("cve_priority"), list) else [],
+        "false_positives": _as_list(result.get("false_positives")),
+        "hypotheses": _as_list(result.get("hypotheses")),
         "confidence": _safe_confidence(result.get("confidence")),
     }
 

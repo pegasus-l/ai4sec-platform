@@ -7,6 +7,7 @@ import './styles/global.css';
 import './styles/shell.css';
 import './styles/threat.css';
 import './styles/vulnerability.css';
+import './styles/news.css';
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>

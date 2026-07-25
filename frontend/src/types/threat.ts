@@ -27,6 +27,7 @@ export interface ThreatRepo {
   evidence: string[];
   assets: string[];
   riskAssessment?: Record<string, unknown>;
+  aiCalibrated?: boolean;
   raw: Record<string, unknown>;
 }
 
@@ -61,6 +62,24 @@ export interface ThreatAsset {
   confidence?: AssetConfidence;
   repos?: string[];
   evidence?: string;
+  // Per-source fields for richer asset cards
+  catalog?: string[];
+  syncState?: string;
+  upstreamUrl?: string;
+  mirrorPath?: string;
+  publisher?: string;
+  labelNames?: string[];
+  size?: string;
+  fullDescription?: string;
+  cannVersion?: string;
+  online?: boolean;
+  official?: boolean;
+  downloadCount?: number;
+  deviceModel?: string;
+  softwareVersion?: string;
+  fileType?: string;
+  hubId?: string;
+  versionTags?: Array<{ tag: string; size: string; update_time: string; architectures: string[] }>;
 }
 
 // ============================================================================
@@ -167,24 +186,6 @@ export type ThreatReactFlowEdge = Edge;
 export type GraphEdgeType = 'direct' | 'inferred' | 'weak';
 
 // ============================================================================
-// W1.5: ThreatOps types (rules + manual queue)
-// ============================================================================
-export interface ThreatOpsRule {
-  id: string;
-  name: string;
-  status: 'active' | 'draft' | 'caution' | string;
-  owner: string;
-  note: string;
-}
-
-export interface ThreatOpsManualQueueItem {
-  id: string;
-  type: string;
-  status: string;
-  title: string;
-  priority: 'P0' | 'P1' | 'P2' | string;
-}
-
 // ============================================================================
 // ThreatViewModel extended with v12 fields (all optional until W1.6 adapter)
 // ============================================================================
@@ -202,6 +203,4 @@ export interface ThreatViewModel {
   vulnDetails?: ThreatVulnDetailMap;
   surfaces?: ThreatSurfaceDetail[];
   activeSurface?: string;
-  opsRules?: ThreatOpsRule[];
-  opsManualQueue?: ThreatOpsManualQueueItem[];
 }

@@ -176,6 +176,41 @@ CREATE TABLE IF NOT EXISTS human_queue_items (
 );
 CREATE INDEX IF NOT EXISTS idx_human_queue_domain ON human_queue_items(domain);
 
+CREATE TABLE IF NOT EXISTS news_item_index (
+    canonical_key TEXT PRIMARY KEY,
+    domain_item_id INTEGER NOT NULL UNIQUE,
+    first_seen_at TEXT NOT NULL,
+    last_seen_at TEXT NOT NULL,
+    FOREIGN KEY(domain_item_id) REFERENCES domain_items(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_news_item_index_item ON news_item_index(domain_item_id);
+
+CREATE TABLE IF NOT EXISTS news_user_states (
+    domain_item_id INTEGER NOT NULL,
+    operator TEXT NOT NULL DEFAULT 'operator',
+    reading_state TEXT NOT NULL DEFAULT 'unread',
+    feedback_value TEXT NOT NULL DEFAULT '',
+    feedback_reason TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY(domain_item_id, operator),
+    FOREIGN KEY(domain_item_id) REFERENCES domain_items(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_news_user_states_operator ON news_user_states(operator, reading_state);
+
+CREATE TABLE IF NOT EXISTS news_daily_reports (
+    report_date TEXT PRIMARY KEY,
+    title TEXT NOT NULL,
+    summary TEXT NOT NULL DEFAULT '',
+    highlights_json TEXT NOT NULL DEFAULT '[]',
+    topic_sections_json TEXT NOT NULL DEFAULT '[]',
+    metrics_json TEXT NOT NULL DEFAULT '{}',
+    status TEXT NOT NULL DEFAULT 'shadow',
+    run_id TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS capability_repro_tasks (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     item_id INTEGER NOT NULL,
@@ -202,11 +237,19 @@ CREATE INDEX IF NOT EXISTS idx_cap_repro_created ON capability_repro_tasks(creat
 
 def init_db(conn: sqlite3.Connection) -> None:
     conn.executescript(SCHEMA_SQL)
+    # Migrations
+    try: conn.execute("ALTER TABLE domain_items ADD COLUMN last_synced_at TEXT")
+    except Exception: pass
+    try: conn.execute("ALTER TABLE human_queue_items ADD COLUMN queue_source TEXT DEFAULT 'pipeline'")
+    except Exception: pass
     conn.commit()
 
 
 def reset_db(conn: sqlite3.Connection) -> None:
     tables = [
+        "news_daily_reports",
+        "news_user_states",
+        "news_item_index",
         "capability_repro_tasks",
         "human_queue_items",
         "quality_audits",

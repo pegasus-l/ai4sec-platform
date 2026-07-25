@@ -44,6 +44,7 @@ class PipelineRunner:
                 production_writes=False,
                 summary=summary,
             )
+            conn.commit()  # Commit immediately so frontend can see running status
             context = PipelineContext(
                 run_id=run_id,
                 pipeline_name=definition.name,
@@ -64,6 +65,7 @@ class PipelineRunner:
                     artifacts.extend(result.artifacts)
                     summary["steps"].append({"name": step.name, "status": "success", "metrics": result.metrics})
                     repo.create_task_run(conn, run_id=run_id, step_name=step.name, status="success", metrics=result.metrics)
+                    conn.commit()  # Commit after each step so progress is visible
                 except Exception as exc:  # pragma: no cover - defensive run recording
                     status = "failed"
                     error_message = str(exc)

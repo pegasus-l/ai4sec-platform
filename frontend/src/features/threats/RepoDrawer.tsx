@@ -18,22 +18,76 @@ import { useDrawerStack } from '../../components/DrawerStack';
 import { VulnListDrawer } from './VulnListDrawer';
 import { VulnDetailDrawer } from './VulnDetailDrawer';
 import { severityBadgeClass } from './severityBadge';
-import { Card, MetricCard } from '../../components/ui';
+import { Card } from '../../components/ui';
+import { useState, useEffect, useMemo } from 'react';
+import { useQueryClient, useQuery } from '@tanstack/react-query';
+import { postJson, getJson, trackTarget, fetchTargetDetail, type AiReviewResult } from '../../api/client';
+import { repoFromItem, vulnDetailsFromItem } from './threatAdapters';
+import { useToast } from '../../components/Toast';
 
 interface RepoDrawerContentProps {
   repo: ThreatRepo;
-  model: ThreatViewModel;
   /** Navigate to graph view (wired by ThreatPage). */
   onViewGraph?: () => void;
   /** Open asset detail (currently uses old AssetDrawer — will be refactored in W3.3). */
   onOpenAsset?: (asset: ThreatAsset) => void;
 }
 
-export function RepoDrawerContent({ repo, model, onViewGraph, onOpenAsset }: RepoDrawerContentProps) {
+export function RepoDrawerContent({ repo: initialRepo, onViewGraph, onOpenAsset }: RepoDrawerContentProps) {
   const { push } = useDrawerStack();
-  const vulns = model.vulnDetails?.[repo.id] ?? [];
+  const { toast } = useToast();
+  // Fetch single target detail (full payload) — replaces fetchFrontendContract
+  const { data: detailData } = useQuery({ queryKey: ['threats-target-detail', initialRepo.id], queryFn: () => fetchTargetDetail(initialRepo.id) });
+  // Build local model from the single item (repos + vulnDetails only)
+  const model = useMemo<ThreatViewModel | null>(() => {
+    if (!detailData) return null;
+    const r = repoFromItem(detailData);
+    const v = vulnDetailsFromItem(detailData);
+    return {
+      summary: { totalRepos: 0, highRisk: 0, withCve: 0, totalCve: 0, uniqueCve: 0, totalSa: 0, broadSecurity: 0, assets: 0, grades: {}, scanModes: {}, sourceStats: {} },
+      repos: [r],
+      today: [r],
+      assets: [],
+      queue: [],
+      cveScout: {},
+      attackSurface: {},
+      reports: {},
+      graph: { nodes: [], edges: [] },
+      vulnDetails: { [r.id]: v },
+    };
+  }, [detailData]);
+  // Always use latest repo from model (updates after AI calibration)
+  const repo = model?.repos.find(r => r.id === initialRepo.id) ?? initialRepo;
+  const vulns = model?.vulnDetails?.[repo.id] ?? [];
+  const [aiReview, setAiReview] = useState<AiReviewResult | null>(null);
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiError, setAiError] = useState<string | null>(null);
+  const queryClient = useQueryClient();
+
+  // On mount, try to fetch cached AI review (GET, no LLM trigger)
+  useEffect(() => {
+    getJson<AiReviewResult>(`/api/threats/${repo.id}/ai-review`)
+      .then(setAiReview)
+      .catch(() => {});  // 404 = no cached review, show button
+  }, [repo.id]);
+
+  const handleAiReview = async () => {
+    setAiLoading(true);
+    setAiError(null);
+    try {
+      const result = await postJson<AiReviewResult>(`/api/threats/${repo.id}/ai-review`);
+      setAiReview(result);
+      queryClient.invalidateQueries({ queryKey: ['threats-target-detail', repo.id] });
+      queryClient.invalidateQueries({ queryKey: ['threats-targets'] });
+    } catch (e) {
+      setAiError(String(e));
+    } finally {
+      setAiLoading(false);
+    }
+  };
 
   const handleOpenVulnList = () => {
+    if (!model) return;
     push({
       title: '漏洞 / 安全线索',
       subtitle: `${repo.org}/${repo.name}`,
@@ -42,6 +96,7 @@ export function RepoDrawerContent({ repo, model, onViewGraph, onOpenAsset }: Rep
   };
 
   const handleOpenVulnDetail = (vulnId: string) => {
+    if (!model) return;
     push({
       title: '漏洞详情',
       subtitle: vulnId,
@@ -50,7 +105,7 @@ export function RepoDrawerContent({ repo, model, onViewGraph, onOpenAsset }: Rep
   };
 
   // Find linked assets by repo.id in asset.repos array
-  const linkedAssets = model.assets.filter(
+  const linkedAssets = (model?.assets ?? []).filter(
     (a) => a.repos?.includes(repo.id) || a.repos?.includes(repo.name),
   );
 
@@ -69,11 +124,6 @@ export function RepoDrawerContent({ repo, model, onViewGraph, onOpenAsset }: Rep
         <p className="muted small" style={{ marginTop: 10 }}>
           {repo.summary}
         </p>
-        {repo.url && (
-          <a href={repo.url} target="_blank" rel="noreferrer" className="muted small" style={{ display: 'inline-block', marginTop: 6 }}>
-            {repo.url}
-          </a>
-        )}
       </Card>
 
       {/* 2. Vuln / security线索 — inline timeline like demo v12 renderVulnList */}
@@ -152,6 +202,9 @@ export function RepoDrawerContent({ repo, model, onViewGraph, onOpenAsset }: Rep
           )}
           {/* 5. Action buttons */}
           <div className="split" style={{ marginTop: 10 }}>
+            <button className="btn primary" onClick={() => trackTarget(repo.id).then(() => toast(`已加入跟踪: ${repo.org}/${repo.name}`, 'success')).catch(e => toast(`跟踪失败: ${e}`, 'error'))}>
+              加入跟踪
+            </button>
             <button className="btn primary" onClick={handleOpenVulnList}>
               查看全部漏洞
             </button>
@@ -163,6 +216,75 @@ export function RepoDrawerContent({ repo, model, onViewGraph, onOpenAsset }: Rep
           </div>
         </Card>
       </div>
+      {/* 6. AI 研判 */}
+      <Card>
+        <h3>AI 研判</h3>
+        {aiReview ? (
+          <div>
+            <p>{aiReview.assessment?.semantic_review?.summary || aiReview.assessment?.summary}</p>
+            {aiReview.assessment?.semantic_review?.attack_surface_calibration && (
+              <div style={{ marginTop: 10 }}>
+                <b>攻击面校准</b>
+                <p className="muted small" style={{ marginTop: 4 }}>{aiReview.assessment.semantic_review.attack_surface_calibration}</p>
+              </div>
+            )}
+            {aiReview.assessment?.semantic_review?.rule_score_assessment && (
+              <div style={{ marginTop: 10 }}>
+                <b>规则评分评估</b>
+                <p className="muted small" style={{ marginTop: 4 }}>{aiReview.assessment.semantic_review.rule_score_assessment}</p>
+              </div>
+            )}
+            {aiReview.assessment?.semantic_review?.cve_priority?.length ? (
+              <div style={{ marginTop: 10 }}>
+                <b>CVE 优先级</b>
+                <div className="timeline" style={{ marginTop: 6 }}>
+                  {aiReview.assessment.semantic_review.cve_priority.map((c, i) => (
+                    <div key={i} className="timeline-item">
+                      <div className="row-title">
+                        <b>{c.cve_id}</b>
+                        <span className={`badge ${c.value === 'high' ? 'A' : c.value === 'medium' ? 'B' : 'C'}`}>{c.value}</span>
+                      </div>
+                      <span className="muted small">{c.reason}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+            {aiReview.assessment?.semantic_review?.false_positives?.length ? (
+              <div style={{ marginTop: 10 }}>
+                <b>误报风险</b>
+                <div className="timeline" style={{ marginTop: 6 }}>
+                  {aiReview.assessment.semantic_review.false_positives.map((r, i) => (
+                    <div key={i} className="timeline-item">{r}</div>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+            {aiReview.assessment?.semantic_review?.hypotheses?.length ? (
+              <div style={{ marginTop: 10 }}>
+                <b>挖洞建议</b>
+                <div className="timeline" style={{ marginTop: 6 }}>
+                  {aiReview.assessment.semantic_review.hypotheses.map((h, i) => (
+                    <div key={i} className="timeline-item">{h}</div>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+            <div className="split" style={{ marginTop: 10 }}>
+              <span className={`badge ${aiReview.assessment?.semantic_review?.confidence && aiReview.assessment.semantic_review.confidence >= 0.7 ? 'A' : 'B'}`}>
+                置信度 {Math.round((aiReview.assessment?.semantic_review?.confidence ?? 0) * 100)}%
+              </span>
+              <span className="badge">{aiReview.status === 'cached' ? '已缓存' : '新研判'}</span>
+            </div>
+          </div>
+        ) : aiLoading ? (
+          <p className="muted">AI 研判中，请稍候 3-10 秒...</p>
+        ) : aiError ? (
+          <p className="muted small">研判失败: {aiError}</p>
+        ) : (
+          <button className="btn primary" onClick={handleAiReview}>开始 AI 研判</button>
+        )}
+      </Card>
     </div>
   );
 }

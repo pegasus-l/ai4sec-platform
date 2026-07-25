@@ -18,6 +18,7 @@ from ai4sec_platform.sources.connectors.threats.atomgit import AtomGitConnector
 from ai4sec_platform.sources.connectors.threats.hiascend import HiAscendConnector
 from ai4sec_platform.sources.connectors.threats.huawei_mirror import HuaweiMirrorConnector
 from ai4sec_platform.sources.connectors.threats.openx_huawei import OpenXHuaweiConnector
+from ai4sec_platform.sources.connectors.threats.firmware_api import FirmwareApiConnector
 
 
 def all_connectors():
@@ -25,5 +26,5 @@ def all_connectors():
         ArxivConnector(), GithubConnector(), RssConnector(), XFeedConnector(), AsisConnector(), AwesomeConnector(),
         AnysearchConnector(), Crawl4aiConnector(), ManualImportConnector(), HuaweiRepoConnector(), CveConnector(),
         FirmwareConnector(), MirrorConnector(), GitCodeConnector(), AtomGitConnector(), HiAscendConnector(),
-        HuaweiMirrorConnector(), OpenXHuaweiConnector(),
+        HuaweiMirrorConnector(), OpenXHuaweiConnector(), FirmwareApiConnector(),
     ]
