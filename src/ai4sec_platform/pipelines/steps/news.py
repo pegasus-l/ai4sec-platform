@@ -143,13 +143,17 @@ class GateNewsCandidatesStep:
     def run(self, context: PipelineContext) -> StepResult:
         candidates = context.outputs.get("deduped_news_items") or []
         per_type = int(context.params.get("review_limit_per_type") or 0)
+        limit = int(context.params.get("review_limit") or len(candidates))
         if per_type:
             papers = [item for item in candidates if item.get("source_type") == "paper"]
             projects = [item for item in candidates if item.get("source_type") == "project"]
             selected_candidates = papers[:per_type] + projects[:per_type]
         else:
-            limit = int(context.params.get("review_limit") or len(candidates))
             selected_candidates = candidates[:limit]
+        if len(selected_candidates) < len(candidates):
+            print(f"[gate] {len(candidates)} candidates → reviewing top {len(selected_candidates)} (pass review_limit={limit} or review_limit_per_type={per_type} to change)", flush=True)
+        else:
+            print(f"[gate] reviewing all {len(candidates)} candidates with {10} concurrent workers", flush=True)
         gated, metrics = gate_candidates(
             context.conn,
             selected_candidates,
