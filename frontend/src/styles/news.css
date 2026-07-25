@@ -66,3 +66,34 @@
 @media (max-width: 680px) { .news-main { padding: 22px 14px 40px; }.news-header { display: block; }.news-header-actions { margin-top: 14px; }.news-kpis { grid-template-columns: repeat(2, minmax(0,1fr)); }.news-grid, .news-columns, .news-ops-grid, .ops-source-grid, .ops-model-grid { grid-template-columns: 1fr; }.news-list-row { grid-template-columns: minmax(0,1fr) 48px; }.row-main p { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }.filter-row select { flex: 1; min-width: 130px; }.tech-points { grid-template-columns: 1fr; }.tech-filter-footer { grid-template-columns: 90px 1fr; }.ops-run-list > button { grid-template-columns: 70px minmax(0,1fr); }.ops-run-list > button > span { display: none; }.ops-funnel > div { grid-template-columns: 70px 1fr; }.ops-funnel > div > span:last-child { grid-column: 2; } }
 
 .ops-source-errors { margin-top: 14px; padding: 10px; border: 1px solid rgba(248,113,113,.25); border-radius: 8px; background: rgba(248,113,113,.06); }.ops-source-errors strong { color: var(--red); font-size: 11px; }.ops-source-errors p { margin: 7px 0 0; color: var(--muted); font-size: 11px; line-height: 1.5; overflow-wrap: anywhere; }
+
+/* Align the news workspace with the platform panel system used by threat insight. */
+.news-workspace { min-height: calc(100vh - 104px); border: 1px solid var(--line); border-radius: 22px; overflow: hidden; background: linear-gradient(165deg, rgba(15,23,42,.9), rgba(2,6,23,.7)); box-shadow: var(--shadow); }
+.news-sidebar { padding: 0; background: rgba(15,23,42,.34); }
+.news-sidebar > .news-kicker, .news-sidebar > h1, .news-sidebar > .news-intro { margin-left: 16px; margin-right: 16px; }
+.news-sidebar > .news-kicker { display: block; margin-top: 18px; }
+.news-sidebar h1 { margin-top: 10px; font-size: 19px; }
+.news-intro { margin-bottom: 16px; }
+.news-nav { padding: 12px; gap: 0; border-top: 1px solid var(--line); }
+.news-nav button { margin-top: 7px; padding: 10px; border-radius: 12px; background: rgba(15,23,42,.34); transition: background .18s, border-color .18s, color .18s, transform .18s; }
+.news-nav button:hover, .news-nav button.active { border-color: rgba(56,189,248,.28); background: rgba(56,189,248,.08); }
+.news-nav button.active { transform: translateX(2px); }
+.news-nav-section { margin: 17px 5px 1px; font-size: 11px; letter-spacing: .15em; }
+.news-flow { margin: 16px 12px 12px; padding: 11px; border: 1px dashed rgba(56,189,248,.28); border-radius: 14px; background: rgba(56,189,248,.06); }
+.news-main { padding: 0; }
+.news-header { margin: 0; padding: 18px 20px 14px; align-items: center; border-bottom: 1px solid var(--line); }
+.news-header h2 { margin-top: 8px; font-size: 25px; letter-spacing: -.02em; }
+.news-header-actions { gap: 8px; }
+.news-main > .news-content, .news-main > .news-ops-stack, .news-main > .report-list, .news-main > .topic-explainer, .news-main > .timeline, .news-main > .empty, .news-main > .news-loading { margin: 20px; }
+.news-kpis { margin-bottom: 20px; gap: 12px; }
+.news-kpis .kpi { min-height: auto; }
+.news-card, .report-card, .report-detail-items button { border-radius: 14px; background: rgba(15,23,42,.48); }
+.news-card { min-height: 0; padding: 14px; transition: border-color .18s, background .18s, transform .18s; }
+.news-card:hover, .report-card:hover { border-color: rgba(56,189,248,.45); background: rgba(56,189,248,.08); transform: translateY(-1px); }
+.news-card h3 { margin-top: 12px; }
+.news-list-row { border-radius: 14px; background: rgba(15,23,42,.48); transition: border-color .18s, background .18s; }
+.news-list-row:hover { border-color: rgba(56,189,248,.38); background: rgba(56,189,248,.06); }
+.news-filter-card { border-radius: 14px; background: rgba(15,23,42,.48); }
+.filter-row select, .tech-filter-trigger, .filter-clear { border-radius: 12px; background: rgba(15,23,42,.54); }
+.topic-explainer, .report-card { border-radius: 14px; background: rgba(15,23,42,.48); }
+.ops-source-strip button, .ops-model-grid > div { border-radius: 13px; background: rgba(15,23,42,.48); }
