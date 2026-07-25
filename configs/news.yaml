@@ -1,19 +1,23 @@
 sources:
   arxiv:
     enabled: true
-    max_results: 30
+    max_results: 100
     queries:
       - 'all:"AI security"'
       - 'all:"LLM security"'
       - 'all:"agent security"'
+      - 'all:"prompt injection"'
+      - 'all:"vulnerability detection"'
   github:
     enabled: true
-    max_results: 30
+    max_results: 100
     readme_limit: 10
     queries:
       - '"AI security" in:name,description,readme'
       - '"LLM security" in:name,description,readme'
       - '"agent security" in:name,description,readme'
+      - '"prompt injection" in:name,description,readme'
+      - '"vulnerability detection" in:name,description,readme'
   rss:
     enabled: false
     urls:
