@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Activity, BookOpen, CalendarDays, Check, Database, ExternalLink, Filter, Heart, Inbox, Layers3, MessageSquare, Network, Newspaper, Search, ShieldCheck, Sparkles, Star, Workflow, X } from 'lucide-react';
+import { Activity, BookOpen, BrainCircuit, CalendarDays, Check, Database, ExternalLink, Filter, Heart, Inbox, Layers3, MessageSquare, Network, Newspaper, Search, ShieldCheck, Sparkles, Star, Workflow, X } from 'lucide-react';
 import { Badge, Card, Drawer, EmptyState, MetricCard } from '../../components/ui';
 import { fetchNews, fetchReport, fetchTechMap, postNewsAction, type NewsFilters } from './newsQueries';
 import type { NewsItem, NewsView, Report, TechMapItem, TodayResponse, TopicSummary } from './newsTypes';
@@ -15,9 +15,10 @@ const views: Array<{ id: NewsView; title: string; icon: typeof Newspaper }> = [
 
 const opsViews: Array<{ id: NewsView; title: string; icon: typeof Newspaper }> = [
   { id: 'ops-overview', title: '运营概览', icon: Activity },
-  { id: 'ops-runs', title: '运行任务', icon: Workflow },
+  { id: 'ops-runs', title: '采集任务', icon: Workflow },
   { id: 'ops-sources', title: '数据源', icon: Database },
-  { id: 'ops-quality', title: '质量与模型', icon: ShieldCheck }
+  { id: 'ops-quality', title: '质量审计', icon: ShieldCheck },
+  { id: 'ops-models', title: '模型评审', icon: BrainCircuit }
 ];
 
 function initialFilters(): NewsFilters {
@@ -210,8 +211,8 @@ function promoLine(item: NewsItem): string { return String(item.payload.one_line
 function highlightLine(item: NewsItem): string { return String(item.highlight || item.payload.highlight_line || '暂无亮点'); }
 function reviewReason(item: NewsItem): string { const review = item.payload.review; return review && typeof review === 'object' ? String((review as Record<string, unknown>).review_reason || '暂无评审意见') : '暂无评审意见'; }
 function techPaths(item: NewsItem): string[] { const paths = item.payload.tech_paths; if (!Array.isArray(paths)) return []; return paths.filter(path => path && typeof path === 'object').map(path => { const value = path as Record<string, unknown>; return [value.dimension, value.category, value.point].filter(Boolean).map(String).join(' → '); }); }
-function viewTitle(view: NewsView): string { return ({ today: '今日精选', all: '全部动态', reports: '日报', topics: '专题时间线', 'ops-overview': '运营概览', 'ops-runs': '运行任务', 'ops-sources': '数据源', 'ops-quality': '质量与模型' })[view]; }
-function viewDescription(view: NewsView): string { return ({ today: '先看今天最值得阅读的 AI 安全论文与开源项目。', all: '检索、筛选并处理全部论文和项目动态。', reports: '按日期回顾采集结果、精选内容和主题变化。', topics: '按中文安全主题聚合资讯，并逐步扩展为事件级持续跟踪。', 'ops-overview': '查看资讯总量、最新运行、六源健康度和日报产物。', 'ops-runs': '跟踪 Pipeline 每个步骤、模型调用和可追溯产物。', 'ops-sources': '检查 arXiv、GitHub、RSS、ASIS、Awesome 和 X 的采集状态。', 'ops-quality': '观察处理漏斗、门控与深评模型以及质量审计结果。' })[view]; }
+function viewTitle(view: NewsView): string { return ({ today: '今日精选', all: '全部动态', reports: '日报', topics: '专题时间线', 'ops-overview': '运营概览', 'ops-runs': '采集任务', 'ops-sources': '数据源', 'ops-quality': '质量审计', 'ops-models': '模型评审' })[view]; }
+function viewDescription(view: NewsView): string { return ({ today: '先看今天最值得阅读的 AI 安全论文与开源项目。', all: '检索、筛选并处理全部论文和项目动态。', reports: '按日期回顾采集结果、精选内容和主题变化。', topics: '按中文安全主题聚合资讯，并逐步扩展为事件级持续跟踪。', 'ops-overview': '查看资讯总量、最新运行、六源健康度和日报产物。', 'ops-runs': '跟踪采集任务的每个步骤、失败原因和可追溯产物。', 'ops-sources': '检查 arXiv、GitHub、RSS、ASIS、Awesome 和 X 的采集状态。', 'ops-quality': '观察采集、去重、筛选和入库漏斗以及质量审计结果。', 'ops-models': '查看门控与深评模型的调用、缓存、重试、失败和延迟。' })[view]; }
 function typeLabel(type: string): string { return type === 'paper' ? '论文' : '项目'; }
 function sourceLabel(source: string): string { return ({ arxiv: 'arXiv', github: 'GitHub', rss: 'RSS', asis: 'ASIS', awesome: 'Awesome', x: 'X' })[source] || source; }
 function formatDate(value: string): string { return value ? value.slice(0, 10) : '未知日期'; }

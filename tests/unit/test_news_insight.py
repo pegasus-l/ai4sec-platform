@@ -107,6 +107,45 @@ def test_model_call_retries_transient_errors_only(monkeypatch) -> None:
     assert permanent_router.calls == 1
 
 
+def test_concurrent_model_api_returns_per_attempt_audit(monkeypatch) -> None:
+    class FakeRouter:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def active_config(self, _profile: str) -> dict:
+            return {"provider": "dashscope"}
+
+        def complete_json(self, **_kwargs):
+            self.calls += 1
+            if self.calls == 1:
+                raise TimeoutError("read timed out")
+            return {"provider": "dashscope", "result": {"decision": "pass"}}
+
+    monkeypatch.setattr(reviewer.random, "uniform", lambda *_: 0.0)
+    monkeypatch.setattr(reviewer.time, "sleep", lambda *_: None)
+    result, _output, failed, _provider, _latency, attempts = reviewer._call_model_api(FakeRouter(), model_profile="DASHSCOPE", prompt="gate", input_payload={"candidate": "a"})
+    assert not failed
+    assert result == {"decision": "pass"}
+    assert [attempt["status"] for attempt in attempts] == ["retryable_failure", "success"]
+
+
+def test_gate_cache_skips_model_and_preserves_input_order(monkeypatch) -> None:
+    class CachedOnlyRouter:
+        def active_config(self, _profile: str) -> dict:
+            return {"provider": "dashscope", "model": "glm-5.2", "base_url": "test"}
+
+        def complete_json(self, **_kwargs):
+            raise AssertionError("cached candidates must not call the model")
+
+    monkeypatch.setattr(reviewer, "LLMRouter", CachedOnlyRouter)
+    monkeypatch.setattr(reviewer, "_cached_stage", lambda *_args, **_kwargs: {"decision": "pass", "map_relevance_score": 90, "potential_value_score": 80, "provisional_tech_paths": []})
+    items = [{"item_key": f"paper:{index}", "title": title, "source_type": "paper"} for index, title in enumerate(["first", "second", "third"])]
+    gated, metrics = reviewer.gate_candidates(connection(), items, run_id="cached-run", project_root=PROJECT_ROOT)
+    assert [item["title"] for item in gated] == ["first", "second", "third"]
+    assert metrics["cache_hits"] == 3
+    assert metrics["model_calls"] == 0
+
+
 def test_news_operations_exposes_domain_scoped_pipeline_metrics() -> None:
     conn = connection()
     repo.create_pipeline_run(conn, run_id="news-ops-run", domain="news", pipeline_name="news.daily_pipeline", status="success", started_at="2026-07-18T08:00:00Z", finished_at="2026-07-18T08:10:00Z", summary={"selected": 12})

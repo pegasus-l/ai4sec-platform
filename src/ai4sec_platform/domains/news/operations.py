@@ -114,7 +114,7 @@ def _run_payload(conn: sqlite3.Connection, row: sqlite3.Row) -> dict[str, Any]:
 
 def _model_metrics(conn: sqlite3.Connection, run_id: str) -> dict[str, Any]:
     if not run_id:
-        return {"total": 0, "success": 0, "failed": 0, "retryable_failure": 0, "avg_latency_ms": 0, "agents": []}
+        return {"total": 0, "success": 0, "failed": 0, "retryable_failure": 0, "cache_hits": 0, "avg_latency_ms": 0, "agents": []}
     rows = conn.execute("SELECT agent_name, provider, model_profile, status, COUNT(*) AS count, AVG(latency_ms) AS avg_latency FROM model_calls WHERE run_id = ? GROUP BY agent_name, provider, model_profile, status", (run_id,)).fetchall()
     agents: dict[tuple[str, str, str], dict[str, Any]] = {}
     totals = {"total": 0, "success": 0, "failed": 0, "retryable_failure": 0}
@@ -129,4 +129,6 @@ def _model_metrics(conn: sqlite3.Connection, run_id: str) -> dict[str, Any]:
         totals["total"] += count
         totals[row["status"]] = totals.get(row["status"], 0) + count
         latency_sum += float(row["avg_latency"] or 0) * count
-    return {**totals, "avg_latency_ms": round(latency_sum / totals["total"]) if totals["total"] else 0, "agents": list(agents.values())}
+    task_rows = conn.execute("SELECT metrics_json FROM task_runs WHERE run_id = ? AND step_name IN ('gate_news_candidates_with_tech_map', 'enrich_news_candidates_with_model')", (run_id,)).fetchall()
+    cache_hits = sum(int(repo.loads(row["metrics_json"], {}).get("cache_hits") or 0) for row in task_rows)
+    return {**totals, "cache_hits": cache_hits, "avg_latency_ms": round(latency_sum / totals["total"]) if totals["total"] else 0, "agents": list(agents.values())}

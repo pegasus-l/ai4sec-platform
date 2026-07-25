@@ -38,38 +38,50 @@ def gate_candidates(
     router = LLMRouter()
     model_identity = router.active_config(model_profile)
     gate_prompt = _gate_prompt()
-    passed: list[dict[str, Any]] = []
+    resolved: dict[int, tuple[dict[str, Any], str]] = {}
     metrics = {"candidates": len(items), "model_calls": 0, "cache_hits": 0, "passed": 0, "needs_review": 0, "rejected": 0, "failed": 0}
 
-    def _process_gate(item: dict[str, Any]) -> dict[str, Any]:
-        """Thread worker: build payload, call API, normalize. No DB access."""
-        input_payload = {**_gate_payload(item, tech_map), "model_identity": model_identity}
-        input_hash = _input_hash(input_payload)
-        result, output_full, failed, provider, latency_ms = _call_model_api(router, model_profile=model_profile, prompt=gate_prompt, input_payload=input_payload)
+    def _process_gate(index: int, item: dict[str, Any], input_payload: dict[str, Any], input_hash: str) -> dict[str, Any]:
+        result, output_full, failed, provider, latency_ms, attempts = _call_model_api(router, model_profile=model_profile, prompt=gate_prompt, input_payload=input_payload)
         gate = _normalize_gate(result, item, tech_map) if not failed else _fallback_gate(item, tech_map, result.get("error", "model call failed"))
-        return {"item": item, "gate": gate, "input_hash": input_hash, "input_payload": input_payload, "output": output_full, "failed": failed, "provider": provider, "latency_ms": latency_ms}
+        return {"index": index, "item": item, "gate": gate, "input_hash": input_hash, "input_payload": input_payload, "output": output_full, "failed": failed, "provider": provider, "latency_ms": latency_ms, "attempts": attempts}
 
     if not items:
-        return passed, metrics
+        return [], metrics
+    pending = []
+    for index, item in enumerate(items):
+        input_payload = {**_gate_payload(item, tech_map), "model_identity": model_identity}
+        input_hash = _input_hash(input_payload)
+        gate = _cached_stage(conn, str(item.get("item_key") or ""), "gate_review", input_hash, GATE_PROMPT_VERSION)
+        if not gate:
+            cached_result = _cached_model_result(conn, "news_tech_map_gate", model_profile, input_payload)
+            gate = _normalize_gate(cached_result, item, tech_map) if cached_result is not None else None
+        if gate:
+            metrics["cache_hits"] += 1
+            resolved[index] = ({**item, "gate_review": {**gate, "input_hash": input_hash, "prompt_version": GATE_PROMPT_VERSION, "tech_map_version": tech_map.version, "model_identity": model_identity}}, "")
+        else:
+            pending.append((index, item, input_payload, input_hash))
     with ThreadPoolExecutor(max_workers=CONCURRENCY) as pool:
-        futures = [pool.submit(_process_gate, item) for item in items]
+        futures = [pool.submit(_process_gate, *entry) for entry in pending]
         for idx, future in enumerate(as_completed(futures), 1):
             r = future.result()
-            # Main thread: DB write + commit (serialized, thread-safe)
-            _record_model_call(conn, run_id=run_id, agent_name="news_tech_map_gate", model_profile=model_profile, provider=r["provider"], input_payload=r["input_payload"], output=r["output"], status="success" if not r["failed"] else "failed", latency_ms=r["latency_ms"], error_message=str(r["output"].get("error", "")) if r["failed"] else "")
+            _record_attempts(conn, run_id=run_id, agent_name="news_tech_map_gate", model_profile=model_profile, provider=r["provider"], input_payload=r["input_payload"], attempts=r["attempts"])
             conn.commit()
             metrics["model_calls"] += 1
             metrics["failed"] += int(r["failed"])
             gate = {**r["gate"], "input_hash": r["input_hash"], "prompt_version": GATE_PROMPT_VERSION, "tech_map_version": tech_map.version, "model_identity": model_identity}
-            enriched = {**r["item"], "gate_review": gate}
-            decision = gate["decision"]
-            if decision in {"pass", "needs_review"}:
-                passed.append(enriched)
-                metrics["passed" if decision == "pass" else "needs_review"] += 1
-            else:
-                metrics["rejected"] += 1
-            if idx % PROGRESS_LOG_INTERVAL == 0 or idx == len(items):
+            resolved[r["index"]] = ({**r["item"], "gate_review": gate}, "")
+            if idx % PROGRESS_LOG_INTERVAL == 0 or idx == len(pending):
                 print(f"[gate] {idx}/{len(items)} calls={metrics['model_calls']} pass={metrics['passed']} review={metrics['needs_review']} reject={metrics['rejected']} failed={metrics['failed']}", flush=True)
+    passed: list[dict[str, Any]] = []
+    for index in range(len(items)):
+        enriched, _ = resolved[index]
+        decision = enriched["gate_review"]["decision"]
+        if decision in {"pass", "needs_review"}:
+            passed.append(enriched)
+            metrics["passed" if decision == "pass" else "needs_review"] += 1
+        else:
+            metrics["rejected"] += 1
     conn.commit()
     return passed, metrics
 
@@ -86,43 +98,58 @@ def enrich_candidates(
     router = LLMRouter()
     model_identity = router.active_config(model_profile)
     review_prompt = _review_prompt()
-    selected: list[dict[str, Any]] = []
+    resolved: dict[int, dict[str, Any] | None] = {}
     metrics = {"candidates": len(items), "model_calls": 0, "cache_hits": 0, "selected": 0, "watch": 0, "rejected": 0, "failed": 0}
 
-    def _process_enrich(item: dict[str, Any]) -> dict[str, Any]:
-        """Thread worker: build payload, call API, normalize. No DB access.
-        If API fails, returns review=None — item will be skipped, no fallback content."""
-        input_payload = {**_review_payload(item, tech_map), "model_identity": model_identity}
-        input_hash = _input_hash(input_payload)
-        result, output_full, failed, provider, latency_ms = _call_model_api(router, model_profile=model_profile, prompt=review_prompt, input_payload=input_payload)
+    def _process_enrich(index: int, item: dict[str, Any], input_payload: dict[str, Any], input_hash: str) -> dict[str, Any]:
+        result, output_full, failed, provider, latency_ms, attempts = _call_model_api(router, model_profile=model_profile, prompt=review_prompt, input_payload=input_payload)
         if failed:
-            return {"item": item, "review": None, "input_hash": input_hash, "input_payload": input_payload, "output": output_full, "failed": True, "provider": provider, "latency_ms": latency_ms}
+            return {"index": index, "item": item, "review": None, "input_hash": input_hash, "input_payload": input_payload, "output": output_full, "failed": True, "provider": provider, "latency_ms": latency_ms, "attempts": attempts}
         review = _normalize_deep_review(result, item, tech_map)
-        return {"item": item, "review": review, "input_hash": input_hash, "input_payload": input_payload, "output": output_full, "failed": False, "provider": provider, "latency_ms": latency_ms}
+        return {"index": index, "item": item, "review": review, "input_hash": input_hash, "input_payload": input_payload, "output": output_full, "failed": False, "provider": provider, "latency_ms": latency_ms, "attempts": attempts}
 
     if not items:
-        return selected, metrics
+        return [], metrics
+    pending = []
+    for index, item in enumerate(items):
+        input_payload = {**_review_payload(item, tech_map), "model_identity": model_identity}
+        input_hash = _input_hash(input_payload)
+        review = _cached_stage(conn, str(item.get("item_key") or ""), "review", input_hash, REVIEW_PROMPT_VERSION)
+        if not review:
+            cached_result = _cached_model_result(conn, "news_deep_review", model_profile, input_payload)
+            review = _normalize_deep_review(cached_result, item, tech_map) if cached_result is not None else None
+        if review:
+            metrics["cache_hits"] += 1
+            resolved[index] = {**item, "review": {**review, "input_hash": input_hash, "prompt_version": REVIEW_PROMPT_VERSION, "tech_map_version": tech_map.version, "model_identity": model_identity}}
+        else:
+            pending.append((index, item, input_payload, input_hash))
     with ThreadPoolExecutor(max_workers=CONCURRENCY) as pool:
-        futures = [pool.submit(_process_enrich, item) for item in items]
+        futures = [pool.submit(_process_enrich, *entry) for entry in pending]
         for idx, future in enumerate(as_completed(futures), 1):
             r = future.result()
-            _record_model_call(conn, run_id=run_id, agent_name="news_deep_review", model_profile=model_profile, provider=r["provider"], input_payload=r["input_payload"], output=r["output"], status="success" if not r["failed"] else "failed", latency_ms=r["latency_ms"], error_message=str(r["output"].get("error", "")) if r["failed"] else "")
+            _record_attempts(conn, run_id=run_id, agent_name="news_deep_review", model_profile=model_profile, provider=r["provider"], input_payload=r["input_payload"], attempts=r["attempts"])
             conn.commit()
             metrics["model_calls"] += 1
             if r["failed"]:
                 metrics["failed"] += 1
-                metrics["rejected"] += 1
-                if idx % PROGRESS_LOG_INTERVAL == 0 or idx == len(items):
+                resolved[r["index"]] = None
+                if idx % PROGRESS_LOG_INTERVAL == 0 or idx == len(pending):
                     print(f"[enrich] {idx}/{len(items)} calls={metrics['model_calls']} selected={metrics['selected']} watch={metrics['watch']} reject={metrics['rejected']} failed={metrics['failed']}", flush=True)
                 continue
             review = {**r["review"], "input_hash": r["input_hash"], "prompt_version": REVIEW_PROMPT_VERSION, "tech_map_version": tech_map.version, "model_identity": model_identity}
-            enriched = {**r["item"], "review": review}
-            decision = review["decision"]
-            metrics[decision] += 1
-            if decision == "selected":
-                selected.append(enriched)
-            if idx % PROGRESS_LOG_INTERVAL == 0 or idx == len(items):
+            resolved[r["index"]] = {**r["item"], "review": review}
+            if idx % PROGRESS_LOG_INTERVAL == 0 or idx == len(pending):
                 print(f"[enrich] {idx}/{len(items)} calls={metrics['model_calls']} selected={metrics['selected']} watch={metrics['watch']} reject={metrics['rejected']} failed={metrics['failed']}", flush=True)
+    selected: list[dict[str, Any]] = []
+    for index in range(len(items)):
+        enriched = resolved[index]
+        if enriched is None:
+            metrics["rejected"] += 1
+            continue
+        decision = enriched["review"]["decision"]
+        metrics[decision] += 1
+        if decision == "selected":
+            selected.append(enriched)
     conn.commit()
     return selected, metrics
 
@@ -367,29 +394,34 @@ def _compose_theme(work_name: str, descriptor: str) -> str:
     return work_name or descriptor
 
 
-def _call_model_api(router: LLMRouter, *, model_profile: str, prompt: str, input_payload: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any], bool, str, int]:
+def _call_model_api(router: LLMRouter, *, model_profile: str, prompt: str, input_payload: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any], bool, str, int, list[dict[str, Any]]]:
     """Pure API call with retries. Thread-safe — no DB access.
-    Returns (result, output_full, failed, provider, latency_ms).
+    Returns result, final output, failure flag, provider, final latency, and per-attempt audit records.
     """
     provider = str(router.active_config(model_profile).get("provider") or "unknown")
     overall_started = time.monotonic()
+    attempts: list[dict[str, Any]] = []
     for attempt in range(1, MODEL_MAX_ATTEMPTS + 1):
         attempt_started = time.monotonic()
         try:
             output = router.complete_json(profile=model_profile, prompt=prompt, payload=input_payload)
             output = {**output, "retry_count": attempt - 1, "total_latency_ms": int((time.monotonic() - overall_started) * 1000)}
             result = output.get("result") or output.get("parsed") or {}
-            return result, output, False, str(output.get("provider") or provider), int((time.monotonic() - attempt_started) * 1000)
+            latency_ms = int((time.monotonic() - attempt_started) * 1000)
+            attempts.append({"status": "success", "output": output, "latency_ms": latency_ms, "error_message": ""})
+            return result, output, False, str(output.get("provider") or provider), latency_ms, attempts
         except Exception as exc:
             error = str(exc)
             retryable = _is_retryable_model_error(exc)
             has_next_attempt = retryable and attempt < MODEL_MAX_ATTEMPTS
+            latency_ms = int((time.monotonic() - attempt_started) * 1000)
+            attempts.append({"status": "retryable_failure" if has_next_attempt else "failed", "output": {"attempt": attempt, "retryable": retryable}, "latency_ms": latency_ms, "error_message": error})
             if not has_next_attempt:
                 error_output = {"error": error, "attempts": attempt, "retry_count": attempt - 1, "total_latency_ms": int((time.monotonic() - overall_started) * 1000)}
-                return {"error": error, "attempts": attempt}, error_output, True, provider, int((time.monotonic() - attempt_started) * 1000)
+                return {"error": error, "attempts": attempt}, error_output, True, provider, latency_ms, attempts
             delay = MODEL_RETRY_BASE_SECONDS * (2 ** (attempt - 1)) + random.uniform(0, MODEL_RETRY_JITTER_SECONDS)
             time.sleep(delay)
-    return {"error": "model retry loop exhausted"}, {"error": "exhausted"}, True, provider, 0
+    return {"error": "model retry loop exhausted"}, {"error": "exhausted"}, True, provider, 0, attempts
 
 
 def _call_model(
@@ -426,6 +458,11 @@ def _call_model(
 def _record_model_call(conn: sqlite3.Connection, *, run_id: str, agent_name: str, model_profile: str, provider: str, input_payload: dict[str, Any], output: dict[str, Any], status: str, latency_ms: int, error_message: str = "") -> None:
     """DB write only. Called from main thread — serialized."""
     repo.create_model_call(conn, run_id=run_id, agent_name=agent_name, model_profile=model_profile, provider=provider, status=status, input_payload=input_payload, output_payload=output, latency_ms=latency_ms, error_message=error_message)
+
+
+def _record_attempts(conn: sqlite3.Connection, *, run_id: str, agent_name: str, model_profile: str, provider: str, input_payload: dict[str, Any], attempts: list[dict[str, Any]]) -> None:
+    for attempt in attempts:
+        _record_model_call(conn, run_id=run_id, agent_name=agent_name, model_profile=model_profile, provider=provider, input_payload=input_payload, output=attempt["output"], status=attempt["status"], latency_ms=int(attempt["latency_ms"]), error_message=str(attempt["error_message"]))
 
 
 def _is_retryable_model_error(exc: Exception) -> bool:
