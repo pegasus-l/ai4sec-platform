@@ -9,7 +9,7 @@ import {
   streamReproLogs, classifyLogLine,
 } from './capabilityQueries';
 import type { CapabilityItem, ReproTask, ConversionRecord, CapabilityView } from './capabilityTypes';
-import { CapabilityOps } from './CapabilityOps';
+import { CapabilityOps, CapabilityOpsQuality, CapabilityOpsRuns } from './CapabilityOps';
 import '../../styles/capability.css';
 
 const navGroups: Array<{ title: string; items: Array<{ id: CapabilityView; icon: string; title: string }> }> = [
@@ -21,6 +21,8 @@ const navGroups: Array<{ title: string; items: Array<{ id: CapabilityView; icon:
   ]},
   { title: '运营', items: [
     { id: 'ops-overview', icon: '◉', title: '运营概览' },
+    { id: 'ops-quality', icon: '◈', title: '质量审计' },
+    { id: 'ops-runs', icon: '↻', title: 'Pipeline 运行' },
   ]},
 ];
 
@@ -93,13 +95,15 @@ export function CapabilityPage() {
         {view === 'repro' && <CapabilityRepro runs={reproRuns} openDetail={openDetail} items={libraryItems} />}
         {view === 'conversion' && <CapabilityConversion conversions={conversions} openConversion={openConversion} />}
         {view === 'ops-overview' && <CapabilityOps />}
+        {view === 'ops-quality' && <CapabilityOpsQuality />}
+        {view === 'ops-runs' && <CapabilityOpsRuns />}
       </div>
     </section>
   </main>;
 }
 
 function heroTitle(view: CapabilityView): string {
-  return { today: '今日能力推荐', library: '能力库', repro: '复现验证', conversion: '能力转化', 'ops-overview': '运营概览' }[view];
+  return { today: '今日能力推荐', library: '能力库', repro: '复现验证', conversion: '能力转化', 'ops-overview': '运营概览', 'ops-quality': '质量审计', 'ops-runs': 'Pipeline 运行' }[view];
 }
 function heroCopy(view: CapabilityView): string {
   return {
@@ -108,6 +112,8 @@ function heroCopy(view: CapabilityView): string {
     repro: '自动复现状态、实时日志、环境和产物。',
     conversion: '有状态、有目的的收藏 / 专题，推进能力落地。',
     'ops-overview': '运营数据概览、复现失败审计、能力卡缺字段审计、Web 分类统计。',
+    'ops-quality': '复现失败详情、能力卡缺字段详情、Web 分类统计。',
+    'ops-runs': '能力洞察 Pipeline 运行历史、步骤详情、产物列表。',
   }[view];
 }
 
