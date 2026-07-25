@@ -1,7 +1,13 @@
 pipelines:
-  news.ai_for_sec_local_raw_import:
+  news.legacy_raw_pipeline:
     domain: news
-    description: AI-for-Sec 本地 raw 六源导入、规范化、去重、构造资讯/能力候选
+    description: AI-for-Sec 本地 raw 导入、规范化、去重、资讯构建和日报生成
+  news.shadow_collect_pipeline:
+    domain: news
+    description: arXiv/GitHub/RSS shadow 采集、规范化、去重、资讯构建和日报生成
+  news.daily_pipeline:
+    domain: news
+    description: 资讯采集和日报生成主流程
   threats.huawei_raw_pipeline:
     domain: threats
     description: 威胁 connector 获取 repo/issue/security 文件/固件/镜像数据，并生成威胁目标

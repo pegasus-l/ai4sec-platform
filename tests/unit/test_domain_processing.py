@@ -19,7 +19,7 @@ from ai4sec_platform.db.models import init_db
 
 def test_news_processing_classifies_and_scores_security_repo() -> None:
     item = {
-        "source_type": "repo",
+        "source_type": "project",
         "title": "LLM Agent Security Scanner",
         "summary": "Detect prompt injection and agent security issues for AI systems",
         "url": "https://github.com/acme/agent-security-scanner",
@@ -31,7 +31,7 @@ def test_news_processing_classifies_and_scores_security_repo() -> None:
     scoring = score_news_item({**item, "classification": classification.as_payload()})
     assert classification.category in {"Agent 安全", "安全工具与代码"}
     assert scoring.priority == "high"
-    assert scoring.breakdown["code"] == 20
+    assert scoring.breakdown["reproducibility"] == 12
 
 
 def test_capability_processing_scores_reproducible_repo() -> None:

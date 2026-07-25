@@ -3,7 +3,7 @@ sources:
     - arxiv
     - github
     - rss
-    - x_feed
+    - x
     - asis
     - awesome
   capabilities:
