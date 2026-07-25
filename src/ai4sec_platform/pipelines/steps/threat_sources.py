@@ -21,16 +21,9 @@ class CollectHuaweiSourcesStep:
 
     def run(self, context: PipelineContext) -> StepResult:
         params = context.params
-        use_cache = bool(params.get("use_source_cache", False)) or params.get("refresh_sources") or params.get("sources")
 
-        if use_cache:
-            # Cached path — collect all at once (fast, uses cache files)
-            records = load_huawei_sources(context.settings, params)
-            artifacts = self._write_records(context, records)
-            metrics = self._metrics(records)
-            return StepResult(metrics=metrics, artifacts=artifacts)
-
-        # Live path — collect source by source, write DB incrementally so UI can see progress
+        # Always use live path with incremental DB writes — cache path had no incremental progress
+        # and refresh_source_cache=true means cache is re-fetched anyway (cache files are pointless)
         registry = SourceRegistry()
         requested = _requested_sources(params)
         records: list[dict] = []
