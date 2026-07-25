@@ -70,8 +70,8 @@ export function OpsTasks() {
     try {
       // When reset=true, don't use cache — force fresh collection from GitCode API
       const params: Record<string, unknown> = forceReset
-        ? { use_source_cache: false, refresh_source_cache: true }
-        : { use_source_cache: true, refresh_source_cache: true };
+        ? { use_source_cache: false, refresh_source_cache: true, scan_profile: 'full' }
+        : { use_source_cache: true, refresh_source_cache: true, scan_profile: 'full' };
       const resp = await fetch('/api/runs', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
