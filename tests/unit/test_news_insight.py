@@ -110,9 +110,10 @@ def test_model_call_retries_transient_errors_only(monkeypatch) -> None:
 def test_news_operations_exposes_domain_scoped_pipeline_metrics() -> None:
     conn = connection()
     repo.create_pipeline_run(conn, run_id="news-ops-run", domain="news", pipeline_name="news.daily_pipeline", status="success", started_at="2026-07-18T08:00:00Z", finished_at="2026-07-18T08:10:00Z", summary={"selected": 12})
-    repo.create_task_run(conn, run_id="news-ops-run", step_name="gate_news_candidates", metrics={"candidates": 20, "passed": 12})
+    repo.create_task_run(conn, run_id="news-ops-run", step_name="collect_news_sources", metrics={"items": 20})
+    repo.create_task_run(conn, run_id="news-ops-run", step_name="gate_news_candidates_with_tech_map", metrics={"candidates": 20, "passed": 12})
     repo.create_model_call(conn, run_id="news-ops-run", agent_name="news_tech_map_gate", model_profile="DASHSCOPE", provider="dashscope", status="success", latency_ms=800)
-    repo.create_data_source(conn, domain="news", name="arxiv", source_type="api", status="success", latest_at="2026-07-18T08:00:00Z", health="healthy", summary={"collected": 20})
+    repo.create_data_source(conn, domain="news", name="arxiv", source_type="api", status="success", latest_at="2026-07-18T08:00:00Z", health="healthy", summary={"items": 20})
     repo.create_pipeline_run(conn, run_id="threat-run", domain="threats", pipeline_name="threats.test", status="failed")
     conn.commit()
 
@@ -121,10 +122,14 @@ def test_news_operations_exposes_domain_scoped_pipeline_metrics() -> None:
     assert overview["models"]["success"] == 1
     assert len(overview["sources"]) == 6
     assert overview["sources"][0]["health"] == "healthy"
+    assert overview["sources"][0]["collected_count"] == 20
+    assert overview["processing"]["collected"] == 20
+    assert overview["processing"]["gate_passed"] == 12
 
     detail = news_operations.run_detail(conn, "news-ops-run")
     assert detail is not None
-    assert detail["tasks"][0]["metrics"]["passed"] == 12
+    gate_task = next(task for task in detail["tasks"] if task["step_name"] == "gate_news_candidates_with_tech_map")
+    assert gate_task["metrics"]["passed"] == 12
     assert news_operations.run_detail(conn, "threat-run") is None
 
 

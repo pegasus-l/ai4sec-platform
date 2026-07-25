@@ -57,6 +57,6 @@ export function fetchNewsRun<T>(runId: string): Promise<T> {
   return getJson<T>(`/api/news/ops/runs/${encodeURIComponent(runId)}`);
 }
 
-export function startNewsPipeline(pipelineName = 'news.daily_pipeline'): Promise<Record<string, unknown>> {
-  return postJson('/api/runs', { pipeline_name: pipelineName, reset: false, params: {} });
+export function startNewsPipeline(sources?: string[]): Promise<Record<string, unknown>> {
+  return postJson('/api/runs', { pipeline_name: 'news.daily_pipeline', reset: false, params: sources?.length ? { sources } : {} });
 }

@@ -13,12 +13,15 @@ def overview(conn: sqlite3.Connection) -> dict[str, Any]:
     latest_run = conn.execute("SELECT * FROM pipeline_runs WHERE domain = 'news' ORDER BY id DESC LIMIT 1").fetchone()
     report = conn.execute("SELECT report_date, title, metrics_json FROM news_daily_reports ORDER BY report_date DESC LIMIT 1").fetchone()
     model = _model_metrics(conn, latest_run["run_id"] if latest_run else "")
+    tasks = _run_tasks(conn, latest_run["run_id"] if latest_run else "")
+    sources = source_status(conn)
     return {
         "items": {"total": sum(counts.values()), "papers": counts.get("paper", 0), "projects": counts.get("project", 0)},
         "latest_run": _run_payload(conn, latest_run) if latest_run else None,
         "latest_report": {"report_date": report["report_date"], "title": report["title"], "metrics": repo.loads(report["metrics_json"], {})} if report else None,
-        "sources": source_status(conn),
+        "sources": sources,
         "models": model,
+        "processing": _processing_summary(tasks, sources),
     }
 
 
@@ -48,6 +51,7 @@ def source_status(conn: sqlite3.Connection) -> list[dict[str, Any]]:
     for source in NEWS_SOURCES:
         row = latest.get(source)
         summary = repo.loads(row["summary_json"], {}) if row else {}
+        errors = [str(error) for error in summary.get("errors", []) if error]
         result.append({
             "id": source,
             "name": source,
@@ -55,6 +59,9 @@ def source_status(conn: sqlite3.Connection) -> list[dict[str, Any]]:
             "health": row["health"] if row else "unknown",
             "latest_at": (row["latest_at"] or row["created_at"]) if row else "",
             "item_count": item_counts.get(source, 0),
+            "collected_count": int(summary.get("items") or 0),
+            "error_count": len(errors),
+            "errors": errors,
             "summary": summary,
         })
     return result
@@ -63,11 +70,38 @@ def source_status(conn: sqlite3.Connection) -> list[dict[str, Any]]:
 def quality(conn: sqlite3.Connection) -> dict[str, Any]:
     latest = conn.execute("SELECT run_id FROM pipeline_runs WHERE domain = 'news' ORDER BY id DESC LIMIT 1").fetchone()
     run_id = latest["run_id"] if latest else ""
-    tasks = []
-    if run_id:
-        tasks = [{"id": row["id"], "step_name": row["step_name"], "status": row["status"], "metrics": repo.loads(row["metrics_json"], {}), "error_message": row["error_message"]} for row in conn.execute("SELECT * FROM task_runs WHERE run_id = ? ORDER BY id", (run_id,)).fetchall()]
+    tasks = _run_tasks(conn, run_id)
     audits = [{**repo.row_to_dict(row), "details": repo.loads(row["details_json"], {})} for row in conn.execute("SELECT * FROM quality_audits WHERE domain = 'news' ORDER BY id DESC LIMIT 20").fetchall()]
-    return {"run_id": run_id, "tasks": tasks, "models": _model_metrics(conn, run_id), "audits": audits}
+    sources = source_status(conn)
+    return {"run_id": run_id, "tasks": tasks, "models": _model_metrics(conn, run_id), "audits": audits, "processing": _processing_summary(tasks, sources)}
+
+
+def _run_tasks(conn: sqlite3.Connection, run_id: str) -> list[dict[str, Any]]:
+    if not run_id:
+        return []
+    return [{"id": row["id"], "step_name": row["step_name"], "status": row["status"], "metrics": repo.loads(row["metrics_json"], {}), "error_message": row["error_message"]} for row in conn.execute("SELECT * FROM task_runs WHERE run_id = ? ORDER BY id", (run_id,)).fetchall()]
+
+
+def _processing_summary(tasks: list[dict[str, Any]], sources: list[dict[str, Any]]) -> dict[str, Any]:
+    by_name = {task["step_name"]: task.get("metrics") or {} for task in tasks}
+    collect = by_name.get("collect_news_sources", {})
+    normalize = by_name.get("normalize_news_items", {})
+    dedupe = by_name.get("deduplicate_news_candidates", {})
+    gate = by_name.get("gate_news_candidates_with_tech_map", {})
+    enrich = by_name.get("enrich_news_candidates_with_model", {})
+    build = by_name.get("build_news_items", {})
+    source_failures = sum(int(source.get("error_count") or 0) for source in sources)
+    task_failures = sum(1 for task in tasks if task.get("status") == "failed")
+    model_failures = int(gate.get("failed") or 0) + int(enrich.get("failed") or 0)
+    return {
+        "collected": int(collect.get("items") or sum(int(source.get("collected_count") or 0) for source in sources)),
+        "normalized": int(normalize.get("normalized_items") or 0),
+        "deduped": int(dedupe.get("deduped_items") or 0),
+        "gate_passed": int(gate.get("passed") or 0) + int(gate.get("needs_review") or 0),
+        "reviewed": int(enrich.get("selected") or 0) + int(enrich.get("watch") or 0),
+        "published": int(build.get("items") or build.get("created") or 0),
+        "failures": {"source": source_failures, "task": task_failures, "model": model_failures, "total": source_failures + task_failures + model_failures},
+    }
 
 
 def _run_payload(conn: sqlite3.Connection, row: sqlite3.Row) -> dict[str, Any]:
