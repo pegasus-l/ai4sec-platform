@@ -61,10 +61,8 @@ export function NewsPage() {
 
   return <div className="news-workspace">
     <aside className="news-sidebar">
-      <div className="news-kicker">NEWS INTELLIGENCE</div>
-      <h1>资讯洞察</h1>
-      <p className="news-intro">持续发现 AI 安全论文与开源项目，形成可跟踪、可阅读、可反馈的资讯流。</p>
-      <nav className="news-nav">{views.map(({ id, title, icon: Icon }) => <button key={id} className={view === id ? 'active' : ''} onClick={() => setView(id)}><Icon size={16} />{title}<span>{id === 'all' && allData?.total !== undefined ? allData.total : ''}</span></button>)}<div className="news-nav-section">运营</div>{opsViews.map(({ id, title, icon: Icon }) => <button key={id} className={view === id ? 'active' : ''} onClick={() => setView(id)}><Icon size={16} />{title}</button>)}</nav>
+      <div className="news-sidebar-head"><div className="news-kicker">NEWS INTELLIGENCE</div><h1>资讯洞察</h1><p className="news-intro">持续发现 AI 安全论文与开源项目，形成可跟踪、可阅读、可反馈的资讯流。</p></div>
+      <nav className="news-nav"><div className="news-nav-group">{views.map(({ id, title, icon: Icon }) => <button key={id} className={view === id ? 'active' : ''} onClick={() => setView(id)}><span className="news-nav-left"><Icon size={16} />{title}</span>{id === 'all' && allData?.total !== undefined && <span className="news-nav-meta">{allData.total}</span>}</button>)}</div><div className="news-nav-group"><div className="news-nav-section">运营</div>{opsViews.map(({ id, title, icon: Icon }) => <button key={id} className={view === id ? 'active' : ''} onClick={() => setView(id)}><span className="news-nav-left"><Icon size={16} />{title}</span></button>)}</div></nav>
       <div className="news-flow"><span>工作流</span><p>发现 → 精选 → 阅读 → 反馈 → 专题沉淀</p></div>
     </aside>
     <main className="news-main">

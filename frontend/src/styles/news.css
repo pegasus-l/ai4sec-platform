@@ -97,3 +97,19 @@
 .filter-row select, .tech-filter-trigger, .filter-clear { border-radius: 12px; background: rgba(15,23,42,.54); }
 .topic-explainer, .report-card { border-radius: 14px; background: rgba(15,23,42,.48); }
 .ops-source-strip button, .ops-model-grid > div { border-radius: 13px; background: rgba(15,23,42,.48); }
+
+/* News navigation follows the same header / scroll area / note structure as threat insight. */
+.news-sidebar { display: grid; grid-template-rows: auto minmax(0,1fr) auto; }
+.news-sidebar-head { padding: 18px 16px 15px; border-bottom: 1px solid var(--line); }
+.news-sidebar > .news-sidebar-head > .news-kicker, .news-sidebar > .news-sidebar-head > h1, .news-sidebar > .news-sidebar-head > .news-intro { margin-left: 0; margin-right: 0; }
+.news-sidebar > .news-sidebar-head > .news-kicker { margin-top: 0; }
+.news-sidebar h1 { margin-bottom: 0; }
+.news-intro { margin-top: 8px; margin-bottom: 0; }
+.news-nav { padding: 12px; overflow-y: auto; border-top: 0; }
+.news-nav-group + .news-nav-group { margin-top: 17px; }
+.news-nav button { width: 100%; justify-content: space-between; }
+.news-nav-left { display: flex; align-items: center; gap: 9px; min-width: 0; margin-left: 0 !important; color: inherit !important; font-size: inherit !important; }
+.news-nav-left svg { flex: 0 0 auto; color: var(--sky); }
+.news-nav-meta { color: var(--faint); font-size: 10px; }
+.news-nav-section { margin: 0 0 8px 5px; }
+.news-flow { margin: 0 12px 12px; border-top: 0; }
