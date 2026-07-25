@@ -59,13 +59,19 @@ export function NewsPage() {
     setView('all');
   };
 
-  return <div className="news-workspace">
-    <aside className="news-sidebar">
-      <div className="news-sidebar-head"><div className="news-kicker">NEWS INTELLIGENCE</div><h1>资讯洞察</h1><p className="news-intro">持续发现 AI 安全论文与开源项目，形成可跟踪、可阅读、可反馈的资讯流。</p></div>
-      <nav className="news-nav"><div className="news-nav-group">{views.map(({ id, title, icon: Icon }) => <button key={id} className={view === id ? 'active' : ''} onClick={() => setView(id)}><span className="news-nav-left"><Icon size={16} />{title}</span>{id === 'all' && allData?.total !== undefined && <span className="news-nav-meta">{allData.total}</span>}</button>)}</div><div className="news-nav-group"><div className="news-nav-section">运营</div>{opsViews.map(({ id, title, icon: Icon }) => <button key={id} className={view === id ? 'active' : ''} onClick={() => setView(id)}><span className="news-nav-left"><Icon size={16} />{title}</span></button>)}</div></nav>
-      <div className="news-flow"><span>工作流</span><p>发现 → 精选 → 阅读 → 反馈 → 专题沉淀</p></div>
+  return <main className="main news-workspace">
+    <aside className="sidebar">
+      <div className="sidebar-head"><div className="label"><span className="dot" /><span>资讯洞察</span></div><h2>前沿论文与项目</h2><p>持续发现 AI 安全论文与开源项目，形成可跟踪、可阅读、可反馈的资讯流。</p></div>
+      <div className="domain-switcher">
+        <button className="domain-btn active" type="button"><span className="domain-icon">AI</span><span className="domain-main"><strong>资讯洞察</strong><span>AI 安全论文与开源项目</span></span><span className="domain-tag">NEWS</span></button>
+      </div>
+      <nav className="nav-scroll">
+        <div className="nav-group"><div className="group-title">资讯洞察</div>{views.map(({ id, title, icon: Icon }) => <button key={id} className={`nav-item ${view === id ? 'active' : ''}`} onClick={() => setView(id)}><span className="nav-left"><span className="nav-ico"><Icon size={16} /></span><span className="nav-text"><b>{title}</b></span></span>{id === 'all' && allData?.total !== undefined ? <span className="nav-meta">{allData.total}</span> : <span className="nav-meta" />}</button>)}</div>
+        <div className="nav-group"><div className="group-title">运营</div>{opsViews.map(({ id, title, icon: Icon }) => <button key={id} className={`nav-item ${view === id ? 'active' : ''}`} onClick={() => setView(id)}><span className="nav-left"><span className="nav-ico"><Icon size={16} /></span><span className="nav-text"><b>{title}</b></span></span><span className="nav-meta" /></button>)}</div>
+      </nav>
+      <div className="sidebar-note">资讯洞察围绕“发现、精选、阅读、反馈、专题沉淀”组织；论文与项目统一进入动态流，并通过日报和专题持续跟踪。</div>
     </aside>
-    <main className="news-main">
+    <section className="news-main">
       <div className="news-header"><div><span className="label">AI4SEC / NEWS</span><h2>{viewTitle(view)}</h2><p>{viewDescription(view)}</p></div><div className="news-header-actions"><Badge tone="green">论文 + 项目</Badge><button className="icon-button" title="刷新" onClick={() => query.refetch()}><Inbox size={17} /></button></div></div>
       {!isOps && query.isError && <Card className="news-error">资讯接口暂时不可用，请检查后端服务和最近采集任务。</Card>}
       {isOps ? <NewsOps view={view} setView={setView} /> : query.isLoading ? <div className="news-loading"><div /><div /><div /></div> : <>
@@ -74,10 +80,10 @@ export function NewsPage() {
         {view === 'reports' && <ReportsView data={data as { items: Report[] } | undefined} onOpen={setSelectedReportDate} />}
         {view === 'topics' && <TopicsView data={data as { items: TopicSummary[] } | undefined} onSelectTopic={openTopic} />}
       </>}
-    </main>
+    </section>
     <NewsDetail item={selected} close={() => setSelected(null)} onAction={(id, name) => action.mutate({ id, name })} />
     <ReportDetail report={reportQuery.data} loading={reportQuery.isLoading} close={() => setSelectedReportDate('')} onSelect={item => { setSelectedReportDate(''); setSelected(item); }} />
-  </div>;
+  </main>;
 }
 
 function TodayView({ data, onSelect }: { data?: TodayResponse; onSelect: (item: NewsItem) => void }) {
