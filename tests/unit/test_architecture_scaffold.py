@@ -38,8 +38,9 @@ def test_architecture_scaffold_files_exist() -> None:
 
 def test_pipeline_registry_has_all_domain_entries() -> None:
     names = {item["name"] for item in default_registry().list()}
-    assert "news.ai_for_sec_raw_pipeline" in names
-    assert "news.ai_for_sec_local_raw_import" in names
+    assert "news.legacy_raw_pipeline" in names
+    assert "news.shadow_collect_pipeline" in names
+    assert "news.daily_pipeline" in names
     assert "capabilities.assessment_placeholder" not in names
     assert "threats.huawei_raw_pipeline" in names
     assert "threats.huawei_local_raw_import" not in names

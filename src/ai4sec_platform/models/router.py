@@ -41,6 +41,8 @@ class LLMRouter:
         return {"provider": config.provider, "configured": True, "model": config.model, "base_url": config.base_url}
 
     def _force_local_rules(self, profile: str) -> bool:
+        if profile in {"local_rules", "rule_based", "offline"}:
+            return True
         provider = os.getenv("AI4SEC_MODEL_PROVIDER", profile)
         if provider in {"local_rules", "rule_based", "offline"}:
             return True

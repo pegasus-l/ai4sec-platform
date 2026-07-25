@@ -28,7 +28,7 @@ def create_app() -> FastAPI:
 
     @app.get("/", include_in_schema=False)
     def index() -> FileResponse:
-        return FileResponse(FRONTEND_DIST / "index.html")
+        return FileResponse(FRONTEND_DIST / "index.html", headers={"Cache-Control": "no-store"})
 
     @app.get("/{path:path}", include_in_schema=False)
     def frontend_fallback(path: str) -> FileResponse:
@@ -37,7 +37,7 @@ def create_app() -> FastAPI:
         target = FRONTEND_DIST / path
         if target.exists() and target.is_file():
             return FileResponse(target)
-        return FileResponse(FRONTEND_DIST / "index.html")
+        return FileResponse(FRONTEND_DIST / "index.html", headers={"Cache-Control": "no-store"})
 
     return app
 

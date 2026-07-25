@@ -33,7 +33,7 @@ class BuildCapabilitiesFromNewsStep:
                     summary=item.get("summary") or payload.get("summary") or "来自资讯 raw pipeline 的能力候选。",
                     score=None,
                     status="待能力评估",
-                    source="news_raw_pipeline",
+                    source="news_pipeline",
                     source_url=item.get("source_url") or payload.get("code_url") or payload.get("url") or "",
                     primary_date=item.get("primary_date") or payload.get("primary_date") or "",
                     tags=["能力候选", "from_news", "raw_pipeline"],

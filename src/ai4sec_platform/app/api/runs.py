@@ -17,7 +17,7 @@ router = APIRouter(prefix="/runs", tags=["runs"])
 
 
 class RunPipelineRequest(BaseModel):
-    pipeline_name: str = Field(default="news.ai_for_sec_local_raw_import")
+    pipeline_name: str = Field(default="news.legacy_raw_pipeline")
     reset: bool = False
     params: dict[str, Any] = Field(default_factory=dict)
 

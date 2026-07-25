@@ -22,7 +22,6 @@
       --radius: 18px;
       --shadow: 0 22px 70px rgba(0, 0, 0, 0.34);
     }
-  }
 
   /* Toast notifications */
   .toast-container {
@@ -73,6 +72,13 @@
       gap: 12px;
       padding: 14px;
     }
+    body.news-document { overflow: auto; }
+    .shell.news-shell {
+      height: auto;
+      min-height: 100%;
+      display: block;
+    }
+    .shell.news-shell > .topbar { min-height: 76px; margin-bottom: 12px; }
     .topbar {
       display: grid;
       grid-template-columns: 300px minmax(0, 1fr) auto;

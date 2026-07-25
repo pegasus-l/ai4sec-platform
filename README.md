@@ -2,13 +2,13 @@
 
 AI4SEC 统一洞察平台新工程目录。
 
-当前阶段目标：只读取旧系统已经落盘的本地原始数据文件，走新平台自己的导入、标准化、去重、证据、评估和展示链路；暂不做联网数据源获取、真实模型重跑、复现执行或生产写入。
+当前阶段目标：在 shadow-only 约束下走新平台自己的采集、标准化、去重、证据、评估和展示链路；资讯洞察支持本地 raw 回归导入和 arXiv/GitHub/RSS shadow 采集，不写生产库、不覆盖旧报告。
 
 ## 快速开始
 
 ```bash
 cd /mnt/d/漏洞挖掘/洞察工具/dashboard/ai4sec-platform
-PYTHONPATH=src python3 -m ai4sec_platform.cli.run_pipeline --pipeline news.ai_for_sec_local_raw_import --reset
+PYTHONPATH=src python3 -m ai4sec_platform.cli.run_pipeline --pipeline news.legacy_raw_pipeline --reset
 PYTHONPATH=src uvicorn ai4sec_platform.app.main:app --reload --host 127.0.0.1 --port 8000
 ```
 
@@ -28,6 +28,9 @@ POST /api/runs
 GET /api/runs
 GET /api/runs/{run_id}
 GET /api/news/today
+GET /api/news/items
+GET /api/news/reports
+GET /api/news/topics
 GET /api/capabilities/today
 GET /api/threats/today
 GET /api/threats/cve-scout
@@ -56,19 +59,19 @@ AGENTS.md
 - `.env` 被 Git 忽略。
 - 输出数据库位于 `output/ai4sec_platform.db`，也被 Git 忽略。
 - 当前实现 `production_writes=false`，不写生产路径。
-- 威胁洞察 connector 默认直接获取外部数据；资讯/漏洞当前仍按既定范围读取本地 raw 输入。
+- 资讯洞察支持 arXiv/GitHub/RSS shadow 采集，也支持本地 raw 回归导入；漏洞当前仍按既定范围读取本地 raw 输入。
 - 模型配置从 `.env` 自动读取，优先使用 DeepSeek / DashScope / Local LLM 这类 OpenAI-compatible 配置；测试环境默认回退到 `local_rules`，避免单测触发真实模型费用。
 
 
 ## 前端页面
 
-当前前端已重建为 React + Vite + TypeScript 工程，威胁洞察参考 `/mnt/d/漏洞挖掘/洞察工具/dashboard/demo/index-v12.html` 的功能布局，并沿用 v9 的深色视觉风格。FastAPI 会直接提供 `frontend/dist` 构建产物。
+当前前端已重建为 React + Vite + TypeScript 工程，资讯洞察提供今日精选、全部动态、日报、专题时间线四个页签；威胁洞察参考 `/mnt/d/漏洞挖掘/洞察工具/dashboard/demo/index-v12.html` 的功能布局，并沿用 v9 的深色视觉风格。FastAPI 会直接提供 `frontend/dist` 构建产物。
 
 ```text
 http://127.0.0.1:8000/
 ```
 
-页面会调用 `/api/dashboard/overview`、四个业务域接口和统一运营接口。首次访问前请先运行本地原始数据导入 pipeline。
+页面会调用 `/api/news/*`、威胁域接口和统一运营接口。首次访问前建议先运行资讯本地 raw 导入或 shadow 采集 pipeline。
 
 前端开发：
 
@@ -90,17 +93,25 @@ npm run build
 当前已支持通过 API 或 CLI 触发第一版最小 pipeline：
 
 ```bash
-PYTHONPATH=src python3 -m ai4sec_platform.cli.run_pipeline --pipeline news.ai_for_sec_local_raw_import --reset
+PYTHONPATH=src python3 -m ai4sec_platform.cli.run_pipeline --pipeline news.legacy_raw_pipeline --reset
 ```
 
 或通过 HTTP：
 
 ```text
 POST /api/runs
-{"pipeline_name": "news.ai_for_sec_local_raw_import", "reset": true, "params": {"date": "2026-07-10"}}
+{"pipeline_name": "news.legacy_raw_pipeline", "reset": true, "params": {"date": "2026-07-10"}}
 ```
 
-该 pipeline 会创建总控 PipelineRun，读取本地原始 JSON，执行标准化和领域对象构建，写入 TaskRun、Artifact 和 manifest，仍保持 `production_writes=false`。
+该 pipeline 会创建总控 PipelineRun，读取本地原始 JSON，执行标准化、去重、资讯对象构建、日报生成和质量审计，写入 TaskRun、Artifact 和 manifest，仍保持 `production_writes=false`。
+
+如需获取最新资讯，可运行 shadow 采集：
+
+```bash
+PYTHONPATH=src python3 -m ai4sec_platform.cli.run_pipeline \
+  --pipeline news.shadow_collect_pipeline \
+  --reset
+```
 
 ## 本地原始数据导入说明
 
@@ -110,16 +121,16 @@ POST /api/runs
 
 ```bash
 PYTHONPATH=src python3 -m ai4sec_platform.cli.run_pipeline \
-  --pipeline news.ai_for_sec_local_raw_import \
+  --pipeline news.legacy_raw_pipeline \
   --reset
 ```
 
-该 pipeline 从 AI-for-Sec 本地 raw 六源文件读取数据，写入 `raw_artifacts`、`normalized_items`，再构造 `news` 和 `capabilities` 的 `domain_items`。它不联网，也不以旧 `selected_entries.json` 作为正式主输入。
+该 pipeline 从 AI-for-Sec 本地 raw 六源文件读取数据，写入 `raw_artifacts`、`normalized_items`，再构造 `news` 的 `domain_items`、证据、日报和质量审计。它不联网，也不以旧 `selected_entries.json` 作为正式主输入；能力候选只在用户操作或能力域 pipeline 中生成。
 
 对应 API：
 
 ```text
-POST /api/runs {"pipeline_name": "news.ai_for_sec_local_raw_import", "reset": true, "params": {"date": "2026-07-10"}}
+POST /api/runs {"pipeline_name": "news.legacy_raw_pipeline", "reset": true, "params": {"date": "2026-07-10"}}
 ```
 
 ## 工程骨架状态
@@ -134,17 +145,19 @@ app / core / db / schemas / sources / artifacts / pipelines / domains / agents /
 
 ## 已实现核心 Pipelines
 
-当前已实现资讯、威胁、漏洞三条核心输入处理 pipeline：
+当前已实现资讯、威胁、漏洞核心输入处理 pipeline：
 
 ```bash
-PYTHONPATH=src python3 -m ai4sec_platform.cli.run_pipeline --pipeline news.ai_for_sec_local_raw_import --reset
+PYTHONPATH=src python3 -m ai4sec_platform.cli.run_pipeline --pipeline news.legacy_raw_pipeline --reset
+PYTHONPATH=src python3 -m ai4sec_platform.cli.run_pipeline --pipeline news.shadow_collect_pipeline --reset
 PYTHONPATH=src python3 -m ai4sec_platform.cli.run_pipeline --pipeline threats.huawei_raw_pipeline --reset
 PYTHONPATH=src python3 -m ai4sec_platform.cli.run_pipeline --pipeline vulnerabilities.material_local_raw_import --reset
 ```
 
 说明：
 
-- `news.ai_for_sec_local_raw_import` 从 AI-for-Sec 六类本地 raw 文件导入。
+- `news.legacy_raw_pipeline` 从 AI-for-Sec 六类本地 raw 文件导入。
+- `news.shadow_collect_pipeline` 从 arXiv/GitHub/RSS 获取最新资讯并走同一套处理链路。
 - `threats.huawei_raw_pipeline` 通过威胁 connector 获取华为 repo、issue/security 文件、固件和镜像数据并生成威胁目标。
 - `vulnerabilities.material_local_raw_import` 从漏洞素材 report 本地 JSON 导入。
 - 三者都会写 `raw_artifacts`、`normalized_items`、`domain_items`、`evidence_items`、`pipeline_runs`、`task_runs` 和 manifest。
@@ -154,7 +167,7 @@ PYTHONPATH=src python3 -m ai4sec_platform.cli.run_pipeline --pipeline vulnerabil
 
 当前已实现第一版真实处理逻辑，不再只是字段搬运：
 
-- 资讯：按 AI 安全、Agent 安全、漏洞攻防、代码仓库线索分类，并按相关性、代码线索、影响力和新鲜度评分。
+- 资讯：按 AI 安全、Agent 安全、漏洞攻防、代码仓库线索分类，并按相关性、安全价值、可复现性、影响力、新鲜度和完整度评分。
 - 能力：从资讯候选中识别可复现代码/论文线索，按复现性、研究价值和安全价值评分。
 - 威胁：从 repo/CVE/固件/镜像 raw 中抽 CVE、security issue、advisory、exploit/PoC、暴露面信号，并输出可解释风险分。
 - 漏洞素材：从搜索/报告 raw 中判断 PoC/Exploit、深度技术分析、漏洞公告、影响范围线索，抽取 CVE、影响版本、PoC 和修复线索，并计算素材有效性分。
@@ -221,7 +234,7 @@ PYTHONPATH=src python3 -m ai4sec_platform.cli.run_pipeline \
 
 ## 能力洞察 Pipeline
 
-在 `news.ai_for_sec_local_raw_import` 运行后，可以继续运行：
+在 `news.legacy_raw_pipeline` 运行后，可以继续运行：
 
 ```bash
 PYTHONPATH=src python3 -m ai4sec_platform.cli.run_pipeline --pipeline capabilities.from_news_pipeline

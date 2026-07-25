@@ -1,13 +1,15 @@
 import { Shell } from '../layouts/Shell';
 import { ThreatPage } from '../features/threats/ThreatPage';
 import { CapabilityPage } from '../features/capabilities/CapabilityPage';
+import { NewsPage } from '../features/news/NewsPage';
 import { useEffect, useState } from 'react';
 
 export function App() {
   const [domain, setDomain] = useState(() => new URLSearchParams(window.location.search).get('domain') || 'capability');
   useEffect(() => {
     document.body.classList.toggle('capability-document', domain === 'capability');
-    return () => document.body.classList.remove('capability-document');
+    document.body.classList.toggle('news-document', domain === 'news');
+    return () => { document.body.classList.remove('capability-document'); document.body.classList.remove('news-document'); };
   }, [domain]);
   const changeDomain = (next: string) => {
     setDomain(next);
@@ -16,6 +18,6 @@ export function App() {
     window.history.pushState({}, '', url);
   };
   return <Shell activeDomain={domain} onDomainChange={changeDomain}>
-    {domain === 'threat' ? <ThreatPage /> : domain === 'capability' ? <CapabilityPage /> : <div className="placeholder-page"><h1>{domain === 'news' ? '资讯洞察' : '漏洞洞察'}</h1><p>该业务域正在接入统一工作台。</p></div>}
+    {domain === 'threat' ? <ThreatPage /> : domain === 'capability' ? <CapabilityPage /> : domain === 'news' ? <NewsPage /> : <div className="placeholder-page"><h1>漏洞洞察</h1><p>该业务域正在接入统一工作台。</p></div>}
   </Shell>;
 }

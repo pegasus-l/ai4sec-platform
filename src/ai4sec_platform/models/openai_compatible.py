@@ -50,5 +50,5 @@ class OpenAICompatibleProvider:
             headers={"Content-Type": "application/json", "Authorization": f"Bearer {self.api_key}"},
             method="POST",
         )
-        with urllib.request.urlopen(request, timeout=120) as response:  # noqa: S310 - configured internal/API endpoint
+        with urllib.request.urlopen(request, timeout=60) as response:  # noqa: S310 - configured internal/API endpoint
             return json.loads(response.read().decode("utf-8"))

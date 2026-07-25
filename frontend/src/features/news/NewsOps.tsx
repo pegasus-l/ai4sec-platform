@@ -1,0 +1,74 @@
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { Activity, CheckCircle2, Database, FileText, Play, RefreshCw, Server, Workflow } from 'lucide-react';
+import { useState } from 'react';
+import { Badge, Card, Drawer, EmptyState, MetricCard } from '../../components/ui';
+import { fetchNewsOps, fetchNewsRun, startNewsPipeline } from './newsQueries';
+import type { NewsView } from './newsTypes';
+
+type Run = { run_id: string; pipeline_name: string; status: string; started_at: string; finished_at: string; production_writes: number; summary: Record<string, unknown>; task_counts: Record<string, number> };
+type Task = { id: number; step_name: string; status: string; started_at: string; finished_at: string; metrics: Record<string, unknown>; error_message: string };
+type Artifact = { id: number; artifact_type: string; path: string; bytes: number };
+type ModelMetrics = { total: number; success: number; failed: number; retryable_failure: number; cache_hits: number; avg_latency_ms: number; agents: Array<{ agent_name: string; provider: string; model_profile: string; total: number; success: number; failed: number; retryable_failure: number; avg_latency_ms: number }> };
+type RunDetail = Run & { tasks: Task[]; artifacts: Artifact[]; models: ModelMetrics };
+type Processing = { collected: number; normalized: number; deduped: number; gate_passed: number; reviewed: number; published: number; failures: { source: number; task: number; model: number; total: number } };
+type Source = { id: string; name: string; status: string; health: string; latest_at: string; item_count: number; collected_count: number; error_count: number; errors: string[]; summary: Record<string, unknown> };
+
+const sourceNames: Record<string, string> = { arxiv: 'arXiv', github: 'GitHub', rss: 'RSS', asis: 'ASIS', awesome: 'Awesome', x: 'X' };
+const stepNames: Record<string, string> = { collect_news_sources: '采集数据源', extract_news_references: '发现论文与项目', normalize_news_items: '标准化', deduplicate_news_candidates: '去重', resolve_news_candidate_links: '论文项目关联', gate_news_candidates_with_tech_map: '技术地图门控', enrich_news_candidates_with_model: '深度评审', build_news_items: '构建资讯条目', build_news_daily_report: '生成日报', audit_news_quality: '质量审计' };
+
+export function NewsOps({ view, setView }: { view: NewsView; setView: (view: NewsView) => void }) {
+  if (view === 'ops-runs') return <Runs />;
+  if (view === 'ops-sources') return <Sources />;
+  if (view === 'ops-quality') return <Quality />;
+  if (view === 'ops-models') return <ModelReview />;
+  return <Overview setView={setView} />;
+}
+
+function Overview({ setView }: { setView: (view: NewsView) => void }) {
+  const queryClient = useQueryClient();
+  const query = useQuery({ queryKey: ['news-ops', 'overview'], queryFn: () => fetchNewsOps<{ items: { total: number; papers: number; projects: number }; latest_run: Run | null; latest_report: { report_date: string; title: string } | null; sources: Source[]; models: ModelMetrics; processing: Processing }>('overview'), refetchInterval: 5000 });
+  const run = useMutation({ mutationFn: () => startNewsPipeline(), onSuccess: () => queryClient.invalidateQueries({ queryKey: ['news-ops'] }) });
+  if (!query.data) return <Loading />;
+  const data = query.data;
+  const healthy = data.sources.filter(source => ['ok', 'healthy', 'success'].includes(source.health) || ['ok', 'success'].includes(source.status)).length;
+  return <div className="news-ops-stack">
+    <div className="news-kpis"><MetricCard label="本次采集" value={data.processing.collected} hint="六个数据源原始条目" /><MetricCard label="评审后保留" value={data.processing.published} hint={`门控通过 ${data.processing.gate_passed} · 深评通过 ${data.processing.reviewed}`} /><MetricCard label="当前资讯总量" value={data.items.total} hint={`${data.items.papers} 篇论文 · ${data.items.projects} 个项目`} /><MetricCard label="运行失败" value={data.processing.failures.total} hint={`来源 ${data.processing.failures.source} · 模型 ${data.processing.failures.model} · 步骤 ${data.processing.failures.task}`} tone={data.processing.failures.total ? 'red' : 'green'} /></div>
+    <div className="news-ops-grid"><Card><div className="ops-card-title"><Workflow size={17} /><h3>最新 Pipeline</h3><Status value={data.latest_run?.status || 'unknown'} /></div>{data.latest_run ? <><strong className="ops-run-name">{data.latest_run.pipeline_name}</strong><p>{formatTime(data.latest_run.started_at)} → {formatTime(data.latest_run.finished_at)}</p><div className="ops-actions"><button onClick={() => setView('ops-runs')}>查看运行详情</button><button className="primary" disabled={run.isPending || data.latest_run.status === 'running'} onClick={() => run.mutate()}><Play size={14} />{run.isPending ? '正在启动' : '运行完整 Pipeline'}</button></div></> : <EmptyState title="暂无运行记录" description="运行资讯 Pipeline 后将在这里显示进度。" />}</Card><Card><div className="ops-card-title"><Activity size={17} /><h3>模型评审</h3></div><div className="ops-mini-grid"><span><b>{data.models.total}</b>调用</span><span><b>{data.models.success}</b>成功</span><span><b>{data.models.failed}</b>失败</span><span><b>{data.models.avg_latency_ms}ms</b>平均延迟</span></div><button className="ops-link" onClick={() => setView('ops-models')}>查看模型调用与重试 →</button></Card></div>
+    <div className="news-ops-grid"><Card><div className="ops-card-title"><Server size={17} /><h3>六数据源</h3></div><div className="ops-source-strip">{data.sources.map(source => <button key={source.id} onClick={() => setView('ops-sources')}><Status value={source.error_count ? 'degraded' : source.health || source.status} /><b>{sourceNames[source.id]}</b><span>采集 {source.collected_count} · 入库 {source.item_count}{source.error_count ? ` · 失败 ${source.error_count}` : ''}</span></button>)}</div></Card><Card><div className="ops-card-title"><FileText size={17} /><h3>日报产物</h3></div>{data.latest_report ? <><strong className="ops-run-name">{data.latest_report.title}</strong><p>最新日报：{data.latest_report.report_date}</p></> : <p className="muted">尚未生成日报，完成 Pipeline 后自动生成。</p>}</Card></div>
+  </div>;
+}
+
+function Runs() {
+  const [selected, setSelected] = useState('');
+  const query = useQuery({ queryKey: ['news-ops', 'runs'], queryFn: () => fetchNewsOps<{ items: Run[] }>('runs'), refetchInterval: 5000 });
+  const detail = useQuery({ queryKey: ['news-ops-run', selected], queryFn: () => fetchNewsRun<RunDetail>(selected), enabled: Boolean(selected), refetchInterval: selected ? 3000 : false });
+  return <div className="news-ops-stack"><Card><div className="ops-card-title"><Workflow size={17} /><h3>Pipeline 运行历史</h3><span className="muted">点击查看步骤、模型调用和产物</span></div>{!query.data?.items.length ? <EmptyState title="暂无运行记录" description="从运营概览启动一次完整 Pipeline。" /> : <div className="ops-run-list">{query.data.items.map(run => <button key={run.run_id} onClick={() => setSelected(run.run_id)}><Status value={run.status} /><div><strong>{run.pipeline_name}</strong><span>{run.run_id}</span></div><span>{formatTime(run.started_at)}</span><span>{Object.values(run.task_counts || {}).reduce((sum, value) => sum + value, 0)} 步</span></button>)}</div>}</Card><RunDrawer data={detail.data} open={Boolean(selected)} close={() => setSelected('')} /></div>;
+}
+
+function RunDrawer({ data, open, close }: { data?: RunDetail; open: boolean; close: () => void }) {
+  return <Drawer open={open} title={data?.pipeline_name || '正在加载运行详情'} subtitle={data?.run_id} onClose={close}>{data && <div className="news-detail"><Card><div className="ops-card-title"><Status value={data.status} /><span>{formatTime(data.started_at)} → {formatTime(data.finished_at)}</span></div><p>Shadow 模式：{data.production_writes ? '否' : '是'}</p></Card><div className="ops-steps">{data.tasks.map((task, index) => <Card key={task.id}><div className="ops-step-index">{index + 1}</div><div><div className="ops-card-title"><strong>{stepNames[task.step_name] || task.step_name}</strong><Status value={task.status} /></div><p>{compactMetrics(task.metrics)}</p>{task.error_message && <div className="ops-error">{task.error_message}</div>}</div></Card>)}</div><Card><h3>模型调用</h3><p>共 {data.models.total} 次 · 成功 {data.models.success} · 失败 {data.models.failed} · 重试 {data.models.retryable_failure}</p></Card><Card><h3>原始与中间产物 · {data.artifacts.length}</h3>{data.artifacts.map(item => <div className="ops-artifact" key={item.id}><Database size={14} /><span>{item.artifact_type}</span><code>{item.path}</code></div>)}</Card></div>}</Drawer>;
+}
+
+function Sources() {
+  const queryClient = useQueryClient();
+  const query = useQuery({ queryKey: ['news-ops', 'sources'], queryFn: () => fetchNewsOps<{ items: Source[] }>('sources'), refetchInterval: 10000 });
+  const retry = useMutation({ mutationFn: (source: string) => startNewsPipeline([source]), onSuccess: () => queryClient.invalidateQueries({ queryKey: ['news-ops'] }) });
+  return <div className="ops-source-grid">{query.data?.items.map(source => <Card key={source.id}><div className="ops-card-title"><Server size={17} /><h3>{sourceNames[source.id]}</h3><Status value={source.error_count ? 'degraded' : source.health || source.status} /></div><strong className="ops-source-count">{source.collected_count}</strong><span className="muted">本次获取 · 入库 {source.item_count}</span><dl><dt>最近更新</dt><dd>{formatTime(source.latest_at)}</dd><dt>失败数量</dt><dd>{source.error_count}</dd><dt>采集摘要</dt><dd>{compactMetrics(source.summary)}</dd></dl>{source.error_count > 0 && <div className="ops-source-errors"><strong>失败原因</strong>{source.errors.map((error, index) => <p key={`${source.id}-${index}`}>{error}</p>)}</div>}<div className="ops-actions"><button className={source.error_count ? 'primary' : ''} disabled={retry.isPending} onClick={() => retry.mutate(source.id)}><Play size={14} />{retry.isPending ? '正在启动' : source.error_count ? '重跑失败来源' : '重新采集该来源'}</button></div></Card>)}</div>;
+}
+
+function Quality() {
+  const query = useQuery({ queryKey: ['news-ops', 'quality'], queryFn: () => fetchNewsOps<{ run_id: string; tasks: Task[]; models: ModelMetrics; processing: Processing; audits: Array<{ id: number; audit_type: string; status: string; score: number; summary: string }> }>('quality'), refetchInterval: 10000 });
+  if (!query.data) return <Loading />;
+  return <div className="news-ops-stack"><Card><div className="ops-card-title"><Activity size={17} /><h3>本次处理漏斗</h3><span className="muted">{query.data.run_id || '暂无运行'}</span></div><div className="ops-funnel">{[['从数据源获取', query.data.processing.collected], ['标准化', query.data.processing.normalized], ['去重关联', query.data.processing.deduped], ['门控保留', query.data.processing.gate_passed], ['深评保留', query.data.processing.reviewed], ['最终入库', query.data.processing.published]].map(([label, count]) => <div key={String(label)}><Status value="success" /><strong>{label}</strong><span>{count} 条</span></div>)}</div></Card><Card><div className="ops-card-title"><CheckCircle2 size={17} /><h3>失败与质量审计</h3></div><p>来源失败 {query.data.processing.failures.source} · 模型失败 {query.data.processing.failures.model} · 步骤失败 {query.data.processing.failures.task}</p>{query.data.audits.length ? query.data.audits.map(audit => <div className="ops-audit" key={audit.id}><Status value={audit.status} /><strong>{audit.audit_type}</strong><span>{audit.score ?? '—'}</span><p>{audit.summary}</p></div>) : <EmptyState title="暂无质量审计" description="Pipeline 的审计步骤完成后将在这里展示结果。" />}</Card></div>;
+}
+
+function ModelReview() {
+  const query = useQuery({ queryKey: ['news-ops', 'quality'], queryFn: () => fetchNewsOps<{ run_id: string; models: ModelMetrics }>('quality'), refetchInterval: 10000 });
+  if (!query.data) return <Loading />;
+  return <div className="news-ops-stack"><div className="news-kpis"><MetricCard label="模型调用" value={query.data.models.total} hint="门控与深评全部尝试" /><MetricCard label="缓存命中" value={query.data.models.cache_hits} hint="跳过重复模型调用" tone="violet" /><MetricCard label="最终失败" value={query.data.models.failed} hint={`成功 ${query.data.models.success}`} tone={query.data.models.failed ? 'red' : 'green'} /><MetricCard label="自动重试" value={query.data.models.retryable_failure} hint="可恢复失败尝试" tone="amber" /></div><Card><div className="ops-card-title"><RefreshCw size={17} /><h3>门控与深评模型</h3><span className="muted">{query.data.run_id}</span></div><div className="ops-model-grid">{query.data.models.agents.map(agent => <div key={`${agent.agent_name}/${agent.model_profile}`}><strong>{agent.agent_name === 'news_tech_map_gate' ? '技术地图门控' : agent.agent_name === 'news_deep_review' ? '深度评审' : agent.agent_name}</strong><span>{agent.provider} / {agent.model_profile}</span><p>调用 {agent.total} · 成功 {agent.success} · 最终失败 {agent.failed} · 重试 {agent.retryable_failure} · 平均 {agent.avg_latency_ms}ms</p></div>)}</div></Card></div>;
+}
+
+function Status({ value }: { value: string }) { const good = ['ok', 'success', 'healthy', 'pass', 'completed'].includes(value); const bad = ['failed', 'error', 'unhealthy', 'fail'].includes(value); return <Badge tone={good ? 'green' : bad ? 'red' : value === 'running' ? 'sky' : 'amber'}>{value === 'success' ? '成功' : value === 'running' ? '运行中' : value === 'failed' ? '失败' : ['ok', 'healthy'].includes(value) ? '健康' : value === 'unknown' ? '未知' : value}</Badge>; }
+function Loading() { return <div className="news-loading"><div /><div /><div /></div>; }
+function formatTime(value?: string) { return value ? value.replace('T', ' ').slice(0, 19) : '—'; }
+function compactMetrics(metrics: Record<string, unknown>) { const entries = Object.entries(metrics || {}).filter(([, value]) => ['string', 'number', 'boolean'].includes(typeof value)).slice(0, 5); return entries.length ? entries.map(([key, value]) => `${key}: ${String(value)}`).join(' · ') : '暂无指标'; }
