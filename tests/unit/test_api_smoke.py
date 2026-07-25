@@ -89,7 +89,7 @@ def test_run_pipeline_endpoint_triggers_import() -> None:
     assert any(item["name"] == "news.legacy_raw_pipeline" for item in pipelines.json()["items"])
     assert not any(item["name"] == "legacy.sample_import" for item in pipelines.json()["items"])
 
-    response = client.post("/api/runs", json={"pipeline_name": "news.legacy_raw_pipeline", "reset": True, "params": {"date": "2026-07-10"}})
+    response = client.post("/api/runs", json={"pipeline_name": "news.legacy_raw_pipeline", "reset": True, "wait": True, "params": {"date": "2026-07-10"}})
     assert response.status_code == 200
     data = response.json()
     assert data["status"] == "success"
@@ -106,7 +106,7 @@ def test_raw_pipeline_builds_from_source_raw_files() -> None:
     client = TestClient(app)
     response = client.post(
         "/api/runs",
-        json={"pipeline_name": "news.legacy_raw_pipeline", "reset": True, "params": {"date": "2026-07-10"}},
+        json={"pipeline_name": "news.legacy_raw_pipeline", "reset": True, "wait": True, "params": {"date": "2026-07-10"}},
     )
     assert response.status_code == 200
     data = response.json()
@@ -165,7 +165,7 @@ def test_threat_and_vulnerability_raw_pipelines_run(monkeypatch) -> None:
         ("vulnerabilities.material_local_raw_import", {"report_limit": 2, "item_limit": 20}, "/api/vulnerabilities/today"),
     ]
     for pipeline_name, params, check_path in cases:
-        response = client.post("/api/runs", json={"pipeline_name": pipeline_name, "reset": True, "params": params})
+        response = client.post("/api/runs", json={"pipeline_name": pipeline_name, "reset": True, "wait": True, "params": params})
         assert response.status_code == 200
         data = response.json()
         assert data["status"] == "success"
@@ -181,10 +181,10 @@ def test_capability_pipeline_assesses_news_candidates() -> None:
     client = TestClient(app)
     news_run = client.post(
         "/api/runs",
-        json={"pipeline_name": "news.legacy_raw_pipeline", "reset": True, "params": {"date": "2026-07-10"}},
+        json={"pipeline_name": "news.legacy_raw_pipeline", "reset": True, "wait": True, "params": {"date": "2026-07-10"}},
     )
     assert news_run.status_code == 200
-    response = client.post("/api/runs", json={"pipeline_name": "capabilities.from_news_pipeline", "params": {"limit": 10}})
+    response = client.post("/api/runs", json={"pipeline_name": "capabilities.from_news_pipeline", "wait": True, "params": {"limit": 10}})
     assert response.status_code == 200
     data = response.json()
     assert data["status"] == "success"
@@ -199,10 +199,10 @@ def test_vulnerability_knowledge_pipeline_extracts_candidates() -> None:
     client = TestClient(app)
     raw_run = client.post(
         "/api/runs",
-        json={"pipeline_name": "vulnerabilities.material_local_raw_import", "reset": True, "params": {"report_limit": 2, "item_limit": 20}},
+        json={"pipeline_name": "vulnerabilities.material_local_raw_import", "reset": True, "wait": True, "params": {"report_limit": 2, "item_limit": 20}},
     )
     assert raw_run.status_code == 200
-    response = client.post("/api/runs", json={"pipeline_name": "vulnerabilities.knowledge_extraction_pipeline", "params": {"limit": 5}})
+    response = client.post("/api/runs", json={"pipeline_name": "vulnerabilities.knowledge_extraction_pipeline", "wait": True, "params": {"limit": 5}})
     assert response.status_code == 200
     data = response.json()
     assert data["status"] == "success"
@@ -217,9 +217,9 @@ def test_vulnerability_knowledge_pipeline_extracts_candidates() -> None:
 def test_threat_risk_pipeline_reasons_targets(monkeypatch) -> None:
     _patch_threat_connector_records(monkeypatch)
     client = TestClient(app)
-    raw_run = client.post("/api/runs", json={"pipeline_name": "threats.huawei_raw_pipeline", "reset": True, "params": {"limit": 30}})
+    raw_run = client.post("/api/runs", json={"pipeline_name": "threats.huawei_raw_pipeline", "reset": True, "wait": True, "params": {"limit": 30}})
     assert raw_run.status_code == 200
-    response = client.post("/api/runs", json={"pipeline_name": "threats.risk_reasoning_pipeline", "params": {"limit": 8}})
+    response = client.post("/api/runs", json={"pipeline_name": "threats.risk_reasoning_pipeline", "wait": True, "params": {"limit": 8}})
     assert response.status_code == 200
     data = response.json()
     assert data["status"] == "success"
@@ -233,7 +233,7 @@ def test_threat_risk_pipeline_reasons_targets(monkeypatch) -> None:
 def test_huawei_full_migration_pipeline_runs_and_exposes_reports(monkeypatch) -> None:
     _patch_threat_connector_records(monkeypatch)
     client = TestClient(app)
-    response = client.post("/api/runs", json={"pipeline_name": "threats.huawei_full_migration_pipeline", "reset": True, "params": {"limit": 5, "top_n": 5}})
+    response = client.post("/api/runs", json={"pipeline_name": "threats.huawei_full_migration_pipeline", "reset": True, "wait": True, "params": {"limit": 5, "top_n": 5}})
     assert response.status_code == 200
     data = response.json()
     assert data["status"] == "success"
@@ -251,10 +251,10 @@ def test_huawei_full_migration_pipeline_runs_and_exposes_reports(monkeypatch) ->
 def test_frontend_v9_contract_returns_all_page_blocks(monkeypatch) -> None:
     _patch_threat_connector_records(monkeypatch)
     client = TestClient(app)
-    client.post("/api/runs", json={"pipeline_name": "news.legacy_raw_pipeline", "reset": True, "params": {"date": "2026-07-10"}})
-    client.post("/api/runs", json={"pipeline_name": "capabilities.from_news_pipeline", "params": {"limit": 3}})
-    client.post("/api/runs", json={"pipeline_name": "threats.huawei_raw_pipeline", "params": {"limit": 10}})
-    client.post("/api/runs", json={"pipeline_name": "vulnerabilities.material_local_raw_import", "params": {"report_limit": 1, "item_limit": 10}})
+    client.post("/api/runs", json={"pipeline_name": "news.legacy_raw_pipeline", "reset": True, "wait": True, "params": {"date": "2026-07-10"}})
+    client.post("/api/runs", json={"pipeline_name": "capabilities.from_news_pipeline", "wait": True, "params": {"limit": 3}})
+    client.post("/api/runs", json={"pipeline_name": "threats.huawei_raw_pipeline", "wait": True, "params": {"limit": 10}})
+    client.post("/api/runs", json={"pipeline_name": "vulnerabilities.material_local_raw_import", "wait": True, "params": {"report_limit": 1, "item_limit": 10}})
     response = client.get("/api/frontend/v9")
     assert response.status_code == 200
     data = response.json()

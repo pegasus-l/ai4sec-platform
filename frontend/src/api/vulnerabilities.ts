@@ -6,6 +6,8 @@ import type {
   KnowledgePayload,
   ListResponse,
   MaterialPayload,
+  PipelineRunDetail,
+  PipelineRunStartResponse,
   ShadowEvaluationPayload,
   VulnerabilityTodayResponse,
 } from '../types/vulnerability';
@@ -38,12 +40,17 @@ export function fetchVulnerabilityEvaluations(): Promise<ListResponse<DomainItem
   return getJson('/api/vulnerabilities/evaluations?limit=20');
 }
 
-export function runVulnerabilitySmokeEvaluation(): Promise<{ run_id: string; status: string }> {
+export function runVulnerabilitySmokeEvaluation(): Promise<PipelineRunStartResponse> {
   return postJson('/api/runs', {
     pipeline_name: 'vulnerabilities.full_knowledge_discovery_pipeline',
     reset: false,
+    wait: false,
     params: { keyword_profile: 'smoke', max_results: 3, crawl_limit: 15, max_run_queries: 5 },
   });
+}
+
+export function fetchPipelineRun(runId: string): Promise<PipelineRunDetail> {
+  return getJson(`/api/runs/${encodeURIComponent(runId)}`);
 }
 
 export function fetchVulnerabilityEvents(): Promise<ListResponse<DomainItem>> {
