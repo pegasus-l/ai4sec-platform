@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
 from ai4sec_platform.app.dependencies import get_db
+from ai4sec_platform.db import repositories as repo
 from ai4sec_platform.domains.vulnerabilities import service as vuln_service
 from ai4sec_platform.services import domain_items
 from ai4sec_platform.services import operations
@@ -48,6 +49,16 @@ def extracted_content(limit: int = Query(50, ge=1, le=200), conn: sqlite3.Connec
 @router.get("/material-reviews")
 def material_reviews(limit: int = Query(50, ge=1, le=200), conn: sqlite3.Connection = Depends(get_db)) -> dict:
     return domain_items.list_items(conn, DOMAIN, item_type="material_review", limit=limit)
+
+
+@router.get("/evaluations")
+def evaluations(limit: int = Query(20, ge=1, le=100), conn: sqlite3.Connection = Depends(get_db)) -> dict:
+    rows = conn.execute(
+        "SELECT * FROM domain_items WHERE domain = ? AND item_type = ? ORDER BY id DESC LIMIT ?",
+        (DOMAIN, "shadow_evaluation", limit),
+    ).fetchall()
+    items = [repo.row_to_dict(row) for row in rows]
+    return {"domain": DOMAIN, "count": len(items), "items": items}
 
 
 @router.get("/materials/{item_id}")

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import re
 from typing import Any
 
+from ai4sec_platform.domains.vulnerabilities.model_inputs import prepare_model_input
 from ai4sec_platform.domains.vulnerabilities.entity_normalizers import enrich_material_entities, material_text
 from ai4sec_platform.domains.vulnerabilities.evidence_extractors import extract_material_evidence
 from ai4sec_platform.domains.vulnerabilities.material_classifiers import classify_material
@@ -62,7 +64,7 @@ MATERIAL_REVIEW_PROMPT = """你是一个资深安全研究员和技术内容审�
 }}"""
 
 
-def review_crawled_material(page: dict[str, Any], *, requirements: str = "", confidence_threshold: float = 0.55) -> dict[str, Any]:
+def review_crawled_material(page: dict[str, Any], *, requirements: str = "", confidence_threshold: float = 0.55, use_model: bool = True) -> dict[str, Any]:
     """Deterministic review that mirrors the old AI checker schema.
 
     The old project used an LLM to decide whether a crawled page was a high-quality
@@ -73,7 +75,25 @@ def review_crawled_material(page: dict[str, Any], *, requirements: str = "", con
         return _review(page, is_relevant=False, confidence=0.0, decision="reject", reason=f"抓取失败：{page.get('error') or 'unknown'}", key_findings=[])
 
     normalized = _normalize_review_input(page)
-    llm_review = _try_llm_review(normalized, requirements=requirements, confidence_threshold=confidence_threshold)
+    if len(str(normalized.get("cleaned_text") or "").strip()) < 800:
+        if re.search(r"\bCVE-\d{4}-\d{4,}\b", f"{normalized.get('title', '')}\n{normalized.get('cleaned_text', '')}", re.IGNORECASE):
+            return _review(
+                normalized,
+                is_relevant=True,
+                confidence=0.2,
+                decision="needs_review",
+                reason="正文内容不足 800 字符；CVE 页面仅保留为事件聚合线索，不能作为优质技术素材。",
+                key_findings=[],
+            )
+        return _review(
+            normalized,
+            is_relevant=False,
+            confidence=0.0,
+            decision="reject",
+            reason="正文内容不足 800 字符，不能作为高质量漏洞技术分析素材。",
+            key_findings=[],
+        )
+    llm_review = _try_llm_review(normalized, requirements=requirements, confidence_threshold=confidence_threshold) if use_model else None
     if llm_review:
         return llm_review
     return _rule_review(normalized, requirements=requirements, confidence_threshold=confidence_threshold)
@@ -84,7 +104,8 @@ def _try_llm_review(normalized: dict[str, Any], *, requirements: str, confidence
         provider = LLMRouter().provider_for("vulnerability_material_reviewer")
         if isinstance(provider, LocalRuleProvider):
             return None
-        payload = {"url": normalized.get("url"), "title": normalized.get("title"), "requirements": requirements, "content": str(normalized.get("cleaned_text") or normalized.get("summary") or "")[:24000]}
+        content, input_truncated = prepare_model_input(str(normalized.get("cleaned_text") or normalized.get("summary") or ""), profile="vulnerability_material_reviewer")
+        payload = {"url": normalized.get("url"), "title": normalized.get("title"), "requirements": requirements, "content": content}
         prompt = MATERIAL_REVIEW_PROMPT.format(requirements=requirements or "- 无额外要求")
         response = provider.complete_json(prompt=prompt, payload=payload)
         result = response.get("result") or response.get("parsed") or {}
@@ -106,7 +127,7 @@ def _try_llm_review(normalized: dict[str, Any], *, requirements: str, confidence
             decision=decision,
             reason=str(result.get("reason") or "模型完成漏洞素材审核。"),
             key_findings=_list_str(result.get("key_findings")),
-            extra={"classification": {"category": result.get("material_type") or "llm_review", "confidence": confidence}, "scoring": {"score": round(confidence * 100, 2), "priority": "high" if decision == "accept" else "medium" if decision == "needs_review" else "low"}, "extracted_evidence": extra_evidence, "reviewer": response.get("provider"), "review_model": response.get("model"), "model_used": True, "prompt": prompt, "llm_output": result, "quality_gate": _quality_gate_reason(result, decision)},
+            extra={"classification": {"category": result.get("material_type") or "llm_review", "confidence": confidence}, "scoring": {"score": round(confidence * 100, 2), "priority": "high" if decision == "accept" else "medium" if decision == "needs_review" else "low"}, "extracted_evidence": extra_evidence, "reviewer": response.get("provider"), "review_model": response.get("model"), "model_used": True, "prompt": prompt, "llm_output": result, "quality_gate": _quality_gate_reason(result, decision), "model_input_characters": len(content), "model_input_truncated": input_truncated},
         )
     except Exception as exc:  # pragma: no cover - external model dependent
         normalized["llm_review_error"] = str(exc)[:300]

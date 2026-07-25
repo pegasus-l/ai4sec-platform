@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+import asyncio
+import inspect
 import re
 import time
 import urllib.error
 import urllib.request
 from html import unescape
-from typing import Any
+from typing import Any, Callable
 
+from ai4sec_platform.domains.vulnerabilities.crawl_policies import VulnerabilityCrawlPolicy
 from ai4sec_platform.schemas.sources import SourceFetchRequest, SourceHealth
 from ai4sec_platform.sources.result import SourceFetchResult
 
@@ -17,10 +20,11 @@ class Crawl4aiConnector:
 
     def health_check(self, config: dict) -> SourceHealth:
         try:
-            import crawl4ai  # noqa: F401
-            return SourceHealth(status="configured", message="crawl4ai import ok")
-        except Exception:
-            return SourceHealth(status="degraded", message="crawl4ai not installed; urllib fallback available")
+            from crawl4ai.__version__ import __version__
+
+            return SourceHealth(status="configured", message=f"crawl4ai {__version__} import ok")
+        except Exception as exc:
+            return SourceHealth(status="degraded", message=f"crawl4ai unavailable ({exc}); urllib fallback available")
 
     def fetch(self, request: SourceFetchRequest) -> SourceFetchResult:
         params = request.params or {}
@@ -30,93 +34,229 @@ class Crawl4aiConnector:
         if not isinstance(candidates, list):
             return SourceFetchResult(source_name=request.source_name, connector_name=self.connector_name, errors=["invalid_candidates"])
 
-        timeout = float(params.get("timeout") or request.config.get("timeout") or 20)
+        policy = VulnerabilityCrawlPolicy.from_params(params, request.config or {})
         max_items = int(params.get("max_items") or request.config.get("max_items") or len(candidates) or 0)
-        use_crawl4ai = bool(params.get("use_crawl4ai", request.config.get("use_crawl4ai", False)))
         items: list[dict[str, Any]] = []
         errors: list[str] = []
-        for candidate in candidates[:max_items]:
+        seen_urls: set[str] = set()
+        for candidate in candidates:
+            if len(items) >= max_items:
+                break
             if not isinstance(candidate, dict):
                 continue
-            try:
-                items.append(_crawl_candidate(candidate, timeout=timeout, use_crawl4ai=use_crawl4ai))
-            except Exception as exc:  # pragma: no cover - network/runtime dependent
-                errors.append(f"{candidate.get('url')}: {exc}")
-                items.append(_failed(candidate, str(exc)))
+            url = str(candidate.get("url") or "").strip()
+            if url and url in seen_urls:
+                continue
+            seen_urls.add(url)
+            item = _crawl_candidate(candidate, policy=policy, prefer_url_fetch=bool(params.get("prefer_url_fetch", False)))
+            items.append(item)
+            if not item.get("success"):
+                errors.append(f"{url}: {item.get('failure_reason') or item.get('error')}")
 
         return SourceFetchResult(
             source_name=request.source_name,
             connector_name=self.connector_name,
             items=items,
-            metadata={"count": len(items), "use_crawl4ai": use_crawl4ai, "timeout": timeout},
+            metadata={
+                "count": len(items),
+                "success_count": sum(1 for item in items if item.get("success")),
+                "use_crawl4ai": policy.use_crawl4ai,
+                "timeout": policy.timeout_seconds,
+                "max_retries": policy.max_retries,
+                "deduplicated": len(candidates[:max_items]) - len(items),
+            },
             errors=errors,
         )
 
 
-def _crawl_candidate(candidate: dict[str, Any], *, timeout: float, use_crawl4ai: bool) -> dict[str, Any]:
-    if candidate.get("markdown") or candidate.get("cleaned_text") or candidate.get("content"):
+def _crawl_candidate(candidate: dict[str, Any], *, policy: VulnerabilityCrawlPolicy, prefer_url_fetch: bool) -> dict[str, Any]:
+    if not prefer_url_fetch and (candidate.get("markdown") or candidate.get("cleaned_text") or candidate.get("content")):
         markdown = str(candidate.get("markdown") or candidate.get("cleaned_text") or candidate.get("content") or candidate.get("snippet") or "")
-        return _success(candidate, markdown=markdown, mode="provided_content")
-    if use_crawl4ai:
+        return _success(candidate, markdown=markdown, mode="provided_content", attempt_count=0)
+
+    url = str(candidate.get("url") or "").strip()
+    validation_error = policy.validate_url(url)
+    if validation_error:
+        return _failed(candidate, validation_error, failure_reason=validation_error, attempt_count=0)
+
+    crawl4ai_error = ""
+    if policy.use_crawl4ai:
+        result, crawl4ai_error = _with_retries(lambda: _crawl4ai_sync(candidate, policy=policy), policy)
+        if result and result.get("success"):
+            return result
+        if not policy.allow_urllib_fallback:
+            return result or _failed(candidate, crawl4ai_error, failure_reason="crawl4ai_failed")
+
+    result, urllib_error = _with_retries(lambda: _urllib_crawl(candidate, policy=policy), policy)
+    if result and result.get("success"):
+        if crawl4ai_error:
+            result["crawl_info"]["fallback_reason"] = crawl4ai_error
+        return result
+    error = urllib_error or crawl4ai_error or "crawl_failed"
+    return result or _failed(candidate, error, failure_reason="all_crawlers_failed")
+
+
+def _with_retries(operation: Callable[[], dict[str, Any]], policy: VulnerabilityCrawlPolicy) -> tuple[dict[str, Any] | None, str]:
+    last_result: dict[str, Any] | None = None
+    last_error = ""
+    for attempt in range(1, policy.max_retries + 2):
         try:
-            return _crawl4ai_sync(candidate, timeout=timeout)
-        except Exception:
-            # Fallback below keeps the pipeline usable in minimal environments.
-            pass
-    return _urllib_crawl(candidate, timeout=timeout)
+            last_result = operation()
+            last_result["attempt_count"] = attempt
+            last_result.setdefault("crawl_info", {})["attempt_count"] = attempt
+            if last_result.get("success"):
+                return last_result, ""
+            last_error = str(last_result.get("error") or "crawl_failed")
+        except Exception as exc:  # pragma: no cover - optional runtime/network
+            last_error = f"{type(exc).__name__}: {exc}"
+        if attempt <= policy.max_retries and policy.retry_delay_seconds:
+            time.sleep(policy.retry_delay_seconds * attempt)
+    if last_result:
+        last_result["failure_reason"] = last_result.get("failure_reason") or "retries_exhausted"
+    return last_result, last_error
 
 
-def _crawl4ai_sync(candidate: dict[str, Any], *, timeout: float) -> dict[str, Any]:  # pragma: no cover - optional dependency
-    import asyncio
-    from crawl4ai import AsyncWebCrawler, CrawlerRunConfig
+def _crawl4ai_sync(candidate: dict[str, Any], *, policy: VulnerabilityCrawlPolicy) -> dict[str, Any]:  # pragma: no cover - optional dependency
+    from crawl4ai import AsyncWebCrawler, BrowserConfig, CrawlerRunConfig
 
     async def run() -> dict[str, Any]:
-        config = CrawlerRunConfig(page_timeout=int(timeout * 1000), delay_before_return_html=1.0, remove_consent_popups=True)
-        async with AsyncWebCrawler(verbose=False) as crawler:
-            result = await crawler.arun(url=str(candidate.get("url")), config=config)
+        browser_config = _construct_supported(
+            BrowserConfig,
+            headless=True,
+            user_agent=policy.user_agent,
+            verbose=False,
+            enable_stealth=True,
+        )
+        run_config = _construct_supported(
+            CrawlerRunConfig,
+            page_timeout=int(policy.timeout_seconds * 1000),
+            delay_before_return_html=policy.js_wait_seconds,
+            wait_for=policy.wait_for_selector or None,
+            remove_consent_popups=True,
+            simulate_user=True,
+            magic=True,
+        )
+        async with AsyncWebCrawler(config=browser_config) as crawler:
+            result = await crawler.arun(url=str(candidate.get("url")), config=run_config)
             if not getattr(result, "success", False):
-                return _failed(candidate, getattr(result, "error_message", "crawl4ai failed"))
-            markdown = getattr(result, "markdown", "") or ""
-            return _success(candidate, markdown=markdown, mode="crawl4ai", metadata=getattr(result, "metadata", {}) or {})
+                error = str(getattr(result, "error_message", "crawl4ai_failed"))
+                return _failed(candidate, error, failure_reason="crawl4ai_failed")
+            markdown = _markdown_text(getattr(result, "markdown", ""))
+            metadata = dict(getattr(result, "metadata", {}) or {})
+            metadata.update(
+                {
+                    "status_code": getattr(result, "status_code", None),
+                    "links": getattr(result, "links", {}) or {},
+                    "media": getattr(result, "media", {}) or {},
+                }
+            )
+            return _success(candidate, markdown=markdown, mode="crawl4ai", metadata=metadata)
 
     return asyncio.run(run())
 
 
-def _urllib_crawl(candidate: dict[str, Any], *, timeout: float) -> dict[str, Any]:
+def _construct_supported(factory: Any, **kwargs: Any) -> Any:
+    signature = inspect.signature(factory)
+    supported = {key: value for key, value in kwargs.items() if key in signature.parameters and value is not None}
+    return factory(**supported)
+
+
+def _markdown_text(value: Any) -> str:
+    if isinstance(value, str):
+        return value
+    for attribute in ("fit_markdown", "raw_markdown", "markdown_with_citations"):
+        text = getattr(value, attribute, "")
+        if text:
+            return str(text)
+    return str(value or "")
+
+
+def _urllib_crawl(candidate: dict[str, Any], *, policy: VulnerabilityCrawlPolicy) -> dict[str, Any]:
     url = str(candidate.get("url") or "")
-    if not url:
-        return _failed(candidate, "missing_url")
-    request = urllib.request.Request(url, headers={"User-Agent": "AI4SEC-Platform/0.1 shadow crawler"})
+    request = urllib.request.Request(
+        url,
+        headers={
+            "User-Agent": policy.user_agent,
+            "Accept": "text/html,application/xhtml+xml,application/pdf;q=0.9,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.8",
+        },
+    )
     started = time.time()
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:  # noqa: S310 - user-provided discovery URL
-            raw = response.read(2_000_000)
+        with urllib.request.urlopen(request, timeout=policy.timeout_seconds) as response:  # noqa: S310 - validated public discovery URL
+            raw = response.read(policy.max_response_bytes)
             content_type = response.headers.get("content-type", "")
+            status_code = getattr(response, "status", 200)
     except urllib.error.HTTPError as exc:
-        return _failed(candidate, f"HTTP {exc.code}")
+        return _failed(candidate, f"HTTP {exc.code}", failure_reason="http_error")
+    except urllib.error.URLError as exc:
+        return _failed(candidate, str(exc.reason), failure_reason="network_error")
     html = raw.decode("utf-8", errors="replace")
     title = _title(html) or candidate.get("title") or url
     text = _html_to_text(html)
-    return _success(candidate, markdown=text, title=title, mode="urllib", metadata={"content_type": content_type, "elapsed_ms": int((time.time() - started) * 1000)})
+    return _success(
+        candidate,
+        markdown=text,
+        title=title,
+        mode="urllib",
+        metadata={"content_type": content_type, "status_code": status_code, "elapsed_ms": int((time.time() - started) * 1000)},
+    )
 
 
-def _success(candidate: dict[str, Any], *, markdown: str, mode: str, title: str | None = None, metadata: dict[str, Any] | None = None) -> dict[str, Any]:
+def _success(
+    candidate: dict[str, Any],
+    *,
+    markdown: str,
+    mode: str,
+    title: str | None = None,
+    metadata: dict[str, Any] | None = None,
+    attempt_count: int = 1,
+) -> dict[str, Any]:
+    metadata = metadata or {}
+    links = metadata.pop("links", {})
+    media = metadata.pop("media", {})
     return {
         **candidate,
-        "title": title or candidate.get("title") or candidate.get("url") or "未命名页面",
+        "title": title or candidate.get("title") or candidate.get("url") or "未命名抓取页",
+        "success": True,
+        "error": "",
+        "failure_reason": "",
         "markdown": markdown,
-        "cleaned_text": candidate.get("cleaned_text") or markdown,
+        "cleaned_text": markdown,
         "markdown_length": len(markdown),
         "content_length": len(markdown),
-        "success": True,
         "crawl_mode": mode,
-        "crawl_info": {"markdown_length": len(markdown), "success": True, "mode": mode, "metadata": metadata or {}},
-        "metadata": metadata or {},
+        "attempt_count": attempt_count,
+        "metadata": metadata,
+        "links": links,
+        "images": media.get("images", []) if isinstance(media, dict) else [],
+        "crawl_info": {"success": True, "mode": mode, "attempt_count": attempt_count, **metadata},
     }
 
 
-def _failed(candidate: dict[str, Any], error: str) -> dict[str, Any]:
-    return {**candidate, "success": False, "error": error, "markdown": "", "cleaned_text": "", "markdown_length": 0, "content_length": 0, "crawl_info": {"success": False, "error": error}}
+def _failed(
+    candidate: dict[str, Any],
+    error: str,
+    *,
+    failure_reason: str = "crawl_failed",
+    attempt_count: int = 1,
+) -> dict[str, Any]:
+    return {
+        **candidate,
+        "success": False,
+        "error": error,
+        "failure_reason": failure_reason,
+        "markdown": "",
+        "cleaned_text": "",
+        "markdown_length": 0,
+        "content_length": 0,
+        "crawl_mode": "failed",
+        "attempt_count": attempt_count,
+        "metadata": {},
+        "links": {},
+        "images": [],
+        "crawl_info": {"success": False, "error": error, "failure_reason": failure_reason, "attempt_count": attempt_count},
+    }
 
 
 def _title(html: str) -> str:

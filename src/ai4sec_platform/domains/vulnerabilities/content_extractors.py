@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from ai4sec_platform.domains.vulnerabilities.model_inputs import prepare_model_input
 from ai4sec_platform.models.local_rules import LocalRuleProvider
 from ai4sec_platform.models.router import LLMRouter
 
@@ -17,7 +18,8 @@ def extract_page_content(page: dict[str, Any], *, use_model: bool = True) -> dic
         try:
             provider = LLMRouter().provider_for("vulnerability_content_extractor")
             if not isinstance(provider, LocalRuleProvider):
-                payload = {"url": page.get("url"), "title": page.get("title"), "raw_content": markdown[:24000]}
+                raw_content, input_truncated = prepare_model_input(markdown, profile="vulnerability_content_extractor")
+                payload = {"url": page.get("url"), "title": page.get("title"), "raw_content": raw_content}
                 response = provider.complete_json(prompt=CONTENT_EXTRACT_PROMPT, payload=payload)
                 result = response.get("result") or response.get("parsed") or {}
                 body = str(result.get("body") or "").strip()
@@ -29,7 +31,7 @@ def extract_page_content(page: dict[str, Any], *, use_model: bool = True) -> dic
                         "content_length": len(body),
                         "published_at": result.get("published_date") or page.get("published_at") or "",
                         "content_quality": result.get("content_quality") or _quality(body),
-                        "content_extraction": {"provider": response.get("provider"), "model": response.get("model"), "model_used": True, "status": "success", "prompt": CONTENT_EXTRACT_PROMPT, "llm_output": result, "reason": result.get("reason", "")},
+                        "content_extraction": {"provider": response.get("provider"), "model": response.get("model"), "model_used": True, "status": "success", "prompt": CONTENT_EXTRACT_PROMPT, "llm_output": result, "reason": result.get("reason", ""), "model_input_characters": len(raw_content), "model_input_truncated": input_truncated},
                     }
         except Exception as exc:  # pragma: no cover - external model dependent
             page = {**page, "content_extraction_error": str(exc)[:300]}

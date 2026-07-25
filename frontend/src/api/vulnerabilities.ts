@@ -1,4 +1,4 @@
-import { getJson } from './client';
+import { getJson, postJson } from './client';
 import type {
   DomainItem,
   FieldReviewRequest,
@@ -6,6 +6,7 @@ import type {
   KnowledgePayload,
   ListResponse,
   MaterialPayload,
+  ShadowEvaluationPayload,
   VulnerabilityTodayResponse,
 } from '../types/vulnerability';
 
@@ -31,6 +32,18 @@ export function fetchVulnerabilityExtractedContent(): Promise<ListResponse<Domai
 
 export function fetchVulnerabilityMaterialReviews(): Promise<ListResponse<DomainItem>> {
   return getJson('/api/vulnerabilities/material-reviews?limit=200');
+}
+
+export function fetchVulnerabilityEvaluations(): Promise<ListResponse<DomainItem<ShadowEvaluationPayload>>> {
+  return getJson('/api/vulnerabilities/evaluations?limit=20');
+}
+
+export function runVulnerabilitySmokeEvaluation(): Promise<{ run_id: string; status: string }> {
+  return postJson('/api/runs', {
+    pipeline_name: 'vulnerabilities.full_knowledge_discovery_pipeline',
+    reset: false,
+    params: { keyword_profile: 'smoke', max_results: 3, crawl_limit: 15, max_run_queries: 5 },
+  });
 }
 
 export function fetchVulnerabilityEvents(): Promise<ListResponse<DomainItem>> {

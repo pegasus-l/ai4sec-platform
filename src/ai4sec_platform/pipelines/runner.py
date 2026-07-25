@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from typing import Any
 
 from ai4sec_platform.artifacts.manifest import write_manifest
@@ -56,7 +57,10 @@ class PipelineRunner:
             error_message = ""
             for step in definition.steps:
                 try:
+                    step_started = time.perf_counter()
                     result = step.run(context)
+                    result.metrics["duration_ms"] = int((time.perf_counter() - step_started) * 1000)
+                    context.outputs.setdefault("_step_metrics", {})[step.name] = dict(result.metrics)
                     artifacts.extend(result.artifacts)
                     summary["steps"].append({"name": step.name, "status": "success", "metrics": result.metrics})
                     repo.create_task_run(conn, run_id=run_id, step_name=step.name, status="success", metrics=result.metrics)
