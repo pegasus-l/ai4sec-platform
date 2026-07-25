@@ -85,6 +85,8 @@ class AssessCapabilitiesStep:
                 metrics={"assessment_status": "model_assessed", "score_breakdown": scoring.breakdown},
                 payload={"assessment": output, "capability_scoring": scoring.as_payload()},
             )
+            # 评估完成后将 item_type 从 capability_candidate 改为 capability
+            context.conn.execute("UPDATE domain_items SET item_type='capability' WHERE id=?", (item_id,))
             assessed += 1
         artifact = context.artifact_store.write_json(context.conn, run_id=context.run_id, artifact_type="capability_assessments", name="capabilities/assessments.json", data={"assessed": assessed, "model_profile": self.model_profile})
         repo.create_quality_audit(context.conn, domain="capabilities", audit_type="capability_assessment", status="pass" if assessed else "warn", score=0.8 if assessed else 0.2, summary=f"能力评估 {assessed} 条，当前使用本地规则引擎。", details={"run_id": context.run_id})
