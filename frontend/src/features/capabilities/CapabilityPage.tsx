@@ -9,14 +9,18 @@ import {
   streamReproLogs, classifyLogLine,
 } from './capabilityQueries';
 import type { CapabilityItem, ReproTask, ConversionRecord, CapabilityView } from './capabilityTypes';
+import { CapabilityOps } from './CapabilityOps';
 import '../../styles/capability.css';
 
-const navGroups = [
+const navGroups: Array<{ title: string; items: Array<{ id: CapabilityView; icon: string; title: string }> }> = [
   { title: '能力洞察', items: [
-    { id: 'today' as const, icon: '★', title: '今日能力' },
-    { id: 'library' as const, icon: '▤', title: '能力库' },
-    { id: 'repro' as const, icon: '⚙', title: '复现验证' },
-    { id: 'conversion' as const, icon: '↗', title: '能力转化' },
+    { id: 'today', icon: '★', title: '今日能力' },
+    { id: 'library', icon: '▤', title: '能力库' },
+    { id: 'repro', icon: '⚙', title: '复现验证' },
+    { id: 'conversion', icon: '↗', title: '能力转化' },
+  ]},
+  { title: '运营', items: [
+    { id: 'ops-overview', icon: '◉', title: '运营概览' },
   ]},
 ];
 
@@ -88,13 +92,14 @@ export function CapabilityPage() {
         {view === 'library' && <CapabilityLibrary items={libraryItems} openDetail={openDetail} />}
         {view === 'repro' && <CapabilityRepro runs={reproRuns} openDetail={openDetail} items={libraryItems} />}
         {view === 'conversion' && <CapabilityConversion conversions={conversions} openConversion={openConversion} />}
+        {view === 'ops-overview' && <CapabilityOps />}
       </div>
     </section>
   </main>;
 }
 
 function heroTitle(view: CapabilityView): string {
-  return { today: '今日能力推荐', library: '能力库', repro: '复现验证', conversion: '能力转化' }[view];
+  return { today: '今日能力推荐', library: '能力库', repro: '复现验证', conversion: '能力转化', 'ops-overview': '运营概览' }[view];
 }
 function heroCopy(view: CapabilityView): string {
   return {
@@ -102,6 +107,7 @@ function heroCopy(view: CapabilityView): string {
     library: '已评分、已分类、可检索的能力资产。',
     repro: '自动复现状态、实时日志、环境和产物。',
     conversion: '有状态、有目的的收藏 / 专题，推进能力落地。',
+    'ops-overview': '运营数据概览、复现失败审计、能力卡缺字段审计、Web 分类统计。',
   }[view];
 }
 

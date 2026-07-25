@@ -390,3 +390,33 @@ def _alloc_web_port(conn) -> int | None:
         if port not in used:
             return port
     return None
+
+
+# ============================================================================
+# 运营端点（ops）
+# ============================================================================
+@router.get("/ops/overview")
+def ops_overview(conn: sqlite3.Connection = Depends(get_db)) -> dict:
+    """运营概览：KPI + 审计摘要"""
+    from ai4sec_platform.domains.capabilities.service import stats as cap_stats, classify_stats
+    from ai4sec_platform.domains.capabilities.audits import audit_repro_failures, audit_missing_fields
+    return {
+        "stats": cap_stats(conn),
+        "classify_stats": classify_stats(conn),
+        "repro_failures": audit_repro_failures(conn),
+        "missing_fields": audit_missing_fields(conn),
+    }
+
+
+@router.get("/ops/repro-failures")
+def ops_repro_failures(conn: sqlite3.Connection = Depends(get_db)) -> dict:
+    """复现失败审计"""
+    from ai4sec_platform.domains.capabilities.audits import audit_repro_failures
+    return audit_repro_failures(conn)
+
+
+@router.get("/ops/missing-fields")
+def ops_missing_fields(conn: sqlite3.Connection = Depends(get_db)) -> dict:
+    """能力卡缺字段审计"""
+    from ai4sec_platform.domains.capabilities.audits import audit_missing_fields
+    return audit_missing_fields(conn)

@@ -1,4 +1,4 @@
-export type CapabilityView = 'today' | 'library' | 'repro' | 'conversion';
+export type CapabilityView = 'today' | 'library' | 'repro' | 'conversion' | 'ops-overview';
 
 export interface CapabilityItem {
   id: number;
