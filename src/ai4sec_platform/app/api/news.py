@@ -5,13 +5,41 @@ import sqlite3
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from ai4sec_platform.app.dependencies import get_db
-from ai4sec_platform.domains.news import service
+from ai4sec_platform.domains.news import operations as news_operations, service
 from ai4sec_platform.domains.news.schemas import NewsActionRequest
 from ai4sec_platform.domains.news.tech_map import AgentTechMap
 from ai4sec_platform.core.config import PROJECT_ROOT
 from ai4sec_platform.services import operations
 
 router = APIRouter(prefix="/news", tags=["news"])
+
+
+@router.get("/ops/overview")
+def ops_overview(conn: sqlite3.Connection = Depends(get_db)) -> dict:
+    return news_operations.overview(conn)
+
+
+@router.get("/ops/runs")
+def ops_runs(limit: int = Query(30, ge=1, le=100), conn: sqlite3.Connection = Depends(get_db)) -> dict:
+    return {"items": news_operations.list_runs(conn, limit=limit)}
+
+
+@router.get("/ops/runs/{run_id}")
+def ops_run_detail(run_id: str, conn: sqlite3.Connection = Depends(get_db)) -> dict:
+    result = news_operations.run_detail(conn, run_id)
+    if not result:
+        raise HTTPException(status_code=404, detail="news pipeline run not found")
+    return result
+
+
+@router.get("/ops/sources")
+def ops_sources(conn: sqlite3.Connection = Depends(get_db)) -> dict:
+    return {"items": news_operations.source_status(conn)}
+
+
+@router.get("/ops/quality")
+def ops_quality(conn: sqlite3.Connection = Depends(get_db)) -> dict:
+    return news_operations.quality(conn)
 
 
 @router.get("/today")

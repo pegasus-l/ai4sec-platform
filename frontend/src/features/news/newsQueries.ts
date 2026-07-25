@@ -48,3 +48,15 @@ export function fetchTechMap(): Promise<TechMapResponse> {
 export function postNewsAction(itemId: number, action: string): Promise<Record<string, unknown>> {
   return postJson(`/api/news/items/${itemId}/${action}`);
 }
+
+export function fetchNewsOps<T>(section: 'overview' | 'runs' | 'sources' | 'quality'): Promise<T> {
+  return getJson<T>(`/api/news/ops/${section}`);
+}
+
+export function fetchNewsRun<T>(runId: string): Promise<T> {
+  return getJson<T>(`/api/news/ops/runs/${encodeURIComponent(runId)}`);
+}
+
+export function startNewsPipeline(pipelineName = 'news.daily_pipeline'): Promise<Record<string, unknown>> {
+  return postJson('/api/runs', { pipeline_name: pipelineName, reset: false, params: {} });
+}

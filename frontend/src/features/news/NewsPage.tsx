@@ -1,15 +1,23 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { BookOpen, CalendarDays, Check, ExternalLink, Filter, Heart, Inbox, Layers3, MessageSquare, Network, Newspaper, Search, Sparkles, Star, X } from 'lucide-react';
+import { Activity, BookOpen, CalendarDays, Check, Database, ExternalLink, Filter, Heart, Inbox, Layers3, MessageSquare, Network, Newspaper, Search, ShieldCheck, Sparkles, Star, Workflow, X } from 'lucide-react';
 import { Badge, Card, Drawer, EmptyState, MetricCard } from '../../components/ui';
 import { fetchNews, fetchReport, fetchTechMap, postNewsAction, type NewsFilters } from './newsQueries';
 import type { NewsItem, NewsView, Report, TechMapItem, TodayResponse, TopicSummary } from './newsTypes';
+import { NewsOps } from './NewsOps';
 
 const views: Array<{ id: NewsView; title: string; icon: typeof Newspaper }> = [
   { id: 'today', title: '今日精选', icon: Sparkles },
   { id: 'all', title: '全部动态', icon: Newspaper },
   { id: 'reports', title: '日报', icon: CalendarDays },
   { id: 'topics', title: '专题时间线', icon: Network }
+];
+
+const opsViews: Array<{ id: NewsView; title: string; icon: typeof Newspaper }> = [
+  { id: 'ops-overview', title: '运营概览', icon: Activity },
+  { id: 'ops-runs', title: '运行任务', icon: Workflow },
+  { id: 'ops-sources', title: '数据源', icon: Database },
+  { id: 'ops-quality', title: '质量与模型', icon: ShieldCheck }
 ];
 
 function initialFilters(): NewsFilters {
@@ -23,7 +31,8 @@ export function NewsPage() {
   const [selected, setSelected] = useState<NewsItem | null>(null);
   const [selectedReportDate, setSelectedReportDate] = useState('');
   const queryClient = useQueryClient();
-  const query = useQuery({ queryKey: ['news', view, filters], queryFn: () => fetchNews(view, filters) });
+  const isOps = view.startsWith('ops-');
+  const query = useQuery({ queryKey: ['news', view, filters], queryFn: () => fetchNews(view, filters), enabled: !isOps });
   const reportQuery = useQuery({ queryKey: ['news-report', selectedReportDate], queryFn: () => fetchReport(selectedReportDate), enabled: Boolean(selectedReportDate) });
   const action = useMutation({
     mutationFn: ({ id, name }: { id: number; name: string }) => postNewsAction(id, name),
@@ -54,13 +63,13 @@ export function NewsPage() {
       <div className="news-kicker">NEWS INTELLIGENCE</div>
       <h1>资讯洞察</h1>
       <p className="news-intro">持续发现 AI 安全论文与开源项目，形成可跟踪、可阅读、可反馈的资讯流。</p>
-      <nav className="news-nav">{views.map(({ id, title, icon: Icon }) => <button key={id} className={view === id ? 'active' : ''} onClick={() => setView(id)}><Icon size={16} />{title}<span>{id === 'all' && allData?.total !== undefined ? allData.total : ''}</span></button>)}</nav>
+      <nav className="news-nav">{views.map(({ id, title, icon: Icon }) => <button key={id} className={view === id ? 'active' : ''} onClick={() => setView(id)}><Icon size={16} />{title}<span>{id === 'all' && allData?.total !== undefined ? allData.total : ''}</span></button>)}<div className="news-nav-section">运营</div>{opsViews.map(({ id, title, icon: Icon }) => <button key={id} className={view === id ? 'active' : ''} onClick={() => setView(id)}><Icon size={16} />{title}</button>)}</nav>
       <div className="news-flow"><span>工作流</span><p>发现 → 精选 → 阅读 → 反馈 → 专题沉淀</p></div>
     </aside>
     <main className="news-main">
       <div className="news-header"><div><span className="label">AI4SEC / NEWS</span><h2>{viewTitle(view)}</h2><p>{viewDescription(view)}</p></div><div className="news-header-actions"><Badge tone="green">论文 + 项目</Badge><button className="icon-button" title="刷新" onClick={() => query.refetch()}><Inbox size={17} /></button></div></div>
-      {query.isError && <Card className="news-error">资讯接口暂时不可用，请检查后端服务和最近采集任务。</Card>}
-      {query.isLoading ? <div className="news-loading"><div /><div /><div /></div> : <>
+      {!isOps && query.isError && <Card className="news-error">资讯接口暂时不可用，请检查后端服务和最近采集任务。</Card>}
+      {isOps ? <NewsOps view={view} setView={setView} /> : query.isLoading ? <div className="news-loading"><div /><div /><div /></div> : <>
         {view === 'today' && <TodayView data={data as TodayResponse | undefined} onSelect={setSelected} />}
         {view === 'all' && <AllView data={allData} filters={filters} setFilters={setFilters} onSelect={setSelected} onAction={(id, name) => action.mutate({ id, name })} />}
         {view === 'reports' && <ReportsView data={data as { items: Report[] } | undefined} onOpen={setSelectedReportDate} />}
@@ -201,8 +210,8 @@ function promoLine(item: NewsItem): string { return String(item.payload.one_line
 function highlightLine(item: NewsItem): string { return String(item.highlight || item.payload.highlight_line || '暂无亮点'); }
 function reviewReason(item: NewsItem): string { const review = item.payload.review; return review && typeof review === 'object' ? String((review as Record<string, unknown>).review_reason || '暂无评审意见') : '暂无评审意见'; }
 function techPaths(item: NewsItem): string[] { const paths = item.payload.tech_paths; if (!Array.isArray(paths)) return []; return paths.filter(path => path && typeof path === 'object').map(path => { const value = path as Record<string, unknown>; return [value.dimension, value.category, value.point].filter(Boolean).map(String).join(' → '); }); }
-function viewTitle(view: NewsView): string { return ({ today: '今日精选', all: '全部动态', reports: '日报', topics: '专题时间线' })[view]; }
-function viewDescription(view: NewsView): string { return ({ today: '先看今天最值得阅读的 AI 安全论文与开源项目。', all: '检索、筛选并处理全部论文和项目动态。', reports: '按日期回顾采集结果、精选内容和主题变化。', topics: '按中文安全主题聚合资讯，并逐步扩展为事件级持续跟踪。' })[view]; }
+function viewTitle(view: NewsView): string { return ({ today: '今日精选', all: '全部动态', reports: '日报', topics: '专题时间线', 'ops-overview': '运营概览', 'ops-runs': '运行任务', 'ops-sources': '数据源', 'ops-quality': '质量与模型' })[view]; }
+function viewDescription(view: NewsView): string { return ({ today: '先看今天最值得阅读的 AI 安全论文与开源项目。', all: '检索、筛选并处理全部论文和项目动态。', reports: '按日期回顾采集结果、精选内容和主题变化。', topics: '按中文安全主题聚合资讯，并逐步扩展为事件级持续跟踪。', 'ops-overview': '查看资讯总量、最新运行、六源健康度和日报产物。', 'ops-runs': '跟踪 Pipeline 每个步骤、模型调用和可追溯产物。', 'ops-sources': '检查 arXiv、GitHub、RSS、ASIS、Awesome 和 X 的采集状态。', 'ops-quality': '观察处理漏斗、门控与深评模型以及质量审计结果。' })[view]; }
 function typeLabel(type: string): string { return type === 'paper' ? '论文' : '项目'; }
 function sourceLabel(source: string): string { return ({ arxiv: 'arXiv', github: 'GitHub', rss: 'RSS', asis: 'ASIS', awesome: 'Awesome', x: 'X' })[source] || source; }
 function formatDate(value: string): string { return value ? value.slice(0, 10) : '未知日期'; }

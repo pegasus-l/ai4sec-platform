@@ -1,4 +1,4 @@
-export type NewsView = 'today' | 'all' | 'reports' | 'topics';
+export type NewsView = 'today' | 'all' | 'reports' | 'topics' | 'ops-overview' | 'ops-runs' | 'ops-sources' | 'ops-quality';
 export type NewsType = 'paper' | 'project';
 
 export interface NewsItem {

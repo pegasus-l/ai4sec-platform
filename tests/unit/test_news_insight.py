@@ -13,6 +13,7 @@ from ai4sec_platform.domains.news.references import extract_reference_items
 from ai4sec_platform.domains.news.tech_map import AgentTechMap
 from ai4sec_platform.domains.news.links import resolve_candidate_links
 from ai4sec_platform.domains.news import reviewer
+from ai4sec_platform.domains.news import operations as news_operations
 from ai4sec_platform.domains.news.reviewer import _input_hash, _normalize_breakdown, _normalize_deep_review, _normalize_gate, _percentage
 from ai4sec_platform.domains.news import service
 
@@ -104,6 +105,27 @@ def test_model_call_retries_transient_errors_only(monkeypatch) -> None:
     assert failed
     assert result["attempts"] == 1
     assert permanent_router.calls == 1
+
+
+def test_news_operations_exposes_domain_scoped_pipeline_metrics() -> None:
+    conn = connection()
+    repo.create_pipeline_run(conn, run_id="news-ops-run", domain="news", pipeline_name="news.daily_pipeline", status="success", started_at="2026-07-18T08:00:00Z", finished_at="2026-07-18T08:10:00Z", summary={"selected": 12})
+    repo.create_task_run(conn, run_id="news-ops-run", step_name="gate_news_candidates", metrics={"candidates": 20, "passed": 12})
+    repo.create_model_call(conn, run_id="news-ops-run", agent_name="news_tech_map_gate", model_profile="DASHSCOPE", provider="dashscope", status="success", latency_ms=800)
+    repo.create_data_source(conn, domain="news", name="arxiv", source_type="api", status="success", latest_at="2026-07-18T08:00:00Z", health="healthy", summary={"collected": 20})
+    repo.create_pipeline_run(conn, run_id="threat-run", domain="threats", pipeline_name="threats.test", status="failed")
+    conn.commit()
+
+    overview = news_operations.overview(conn)
+    assert overview["latest_run"]["run_id"] == "news-ops-run"
+    assert overview["models"]["success"] == 1
+    assert len(overview["sources"]) == 6
+    assert overview["sources"][0]["health"] == "healthy"
+
+    detail = news_operations.run_detail(conn, "news-ops-run")
+    assert detail is not None
+    assert detail["tasks"][0]["metrics"]["passed"] == 12
+    assert news_operations.run_detail(conn, "threat-run") is None
 
 
 def test_dedupe_merges_sources_and_complementary_fields() -> None:
