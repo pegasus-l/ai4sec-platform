@@ -25,12 +25,22 @@ class BuildCapabilitiesFromNewsStep:
             candidates = capability_candidates_from_news(news_items)
             for item in candidates[:limit]:
                 payload = item.get("payload") or {}
+                # 从 source_news_item 提取资讯洞察的展示字段
+                sni = item.get("source_news_item", {})
+                np = sni.get("payload", {}) if isinstance(sni, dict) else {}
+                display_theme = np.get("display_theme", "")
+                display_topic = np.get("display_topic", "")
+                display_work_name = np.get("display_work_name", "")
+                one_liner = np.get("one_liner", "")
+                highlight = np.get("highlight", "")
+                news_summary = np.get("summary", "") or sni.get("summary", "")
+                tech_points = np.get("technical_points", [])
                 capability_id = repo.create_domain_item(
                     context.conn,
                     domain="capabilities",
                     item_type="capability_candidate",
-                    title=item.get("title") or payload.get("title") or "未命名能力候选",
-                    summary=item.get("summary") or payload.get("summary") or "来自资讯 raw pipeline 的能力候选。",
+                    title=display_theme or item.get("title") or "未命名能力候选",
+                    summary=one_liner or news_summary or "能力候选",
                     score=None,
                     status="待能力评估",
                     source="news_pipeline",
@@ -38,7 +48,19 @@ class BuildCapabilitiesFromNewsStep:
                     primary_date=item.get("primary_date") or payload.get("primary_date") or "",
                     tags=["能力候选", "from_news", "raw_pipeline"],
                     metrics={"source_news_item_id": item.get("id"), "pipeline_run": context.run_id},
-                    payload={"source_news_item": item},
+                    payload={
+                        "source_news_item": item,
+                        "display_theme": display_theme,
+                        "display_topic": display_topic,
+                        "display_work_name": display_work_name,
+                        "one_liner": one_liner,
+                        "highlight": highlight,
+                        "summary": news_summary,
+                        "tech_points": tech_points,
+                        "code_url": item.get("code_url", ""),
+                        "source_type": item.get("source_type", ""),
+                        "source_news_score": item.get("source_news_score"),
+                    },
                 )
                 created.append(capability_id)
             selected = created
