@@ -29,7 +29,7 @@ class SelectReproCandidatesStep:
 
     def run(self, context: PipelineContext) -> StepResult:
         n = int(context.params.get("repro_topn", 3))
-        web_only = bool(context.params.get("web_only", False))
+        web_only = bool(context.params.get("web_only", True))
         candidates = pick_top_repro_candidates(context.conn, n=n, web_only=web_only)
         context.outputs["repro_candidates"] = candidates
         artifact = context.artifact_store.write_json(

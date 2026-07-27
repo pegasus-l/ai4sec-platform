@@ -407,7 +407,7 @@ function CapabilityDetailContent({ itemId, initialItem, onRepro, onConvert }: { 
     </div>}
 
     <div className="drawer-actions">
-      <button className="pill-button primary" onClick={onRepro}>加入复现</button>
+      {p.is_web && <button className="pill-button primary" onClick={onRepro}>加入复现</button>}
       {!showConvertForm && <button className="pill-button" onClick={() => setShowConvertForm(true)}>加入转化</button>}
       {showConvertForm && <button className="pill-button primary" onClick={handleConvert} disabled={submitting}>{submitting ? '提交中…' : '确认转化'}</button>}
     </div>
