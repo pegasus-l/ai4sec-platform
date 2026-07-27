@@ -35,6 +35,11 @@ export interface CapabilityItem {
     highlight?: string;
     theme?: string;
     pitch?: string;
+    display_topic?: string;
+    display_theme?: string;
+    display_work_name?: string;
+    one_liner?: string;
+    tech_points?: string[];
     usage?: Record<string, string>;
     blockers?: string[];
     gotchas?: string[];
