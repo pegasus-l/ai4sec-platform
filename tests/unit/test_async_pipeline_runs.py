@@ -101,6 +101,9 @@ def test_async_run_returns_pollable_run_id(monkeypatch, tmp_path: Path) -> None:
         time.sleep(0.01)
     assert detail_payload["status"] == "success"
     assert detail_payload["progress"] == {"completed_steps": 1, "total_steps": 1, "current_step": ""}
+    history = client.get("/api/vulnerabilities/runs")
+    assert history.status_code == 200
+    assert history.json()["items"][0]["run_id"] == payload["run_id"]
 
 
 def test_vulnerability_run_results_are_scoped_by_run_id(monkeypatch, tmp_path: Path) -> None:

@@ -49,6 +49,15 @@ def run_results(run_id: str, conn: sqlite3.Connection = Depends(get_db)) -> dict
     }
 
 
+@router.get("/runs")
+def runs(limit: int = Query(20, ge=1, le=100), conn: sqlite3.Connection = Depends(get_db)) -> dict:
+    rows = conn.execute(
+        "SELECT * FROM pipeline_runs WHERE domain = ? ORDER BY id DESC LIMIT ?",
+        (DOMAIN, limit),
+    ).fetchall()
+    return {"items": [repo.row_to_dict(row) for row in rows]}
+
+
 @router.get("/today")
 def today(limit: int = Query(12, ge=1, le=100), conn: sqlite3.Connection = Depends(get_db)) -> dict:
     return vuln_service.today(conn, limit=limit)

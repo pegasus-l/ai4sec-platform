@@ -8,6 +8,7 @@ import type {
   ListResponse,
   MaterialPayload,
   PipelineRunDetail,
+  PipelineRunSummary,
   PipelineRunStartResponse,
   ShadowEvaluationPayload,
   VulnerabilityTodayResponse,
@@ -67,6 +68,10 @@ export function fetchVulnerabilityRunResults(runId: string): Promise<Vulnerabili
 
 export function fetchPipelineRun(runId: string): Promise<PipelineRunDetail> {
   return getJson(`/api/runs/${encodeURIComponent(runId)}`);
+}
+
+export function fetchVulnerabilityRuns(): Promise<{ items: PipelineRunSummary[] }> {
+  return getJson('/api/vulnerabilities/runs?limit=30');
 }
 
 export function fetchVulnerabilityEvents(): Promise<ListResponse<DomainItem>> {
