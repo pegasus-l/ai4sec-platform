@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 import urllib.error
 import urllib.request
 from typing import Any
@@ -55,6 +56,8 @@ class AnysearchConnector:
         domain = params.get("domain") or request.config.get("domain")
         zone = params.get("zone") or request.config.get("zone")
         language = params.get("language") or request.config.get("language")
+        max_attempts = max(1, min(int(params.get("search_max_attempts") or 4), 10))
+        retry_delay = max(0.0, float(params.get("search_retry_delay") or 1.0))
 
         items: list[dict[str, Any]] = []
         errors: list[str] = []
@@ -67,21 +70,26 @@ class AnysearchConnector:
                 payload["zone"] = zone
             if language:
                 payload["language"] = language
-            try:
-                raw = _post_json(f"{base_url}/v1/search", payload, api_key=api_key, timeout=timeout)
-                raw_responses.append({"query": query, "raw": raw})
-                results = raw.get("results", []) if isinstance(raw, dict) else []
-                for rank, item in enumerate(results, start=1):
-                    if isinstance(item, dict):
-                        items.append(_normalize_candidate(item, query=query, rank=rank))
-            except Exception as exc:  # pragma: no cover - depends on external service
-                errors.append(f"{query}: {exc}")
+            for attempt in range(1, max_attempts + 1):
+                try:
+                    raw = _post_json(f"{base_url}/v1/search", payload, api_key=api_key, timeout=timeout)
+                    raw_responses.append({"query": query, "raw": raw, "attempt": attempt})
+                    results = raw.get("results", []) if isinstance(raw, dict) else []
+                    for rank, item in enumerate(results, start=1):
+                        if isinstance(item, dict):
+                            items.append(_normalize_candidate(item, query=query, rank=rank))
+                    break
+                except Exception as exc:  # pragma: no cover - depends on external service
+                    if attempt == max_attempts:
+                        errors.append(f"{query}: {exc}")
+                    elif retry_delay:
+                        time.sleep(retry_delay)
 
         return SourceFetchResult(
             source_name=request.source_name,
             connector_name=self.connector_name,
             items=items,
-            metadata={"queries": queries, "max_results": max_results, "raw_response_count": len(raw_responses)},
+            metadata={"queries": queries, "max_results": max_results, "max_attempts": max_attempts, "raw_response_count": len(raw_responses)},
             errors=errors,
         )
 

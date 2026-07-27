@@ -33,7 +33,7 @@ def list_keyword_profiles(project_root: Path) -> list[dict[str, Any]]:
         explicit_queries = [str(value).strip() for value in profile.get("queries") or [] if str(value).strip()]
         categories = [str(value) for value in profile.get("categories") or []]
         category_queries = [str(value).strip() for category in categories for value in categories_config.get(category, []) if str(value).strip()]
-        configured_queries = len(_dedupe([*explicit_queries, *category_queries]))
+        configured_queries = len([*explicit_queries, *category_queries])
         result.append({
             "name": str(name),
             "description": str(profile.get("description") or ""),
@@ -69,7 +69,6 @@ def resolve_keyword_profile(params: dict[str, Any], project_root: Path) -> Resol
             raise ValueError(f"keyword profile '{profile_name}' references unknown category '{category_name}'")
         queries.extend(str(value).strip() for value in category_queries if str(value).strip())
 
-    queries = _dedupe(queries)
     configured_queries = len(queries)
     profile_limit = _positive_int(profile.get("max_queries"), configured_queries)
     requested_limit = _positive_int(params.get("max_queries"), profile_limit)

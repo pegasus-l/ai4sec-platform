@@ -20,6 +20,9 @@ pipelines:
   vulnerabilities.full_knowledge_discovery_pipeline:
     domain: vulnerabilities
     description: AnySearch 检索、抓取、素材审核、CVE 事件聚合和知识抽取完整 shadow 链路
+  vulnerabilities.batched_full_knowledge_discovery_pipeline:
+    domain: vulnerabilities
+    description: 按关键词批次运行完整漏洞知识链路，支持 checkpoint 和跨批次 URL 去重
   capabilities.from_news_pipeline:
     domain: capabilities
     description: 从资讯候选生成能力候选并进行本地规则评估

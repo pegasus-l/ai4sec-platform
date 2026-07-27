@@ -47,9 +47,9 @@ export function fetchVulnerabilityKeywordProfiles(): Promise<{ items: KeywordPro
   return getJson('/api/vulnerabilities/keyword-profiles');
 }
 
-export function runVulnerabilityDiscovery(input: { keywordProfile: string; maxQueries: number; maxResults: number; crawlLimit: number }): Promise<PipelineRunStartResponse> {
+export function runVulnerabilityDiscovery(input: { keywordProfile: string; maxQueries: number; maxResults: number; crawlLimit: number; queryBatchSize: number; timeRangeMode: string; recentDays: number; startDate: string; endDate: string }): Promise<PipelineRunStartResponse> {
   return postJson('/api/runs', {
-    pipeline_name: 'vulnerabilities.full_knowledge_discovery_pipeline',
+    pipeline_name: 'vulnerabilities.batched_full_knowledge_discovery_pipeline',
     reset: false,
     wait: false,
     params: {
@@ -57,7 +57,17 @@ export function runVulnerabilityDiscovery(input: { keywordProfile: string; maxQu
       max_queries: input.maxQueries,
       max_results: input.maxResults,
       crawl_limit: input.crawlLimit,
-      max_run_queries: 50,
+      query_batch_size: input.queryBatchSize,
+      time_range_mode: input.timeRangeMode,
+      recent_days: input.recentDays,
+      start_date: input.startDate,
+      end_date: input.endDate,
+      allow_large_keyword_profile: true,
+      max_run_queries: input.maxQueries,
+      resume: true,
+      domain: 'security',
+      zone: 'cn',
+      language: 'zh-CN',
     },
   });
 }

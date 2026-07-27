@@ -30,13 +30,22 @@ def keyword_profiles() -> dict:
 
 @router.get("/runs/{run_id}/results")
 def run_results(run_id: str, conn: sqlite3.Connection = Depends(get_db)) -> dict:
+    run = conn.execute("SELECT summary_json FROM pipeline_runs WHERE run_id = ?", (run_id,)).fetchone()
+    summary = repo.loads(run["summary_json"], {}) if run else {}
+    child_run_ids = [str(value) for value in summary.get("child_run_ids") or []]
+    for step in summary.get("steps") or []:
+        for child_run_id in (step.get("metrics") or {}).get("child_run_ids") or []:
+            if str(child_run_id) not in child_run_ids:
+                child_run_ids.append(str(child_run_id))
+    included_run_ids = [run_id, *child_run_ids]
+    placeholders = ",".join("?" for _ in included_run_ids)
     rows = conn.execute(
-        """
+        f"""
         SELECT * FROM domain_items
-        WHERE domain = ? AND json_extract(metrics_json, '$.pipeline_run') = ?
+        WHERE domain = ? AND json_extract(metrics_json, '$.pipeline_run') IN ({placeholders})
         ORDER BY id ASC
         """,
-        (DOMAIN, run_id),
+        (DOMAIN, *included_run_ids),
     ).fetchall()
     stages: dict[str, list[dict]] = {}
     for row in rows:
@@ -44,6 +53,7 @@ def run_results(run_id: str, conn: sqlite3.Connection = Depends(get_db)) -> dict
         stages.setdefault(str(item["item_type"]), []).append(item)
     return {
         "run_id": run_id,
+        "child_run_ids": child_run_ids,
         "count": len(rows),
         "stages": stages,
     }
@@ -52,7 +62,12 @@ def run_results(run_id: str, conn: sqlite3.Connection = Depends(get_db)) -> dict
 @router.get("/runs")
 def runs(limit: int = Query(20, ge=1, le=100), conn: sqlite3.Connection = Depends(get_db)) -> dict:
     rows = conn.execute(
-        "SELECT * FROM pipeline_runs WHERE domain = ? ORDER BY id DESC LIMIT ?",
+        """
+        SELECT * FROM pipeline_runs
+        WHERE domain = ?
+          AND COALESCE(json_extract(summary_json, '$.params.batch_parent_run_id'), '') = ''
+        ORDER BY id DESC LIMIT ?
+        """,
         (DOMAIN, limit),
     ).fetchall()
     items = []
@@ -65,6 +80,7 @@ def runs(limit: int = Query(20, ge=1, le=100), conn: sqlite3.Connection = Depend
             "current_step": summary.get("current_step"),
             "completed_steps": summary.get("completed_steps"),
             "total_steps": summary.get("total_steps"),
+            "batch_progress": summary.get("batch_progress"),
         }
         items.append(item)
     return {"items": items}
