@@ -21,6 +21,7 @@ from ai4sec_platform.domains.news import service
 from ai4sec_platform.domains.news.adapters.sources import _arxiv_requests, _github_requests
 from ai4sec_platform.schemas.sources import SourceFetchRequest
 from ai4sec_platform.sources.connectors.news.rss import RssConnector
+from ai4sec_platform.sources.connectors.news.awesome import AwesomeConnector
 
 
 def connection() -> sqlite3.Connection:
@@ -44,7 +45,6 @@ def test_live_source_config_matches_legacy_six_source_baseline() -> None:
         "source_type": "wechat",
         "paginate": True,
         "page_size": 30,
-        "max_pages": 20,
         "article_api_base": "http://localhost:8001/api/v1/wx/articles",
     }]
     assert [account["username"] for account in config["x"]["accounts"]] == ["__suto", "moyix", "halaboratory", "AnthropicAI", "GoogleVRP"]
@@ -58,6 +58,8 @@ def test_legacy_arxiv_and_github_channels_are_expanded() -> None:
     arxiv_requests = _arxiv_requests(config["arxiv"], {})
     github_requests = _github_requests(config["github"], {"lookback_days": 7})
     assert [request["category"] for request in arxiv_requests[:6]] == config["arxiv"]["categories"]
+    assert sum(bool(request.get("category_backfill")) for request in arxiv_requests) == 6
+    assert all(request["max_results"] >= 100 for request in arxiv_requests if request.get("category_backfill"))
     assert any(request.get("keyword") == "MCP model context protocol" and "all:MCP" in request["query"] for request in arxiv_requests)
     assert any(request["channel"] == "new" and request["query"].startswith("topic:fuzzing created:>") for request in github_requests)
     assert any(request["channel"] == "updated" and "stars:>=3" in request["query"] for request in github_requests)
@@ -84,6 +86,38 @@ def test_werss_pagination_and_article_content_fallback(monkeypatch) -> None:
     assert result.metadata["feeds"][0]["pages"] == 2
     references = [reference for item in result.items for reference in extract_reference_items("rss", item)]
     assert {reference["source_type"] for reference in references} == {"paper", "project"}
+
+
+def test_werss_legacy_state_filters_seen_articles(monkeypatch, tmp_path) -> None:
+    state_path = tmp_path / "rss.json"
+    state_path.write_text('{"scanned_rss_ids":["rss:wechat:https%3A%2F%2Fexample.com%2Fseen"]}', encoding="utf-8")
+    feed = b"""<rss><channel>
+      <item><title>Seen</title><link>https://example.com/seen</link><description>old</description></item>
+      <item><title>New</title><link>https://example.com/new</link><description>https://github.com/acme/new</description></item>
+    </channel></rss>"""
+    connector = RssConnector()
+    monkeypatch.setattr(connector, "get_bytes", lambda *_args, **_kwargs: feed)
+    result = connector.fetch(SourceFetchRequest(source_name="rss", config={"feeds": [{"url": "http://localhost/feed", "source_type": "wechat", "page_size": 30}]}, params={"state_path": str(state_path)}))
+    assert [item["title"] for item in result.items] == ["New"]
+    stored = state_path.read_text(encoding="utf-8")
+    assert "https%3A%2F%2Fexample.com%2Fnew" in stored
+
+
+def test_awesome_loads_up_to_four_recent_research_subpages(monkeypatch) -> None:
+    connector = AwesomeConnector()
+    readme = "\n".join(f"[2026-{index}](https://github.com/tmgthb/Autonomous-Agents/blob/main/Research_Papers/2026/page-{index}.md)" for index in range(1, 7))
+
+    def fake_get_bytes(url: str, **_kwargs) -> bytes:
+        content = readme if url.endswith("/readme") else "See https://arxiv.org/abs/2501.01234"
+        import base64
+        import json
+        return json.dumps({"content": base64.b64encode(content.encode()).decode()}).encode()
+
+    monkeypatch.setattr(connector, "get_bytes", fake_get_bytes)
+    result = connector.fetch(SourceFetchRequest(source_name="awesome", config={"repositories": ["tmgthb/Autonomous-Agents"], "recent_subpage_years": [2026, 2025], "max_subpages": 4}))
+    assert result.errors == []
+    assert len(result.items) == 5
+    assert result.metadata["repositories"][0]["subpages_loaded"] == 4
 
 
 def test_normalizers_produce_stable_paper_and_project_keys() -> None:

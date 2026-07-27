@@ -3,6 +3,7 @@ sources:
     enabled: true
     categories: [cs.CR, cs.AI, cs.SE, cs.LG, cs.CL, cs.MA]
     max_results_per_category: 100
+    category_backfill_days: 2
     keyword_max_results: 50
     keyword_lookback_days: 30
     category_delay_seconds: 1
@@ -132,7 +133,6 @@ sources:
         source_type: wechat
         paginate: true
         page_size: 30
-        max_pages: 20
         article_api_base: http://localhost:8001/api/v1/wx/articles
   x:
     enabled: true
@@ -158,6 +158,8 @@ sources:
     min_score: 70
   awesome:
     enabled: true
+    recent_subpage_years: [2026, 2025]
+    max_subpages: 4
     repositories:
       - tmgthb/Autonomous-Agents
 selection:

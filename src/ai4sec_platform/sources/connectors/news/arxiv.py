@@ -28,7 +28,7 @@ class ArxivConnector(NewsLiveConnector):
             except Exception as exc:
                 return SourceFetchResult(source_name=request.source_name, connector_name=self.connector_name, metadata={"url": url, "category": category, "channel": "category_rss"}, errors=[str(exc)])
         query = str(request.params.get("query") or request.config.get("query") or 'all:"AI security"')
-        max_results = min(100, int(request.params.get("max_results") or request.config.get("max_results") or 30))
+        max_results = min(500, int(request.params.get("max_results") or request.config.get("max_results") or 30))
         url = f"{self.api_url}?{urllib.parse.urlencode({'search_query': query, 'start': 0, 'max_results': max_results, 'sortBy': 'submittedDate', 'sortOrder': 'descending'})}"
         try:
             raw = self.get_bytes(url, timeout=int(request.params.get("timeout_seconds") or 30))
@@ -36,7 +36,7 @@ class ArxivConnector(NewsLiveConnector):
             published_after = str(request.params.get("published_after") or "")
             if published_after:
                 items = [item for item in items if str(item.get("published") or "")[:10] >= published_after]
-            return SourceFetchResult(source_name=request.source_name, connector_name=self.connector_name, items=items, raw_text=raw.decode("utf-8", errors="replace"), metadata={"url": url, "query": query})
+            return SourceFetchResult(source_name=request.source_name, connector_name=self.connector_name, items=items, raw_text=raw.decode("utf-8", errors="replace"), metadata={"url": url, "query": query, "channel": "category_backfill" if request.params.get("category_backfill") else "keyword"})
         except Exception as exc:
             return SourceFetchResult(source_name=request.source_name, connector_name=self.connector_name, metadata={"url": url, "query": query}, errors=[str(exc)])
 

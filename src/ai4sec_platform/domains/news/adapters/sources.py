@@ -47,7 +47,13 @@ def collect_news_sources(settings: Settings, params: dict[str, Any]) -> list[dic
             items = _dedupe_collected_items(source, items)
             records.append({"source": source, "path": f"connector:{source}", "exists": True, "mode": mode, "items": items, "errors": errors, "metadata": metadata})
         else:
-            result = connector.fetch(SourceFetchRequest(source_name=source, config=source_config, params={"timeout_seconds": params.get("timeout_seconds", 30)}))
+            source_params: dict[str, Any] = {"timeout_seconds": params.get("timeout_seconds", 30)}
+            if source == "rss":
+                raw_dir = Path(settings.legacy_sources.get("ai_for_sec_raw_dir", ""))
+                source_params["state_path"] = str(settings.output_dir / "source_state" / "rss.json")
+                if raw_dir:
+                    source_params["legacy_state_path"] = str(raw_dir.parent.parent / "state_rss.json")
+            result = connector.fetch(SourceFetchRequest(source_name=source, config=source_config, params=source_params))
             records.append({"source": source, "path": f"connector:{source}", "exists": True, "mode": mode, "items": result.items, "errors": result.errors, "metadata": result.metadata})
     return records
 
@@ -59,6 +65,10 @@ def _load_config(project_root: Path) -> dict[str, Any]:
 
 def _arxiv_requests(config: dict[str, Any], params: dict[str, Any]) -> list[dict[str, Any]]:
     requests = [{"category": category, "_delay_seconds": config.get("category_delay_seconds", 1)} for category in config.get("categories") or []]
+    backfill_days = int(params.get("arxiv_backfill_days") or config.get("category_backfill_days", 2))
+    backfill_cutoff = (datetime.now(timezone.utc) - timedelta(days=backfill_days)).date().isoformat()
+    backfill_max_results = min(int(config.get("max_results_per_category", 100)) * max(backfill_days, 1), 500)
+    requests.extend({"query": f"cat:{category}", "category_backfill": category, "max_results": backfill_max_results, "published_after": backfill_cutoff, "_delay_seconds": config.get("keyword_delay_seconds", 3)} for category in config.get("categories") or [])
     keyword_max_results = int(params.get("max_results") or config.get("keyword_max_results", 50))
     keyword_cutoff = (datetime.now(timezone.utc) - timedelta(days=int(config.get("keyword_lookback_days", 30)))).date().isoformat()
     for keyword in config.get("keyword_queries") or []:
