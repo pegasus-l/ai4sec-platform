@@ -31,6 +31,10 @@ export interface CapabilityItem {
     source_news_score?: number;
     repro_report?: ReproReport;
     repro_summary?: string;
+    summary?: string;
+    highlight?: string;
+    theme?: string;
+    pitch?: string;
     usage?: Record<string, string>;
     blockers?: string[];
     gotchas?: string[];
