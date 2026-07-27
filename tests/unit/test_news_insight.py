@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import sqlite3
 
+import yaml
+
 from ai4sec_platform.core.time import utc_now
 from ai4sec_platform.db import repositories as repo
 from ai4sec_platform.db.models import init_db
@@ -16,6 +18,9 @@ from ai4sec_platform.domains.news import reviewer
 from ai4sec_platform.domains.news import operations as news_operations
 from ai4sec_platform.domains.news.reviewer import _input_hash, _normalize_breakdown, _normalize_deep_review, _normalize_gate, _percentage
 from ai4sec_platform.domains.news import service
+from ai4sec_platform.domains.news.adapters.sources import _arxiv_requests, _github_requests
+from ai4sec_platform.schemas.sources import SourceFetchRequest
+from ai4sec_platform.sources.connectors.news.rss import RssConnector
 
 
 def connection() -> sqlite3.Connection:
@@ -24,6 +29,61 @@ def connection() -> sqlite3.Connection:
     conn.execute("PRAGMA foreign_keys = ON")
     init_db(conn)
     return conn
+
+
+def test_live_source_config_matches_legacy_six_source_baseline() -> None:
+    config = yaml.safe_load((PROJECT_ROOT / "configs" / "news.yaml").read_text(encoding="utf-8"))["sources"]
+    assert list(config) == ["arxiv", "github", "rss", "x", "asis", "awesome"]
+    assert config["arxiv"]["categories"] == ["cs.CR", "cs.AI", "cs.SE", "cs.LG", "cs.CL", "cs.MA"]
+    assert len(config["arxiv"]["keyword_queries"]) == 37
+    assert "mcp-security" in config["github"]["topics"]
+    assert len(config["github"]["creation_queries"]) == 9
+    assert config["rss"]["feeds"] == [{
+        "name": "微信公众号-合并源",
+        "url": "http://localhost:8001/feed/all.xml",
+        "source_type": "wechat",
+        "paginate": True,
+        "page_size": 30,
+        "max_pages": 20,
+        "article_api_base": "http://localhost:8001/api/v1/wx/articles",
+    }]
+    assert [account["username"] for account in config["x"]["accounts"]] == ["__suto", "moyix", "halaboratory", "AnthropicAI", "GoogleVRP"]
+    assert config["x"]["enabled"] is True
+    assert config["asis"]["enabled"] is True
+    assert config["awesome"]["repositories"] == ["tmgthb/Autonomous-Agents"]
+
+
+def test_legacy_arxiv_and_github_channels_are_expanded() -> None:
+    config = yaml.safe_load((PROJECT_ROOT / "configs" / "news.yaml").read_text(encoding="utf-8"))["sources"]
+    arxiv_requests = _arxiv_requests(config["arxiv"], {})
+    github_requests = _github_requests(config["github"], {"lookback_days": 7})
+    assert [request["category"] for request in arxiv_requests[:6]] == config["arxiv"]["categories"]
+    assert any(request.get("keyword") == "MCP model context protocol" and "all:MCP" in request["query"] for request in arxiv_requests)
+    assert any(request["channel"] == "new" and request["query"].startswith("topic:fuzzing created:>") for request in github_requests)
+    assert any(request["channel"] == "updated" and "stars:>=3" in request["query"] for request in github_requests)
+    assert any(request["channel"] == "high_star" and "stars:>5000" in request["query"] for request in github_requests)
+
+
+def test_werss_pagination_and_article_content_fallback(monkeypatch) -> None:
+    first_page = b"""<rss xmlns:content='http://purl.org/rss/1.0/modules/content/'><channel>
+      <item><title>Paper</title><link>https://example.com/1</link><description>short</description><content:encoded>See https://arxiv.org/abs/2501.01234</content:encoded></item>
+      <item><title>Project</title><link>https://example.com/2</link><description>short</description><id>feed-2</id></item>
+    </channel></rss>"""
+    second_page = b"""<rss><channel><item><title>Last</title><link>https://example.com/3</link><description>none</description></item></channel></rss>"""
+    connector = RssConnector()
+
+    def fake_get_bytes(url: str, **_kwargs) -> bytes:
+        if "/api/v1/wx/articles/feed-2" in url:
+            return b'{"data":{"content":"See https://github.com/acme/scanner"}}'
+        return second_page if "offset=2" in url else first_page
+
+    monkeypatch.setattr(connector, "get_bytes", fake_get_bytes)
+    result = connector.fetch(SourceFetchRequest(source_name="rss", config={"feeds": [{"name": "微信公众号-合并源", "url": "http://localhost:8001/feed/all.xml", "source_type": "wechat", "paginate": True, "page_size": 2, "max_pages": 5, "article_api_base": "http://localhost:8001/api/v1/wx/articles"}]}))
+    assert result.errors == []
+    assert len(result.items) == 3
+    assert result.metadata["feeds"][0]["pages"] == 2
+    references = [reference for item in result.items for reference in extract_reference_items("rss", item)]
+    assert {reference["source_type"] for reference in references} == {"paper", "project"}
 
 
 def test_normalizers_produce_stable_paper_and_project_keys() -> None:
