@@ -16,7 +16,7 @@ def materials(conn: sqlite3.Connection, limit: int = 50) -> dict:
 
 def today(conn: sqlite3.Connection, limit: int = 12) -> dict[str, Any]:
     materials_data = domain_items.list_items(conn, DOMAIN, item_type="material", limit=limit)
-    events_data = domain_items.list_items(conn, DOMAIN, item_type="event", limit=limit)
+    events_data = _active_events(conn, limit)
     knowledge_data = domain_items.list_items(conn, DOMAIN, item_type="knowledge", limit=limit)
     pending_fields = _pending_field_count(knowledge_data["items"])
     return {
@@ -36,7 +36,13 @@ def today(conn: sqlite3.Connection, limit: int = 12) -> dict[str, Any]:
 
 
 def events(conn: sqlite3.Connection, limit: int = 50) -> dict[str, Any]:
-    return domain_items.list_items(conn, DOMAIN, item_type="event", limit=limit)
+    return _active_events(conn, limit)
+
+
+def _active_events(conn: sqlite3.Connection, limit: int) -> dict[str, Any]:
+    data = domain_items.list_items(conn, DOMAIN, item_type="event", limit=max(limit * 3, limit))
+    items = [item for item in data["items"] if item.get("status") != "superseded"][:limit]
+    return {"domain": DOMAIN, "count": len(items), "items": items}
 
 
 def event_detail(conn: sqlite3.Connection, item_id: int) -> dict[str, Any] | None:
