@@ -149,11 +149,23 @@ def start_repro(item_id: int, body: StartReproRequest = StartReproRequest(), con
         if web_port:
             repo.update_repro_task(conn, task_id=task_id, web_port=web_port)
 
+    conn.commit()
+
     # 回调
     def on_log(line: str):
-        repo.append_repro_log(conn, task_id=task_id, line=line)
+        from ai4sec_platform.db.session import connect as db_connect
+
+        callback_conn = db_connect()
+        try:
+            repo.append_repro_log(callback_conn, task_id=task_id, line=line)
+            callback_conn.commit()
+        finally:
+            callback_conn.close()
 
     def on_status(status: str, _tid=task_id, _iid=item_id, **kw):
+        from ai4sec_platform.db.session import connect as db_connect
+
+        callback_conn = db_connect()
         update_fields: dict[str, Any] = {"status": status}
         if "result" in kw:
             update_fields["result"] = str(kw["result"])[:10000]
@@ -163,10 +175,14 @@ def start_repro(item_id: int, body: StartReproRequest = StartReproRequest(), con
             update_fields["report_json"] = json.dumps(kw["report"], ensure_ascii=False) if isinstance(kw["report"], dict) else str(kw["report"])
         if "web_port" in kw:
             update_fields["web_port"] = kw["web_port"]
-        repo.update_repro_task(conn, task_id=_tid, **update_fields)
-        if "report" in kw and kw["report"]:
-            from ai4sec_platform.domains.capabilities.adapters.repro_results import update_capability_from_report
-            update_capability_from_report(conn, item_id=_iid, report=kw["report"])
+        try:
+            repo.update_repro_task(callback_conn, task_id=_tid, **update_fields)
+            if "report" in kw and kw["report"]:
+                from ai4sec_platform.domains.capabilities.adapters.repro_results import update_capability_from_report
+                update_capability_from_report(callback_conn, item_id=_iid, report=kw["report"])
+            callback_conn.commit()
+        finally:
+            callback_conn.close()
 
     # 启动 ReproRunner
     repro_manager.start_task(

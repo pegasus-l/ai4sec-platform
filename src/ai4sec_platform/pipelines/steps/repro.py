@@ -88,10 +88,20 @@ class StartReproTasksStep:
             )
 
             # 定义回调（写 DB + 回写能力卡）
-            def on_log(line: str, _tid=task_id, _conn=context.conn):
-                repo.append_repro_log(_conn, task_id=_tid, line=line)
+            def on_log(line: str, _tid=task_id):
+                from ai4sec_platform.db.session import connect as db_connect
 
-            def on_status(status: str, _tid=task_id, _iid=item_id, _conn=context.conn, **kw):
+                callback_conn = db_connect()
+                try:
+                    repo.append_repro_log(callback_conn, task_id=_tid, line=line)
+                    callback_conn.commit()
+                finally:
+                    callback_conn.close()
+
+            def on_status(status: str, _tid=task_id, _iid=item_id, **kw):
+                from ai4sec_platform.db.session import connect as db_connect
+
+                callback_conn = db_connect()
                 # 更新 task status
                 update_fields: dict[str, Any] = {"status": status}
                 if "result" in kw:
@@ -105,11 +115,15 @@ class StartReproTasksStep:
                     update_fields["web_port"] = kw["web_port"]
                 if "web_url" in kw:
                     update_fields["web_url"] = kw["web_url"]
-                repo.update_repro_task(_conn, task_id=_tid, **update_fields)
+                try:
+                    repo.update_repro_task(callback_conn, task_id=_tid, **update_fields)
 
-                # 如果有报告，回写能力卡
-                if "report" in kw and kw["report"]:
-                    update_capability_from_report(_conn, item_id=_iid, report=kw["report"])
+                    # 如果有报告，回写能力卡
+                    if "report" in kw and kw["report"]:
+                        update_capability_from_report(callback_conn, item_id=_iid, report=kw["report"])
+                    callback_conn.commit()
+                finally:
+                    callback_conn.close()
 
             # 决定是否 Web 复现
             payload = candidate.get("payload") or {}
@@ -118,6 +132,8 @@ class StartReproTasksStep:
                 web_port = _alloc_web_port(context.conn)
                 if web_port:
                     repo.update_repro_task(context.conn, task_id=task_id, web_port=web_port)
+
+            context.conn.commit()
 
             # 启动 ReproRunner（异步）
             repro_manager.start_task(
