@@ -341,7 +341,8 @@ class ReproRunner:
     def start(self):
         self.workspace.mkdir(parents=True, exist_ok=True)
         try:
-            os.chown(self.workspace, 1000, 1000)
+            if hasattr(os, 'chown'):
+                os.chown(self.workspace, 1000, 1000)
         except (PermissionError, OSError):
             pass
         self._thread = threading.Thread(target=self._run, daemon=True)
