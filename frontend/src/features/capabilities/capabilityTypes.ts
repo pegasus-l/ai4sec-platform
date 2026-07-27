@@ -9,6 +9,8 @@ export interface CapabilityItem {
   status: string;
   tags: string[];
   payload: {
+    assessment?: Record<string, unknown>;
+    capability_scoring?: Record<string, unknown>;
     code_url?: string;
     source_type?: string;
     capability_type?: string;

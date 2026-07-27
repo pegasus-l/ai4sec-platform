@@ -363,14 +363,50 @@ function CapabilityDetailContent({ itemId, initialItem, onRepro, onConvert }: { 
   };
 
   return <div className="grid">
-    <div className="drawer-section"><h3>项目摘要</h3><p>{item?.summary ?? initialItem.summary}</p></div>
+    {/* 评分 + 评分理由 */}
+    <div className="drawer-section">
+      <h3>能力评分</h3>
+      <div className="split" style={{ alignItems: 'center' }}>
+        <div className="score-ring">{item?.score ?? initialItem.score}</div>
+        <div style={{ flex: 1 }}>
+          {((p.capability_scoring as Record<string, unknown>)?.reasons as string[] || []).map((r, i) => <p key={i} className="small muted">• {r}</p>)}
+          {(!((p.capability_scoring as Record<string, unknown>)?.reasons as string[] || []).length) && <p className="small muted">基于相关性、代码线索、可复现性、研究价值、安全价值综合评分</p>}
+        </div>
+      </div>
+      {p.score_breakdown && Object.keys(p.score_breakdown).length > 0 && <div className="field-grid" style={{ marginTop: 10 }}>{Object.entries(p.score_breakdown).map(([k, v]) => { const pct = Math.round(v * 100); const color = v >= 0.8 ? 'var(--green)' : v >= 0.5 ? 'var(--sky)' : 'var(--amber)'; return <div className="cap-field" key={k}><span>{k}</span><b style={{ color }}>{pct}%</b></div>; })}</div>}
+    </div>
+
+    {/* 项目信息 */}
+    <div className="drawer-section">
+      <h3>项目信息</h3>
+      {p.display_work_name && <p><b>工作名:</b> {p.display_work_name}</p>}
+      <p><b>技术定位:</b> {p.display_theme || item?.summary || '—'}</p>
+      {(item?.title || initialItem.title) !== (p.display_theme || '') && <p className="small muted">原始标题: {item?.title || initialItem.title}</p>}
+      {(item?.source_url || initialItem.source_url) && <p style={{ marginTop: 4 }}><a href={item?.source_url || initialItem.source_url} target="_blank" rel="noopener" style={{ color: 'var(--sky)' }}>🔗 项目链接</a></p>}
+      {p.code_url && <p><a href={p.code_url} target="_blank" rel="noopener" style={{ color: 'var(--sky)' }}>🔗 代码仓库</a></p>}
+      {p.demo_url && <p><a href={p.demo_url} target="_blank" rel="noopener" style={{ color: 'var(--sky)' }}>🔗 在线 Demo</a></p>}
+    </div>
+
+    {/* 宣传一句话 */}
+    <div className="drawer-section"><h3>宣传一句话</h3><p>{p.one_liner || '—'}</p></div>
+
+    {/* 亮点一句话 */}
+    {p.highlight && <div className="drawer-section"><h3>亮点</h3><p style={{ color: 'var(--green)' }}>{p.highlight}</p></div>}
+
+    {/* 中文摘要 */}
+    <div className="drawer-section"><h3>中文摘要</h3><p>{item?.summary ?? initialItem.summary || '—'}</p></div>
+
+    {/* 技术点 */}
+    {p.tech_points && p.tech_points.length > 0 && <div className="drawer-section"><h3>技术点 · {p.tech_points.length} 项</h3><div className="badges">{p.tech_points.map((t: string) => <Badge key={t} tone="sky">{t}</Badge>)}</div></div>}
+
+    {/* 能力评估 */}
+    <div className="drawer-section"><h3>能力评估</h3><div className="badges">{p.capability_type && <Badge tone="green">{p.capability_type}</Badge>}{p.sub_type && <Badge tone="sky">{p.sub_type}</Badge>}{p.application_scenarios && p.application_scenarios.length > 0 && p.application_scenarios.map((s: string) => <Badge key={s} tone="violet">{s}</Badge>)}</div>{p.implementation_depth && <p className="small muted" style={{ marginTop: 8 }}>实现深度: 有代码 {p.implementation_depth.has_real_code ? '✓' : '✗'} | 有测试 {p.implementation_depth.has_tests ? '✓' : '✗'} | 有评估 {p.implementation_depth.has_eval ? '✓' : '✗'}</p>}</div>
+
+    {/* 复现 & 转化 */}
     {p.repro_summary && <div className="drawer-section"><h3>复现摘要</h3><p style={{ color: 'var(--green)' }}>{p.repro_summary}</p></div>}
-    <div className="drawer-section"><h3>能力类型</h3><div className="badges">{p.capability_type && <Badge tone="green">{p.capability_type}</Badge>}{p.sub_type && <Badge tone="sky">{p.sub_type}</Badge>}</div></div>
-    {p.application_scenarios && p.application_scenarios.length > 0 && <div className="drawer-section"><h3>应用场景</h3><div className="badges">{p.application_scenarios.map(s => <Badge key={s} tone="violet">{s}</Badge>)}</div></div>}
-    {p.tech_points && p.tech_points.length > 0 && <div className="drawer-section"><h3>技术点</h3>{p.tech_points.map((t, i) => <p key={i}>• {t}</p>)}</div>}
-    {p.score_breakdown && Object.keys(p.score_breakdown).length > 0 && <div className="drawer-section"><h3>评分依据</h3><div className="field-grid">{Object.entries(p.score_breakdown).map(([k, v]) => { const pct = Math.round(v * 100); const color = v >= 0.8 ? 'var(--green)' : v >= 0.5 ? 'var(--sky)' : 'var(--amber)'; return <div className="cap-field" key={k}><span>{k}</span><b style={{ color }}>{pct}%</b></div>; })}</div></div>}
-    {p.implementation_depth && <div className="drawer-section"><h3>实现深度</h3><p>有真实代码: {p.implementation_depth.has_real_code ? '✓' : '✗'} | 有测试: {p.implementation_depth.has_tests ? '✓' : '✗'} | 有评估: {p.implementation_depth.has_eval ? '✓' : '✗'}</p></div>}
-    <div className="drawer-section"><h3>复现 & 转化</h3><div className="badges"><Badge tone={p.repro_status === 'candidate' ? 'green' : 'amber'}>{p.repro_status ?? '未知'}</Badge><Badge tone="violet">{p.conversion_status ?? '待评估'}</Badge></div>{p.code_url && <p style={{ marginTop: 6 }}><a href={p.code_url} target="_blank" rel="noopener" style={{ color: 'var(--sky)' }}>{p.code_url}</a></p>}</div>
+    <div className="drawer-section"><h3>复现 & 转化</h3><div className="badges"><Badge tone={p.repro_status === 'candidate' ? 'green' : 'amber'}>{p.repro_status ?? '未知'}</Badge><Badge tone="violet">{p.conversion_status ?? '待评估'}</Badge>{p.is_web && <Badge tone="amber">Web{p.web_framework ? `:${p.web_framework}` : ''}</Badge>}</div></div>
+
+    {/* 使用说明 */}
     {p.usage && Object.keys(p.usage).length > 0 && <div className="drawer-section"><h3>使用说明</h3><p><b>是什么:</b> {p.usage.what ?? ''}</p><p><b>怎么用:</b> {p.usage.how_to_use ?? ''}</p>{p.usage.prerequisites && <p><b>前提:</b> {p.usage.prerequisites}</p>}{p.usage.limitations && <p><b>限制:</b> {p.usage.limitations}</p>}</div>}
 
     {/* 【改动 2】转化表单 */}
