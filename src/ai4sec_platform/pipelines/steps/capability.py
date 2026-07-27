@@ -40,7 +40,7 @@ class BuildCapabilitiesFromNewsStep:
                     domain="capabilities",
                     item_type="capability_candidate",
                     title=display_theme or item.get("title") or "未命名能力候选",
-                    summary=one_liner or news_summary or "能力候选",
+                    summary=news_summary or one_liner or "能力候选",
                     score=None,
                     status="待能力评估",
                     source="news_pipeline",
