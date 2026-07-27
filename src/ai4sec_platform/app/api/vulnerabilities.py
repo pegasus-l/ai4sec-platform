@@ -55,7 +55,19 @@ def runs(limit: int = Query(20, ge=1, le=100), conn: sqlite3.Connection = Depend
         "SELECT * FROM pipeline_runs WHERE domain = ? ORDER BY id DESC LIMIT ?",
         (DOMAIN, limit),
     ).fetchall()
-    return {"items": [repo.row_to_dict(row) for row in rows]}
+    items = []
+    for row in rows:
+        item = repo.row_to_dict(row)
+        summary = item.get("summary") or {}
+        item["summary"] = {
+            "status": summary.get("status"),
+            "error_message": summary.get("error_message"),
+            "current_step": summary.get("current_step"),
+            "completed_steps": summary.get("completed_steps"),
+            "total_steps": summary.get("total_steps"),
+        }
+        items.append(item)
+    return {"items": items}
 
 
 @router.get("/today")
