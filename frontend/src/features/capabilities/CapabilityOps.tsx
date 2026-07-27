@@ -130,10 +130,10 @@ const capPipelineNames: Record<string, string> = {
 };
 
 const capPipelines = [
-  { name: 'capabilities.from_news_pipeline', label: '从资讯派生能力候选（评分+Web分类）' },
-  { name: 'capabilities.web_classify_pipeline', label: 'Web 分类（规则+DeepSeek）' },
-  { name: 'capabilities.repro_pipeline', label: '复现验证（需要 docker+sysbox）' },
-  { name: 'capabilities.conversion_pipeline', label: '能力转化状态推进' },
+  { name: 'capabilities.from_news_pipeline', label: '从资讯派生能力候选', desc: '筛选有 code_url 的高分项目 → 多维度评分 + LLM 评估' },
+  { name: 'capabilities.web_classify_pipeline', label: 'Web 项目分类', desc: '规则预筛 + DeepSeek LLM 判断是否自带 Web 界面' },
+  { name: 'capabilities.repro_pipeline', label: '自动复现验证', desc: '选 top N 候选 → docker sysbox 容器复现 → 报告回写（需要 docker 环境）' },
+  { name: 'capabilities.conversion_pipeline', label: '能力转化推进', desc: '选已复现成功的 → 创建转化记录（持续观察→已采用）' },
 ];
 
 export function CapabilityOpsRuns() {
@@ -141,7 +141,6 @@ export function CapabilityOpsRuns() {
   const { toast } = useToast();
   const { data, isLoading } = useQuery({ queryKey: ['cap-ops-runs'], queryFn: fetchRuns, staleTime: 5000 });
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
-  const [selectedPipeline, setSelectedPipeline] = useState('capabilities.from_news_pipeline');
   const [starting, setStarting] = useState(false);
   const { data: runDetail, isLoading: detailLoading } = useQuery({
     queryKey: ['cap-ops-run-detail', selectedRunId],
@@ -155,10 +154,10 @@ export function CapabilityOpsRuns() {
   const failed = capRuns.filter((r) => r.status === 'failed');
   const succeeded = capRuns.filter((r) => r.status === 'success');
 
-  const handleRun = async () => {
+  const handleRunPipeline = async (pipelineName: string) => {
     setStarting(true);
     try {
-      const resp = await fetch('/api/runs', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pipeline_name: selectedPipeline, reset: false }) });
+      const resp = await fetch('/api/runs', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pipeline_name: pipelineName, reset: false }) });
       await resp.json();
       toast('Pipeline 已启动', 'success');
       qc.invalidateQueries({ queryKey: ['cap-ops-runs'] });
@@ -167,16 +166,21 @@ export function CapabilityOpsRuns() {
   };
 
   return <div className="grid" style={{ paddingBottom: 48 }}>
-    {/* Pipeline 触发器 */}
+    {/* Pipeline 触发器 — 4 行卡片 */}
     <div className="panel">
       <div className="panel-head"><h3>运行 Pipeline</h3>{activeRun && <span className="status-tag good">运行中: {activeRun.pipeline_name.replace('capabilities.', '')}</span>}</div>
       <div className="panel-body">
-        <div className="split">
-          <select className="select" value={selectedPipeline} onChange={(e) => setSelectedPipeline(e.target.value)}>
-            {capPipelines.map((p) => <option key={p.name} value={p.name}>{p.label}</option>)}
-          </select>
-          <button className="btn primary" disabled={starting || !!activeRun} onClick={handleRun}>{starting ? '启动中…' : activeRun ? '已有运行中' : '运行 Pipeline'}</button>
-        </div>
+        {capPipelines.map((p) => (
+          <div className="profile" key={p.name} style={{ marginBottom: 8 }}>
+            <div>
+              <div className="pt">{p.label}</div>
+              <div className="ph">{p.desc}</div>
+            </div>
+            <button className={activeRun?.pipeline_name === p.name ? 'btn' : 'btn primary'} disabled={starting || !!activeRun} onClick={() => handleRunPipeline(p.name)}>
+              {activeRun?.pipeline_name === p.name ? '运行中' : starting ? '启动中' : '运行'}
+            </button>
+          </div>
+        ))}
       </div>
     </div>
     <div className="grid cols-4">

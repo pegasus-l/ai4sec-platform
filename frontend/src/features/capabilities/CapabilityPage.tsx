@@ -5,7 +5,7 @@ import { useToast } from '../../components/Toast';
 import { useDrawerStack } from '../../components/DrawerStack';
 import {
   fetchToday, fetchLibrary, fetchReproRuns, fetchConversions, fetchClassifyStats,
-  fetchDetail, startRepro, stopRepro, cleanupRepro, markConversion, classifyBatch,
+  fetchDetail, startRepro, stopRepro, cleanupRepro, markConversion,
   streamReproLogs, classifyLogLine,
 } from './capabilityQueries';
 import type { CapabilityItem, ReproTask, ConversionRecord, CapabilityView } from './capabilityTypes';
@@ -171,15 +171,7 @@ function CapabilityCard({ item, rank, onClick }: { item: CapabilityItem; rank: n
 
 // ========== 能力库（改动 1: 4 个视图 + 改动 3: classifyBatch 按钮）==========
 function CapabilityLibrary({ items, openDetail }: { items: CapabilityItem[]; openDetail: (item: CapabilityItem) => void }) {
-  const { toast } = useToast();
-  const qc = useQueryClient();
   const [viewMode, setViewMode] = useState<'列表视图' | '能力分类' | '应用场景' | '代码可用性'>('列表视图');
-
-  // 【改动 3】classifyBatch 触发
-  const handleClassify = async () => {
-    try { toast('开始批量 Web 分类…', 'info'); const r = await classifyBatch(); toast(`分类完成: ${r.classified} 成功, ${r.failed} 失败`, r.failed > 0 ? 'error' : 'success'); qc.invalidateQueries({ queryKey: ['cap-'] }); }
-    catch (e) { toast(`分类失败: ${e}`, 'error'); }
-  };
 
   // 【改动 1】能力分类视图：按 capability_type 分组
   const typeGroups = useMemo(() => {
@@ -202,12 +194,8 @@ function CapabilityLibrary({ items, openDetail }: { items: CapabilityItem[]; ope
   }), [items]);
 
   return <div className="grid">
-    <div className="split">
-      <div className="view-switch" style={{ marginBottom: 0 }}>
-        {(['列表视图', '能力分类', '应用场景', '代码可用性'] as const).map(v => <span key={v} className={`view-pill ${viewMode === v ? 'active' : ''}`} onClick={() => setViewMode(v)}>{v}</span>)}
-      </div>
-      {/* 【改动 3】批量 Web 分类按钮 */}
-      <button className="btn primary" onClick={handleClassify}>批量 Web 分类</button>
+    <div className="view-switch">
+      {(['列表视图', '能力分类', '应用场景', '代码可用性'] as const).map(v => <span key={v} className={`view-pill ${viewMode === v ? 'active' : ''}`} onClick={() => setViewMode(v)}>{v}</span>)}
     </div>
     {items.length === 0 && <EmptyState title="能力库为空" description="先跑 capabilities.from_news_pipeline 生成能力卡" />}
 
