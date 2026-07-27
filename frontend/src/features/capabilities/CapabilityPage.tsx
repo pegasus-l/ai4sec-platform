@@ -394,7 +394,7 @@ function CapabilityDetailContent({ itemId, initialItem, onRepro, onConvert }: { 
     {p.highlight && <div className="drawer-section"><h3>亮点</h3><p style={{ color: 'var(--green)' }}>{p.highlight}</p></div>}
 
     {/* 中文摘要 */}
-    <div className="drawer-section"><h3>中文摘要</h3><p>{item?.summary ?? initialItem.summary || '—'}</p></div>
+    <div className="drawer-section"><h3>中文摘要</h3><p>{item?.summary || initialItem.summary || '—'}</p></div>
 
     {/* 技术点 */}
     {p.tech_points && p.tech_points.length > 0 && <div className="drawer-section"><h3>技术点 · {p.tech_points.length} 项</h3><div className="badges">{p.tech_points.map((t: string) => <Badge key={t} tone="sky">{t}</Badge>)}</div></div>}
