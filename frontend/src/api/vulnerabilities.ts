@@ -112,8 +112,8 @@ export function fetchVulnerabilityExtractions(): Promise<ListResponse<DomainItem
   return getJson('/api/vulnerabilities/extractions?limit=200');
 }
 
-export function fetchVulnerabilityKnowledge(): Promise<ListResponse> {
-  return getJson('/api/vulnerabilities/knowledge');
+export function fetchVulnerabilityKnowledge(): Promise<ListResponse<DomainItem<KnowledgePayload>>> {
+  return getJson('/api/vulnerabilities/extractions?limit=200');
 }
 
 export async function acceptKnowledgeField(itemId: number, fieldName: string, body: FieldReviewRequest): Promise<FieldReviewResponse> {
