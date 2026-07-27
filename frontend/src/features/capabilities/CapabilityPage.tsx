@@ -363,18 +363,23 @@ function CapabilityDetailContent({ itemId, initialItem, onRepro, onConvert }: { 
   };
 
   return <div className="grid">
-    {/* 评分 + 评分理由 */}
+    {/* 能力评分（LLM 自然语言理由） */}
     <div className="drawer-section">
       <h3>能力评分</h3>
       <div className="split" style={{ alignItems: 'center' }}>
         <div className="score-ring">{item?.score ?? initialItem.score}</div>
         <div style={{ flex: 1 }}>
-          {((p.capability_scoring as Record<string, unknown>)?.reasons as string[] || []).map((r, i) => <p key={i} className="small muted">• {r}</p>)}
-          {(!((p.capability_scoring as Record<string, unknown>)?.reasons as string[] || []).length) && <p className="small muted">基于相关性、代码线索、可复现性、研究价值、安全价值综合评分</p>}
+          {p.score_reason ? <p>{p.score_reason}</p> : <p className="small muted">基于多维度综合评分</p>}
         </div>
       </div>
-      {p.score_breakdown && Object.keys(p.score_breakdown).length > 0 && <div className="field-grid" style={{ marginTop: 10 }}>{Object.entries(p.score_breakdown).map(([k, v]) => { const pct = Math.round(v * 100); const color = v >= 0.8 ? 'var(--green)' : v >= 0.5 ? 'var(--sky)' : 'var(--amber)'; return <div className="cap-field" key={k}><span>{k}</span><b style={{ color }}>{pct}%</b></div>; })}</div>}
     </div>
+
+    {/* LLM 评估 */}
+    {p.overview && <div className="drawer-section"><h3>项目概述</h3><p>{p.overview}</p></div>}
+    {p.security_value && <div className="drawer-section"><h3>安全价值</h3><p>{p.security_value}</p></div>}
+    {p.reproducibility_assessment && <div className="drawer-section"><h3>复现可行性</h3><p>{p.reproducibility_assessment}</p></div>}
+    {p.code_quality && <div className="drawer-section"><h3>代码质量</h3><p>{p.code_quality}</p></div>}
+    {p.application_advice && <div className="drawer-section"><h3>应用建议</h3><p>{p.application_advice}</p></div>}
 
     {/* 项目信息 */}
     <div className="drawer-section">
@@ -399,7 +404,7 @@ function CapabilityDetailContent({ itemId, initialItem, onRepro, onConvert }: { 
     {p.tech_points && p.tech_points.length > 0 && <div className="drawer-section"><h3>技术点 · {p.tech_points.length} 项</h3><div className="badges">{p.tech_points.map((t: string) => <Badge key={t} tone="sky">{t}</Badge>)}</div></div>}
 
     {/* 能力评估 */}
-    <div className="drawer-section"><h3>能力评估</h3><div className="badges">{p.capability_type && <Badge tone="green">{p.capability_type}</Badge>}{p.sub_type && <Badge tone="sky">{p.sub_type}</Badge>}{p.application_scenarios && p.application_scenarios.length > 0 && p.application_scenarios.map((s: string) => <Badge key={s} tone="violet">{s}</Badge>)}</div>{p.implementation_depth && <p className="small muted" style={{ marginTop: 8 }}>实现深度: 有代码 {p.implementation_depth.has_real_code ? '✓' : '✗'} | 有测试 {p.implementation_depth.has_tests ? '✓' : '✗'} | 有评估 {p.implementation_depth.has_eval ? '✓' : '✗'}</p>}</div>
+    <div className="drawer-section"><h3>能力评估</h3><div className="badges">{p.capability_type && <Badge tone="green">{p.capability_type}</Badge>}{p.application_scenarios && p.application_scenarios.length > 0 && p.application_scenarios.map((s: string) => <Badge key={s} tone="violet">{s}</Badge>)}</div></div>
 
     {/* 复现 & 转化 */}
     {p.repro_summary && <div className="drawer-section"><h3>复现摘要</h3><p style={{ color: 'var(--green)' }}>{p.repro_summary}</p></div>}

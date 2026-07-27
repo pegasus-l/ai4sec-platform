@@ -85,8 +85,8 @@ class AssessCapabilitiesStep:
             if not item:
                 continue
             item_data = repo.row_to_dict(item)
-            prompt = """评估该论文或项目是否值得复现和能力转化，输出 JSON：
-{"recommended_status":"待复现验证或待资料补齐","capability_type":"验证与评估或推理与规划或工具调用","sub_type":"具体子类型","application_scenarios":["场景1","场景2"],"implementation_depth":{"has_real_code":true,"has_tests":false,"has_eval":false},"repro_status":"candidate或no_code","conversion_status":"待评估","summary":"一句话结论","reason":"评估理由"}"""
+            prompt = """你是安全能力评估专家。评估这个项目是否值得复现和能力转化。输出 JSON：
+{"overview":"一句话说清这个项目是做什么的","security_value":"一段话说明它解决了什么安全问题、为什么重要","reproducibility_assessment":"能不能跑起来？需要什么环境/依赖？有什么坑？","code_quality":"README质量、有没有测试、代码结构如何","application_advice":"适合用在什么场景？怎么集成到团队工作流？","recommended_score":1到5的整数,"score_reason":"给这个分的理由（自然语言段落）","capability_type":"从以下选一个：验证与评估 | 推理与规划 | 工具调用","application_scenarios":["场景1","场景2"]}"""
             try:
                 output = router.complete_json(profile=self.model_profile, prompt=prompt, payload=item_data)
             except Exception as exc:
@@ -121,17 +121,21 @@ class AssessCapabilitiesStep:
                 context.conn,
                 item_id=item_id,
                 status=recommended_status,
-                score=scoring.score,
-                metrics={"assessment_status": "model_assessed", "score_breakdown": scoring.breakdown},
+                score=float(model_result.get("recommended_score") or scoring.score),
+                metrics={"assessment_status": "model_assessed", "score_breakdown": scoring.breakdown, "llm_score": model_result.get("recommended_score")},
                 payload={
                     "assessment": output,
                     "capability_scoring": scoring.as_payload(),
                     "capability_type": model_result.get("capability_type", ""),
-                    "sub_type": model_result.get("sub_type", ""),
                     "application_scenarios": model_result.get("application_scenarios", []),
-                    "implementation_depth": model_result.get("implementation_depth", {}),
                     "repro_status": model_result.get("repro_status", "candidate" if (item_data.get("payload") or {}).get("code_url") else "no_code"),
                     "conversion_status": model_result.get("conversion_status", "待评估"),
+                    "score_reason": model_result.get("score_reason", ""),
+                    "overview": model_result.get("overview", ""),
+                    "security_value": model_result.get("security_value", ""),
+                    "reproducibility_assessment": model_result.get("reproducibility_assessment", ""),
+                    "code_quality": model_result.get("code_quality", ""),
+                    "application_advice": model_result.get("application_advice", ""),
                     "code_url": (item_data.get("payload") or {}).get("code_url", ""),
                     "source_type": (item_data.get("payload") or {}).get("source_type", ""),
                     "source_news_score": (item_data.get("payload") or {}).get("source_news_score"),

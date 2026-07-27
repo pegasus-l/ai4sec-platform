@@ -11,6 +11,12 @@ export interface CapabilityItem {
   payload: {
     assessment?: Record<string, unknown>;
     capability_scoring?: Record<string, unknown>;
+    score_reason?: string;
+    overview?: string;
+    security_value?: string;
+    reproducibility_assessment?: string;
+    code_quality?: string;
+    application_advice?: string;
     code_url?: string;
     source_type?: string;
     capability_type?: string;
