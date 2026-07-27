@@ -62,10 +62,16 @@ def run_results(run_id: str, conn: sqlite3.Connection = Depends(get_db)) -> dict
     rows = conn.execute(
         f"""
         SELECT * FROM domain_items
-        WHERE domain = ? AND json_extract(metrics_json, '$.pipeline_run') IN ({placeholders})
+        WHERE domain = ? AND (
+            json_extract(metrics_json, '$.pipeline_run') IN ({placeholders})
+            OR EXISTS (
+                SELECT 1 FROM json_each(domain_items.metrics_json, '$.pipeline_runs')
+                WHERE json_each.value IN ({placeholders})
+            )
+        )
         ORDER BY id ASC
         """,
-        (DOMAIN, *included_run_ids),
+        (DOMAIN, *included_run_ids, *included_run_ids),
     ).fetchall()
     stages: dict[str, list[dict]] = {}
     for row in rows:
