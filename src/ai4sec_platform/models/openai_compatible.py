@@ -42,6 +42,11 @@ class OpenAICompatibleProvider:
             retry_body = dict(body)
             retry_body.pop("response_format", None)
             return self._post_once(retry_body)
+        except (urllib.error.URLError, TimeoutError, OSError):
+            # 超时后重试 1 次（等待 2 秒再重试）
+            import time
+            time.sleep(2)
+            return self._post_once(body)
 
     def _post_once(self, body: dict[str, Any]) -> dict[str, Any]:
         request = urllib.request.Request(

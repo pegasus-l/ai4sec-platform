@@ -16,7 +16,7 @@ class BuildCapabilitiesFromNewsStep:
     step_type: str = "build_domain_item"
 
     def run(self, context: PipelineContext) -> StepResult:
-        limit = int(context.params.get("limit", 100))
+        limit = int(context.params.get("limit", 100000))
         existing = repo.list_domain_items(context.conn, "capabilities", limit=limit, status="待能力评估")
         selected = [item["id"] for item in existing[:limit]]
         created: list[int] = []
@@ -57,13 +57,30 @@ class AssessCapabilitiesStep:
         ids = context.outputs.get("capability_candidate_ids") or []
         router = LLMRouter()
         assessed = 0
+        failed = 0
         for item_id in ids:
             item = context.conn.execute("SELECT * FROM domain_items WHERE id = ?", (item_id,)).fetchone()
             if not item:
                 continue
             item_data = repo.row_to_dict(item)
             prompt = "评估该论文或项目是否值得复现和能力转化，输出结构化建议。"
-            output = router.complete_json(profile=self.model_profile, prompt=prompt, payload=item_data)
+            try:
+                output = router.complete_json(profile=self.model_profile, prompt=prompt, payload=item_data)
+            except Exception as exc:
+                # 单个候选超时/失败，跳过继续评估下一个
+                failed += 1
+                repo.create_model_call(
+                    context.conn,
+                    run_id=context.run_id,
+                    agent_name="capability_assess",
+                    model_profile=self.model_profile,
+                    provider=self.model_profile,
+                    status="failed",
+                    error_message=str(exc)[:500],
+                    input_payload={"item_id": item_id, "title": item_data.get("title", "")},
+                    output_payload={},
+                )
+                continue
             scoring = score_capability_candidate(item_data)
             model_result = output.get("result") or output.get("parsed") or {}
             recommended_status = model_result.get("recommended_status") or ("待复现验证" if scoring.priority in {"high", "medium"} else "待资料补齐")
@@ -88,6 +105,6 @@ class AssessCapabilitiesStep:
             # 评估完成后将 item_type 从 capability_candidate 改为 capability
             context.conn.execute("UPDATE domain_items SET item_type='capability' WHERE id=?", (item_id,))
             assessed += 1
-        artifact = context.artifact_store.write_json(context.conn, run_id=context.run_id, artifact_type="capability_assessments", name="capabilities/assessments.json", data={"assessed": assessed, "model_profile": self.model_profile})
-        repo.create_quality_audit(context.conn, domain="capabilities", audit_type="capability_assessment", status="pass" if assessed else "warn", score=0.8 if assessed else 0.2, summary=f"能力评估 {assessed} 条，当前使用本地规则引擎。", details={"run_id": context.run_id})
-        return StepResult(metrics={"assessed": assessed, "model_profile": self.model_profile}, artifacts=[artifact])
+        artifact = context.artifact_store.write_json(context.conn, run_id=context.run_id, artifact_type="capability_assessments", name="capabilities/assessments.json", data={"assessed": assessed, "failed": failed, "model_profile": self.model_profile})
+        repo.create_quality_audit(context.conn, domain="capabilities", audit_type="capability_assessment", status="pass" if assessed else "warn", score=0.8 if assessed else 0.2, summary=f"能力评估 {assessed} 条成功，{failed} 条失败。", details={"run_id": context.run_id})
+        return StepResult(metrics={"assessed": assessed, "failed": failed, "model_profile": self.model_profile}, artifacts=[artifact])
