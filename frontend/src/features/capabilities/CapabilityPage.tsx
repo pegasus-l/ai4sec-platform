@@ -151,6 +151,7 @@ function CapabilityToday({ items, stats, openDetail }: { items: CapabilityItem[]
 
 function CapabilityCard({ item, rank, onClick }: { item: CapabilityItem; rank: number; onClick: () => void; onRepro: () => void }) {
   const p = item.payload ?? {};
+  const sourceType = p.source_type || (item.source_url?.includes('github.com') ? 'github' : 'arxiv');
   const reproTag = p.repro_status === 'candidate' ? 'green' : p.repro_status === 'in_progress' ? 'sky' : p.repro_status === 'no_code' ? 'slate' : 'amber';
   const reproText = { candidate: '可复现', in_progress: '复现中', no_code: '无代码', success: '已复现', failed: '复现失败' }[p.repro_status ?? ''] ?? p.repro_status;
   return <div className="asis-card clickable" onClick={onClick}>
@@ -159,7 +160,7 @@ function CapabilityCard({ item, rank, onClick }: { item: CapabilityItem; rank: n
       <h4>{item.title}</h4>
       <p>{item.summary}</p>
       <div className="badges">
-        <Badge tone={p.source_type === 'github' ? 'sky' : 'violet'}>{p.source_type ?? 'unknown'}</Badge>
+        <Badge tone={sourceType === 'github' ? 'sky' : 'violet'}>{sourceType}</Badge>
         {p.capability_type && <Badge tone="green">{p.capability_type}</Badge>}
         <Badge tone={reproTag as 'green' | 'sky' | 'slate' | 'amber'}>{reproText}</Badge>
         {p.is_web && <Badge tone="amber">Web{p.web_framework ? `:${p.web_framework}` : ''}</Badge>}
