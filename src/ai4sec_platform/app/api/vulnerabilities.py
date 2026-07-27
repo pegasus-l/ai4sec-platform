@@ -6,6 +6,8 @@ from pydantic import BaseModel
 
 from ai4sec_platform.app.dependencies import get_db
 from ai4sec_platform.db import repositories as repo
+from ai4sec_platform.core.config import load_settings
+from ai4sec_platform.domains.vulnerabilities.keyword_profiles import list_keyword_profiles
 from ai4sec_platform.domains.vulnerabilities import service as vuln_service
 from ai4sec_platform.services import domain_items
 from ai4sec_platform.services import operations
@@ -19,6 +21,32 @@ class FieldReviewRequest(BaseModel):
     value: object | None = None
     reason: str = ""
     evidence_ids: list[int] = []
+
+
+@router.get("/keyword-profiles")
+def keyword_profiles() -> dict:
+    return {"items": list_keyword_profiles(load_settings().project_root)}
+
+
+@router.get("/runs/{run_id}/results")
+def run_results(run_id: str, conn: sqlite3.Connection = Depends(get_db)) -> dict:
+    rows = conn.execute(
+        """
+        SELECT * FROM domain_items
+        WHERE domain = ? AND json_extract(metrics_json, '$.pipeline_run') = ?
+        ORDER BY id ASC
+        """,
+        (DOMAIN, run_id),
+    ).fetchall()
+    stages: dict[str, list[dict]] = {}
+    for row in rows:
+        item = repo.row_to_dict(row)
+        stages.setdefault(str(item["item_type"]), []).append(item)
+    return {
+        "run_id": run_id,
+        "count": len(rows),
+        "stages": stages,
+    }
 
 
 @router.get("/today")

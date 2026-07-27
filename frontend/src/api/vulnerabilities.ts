@@ -4,12 +4,14 @@ import type {
   FieldReviewRequest,
   FieldReviewResponse,
   KnowledgePayload,
+  KeywordProfile,
   ListResponse,
   MaterialPayload,
   PipelineRunDetail,
   PipelineRunStartResponse,
   ShadowEvaluationPayload,
   VulnerabilityTodayResponse,
+  VulnerabilityRunResults,
 } from '../types/vulnerability';
 
 export function fetchVulnerabilityToday(): Promise<VulnerabilityTodayResponse> {
@@ -40,13 +42,27 @@ export function fetchVulnerabilityEvaluations(): Promise<ListResponse<DomainItem
   return getJson('/api/vulnerabilities/evaluations?limit=20');
 }
 
-export function runVulnerabilitySmokeEvaluation(): Promise<PipelineRunStartResponse> {
+export function fetchVulnerabilityKeywordProfiles(): Promise<{ items: KeywordProfile[] }> {
+  return getJson('/api/vulnerabilities/keyword-profiles');
+}
+
+export function runVulnerabilityDiscovery(input: { keywordProfile: string; maxQueries: number; maxResults: number; crawlLimit: number }): Promise<PipelineRunStartResponse> {
   return postJson('/api/runs', {
     pipeline_name: 'vulnerabilities.full_knowledge_discovery_pipeline',
     reset: false,
     wait: false,
-    params: { keyword_profile: 'smoke', max_results: 3, crawl_limit: 15, max_run_queries: 5 },
+    params: {
+      keyword_profile: input.keywordProfile,
+      max_queries: input.maxQueries,
+      max_results: input.maxResults,
+      crawl_limit: input.crawlLimit,
+      max_run_queries: 50,
+    },
   });
+}
+
+export function fetchVulnerabilityRunResults(runId: string): Promise<VulnerabilityRunResults> {
+  return getJson(`/api/vulnerabilities/runs/${encodeURIComponent(runId)}/results`);
 }
 
 export function fetchPipelineRun(runId: string): Promise<PipelineRunDetail> {

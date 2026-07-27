@@ -101,3 +101,37 @@ def test_async_run_returns_pollable_run_id(monkeypatch, tmp_path: Path) -> None:
         time.sleep(0.01)
     assert detail_payload["status"] == "success"
     assert detail_payload["progress"] == {"completed_steps": 1, "total_steps": 1, "current_step": ""}
+
+
+def test_vulnerability_run_results_are_scoped_by_run_id(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("AI4SEC_DATABASE_PATH", str(tmp_path / "results.db"))
+    monkeypatch.setenv("AI4SEC_OUTPUT_DIR", str(tmp_path / "output"))
+    settings = load_settings()
+    with connect(settings) as conn:
+        init_db(conn)
+        repo.create_domain_item(
+            conn,
+            domain="vulnerabilities",
+            item_type="material",
+            title="current run material",
+            metrics={"pipeline_run": "run_current"},
+        )
+        repo.create_domain_item(
+            conn,
+            domain="vulnerabilities",
+            item_type="material",
+            title="history material",
+            metrics={"pipeline_run": "run_history"},
+        )
+        conn.commit()
+
+    client = TestClient(app)
+    response = client.get("/api/vulnerabilities/runs/run_current/results")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["count"] == 1
+    assert [item["title"] for item in payload["stages"]["material"]] == ["current run material"]
+    profiles = client.get("/api/vulnerabilities/keyword-profiles")
+    assert profiles.status_code == 200
+    assert any(item["name"] == "smoke" for item in profiles.json()["items"])

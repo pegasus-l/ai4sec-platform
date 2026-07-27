@@ -19,6 +19,31 @@ class ResolvedKeywordProfile:
     truncated: bool
 
 
+def list_keyword_profiles(project_root: Path) -> list[dict[str, Any]]:
+    config_path = project_root / "configs" / "vulnerability_keywords.yaml"
+    if not config_path.exists():
+        raise ValueError(f"keyword profile config not found: {config_path}")
+    config = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+    categories_config = config.get("categories") or {}
+    profiles = config.get("profiles") or {}
+    result: list[dict[str, Any]] = []
+    for name, profile in profiles.items():
+        if not isinstance(profile, dict):
+            continue
+        explicit_queries = [str(value).strip() for value in profile.get("queries") or [] if str(value).strip()]
+        categories = [str(value) for value in profile.get("categories") or []]
+        category_queries = [str(value).strip() for category in categories for value in categories_config.get(category, []) if str(value).strip()]
+        configured_queries = len(_dedupe([*explicit_queries, *category_queries]))
+        result.append({
+            "name": str(name),
+            "description": str(profile.get("description") or ""),
+            "configured_queries": configured_queries,
+            "max_queries": _positive_int(profile.get("max_queries"), configured_queries),
+            "categories": categories,
+        })
+    return result
+
+
 def resolve_keyword_profile(params: dict[str, Any], project_root: Path) -> ResolvedKeywordProfile | None:
     profile_name = str(params.get("keyword_profile") or "").strip()
     if not profile_name:
