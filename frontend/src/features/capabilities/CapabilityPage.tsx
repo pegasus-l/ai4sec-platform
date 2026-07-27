@@ -162,7 +162,7 @@ function CapabilityCard({ item, rank, onClick }: { item: CapabilityItem; rank: n
         <Badge tone={p.source_type === 'github' ? 'sky' : 'violet'}>{p.source_type ?? 'unknown'}</Badge>
         {p.capability_type && <Badge tone="green">{p.capability_type}</Badge>}
         <Badge tone={reproTag as 'green' | 'sky' | 'slate' | 'amber'}>{reproText}</Badge>
-        {p.is_web && p.web_framework && <Badge tone="amber">Web:{p.web_framework}</Badge>}
+        {p.is_web && <Badge tone="amber">Web{p.web_framework ? `:${p.web_framework}` : ''}</Badge>}
       </div>
     </div>
     <div className="score-ring">{item.score}</div>

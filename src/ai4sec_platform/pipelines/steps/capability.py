@@ -63,7 +63,8 @@ class AssessCapabilitiesStep:
             if not item:
                 continue
             item_data = repo.row_to_dict(item)
-            prompt = "评估该论文或项目是否值得复现和能力转化，输出结构化建议。"
+            prompt = """评估该论文或项目是否值得复现和能力转化，输出 JSON：
+{"recommended_status":"待复现验证或待资料补齐","capability_type":"验证与评估或推理与规划或工具调用","sub_type":"具体子类型","application_scenarios":["场景1","场景2"],"implementation_depth":{"has_real_code":true,"has_tests":false,"has_eval":false},"repro_status":"candidate或no_code","conversion_status":"待评估","summary":"一句话结论","reason":"评估理由"}"""
             try:
                 output = router.complete_json(profile=self.model_profile, prompt=prompt, payload=item_data)
             except Exception as exc:
@@ -100,7 +101,19 @@ class AssessCapabilitiesStep:
                 status=recommended_status,
                 score=scoring.score,
                 metrics={"assessment_status": "model_assessed", "score_breakdown": scoring.breakdown},
-                payload={"assessment": output, "capability_scoring": scoring.as_payload()},
+                payload={
+                    "assessment": output,
+                    "capability_scoring": scoring.as_payload(),
+                    "capability_type": model_result.get("capability_type", ""),
+                    "sub_type": model_result.get("sub_type", ""),
+                    "application_scenarios": model_result.get("application_scenarios", []),
+                    "implementation_depth": model_result.get("implementation_depth", {}),
+                    "repro_status": model_result.get("repro_status", "candidate" if (item_data.get("payload") or {}).get("code_url") else "no_code"),
+                    "conversion_status": model_result.get("conversion_status", "待评估"),
+                    "code_url": (item_data.get("payload") or {}).get("code_url", ""),
+                    "source_type": (item_data.get("payload") or {}).get("source_type", ""),
+                    "source_news_score": (item_data.get("payload") or {}).get("source_news_score"),
+                },
             )
             # 评估完成后将 item_type 从 capability_candidate 改为 capability
             context.conn.execute("UPDATE domain_items SET item_type='capability' WHERE id=?", (item_id,))
