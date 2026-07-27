@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import socket
+import time
 import urllib.error
 import urllib.request
 from typing import Any
@@ -67,4 +69,27 @@ class OpenAICompatibleProvider:
             method="POST",
         )
         with urllib.request.urlopen(request, timeout=self.timeout_seconds) as response:  # noqa: S310 - configured internal/API endpoint
-            return json.loads(response.read().decode("utf-8"))
+            deadline = time.monotonic() + self.timeout_seconds
+            chunks: list[bytes] = []
+            while True:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise TimeoutError(f"model response exceeded {self.timeout_seconds:g}s total deadline")
+                _set_response_socket_timeout(response, min(remaining, 15.0))
+                try:
+                    chunk = response.read(64 * 1024)
+                except socket.timeout as exc:
+                    if time.monotonic() >= deadline:
+                        raise TimeoutError(f"model response exceeded {self.timeout_seconds:g}s total deadline") from exc
+                    continue
+                if not chunk:
+                    break
+                chunks.append(chunk)
+            return json.loads(b"".join(chunks).decode("utf-8"))
+
+
+def _set_response_socket_timeout(response: Any, timeout_seconds: float) -> None:
+    try:
+        response.fp.raw._sock.settimeout(timeout_seconds)
+    except AttributeError:
+        return

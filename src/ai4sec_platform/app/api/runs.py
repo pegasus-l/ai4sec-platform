@@ -112,10 +112,17 @@ def run_detail(run_id: str, conn: sqlite3.Connection = Depends(get_db)) -> dict:
     data["tasks"] = [repo.row_to_dict(row) for row in conn.execute("SELECT * FROM task_runs WHERE run_id = ? ORDER BY id", (run_id,)).fetchall()]
     data["artifacts"] = [repo.row_to_dict(row) for row in conn.execute("SELECT * FROM artifacts WHERE run_id = ? ORDER BY id", (run_id,)).fetchall()]
     summary = data.get("summary") or {}
+    item_progress = summary.get("item_progress")
+    child_run_ids = summary.get("child_run_ids") or []
+    if child_run_ids and data.get("status") == "running":
+        child = conn.execute("SELECT summary_json FROM pipeline_runs WHERE run_id = ?", (str(child_run_ids[-1]),)).fetchone()
+        child_summary = repo.loads(child["summary_json"], {}) if child else {}
+        item_progress = child_summary.get("item_progress") or item_progress
     data["progress"] = {
         "completed_steps": int(summary.get("completed_steps") or len(data["tasks"])),
         "total_steps": int(summary.get("total_steps") or 0),
         "current_step": str(summary.get("current_step") or ""),
+        "item_progress": item_progress,
     }
     return data
 

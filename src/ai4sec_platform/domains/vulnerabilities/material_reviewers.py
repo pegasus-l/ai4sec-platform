@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import time
 from typing import Any
 
 from ai4sec_platform.domains.vulnerabilities.model_inputs import prepare_model_input
@@ -100,6 +101,7 @@ def review_crawled_material(page: dict[str, Any], *, requirements: str = "", con
 
 
 def _try_llm_review(normalized: dict[str, Any], *, requirements: str, confidence_threshold: float) -> dict[str, Any] | None:
+    started = time.perf_counter()
     try:
         provider = LLMRouter().provider_for("vulnerability_material_reviewer")
         if isinstance(provider, LocalRuleProvider):
@@ -127,10 +129,11 @@ def _try_llm_review(normalized: dict[str, Any], *, requirements: str, confidence
             decision=decision,
             reason=str(result.get("reason") or "模型完成漏洞素材审核。"),
             key_findings=_list_str(result.get("key_findings")),
-            extra={"classification": {"category": result.get("material_type") or "llm_review", "confidence": confidence}, "scoring": {"score": round(confidence * 100, 2), "priority": "high" if decision == "accept" else "medium" if decision == "needs_review" else "low"}, "extracted_evidence": extra_evidence, "reviewer": response.get("provider"), "review_model": response.get("model"), "model_used": True, "prompt": prompt, "llm_output": result, "quality_gate": _quality_gate_reason(result, decision), "model_input_characters": len(content), "model_input_truncated": input_truncated},
+            extra={"classification": {"category": result.get("material_type") or "llm_review", "confidence": confidence}, "scoring": {"score": round(confidence * 100, 2), "priority": "high" if decision == "accept" else "medium" if decision == "needs_review" else "low"}, "extracted_evidence": extra_evidence, "reviewer": response.get("provider"), "review_model": response.get("model"), "model_used": True, "prompt": prompt, "llm_output": result, "quality_gate": _quality_gate_reason(result, decision), "model_input_characters": len(content), "model_input_truncated": input_truncated, "latency_ms": int((time.perf_counter() - started) * 1000)},
         )
     except Exception as exc:  # pragma: no cover - external model dependent
         normalized["llm_review_error"] = str(exc)[:300]
+        normalized["llm_review_latency_ms"] = int((time.perf_counter() - started) * 1000)
         return None
 
 
@@ -159,7 +162,7 @@ def _rule_review(normalized: dict[str, Any], *, requirements: str, confidence_th
         decision=decision,
         reason="；".join(dict.fromkeys(reasons)) or "本地规则未发现足够高质量漏洞技术信号。",
         key_findings=key_findings,
-        extra={"classification": classification, "scoring": scoring.as_payload(), "extracted_evidence": evidence, "reviewer": "local_rules", "model_used": False, "llm_review_error": normalized.get("llm_review_error")},
+        extra={"classification": classification, "scoring": scoring.as_payload(), "extracted_evidence": evidence, "reviewer": "local_rules", "model_used": False, "llm_review_error": normalized.get("llm_review_error"), "latency_ms": normalized.get("llm_review_latency_ms", 0)},
     )
 
 

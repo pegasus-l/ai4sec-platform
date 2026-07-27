@@ -40,6 +40,7 @@ def run_bounded_with_circuit(
     is_failure: Callable[[OutputValue], bool],
     max_concurrency: int,
     circuit_failure_threshold: int = 1,
+    on_item: Callable[[OutputValue, int, int], None] | None = None,
 ) -> BoundedParallelResult[OutputValue]:
     concurrency = min(max(int(max_concurrency), 1), 8)
     failure_threshold = max(int(circuit_failure_threshold), 1)
@@ -49,11 +50,19 @@ def run_bounded_with_circuit(
     for offset in range(0, len(items), concurrency):
         batch = items[offset : offset + concurrency]
         if circuit_open:
-            output.extend(fallback_worker(item) for item in batch)
+            fallback_results = [fallback_worker(item) for item in batch]
+            output.extend(fallback_results)
+            if on_item:
+                for result in fallback_results:
+                    on_item(result, len(output), len(items))
             continue
         parallel_batches += 1
         with ThreadPoolExecutor(max_workers=min(concurrency, len(batch))) as executor:
             results = list(executor.map(worker, batch))
         output.extend(results)
+        if on_item:
+            completed_before_batch = len(output) - len(results)
+            for index, result in enumerate(results, start=1):
+                on_item(result, completed_before_batch + index, len(items))
         circuit_open = sum(1 for result in results if is_failure(result)) >= failure_threshold
     return BoundedParallelResult(items=output, circuit_open=circuit_open, parallel_batches=parallel_batches)

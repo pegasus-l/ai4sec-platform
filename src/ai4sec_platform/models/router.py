@@ -80,7 +80,7 @@ def _config_from_prefix(prefix: str, *, profile: str = "configured_model") -> Mo
 
 def _model_timeout_seconds(profile: str) -> float:
     profile_key = _profile_key(profile)
-    default = "600" if profile == "vulnerability_content_extractor" else "180" if profile in {"vulnerability_material_reviewer", "vulnerability_knowledge_extractor"} else "45"
+    default = "180" if profile in {"vulnerability_content_extractor", "vulnerability_material_reviewer", "vulnerability_knowledge_extractor"} else "45"
     try:
         timeout = float(os.getenv(f"AI4SEC_{profile_key}_TIMEOUT_SECONDS", os.getenv("AI4SEC_MODEL_TIMEOUT_SECONDS", default)))
     except ValueError:

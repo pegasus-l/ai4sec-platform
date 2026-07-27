@@ -6,6 +6,7 @@ import re
 import time
 import urllib.error
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from html import unescape
 from typing import Any, Callable
 
@@ -36,11 +37,14 @@ class Crawl4aiConnector:
 
         policy = VulnerabilityCrawlPolicy.from_params(params, request.config or {})
         max_items = int(params.get("max_items") or request.config.get("max_items") or len(candidates) or 0)
+        max_concurrency = _bounded_int(params.get("crawl_max_concurrency"), 10, maximum=10)
+        on_item = params.get("on_crawl_item")
         items: list[dict[str, Any]] = []
         errors: list[str] = []
         seen_urls: set[str] = set()
+        selected: list[dict[str, Any]] = []
         for candidate in candidates:
-            if len(items) >= max_items:
+            if len(selected) >= max_items:
                 break
             if not isinstance(candidate, dict):
                 continue
@@ -48,10 +52,22 @@ class Crawl4aiConnector:
             if url and url in seen_urls:
                 continue
             seen_urls.add(url)
-            item = _crawl_candidate(candidate, policy=policy, prefer_url_fetch=bool(params.get("prefer_url_fetch", False)))
-            items.append(item)
-            if not item.get("success"):
-                errors.append(f"{url}: {item.get('failure_reason') or item.get('error')}")
+            selected.append(candidate)
+
+        prefer_url_fetch = bool(params.get("prefer_url_fetch", False))
+        with ThreadPoolExecutor(max_workers=min(max_concurrency, len(selected) or 1)) as executor:
+            futures = {executor.submit(_crawl_candidate, candidate, policy=policy, prefer_url_fetch=prefer_url_fetch): candidate for candidate in selected}
+            for future in as_completed(futures):
+                candidate = futures[future]
+                try:
+                    item = future.result()
+                except Exception as exc:  # pragma: no cover - defensive worker isolation
+                    item = _failed(candidate, f"{type(exc).__name__}: {exc}", failure_reason="crawl_worker_error")
+                items.append(item)
+                if callable(on_item):
+                    on_item(item, len(items), len(selected))
+                if not item.get("success"):
+                    errors.append(f"{item.get('url')}: {item.get('failure_reason') or item.get('error')}")
 
         return SourceFetchResult(
             source_name=request.source_name,
@@ -63,7 +79,8 @@ class Crawl4aiConnector:
                 "use_crawl4ai": policy.use_crawl4ai,
                 "timeout": policy.timeout_seconds,
                 "max_retries": policy.max_retries,
-                "deduplicated": len(candidates[:max_items]) - len(items),
+                "max_concurrency": max_concurrency,
+                "deduplicated": len(candidates[:max_items]) - len(selected),
             },
             errors=errors,
         )
@@ -181,6 +198,14 @@ def _urllib_crawl(candidate: dict[str, Any], *, policy: VulnerabilityCrawlPolicy
             "Accept-Language": "en-US,en;q=0.8",
         },
     )
+
+
+def _bounded_int(value: Any, default: int, *, maximum: int) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        parsed = default
+    return max(1, min(parsed, maximum))
     started = time.time()
     try:
         with urllib.request.urlopen(request, timeout=policy.timeout_seconds) as response:  # noqa: S310 - validated public discovery URL

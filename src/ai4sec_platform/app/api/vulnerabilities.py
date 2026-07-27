@@ -16,6 +16,26 @@ router = APIRouter(prefix="/vulnerabilities", tags=["vulnerabilities"])
 DOMAIN = "vulnerabilities"
 
 
+def _compact_stage_list(conn: sqlite3.Connection, item_type: str, limit: int) -> dict:
+    data = domain_items.list_items(conn, DOMAIN, item_type=item_type, limit=limit)
+    data["items"] = [_compact_stage_item(item) for item in data["items"]]
+    return data
+
+
+def _compact_stage_item(item: dict) -> dict:
+    payload = item.get("payload") or {}
+    compact_payload = {
+        key: payload.get(key)
+        for key in ("failure_reason", "error", "attempt_count", "crawl_mode", "search_keyword", "decision", "confidence", "reason")
+        if payload.get(key) is not None
+    }
+    return {
+        key: value
+        for key, value in {**item, "payload": compact_payload}.items()
+        if key not in {"evidence"}
+    }
+
+
 class FieldReviewRequest(BaseModel):
     reviewer: str = "shadow_operator"
     value: object | None = None
@@ -49,7 +69,7 @@ def run_results(run_id: str, conn: sqlite3.Connection = Depends(get_db)) -> dict
     ).fetchall()
     stages: dict[str, list[dict]] = {}
     for row in rows:
-        item = repo.row_to_dict(row)
+        item = _compact_stage_item(repo.row_to_dict(row))
         stages.setdefault(str(item["item_type"]), []).append(item)
     return {
         "run_id": run_id,
@@ -98,22 +118,22 @@ def materials(limit: int = Query(50, ge=1, le=200), conn: sqlite3.Connection = D
 
 @router.get("/candidates")
 def candidates(limit: int = Query(50, ge=1, le=200), conn: sqlite3.Connection = Depends(get_db)) -> dict:
-    return domain_items.list_items(conn, DOMAIN, item_type="search_candidate", limit=limit)
+    return _compact_stage_list(conn, "search_candidate", limit)
 
 
 @router.get("/crawled-pages")
 def crawled_pages(limit: int = Query(50, ge=1, le=200), conn: sqlite3.Connection = Depends(get_db)) -> dict:
-    return domain_items.list_items(conn, DOMAIN, item_type="crawled_page", limit=limit)
+    return _compact_stage_list(conn, "crawled_page", limit)
 
 
 @router.get("/extracted-content")
 def extracted_content(limit: int = Query(50, ge=1, le=200), conn: sqlite3.Connection = Depends(get_db)) -> dict:
-    return domain_items.list_items(conn, DOMAIN, item_type="extracted_content", limit=limit)
+    return _compact_stage_list(conn, "extracted_content", limit)
 
 
 @router.get("/material-reviews")
 def material_reviews(limit: int = Query(50, ge=1, le=200), conn: sqlite3.Connection = Depends(get_db)) -> dict:
-    return domain_items.list_items(conn, DOMAIN, item_type="material_review", limit=limit)
+    return _compact_stage_list(conn, "material_review", limit)
 
 
 @router.get("/evaluations")
