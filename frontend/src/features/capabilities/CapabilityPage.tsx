@@ -381,7 +381,7 @@ function CapabilityDetailContent({ itemId, initialItem, onRepro, onConvert }: { 
     {p.code_quality && <div className="drawer-section"><h3>代码质量</h3><p>{p.code_quality}</p></div>}
     {p.application_advice && <div className="drawer-section"><h3>应用建议</h3><p>{p.application_advice}</p></div>}
 
-    {/* 项目信息 */}
+    {/* 项目信息（合并：信息 + 宣传 + 亮点 + 摘要） */}
     <div className="drawer-section">
       <h3>项目信息</h3>
       {p.display_work_name && <p><b>工作名:</b> {p.display_work_name}</p>}
@@ -389,16 +389,10 @@ function CapabilityDetailContent({ itemId, initialItem, onRepro, onConvert }: { 
       {(item?.title || initialItem.title) !== (p.display_theme || '') && <p className="small muted">原始标题: {item?.title || initialItem.title}</p>}
       {(item?.source_url || initialItem.source_url) && <p style={{ marginTop: 4 }}><a href={item?.source_url || initialItem.source_url} target="_blank" rel="noopener" style={{ color: 'var(--sky)' }}>🔗 {item?.source_url || initialItem.source_url}</a></p>}
       {p.demo_url && <p><a href={p.demo_url} target="_blank" rel="noopener" style={{ color: 'var(--sky)' }}>🔗 在线 Demo</a></p>}
+      <p style={{ marginTop: 10 }}><b>宣传一句话:</b> {p.one_liner || '—'}</p>
+      {p.highlight && <p><b>亮点:</b> <span style={{ color: 'var(--green)' }}>{p.highlight}</span></p>}
+      <p style={{ marginTop: 10 }}><b>中文摘要:</b> {p.summary || item?.summary || initialItem.summary || '—'}</p>
     </div>
-
-    {/* 宣传一句话 */}
-    <div className="drawer-section"><h3>宣传一句话</h3><p>{p.one_liner || '—'}</p></div>
-
-    {/* 亮点一句话 */}
-    {p.highlight && <div className="drawer-section"><h3>亮点</h3><p style={{ color: 'var(--green)' }}>{p.highlight}</p></div>}
-
-    {/* 中文摘要 */}
-    <div className="drawer-section"><h3>中文摘要</h3><p>{p.summary || item?.summary || initialItem.summary || '—'}</p></div>
 
     {/* 技术点 */}
     {p.tech_points && p.tech_points.length > 0 && <div className="drawer-section"><h3>技术点 · {p.tech_points.length} 项</h3><div className="badges">{p.tech_points.map((t: string) => <Badge key={t} tone="sky">{t}</Badge>)}</div></div>}
