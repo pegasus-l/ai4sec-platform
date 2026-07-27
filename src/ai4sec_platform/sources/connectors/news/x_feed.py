@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import os
-import time
 import urllib.parse
 
 from ai4sec_platform.schemas.sources import SourceFetchRequest, SourceHealth
@@ -35,7 +34,7 @@ class XFeedConnector(NewsLiveConnector):
             username = str(account.get("username") if isinstance(account, dict) else account)
             url = f"{api_base}/twitter/tweet/advanced_search?{urllib.parse.urlencode({'q': f'from:{username}', 'count': count})}"
             try:
-                raw = self._fetch_json(url, api_key, timeout=timeout)
+                raw = json.loads(self.get_bytes(url, timeout=timeout, headers={"Authorization": f"Bearer {api_key}"}).decode("utf-8"))
                 tweets = raw.get("tweets") or raw.get("data") or []
                 for tweet in tweets:
                     if not isinstance(tweet, dict):
@@ -51,14 +50,3 @@ class XFeedConnector(NewsLiveConnector):
             except Exception as exc:
                 errors.append(f"{username}: {exc}")
         return SourceFetchResult(source_name=request.source_name, connector_name=self.connector_name, items=items, metadata={"accounts": len(accounts)}, errors=errors)
-
-    def _fetch_json(self, url: str, api_key: str, *, timeout: int) -> dict:
-        last_error: Exception | None = None
-        for attempt in range(3):
-            try:
-                return json.loads(self.get_bytes(url, timeout=timeout, headers={"Authorization": f"Bearer {api_key}"}).decode("utf-8"))
-            except Exception as exc:
-                last_error = exc
-                if attempt < 2:
-                    time.sleep(2 * (attempt + 1))
-        raise RuntimeError(str(last_error))

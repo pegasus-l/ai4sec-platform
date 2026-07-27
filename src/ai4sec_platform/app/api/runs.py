@@ -14,6 +14,8 @@ from ai4sec_platform.pipelines.registry import default_registry
 from ai4sec_platform.pipelines.runner import PipelineRunner
 
 router = APIRouter(prefix="/runs", tags=["runs"])
+_active_pipelines: set[str] = set()
+_active_pipelines_lock = threading.Lock()
 
 
 class RunPipelineRequest(BaseModel):
@@ -40,6 +42,9 @@ def start_run(request: RunPipelineRequest) -> dict:
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
+    if not _reserve_pipeline(request.pipeline_name):
+        raise HTTPException(status_code=409, detail=f"pipeline already running: {request.pipeline_name}")
+
     # Run in background thread (PipelineRunner creates its own DB connection)
     def _run_in_background():
         import sys
@@ -51,11 +56,30 @@ def start_run(request: RunPipelineRequest) -> dict:
         except Exception as e:
             print(f"[BG] Pipeline CRASHED: {e}", file=sys.stderr, flush=True)
             traceback.print_exc()
+        finally:
+            _release_pipeline(request.pipeline_name)
 
     thread = threading.Thread(target=_run_in_background, daemon=True)
-    thread.start()
+    try:
+        thread.start()
+    except Exception:
+        _release_pipeline(request.pipeline_name)
+        raise
 
     return {"status": "started", "pipeline": request.pipeline_name, "message": "Pipeline started in background. Poll GET /api/runs to track progress."}
+
+
+def _reserve_pipeline(pipeline_name: str) -> bool:
+    with _active_pipelines_lock:
+        if pipeline_name in _active_pipelines:
+            return False
+        _active_pipelines.add(pipeline_name)
+        return True
+
+
+def _release_pipeline(pipeline_name: str) -> None:
+    with _active_pipelines_lock:
+        _active_pipelines.discard(pipeline_name)
 
 
 @router.get("")

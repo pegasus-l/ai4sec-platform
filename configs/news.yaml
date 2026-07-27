@@ -1,3 +1,5 @@
+collection:
+  max_workers: 4
 sources:
   arxiv:
     enabled: true

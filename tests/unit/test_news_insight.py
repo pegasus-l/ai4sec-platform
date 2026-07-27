@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 import sqlite3
+import threading
+import time
 
 import yaml
 
 from ai4sec_platform.core.time import utc_now
 from ai4sec_platform.db import repositories as repo
 from ai4sec_platform.db.models import init_db
-from ai4sec_platform.core.config import PROJECT_ROOT
+from ai4sec_platform.core.config import PROJECT_ROOT, Settings
 from ai4sec_platform.domains.news.builders import build_news_items
 from ai4sec_platform.domains.news.dedupe import dedupe_normalized_items
 from ai4sec_platform.domains.news.normalizers import normalize_raw_item
@@ -18,10 +20,13 @@ from ai4sec_platform.domains.news import reviewer
 from ai4sec_platform.domains.news import operations as news_operations
 from ai4sec_platform.domains.news.reviewer import _input_hash, _normalize_breakdown, _normalize_deep_review, _normalize_gate, _percentage
 from ai4sec_platform.domains.news import service
+from ai4sec_platform.domains.news.adapters import sources as source_adapter
 from ai4sec_platform.domains.news.adapters.sources import _arxiv_requests, _github_requests
 from ai4sec_platform.schemas.sources import SourceFetchRequest
 from ai4sec_platform.sources.connectors.news.rss import RssConnector
 from ai4sec_platform.sources.connectors.news.awesome import AwesomeConnector
+from ai4sec_platform.sources.result import SourceFetchResult
+from ai4sec_platform.app.api.runs import _release_pipeline, _reserve_pipeline
 
 
 def connection() -> sqlite3.Connection:
@@ -51,6 +56,43 @@ def test_live_source_config_matches_legacy_six_source_baseline() -> None:
     assert config["x"]["enabled"] is True
     assert config["asis"]["enabled"] is True
     assert config["awesome"]["repositories"] == ["tmgthb/Autonomous-Agents"]
+
+
+def test_live_sources_run_with_bounded_concurrency(monkeypatch, tmp_path) -> None:
+    active = 0
+    max_active = 0
+    lock = threading.Lock()
+
+    class FakeConnector:
+        def fetch(self, request: SourceFetchRequest) -> SourceFetchResult:
+            nonlocal active, max_active
+            with lock:
+                active += 1
+                max_active = max(max_active, active)
+            time.sleep(0.05)
+            with lock:
+                active -= 1
+            return SourceFetchResult(source_name=request.source_name, connector_name=request.source_name, items=[{"id": request.source_name}])
+
+    config = {"collection": {"max_workers": 3}, "sources": {source: {"enabled": True} for source in ["rss", "x", "asis"]}}
+    monkeypatch.setattr(source_adapter, "_load_config", lambda _root: config)
+    monkeypatch.setattr(source_adapter.SourceRegistry, "get", lambda _self, _source: FakeConnector())
+    settings = Settings(project_root=PROJECT_ROOT, output_dir=tmp_path, database_path=tmp_path / "test.db", legacy_sources={})
+    records = source_adapter.collect_news_sources(settings, {"sources": ["rss", "x", "asis"], "source_workers": 3})
+    assert [record["source"] for record in records] == ["rss", "x", "asis"]
+    assert max_active == 3
+
+
+def test_pipeline_run_lock_rejects_duplicate_name() -> None:
+    pipeline_name = "news.test-lock"
+    _release_pipeline(pipeline_name)
+    try:
+        assert _reserve_pipeline(pipeline_name) is True
+        assert _reserve_pipeline(pipeline_name) is False
+    finally:
+        _release_pipeline(pipeline_name)
+    assert _reserve_pipeline(pipeline_name) is True
+    _release_pipeline(pipeline_name)
 
 
 def test_legacy_arxiv_and_github_channels_are_expanded() -> None:

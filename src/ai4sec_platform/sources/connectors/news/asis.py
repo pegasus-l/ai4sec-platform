@@ -7,7 +7,7 @@ import urllib.parse
 import urllib.request
 
 from ai4sec_platform.schemas.sources import SourceFetchRequest, SourceHealth
-from ai4sec_platform.sources.connectors.news.base_live import NewsLiveConnector
+from ai4sec_platform.sources.connectors.news.base_live import NewsLiveConnector, retry_call
 from ai4sec_platform.sources.result import SourceFetchResult
 
 
@@ -31,10 +31,10 @@ class AsisConnector(NewsLiveConnector):
         opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
         try:
             login = urllib.request.Request(f"{base_url}/api/auth/login", data=urllib.parse.urlencode({"username": username, "password": password, "next": "/"}).encode(), headers={"Content-Type": "application/x-www-form-urlencoded"}, method="POST")
-            opener.open(login, timeout=30).read()
+            retry_call(lambda: opener.open(login, timeout=30).read())
             limit = min(500, int(request.config.get("fetch_limit") or 500))
-            with opener.open(urllib.request.Request(f"{base_url}/api/items?limit={limit}&offset=0", headers={"Accept": "application/json"}), timeout=60) as response:
-                raw_text = response.read().decode("utf-8")
+            items_request = urllib.request.Request(f"{base_url}/api/items?limit={limit}&offset=0", headers={"Accept": "application/json"})
+            raw_text = retry_call(lambda: opener.open(items_request, timeout=60).read().decode("utf-8"))
             raw = json.loads(raw_text)
             raw_items = raw if isinstance(raw, list) else raw.get("items") or []
             min_score = int(request.config.get("min_score") or 0)
