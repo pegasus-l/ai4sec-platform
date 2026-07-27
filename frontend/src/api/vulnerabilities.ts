@@ -72,6 +72,26 @@ export function runVulnerabilityDiscovery(input: { keywordProfile: string; maxQu
   });
 }
 
+export function retryVulnerabilityCrawlFailures(items: DomainItem[]): Promise<PipelineRunStartResponse> {
+  return postJson('/api/runs', {
+    pipeline_name: 'vulnerabilities.full_knowledge_discovery_pipeline',
+    reset: false,
+    wait: false,
+    params: {
+      seed_candidates: items.map(item => ({
+        title: item.title,
+        url: item.source_url,
+        snippet: item.summary,
+        search_keyword: String(item.payload?.search_keyword ?? 'crawl_failure_retry'),
+      })),
+      prefer_url_fetch: true,
+      crawl_limit: items.length,
+      max_results: items.length,
+      crawl_max_retries: 2,
+    },
+  });
+}
+
 export function fetchVulnerabilityRunResults(runId: string): Promise<VulnerabilityRunResults> {
   return getJson(`/api/vulnerabilities/runs/${encodeURIComponent(runId)}/results`);
 }
