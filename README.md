@@ -50,6 +50,7 @@ GET /api/frontend/v9/files/{path}
 
 ```text
 docs/平台总体架构设计.md
+docs/Beta到生产级实施总计划.md
 docs/开发记录.md
 AGENTS.md
 ```
