@@ -1,38 +1,167 @@
+collection:
+  max_workers: 4
 sources:
   arxiv:
     enabled: true
-    max_results: 100
-    queries:
-      - 'all:"AI security"'
-      - 'all:"LLM security"'
-      - 'all:"agent security"'
-      - 'all:"prompt injection"'
-      - 'all:"vulnerability detection"'
+    categories: [cs.CR, cs.AI, cs.SE, cs.LG, cs.CL, cs.MA]
+    max_results_per_category: 100
+    category_backfill_days: 2
+    keyword_max_results: 50
+    keyword_lookback_days: 30
+    category_delay_seconds: 1
+    keyword_delay_seconds: 3
+    keyword_queries:
+      - LLM fuzzing vulnerability
+      - multi-agent vulnerability discovery
+      - LLM exploit generation
+      - autonomous penetration testing agent
+      - AI code audit vulnerability
+      - LLM binary analysis vulnerability
+      - symbolic execution LLM
+      - AI red team agent
+      - proof of concept generation LLM
+      - agent planning reasoning task decomposition
+      - chain-of-thought agent reasoning
+      - tree-of-thought LLM
+      - reflexion agent self-correction
+      - agent memory long-term persistent
+      - context compression LLM agent
+      - retrieval augmented generation agent
+      - knowledge graph LLM agent
+      - tool use LLM agent function calling
+      - MCP model context protocol
+      - agent skill evolution learning
+      - skill library LLM agent
+      - self-evolving agent harness
+      - prompt optimization automatic DSPy
+      - multi-agent collaboration framework
+      - agent communication coordination
+      - adversarial validation agent
+      - formal verification LLM agent
+      - agent self-improvement reinforcement
+      - LLM agent benchmark evaluation
+      - agentic workflow automation
+      - auto-harness LLM agent
+      - harness evolution agent
+      - skill poisoning attack agent
+      - MCP safety agent
+      - neuro-symbolic vulnerability
+      - LLM target selection vulnerability
+      - agent tool safety defense
   github:
     enabled: true
-    max_results: 100
     readme_limit: 10
-    queries:
-      - '"AI security" in:name,description,readme'
-      - '"LLM security" in:name,description,readme'
-      - '"agent security" in:name,description,readme'
-      - '"prompt injection" in:name,description,readme'
-      - '"vulnerability detection" in:name,description,readme'
+    lookback_days: 7
+    min_stars: 3
+    max_pages_per_query: 5
+    per_page: 100
+    request_delay_seconds: 3
+    topics:
+      - fuzzing
+      - vulnerability-discovery
+      - security-testing
+      - llm-agent
+      - multi-agent
+      - exploit
+      - static-analysis
+      - binary-analysis
+      - program-analysis
+      - afl
+      - libfuzzer
+      - security-automation
+      - ai-security
+      - pentesting
+      - agent-memory
+      - autonomous-agent
+      - red-team
+      - bug-bounty
+      - reverse-engineering
+      - penetration-testing
+      - code-audit
+      - mcp-security
+      - offensive-security
+      - agent-framework
+      - prompt-optimization
+      - rag
+      - knowledge-graph
+      - skill-library
+      - self-evolution
+      - multi-agent-system
+      - tool-use
+      - mcp-server
+      - langchain
+      - autogen
+      - crewai
+    keyword_queries:
+      - LLM vulnerability discovery
+      - AI fuzzing agent
+      - multi-agent security
+      - automated exploit generation
+      - LLM code audit security
+      - agent memory long-term
+      - agent skill evolution
+      - autonomous penetration testing
+      - AI binary analysis
+      - LLM program analysis
+      - AI red team autonomous
+      - MCP security agent
+      - self-evolving agent framework
+      - prompt optimization tool
+      - multi-agent collaboration framework
+      - agent tool use integration
+      - knowledge graph code analysis
+      - LLM reasoning planning agent
+    creation_queries:
+      - LLM fuzzing
+      - AI vulnerability
+      - agent exploit
+      - security agent LLM
+      - AI pentest
+      - red team agent
+      - agent skill library
+      - self-evolving LLM
+      - multi-agent framework
+    high_star_queries:
+      - agent platform stars:>5000
+      - agents framework stars:>5000
+      - autonomous agent stars:>5000
+      - coding agent stars:>5000
+      - AI security stars:>5000
   rss:
-    enabled: false
-    urls:
-      - https://feeds.feedburner.com/TheHackersNews
+    enabled: true
+    feeds:
+      - name: 微信公众号-合并源
+        url: http://localhost:8001/feed/all.xml
+        source_type: wechat
+        paginate: true
+        page_size: 30
+        article_api_base: http://localhost:8001/api/v1/wx/articles
   x:
-    enabled: false
+    enabled: true
     api_base: https://api.getxapi.com
     tweets_per_account: 20
-    accounts: []
+    min_likes: 5
+    skip_pure_replies: true
+    accounts:
+      - username: __suto
+        note: V8/Chrome漏洞研究, Agent pipeline实战
+      - username: moyix
+        note: AI安全研究
+      - username: halaboratory
+        note: AI安全实验室
+      - username: AnthropicAI
+        note: Anthropic官方与安全研究
+      - username: GoogleVRP
+        note: Google漏洞奖励计划
   asis:
-    enabled: false
-    base_url: ""
+    enabled: true
+    base_url: http://104.155.170.61
     fetch_limit: 500
+    min_score: 70
   awesome:
     enabled: true
+    recent_subpage_years: [2026, 2025]
+    max_subpages: 4
     repositories:
       - tmgthb/Autonomous-Agents
 selection:

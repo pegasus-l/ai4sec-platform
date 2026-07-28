@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 from ai4sec_platform.pipelines.base import PipelineDefinition
+from ai4sec_platform.pipelines.steps.vulnerability_batch import RunBatchedVulnerabilityDiscoveryStep
+from ai4sec_platform.pipelines.steps.vulnerability_discovery import BuildAcceptedVulnerabilityMaterialsStep, CollectAnySearchCandidatesStep, CrawlCandidatePagesStep, ExtractCrawledContentStep, ReviewCrawledMaterialsStep
 from ai4sec_platform.pipelines.steps.vulnerability_event import AggregateVulnerabilityEventsStep
+from ai4sec_platform.pipelines.steps.vulnerability_evaluation import BuildVulnerabilityShadowEvaluationStep
 from ai4sec_platform.pipelines.steps.vulnerability_raw import BuildVulnerabilityMaterialItemsStep, ImportVulnerabilityRawStep, NormalizeVulnerabilityRawStep
 from ai4sec_platform.pipelines.steps.vulnerability_knowledge import ExtractVulnerabilityKnowledgeStep, SelectVulnerabilityKnowledgeCandidatesStep
 
@@ -27,4 +30,45 @@ def vulnerability_event_pipeline() -> PipelineDefinition:
         name="vulnerabilities.event_aggregation_pipeline",
         domain="vulnerabilities",
         steps=[AggregateVulnerabilityEventsStep()],
+    )
+
+
+def vulnerability_external_discovery_pipeline() -> PipelineDefinition:
+    return PipelineDefinition(
+        name="vulnerabilities.external_material_discovery_pipeline",
+        domain="vulnerabilities",
+        steps=[
+            CollectAnySearchCandidatesStep(),
+            CrawlCandidatePagesStep(),
+            ExtractCrawledContentStep(),
+            ReviewCrawledMaterialsStep(),
+            BuildAcceptedVulnerabilityMaterialsStep(),
+            BuildVulnerabilityShadowEvaluationStep(),
+        ],
+    )
+
+
+def vulnerability_full_discovery_pipeline() -> PipelineDefinition:
+    return PipelineDefinition(
+        name="vulnerabilities.full_knowledge_discovery_pipeline",
+        domain="vulnerabilities",
+        steps=[
+            CollectAnySearchCandidatesStep(),
+            CrawlCandidatePagesStep(),
+            ExtractCrawledContentStep(),
+            ReviewCrawledMaterialsStep(),
+            BuildAcceptedVulnerabilityMaterialsStep(),
+            AggregateVulnerabilityEventsStep(),
+            SelectVulnerabilityKnowledgeCandidatesStep(),
+            ExtractVulnerabilityKnowledgeStep(),
+            BuildVulnerabilityShadowEvaluationStep(),
+        ],
+    )
+
+
+def vulnerability_batched_full_discovery_pipeline() -> PipelineDefinition:
+    return PipelineDefinition(
+        name="vulnerabilities.batched_full_knowledge_discovery_pipeline",
+        domain="vulnerabilities",
+        steps=[RunBatchedVulnerabilityDiscoveryStep()],
     )

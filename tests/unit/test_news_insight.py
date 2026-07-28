@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 import sqlite3
+import threading
+import time
+
+import yaml
 
 from ai4sec_platform.core.time import utc_now
 from ai4sec_platform.db import repositories as repo
 from ai4sec_platform.db.models import init_db
-from ai4sec_platform.core.config import PROJECT_ROOT
+from ai4sec_platform.core.config import PROJECT_ROOT, Settings
 from ai4sec_platform.domains.news.builders import build_news_items
 from ai4sec_platform.domains.news.dedupe import dedupe_normalized_items
 from ai4sec_platform.domains.news.normalizers import normalize_raw_item
@@ -16,6 +20,13 @@ from ai4sec_platform.domains.news import reviewer
 from ai4sec_platform.domains.news import operations as news_operations
 from ai4sec_platform.domains.news.reviewer import _input_hash, _normalize_breakdown, _normalize_deep_review, _normalize_gate, _percentage
 from ai4sec_platform.domains.news import service
+from ai4sec_platform.domains.news.adapters import sources as source_adapter
+from ai4sec_platform.domains.news.adapters.sources import _arxiv_requests, _github_requests
+from ai4sec_platform.schemas.sources import SourceFetchRequest
+from ai4sec_platform.sources.connectors.news.rss import RssConnector
+from ai4sec_platform.sources.connectors.news.awesome import AwesomeConnector
+from ai4sec_platform.sources.result import SourceFetchResult
+from ai4sec_platform.app.api.runs import _release_pipeline, _reserve_pipeline
 
 
 def connection() -> sqlite3.Connection:
@@ -24,6 +35,131 @@ def connection() -> sqlite3.Connection:
     conn.execute("PRAGMA foreign_keys = ON")
     init_db(conn)
     return conn
+
+
+def test_live_source_config_matches_legacy_six_source_baseline() -> None:
+    config = yaml.safe_load((PROJECT_ROOT / "configs" / "news.yaml").read_text(encoding="utf-8"))["sources"]
+    assert list(config) == ["arxiv", "github", "rss", "x", "asis", "awesome"]
+    assert config["arxiv"]["categories"] == ["cs.CR", "cs.AI", "cs.SE", "cs.LG", "cs.CL", "cs.MA"]
+    assert len(config["arxiv"]["keyword_queries"]) == 37
+    assert "mcp-security" in config["github"]["topics"]
+    assert len(config["github"]["creation_queries"]) == 9
+    assert config["rss"]["feeds"] == [{
+        "name": "微信公众号-合并源",
+        "url": "http://localhost:8001/feed/all.xml",
+        "source_type": "wechat",
+        "paginate": True,
+        "page_size": 30,
+        "article_api_base": "http://localhost:8001/api/v1/wx/articles",
+    }]
+    assert [account["username"] for account in config["x"]["accounts"]] == ["__suto", "moyix", "halaboratory", "AnthropicAI", "GoogleVRP"]
+    assert config["x"]["enabled"] is True
+    assert config["asis"]["enabled"] is True
+    assert config["awesome"]["repositories"] == ["tmgthb/Autonomous-Agents"]
+
+
+def test_live_sources_run_with_bounded_concurrency(monkeypatch, tmp_path) -> None:
+    active = 0
+    max_active = 0
+    lock = threading.Lock()
+
+    class FakeConnector:
+        def fetch(self, request: SourceFetchRequest) -> SourceFetchResult:
+            nonlocal active, max_active
+            with lock:
+                active += 1
+                max_active = max(max_active, active)
+            time.sleep(0.05)
+            with lock:
+                active -= 1
+            return SourceFetchResult(source_name=request.source_name, connector_name=request.source_name, items=[{"id": request.source_name}])
+
+    config = {"collection": {"max_workers": 3}, "sources": {source: {"enabled": True} for source in ["rss", "x", "asis"]}}
+    monkeypatch.setattr(source_adapter, "_load_config", lambda _root: config)
+    monkeypatch.setattr(source_adapter.SourceRegistry, "get", lambda _self, _source: FakeConnector())
+    settings = Settings(project_root=PROJECT_ROOT, output_dir=tmp_path, database_path=tmp_path / "test.db", legacy_sources={})
+    records = source_adapter.collect_news_sources(settings, {"sources": ["rss", "x", "asis"], "source_workers": 3})
+    assert [record["source"] for record in records] == ["rss", "x", "asis"]
+    assert max_active == 3
+
+
+def test_pipeline_run_lock_rejects_duplicate_name() -> None:
+    pipeline_name = "news.test-lock"
+    _release_pipeline(pipeline_name)
+    try:
+        assert _reserve_pipeline(pipeline_name) is True
+        assert _reserve_pipeline(pipeline_name) is False
+    finally:
+        _release_pipeline(pipeline_name)
+    assert _reserve_pipeline(pipeline_name) is True
+    _release_pipeline(pipeline_name)
+
+
+def test_legacy_arxiv_and_github_channels_are_expanded() -> None:
+    config = yaml.safe_load((PROJECT_ROOT / "configs" / "news.yaml").read_text(encoding="utf-8"))["sources"]
+    arxiv_requests = _arxiv_requests(config["arxiv"], {})
+    github_requests = _github_requests(config["github"], {"lookback_days": 7})
+    assert [request["category"] for request in arxiv_requests[:6]] == config["arxiv"]["categories"]
+    assert sum(bool(request.get("category_backfill")) for request in arxiv_requests) == 6
+    assert all(request["max_results"] >= 100 for request in arxiv_requests if request.get("category_backfill"))
+    assert any(request.get("keyword") == "MCP model context protocol" and "all:MCP" in request["query"] for request in arxiv_requests)
+    assert any(request["channel"] == "new" and request["query"].startswith("topic:fuzzing created:>") for request in github_requests)
+    assert any(request["channel"] == "updated" and "stars:>=3" in request["query"] for request in github_requests)
+    assert any(request["channel"] == "high_star" and "stars:>5000" in request["query"] for request in github_requests)
+
+
+def test_werss_pagination_and_article_content_fallback(monkeypatch) -> None:
+    first_page = b"""<rss xmlns:content='http://purl.org/rss/1.0/modules/content/'><channel>
+      <item><title>Paper</title><link>https://example.com/1</link><description>short</description><content:encoded>See https://arxiv.org/abs/2501.01234</content:encoded></item>
+      <item><title>Project</title><link>https://example.com/2</link><description>short</description><id>feed-2</id></item>
+    </channel></rss>"""
+    second_page = b"""<rss><channel><item><title>Last</title><link>https://example.com/3</link><description>none</description></item></channel></rss>"""
+    connector = RssConnector()
+
+    def fake_get_bytes(url: str, **_kwargs) -> bytes:
+        if "/api/v1/wx/articles/feed-2" in url:
+            return b'{"data":{"content":"See https://github.com/acme/scanner"}}'
+        return second_page if "offset=2" in url else first_page
+
+    monkeypatch.setattr(connector, "get_bytes", fake_get_bytes)
+    result = connector.fetch(SourceFetchRequest(source_name="rss", config={"feeds": [{"name": "微信公众号-合并源", "url": "http://localhost:8001/feed/all.xml", "source_type": "wechat", "paginate": True, "page_size": 2, "max_pages": 5, "article_api_base": "http://localhost:8001/api/v1/wx/articles"}]}))
+    assert result.errors == []
+    assert len(result.items) == 3
+    assert result.metadata["feeds"][0]["pages"] == 2
+    references = [reference for item in result.items for reference in extract_reference_items("rss", item)]
+    assert {reference["source_type"] for reference in references} == {"paper", "project"}
+
+
+def test_werss_legacy_state_filters_seen_articles(monkeypatch, tmp_path) -> None:
+    state_path = tmp_path / "rss.json"
+    state_path.write_text('{"scanned_rss_ids":["rss:wechat:https%3A%2F%2Fexample.com%2Fseen"]}', encoding="utf-8")
+    feed = b"""<rss><channel>
+      <item><title>Seen</title><link>https://example.com/seen</link><description>old</description></item>
+      <item><title>New</title><link>https://example.com/new</link><description>https://github.com/acme/new</description></item>
+    </channel></rss>"""
+    connector = RssConnector()
+    monkeypatch.setattr(connector, "get_bytes", lambda *_args, **_kwargs: feed)
+    result = connector.fetch(SourceFetchRequest(source_name="rss", config={"feeds": [{"url": "http://localhost/feed", "source_type": "wechat", "page_size": 30}]}, params={"state_path": str(state_path)}))
+    assert [item["title"] for item in result.items] == ["New"]
+    stored = state_path.read_text(encoding="utf-8")
+    assert "https%3A%2F%2Fexample.com%2Fnew" in stored
+
+
+def test_awesome_loads_up_to_four_recent_research_subpages(monkeypatch) -> None:
+    connector = AwesomeConnector()
+    readme = "\n".join(f"[2026-{index}](https://github.com/tmgthb/Autonomous-Agents/blob/main/Research_Papers/2026/page-{index}.md)" for index in range(1, 7))
+
+    def fake_get_bytes(url: str, **_kwargs) -> bytes:
+        content = readme if url.endswith("/readme") else "See https://arxiv.org/abs/2501.01234"
+        import base64
+        import json
+        return json.dumps({"content": base64.b64encode(content.encode()).decode()}).encode()
+
+    monkeypatch.setattr(connector, "get_bytes", fake_get_bytes)
+    result = connector.fetch(SourceFetchRequest(source_name="awesome", config={"repositories": ["tmgthb/Autonomous-Agents"], "recent_subpage_years": [2026, 2025], "max_subpages": 4}))
+    assert result.errors == []
+    assert len(result.items) == 5
+    assert result.metadata["repositories"][0]["subpages_loaded"] == 4
 
 
 def test_normalizers_produce_stable_paper_and_project_keys() -> None:

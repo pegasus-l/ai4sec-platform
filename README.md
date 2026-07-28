@@ -141,7 +141,7 @@ POST /api/runs {"pipeline_name": "news.legacy_raw_pipeline", "reset": true, "par
 app / core / db / schemas / sources / artifacts / pipelines / domains / agents / models / ops / cli
 ```
 
-其中资讯、漏洞素材的本地 raw 导入与威胁 connector pipeline 已可运行；其他业务域继续在标准目录、service/pipeline/adapter/builder/audit 文件边界内填实逻辑，不再新增散乱脚本。
+其中资讯本地 raw 导入、漏洞素材本地 raw 导入、漏洞外部素材发现与威胁 connector pipeline 已可运行；其他业务域继续在标准目录、service/pipeline/adapter/builder/audit 文件边界内填实逻辑，不再新增散乱脚本。
 
 ## 已实现核心 Pipelines
 
@@ -152,6 +152,8 @@ PYTHONPATH=src python3 -m ai4sec_platform.cli.run_pipeline --pipeline news.legac
 PYTHONPATH=src python3 -m ai4sec_platform.cli.run_pipeline --pipeline news.shadow_collect_pipeline --reset
 PYTHONPATH=src python3 -m ai4sec_platform.cli.run_pipeline --pipeline threats.huawei_raw_pipeline --reset
 PYTHONPATH=src python3 -m ai4sec_platform.cli.run_pipeline --pipeline vulnerabilities.material_local_raw_import --reset
+PYTHONPATH=src python3 -m ai4sec_platform.cli.run_pipeline --pipeline vulnerabilities.external_material_discovery_pipeline --params '{"queries":["CVE-2024 exploit root cause analysis"],"max_results":5,"crawl_limit":5}'
+PYTHONPATH=src python3 -m ai4sec_platform.cli.run_pipeline --pipeline vulnerabilities.full_knowledge_discovery_pipeline --params '{"queries":["CVE-2024 exploit root cause analysis"],"max_results":5,"crawl_limit":5}'
 ```
 
 说明：
@@ -160,8 +162,27 @@ PYTHONPATH=src python3 -m ai4sec_platform.cli.run_pipeline --pipeline vulnerabil
 - `news.shadow_collect_pipeline` 从 arXiv/GitHub/RSS 获取最新资讯并走同一套处理链路。
 - `threats.huawei_raw_pipeline` 通过威胁 connector 获取华为 repo、issue/security 文件、固件和镜像数据并生成威胁目标。
 - `vulnerabilities.material_local_raw_import` 从漏洞素材 report 本地 JSON 导入。
-- 三者都会写 `raw_artifacts`、`normalized_items`、`domain_items`、`evidence_items`、`pipeline_runs`、`task_runs` 和 manifest。
+- `vulnerabilities.external_material_discovery_pipeline` 通过 AnySearch 获取候选 URL，经 crawl4ai/urllib 抓取、规则审核后构建优质漏洞素材；未配置 `ANYSEARCH_API_KEY` 时可通过 `seed_candidates` 参数做 shadow/测试运行。
+- `vulnerabilities.full_knowledge_discovery_pipeline` 在外部发现后继续完成 CVE 事件聚合与本地规则知识抽取，用于端到端 shadow 验证。
+- 这些 pipeline 都会写 `raw_artifacts`、`normalized_items`、`domain_items`、`evidence_items`、`pipeline_runs`、`task_runs` 和 manifest。
 - 所有 pipeline 仍保持 `production_writes=false`，不写生产路径。
+
+### 漏洞外部发现链路和模型使用
+
+旧 `vul-info/project_demo_0626` 中，AnySearch 负责候选 URL 检索，crawl4ai 负责抓取网页，之后有三个模型阶段：
+
+1. `ContentExtractor`：从抓取 markdown 中抽取正文；
+2. `ContentChecker`：判断是否为高质量漏洞素材，并输出 `is_relevant/confidence/reason/key_findings`；
+3. `UrlClassifier`：对相关 URL 做 PoC/技术分析/内核安全/学术会议等分类。
+
+当前新平台保持能力不降级：
+
+- `extract_crawled_content` 阶段优先使用 OpenAI-compatible 模型抽正文，失败或测试环境回退本地规则；
+- `review_crawled_materials` 阶段优先使用 OpenAI-compatible 模型做素材审核，输出 `accept/needs_review/reject`，失败或测试环境回退本地规则；
+- 素材审核对齐旧实现的“高质量漏洞技术分析”口径：CVE/NVD/OpenCVE 页面、厂商公告、补丁列表如果缺少独立根因/触发条件/PoC/利用链/修复分析，不会直接 `accept`；CVE 只作为事件聚合连接键，不作为优质素材通过依据；
+- `extract_vulnerability_knowledge` 阶段优先使用 OpenAI-compatible 模型抽取结构化漏洞知识，失败或测试环境回退 `LocalRuleProvider`。
+
+模型配置从 `.env` 读取，支持 `AI4SEC_OPENAI_*`、`OPENAI_*`、`DEEPSEEK_*`、`DASHSCOPE_*` 等 OpenAI-compatible 配置。`ANYSEARCH_API_KEY` / `ANYSEARCH_BASE_URL` 可从旧漏洞工程 `.env` 同步到本目录 `.env`；这些本地配置被 `.gitignore` 忽略，不提交。
 
 ## 核心数据处理逻辑
 
@@ -170,7 +191,7 @@ PYTHONPATH=src python3 -m ai4sec_platform.cli.run_pipeline --pipeline vulnerabil
 - 资讯：按 AI 安全、Agent 安全、漏洞攻防、代码仓库线索分类，并按相关性、安全价值、可复现性、影响力、新鲜度和完整度评分。
 - 能力：从资讯候选中识别可复现代码/论文线索，按复现性、研究价值和安全价值评分。
 - 威胁：从 repo/CVE/固件/镜像 raw 中抽 CVE、security issue、advisory、exploit/PoC、暴露面信号，并输出可解释风险分。
-- 漏洞素材：从搜索/报告 raw 中判断 PoC/Exploit、深度技术分析、漏洞公告、影响范围线索，抽取 CVE、影响版本、PoC 和修复线索，并计算素材有效性分。
+- 漏洞素材：从搜索/报告 raw 中优先保留 PoC/Exploit、深度技术分析和具备完整技术证据的研究文章；CVE/公告/影响范围线索用于聚合和复核，缺少独立分析时不作为展示素材直接通过。
 
 公共结构位于 `schemas/classification.py` 和 `schemas/scoring.py`；公共编排位于 `pipelines/steps/classify.py` 和 `pipelines/steps/score.py`；领域规则继续放在 `domains/*/` 下。
 

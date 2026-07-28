@@ -13,9 +13,10 @@ def build_material(item: dict) -> dict:
     return {"item_type": "material", "title": item.get("title", "未命名漏洞素材"), "payload": item}
 
 
-def build_vulnerability_items(conn: sqlite3.Connection, items: list[dict], *, run_id: str) -> dict[str, int]:
+def build_vulnerability_items(conn: sqlite3.Connection, items: list[dict], *, run_id: str) -> dict[str, int | list[int]]:
     materials = 0
     knowledge_candidates = 0
+    material_ids: list[int] = []
     for item in items:
         payload = repo.loads(item.get("normalized_json"), {}) if "normalized_json" in item else item
         payload = enrich_material_entities(payload)
@@ -40,6 +41,7 @@ def build_vulnerability_items(conn: sqlite3.Connection, items: list[dict], *, ru
             payload=payload,
         )
         materials += 1
+        material_ids.append(item_id)
         content = payload.get("summary") or "\n".join(str(x) for x in payload.get("key_findings") or [])
         repo.create_evidence(
             conn,
@@ -75,7 +77,7 @@ def build_vulnerability_items(conn: sqlite3.Connection, items: list[dict], *, ru
                 reason="Raw pipeline 识别到高相关漏洞素材，等待知识提取。",
                 payload={"run_id": run_id, "item_key": payload.get("item_key")},
             )
-    return {"materials": materials, "knowledge_candidates": knowledge_candidates}
+    return {"materials": materials, "knowledge_candidates": knowledge_candidates, "material_ids": material_ids}
 
 
 def _safe_float(value) -> float | None:

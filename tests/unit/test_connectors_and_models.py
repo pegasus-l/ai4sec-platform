@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import urllib.error
 
 from ai4sec_platform.core.env import load_env_file
 from ai4sec_platform.agents.capability_assess import CapabilityAssessAgent
@@ -9,6 +10,7 @@ from ai4sec_platform.agents.risk_reasoning import RiskReasoningAgent
 from ai4sec_platform.models.router import LLMRouter
 from ai4sec_platform.schemas.sources import SourceFetchRequest
 from ai4sec_platform.sources.registry import SourceRegistry
+from ai4sec_platform.sources.connectors.news import base_live
 
 
 def test_json_source_connector_reads_ai_for_sec_raw() -> None:
@@ -30,6 +32,42 @@ def test_json_source_connector_rejects_live_http_fetch_by_default() -> None:
     )
     assert result.items == []
     assert result.errors == ["http_path_not_supported_by_json_file_connector"]
+
+
+def test_source_retry_uses_exponential_backoff_for_transient_errors(monkeypatch) -> None:
+    attempts = 0
+    delays: list[float] = []
+
+    def operation() -> str:
+        nonlocal attempts
+        attempts += 1
+        if attempts < 3:
+            raise TimeoutError("read timed out")
+        return "ok"
+
+    monkeypatch.setattr(base_live.random, "uniform", lambda *_args: 0.0)
+    monkeypatch.setattr(base_live.time, "sleep", delays.append)
+    assert base_live.retry_call(operation) == "ok"
+    assert attempts == 3
+    assert delays == [1.0, 2.0]
+
+
+def test_source_retry_does_not_retry_non_transient_http_errors(monkeypatch) -> None:
+    attempts = 0
+
+    def operation() -> None:
+        nonlocal attempts
+        attempts += 1
+        raise urllib.error.HTTPError("https://example.com", 402, "Payment Required", {}, None)
+
+    monkeypatch.setattr(base_live.time, "sleep", lambda *_args: None)
+    try:
+        base_live.retry_call(operation)
+    except urllib.error.HTTPError as exc:
+        assert exc.code == 402
+    else:
+        raise AssertionError("HTTP 402 should not be retried")
+    assert attempts == 1
 
 
 def test_llm_router_defaults_to_local_rule_provider() -> None:

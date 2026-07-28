@@ -111,4 +111,3 @@ def _items(records: list[dict], source: str) -> list[dict]:
         if record.get("source") == source:
             return record.get("items") or []
     return []
-

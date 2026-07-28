@@ -1,8 +1,9 @@
+import { useEffect, useState } from 'react';
 import { Shell } from '../layouts/Shell';
 import { ThreatPage } from '../features/threats/ThreatPage';
 import { CapabilityPage } from '../features/capabilities/CapabilityPage';
+import { VulnerabilityPage } from '../features/vulnerabilities/VulnerabilityPage';
 import { NewsPage } from '../features/news/NewsPage';
-import { useEffect, useState } from 'react';
 
 export function App() {
   const [domain, setDomain] = useState(() => new URLSearchParams(window.location.search).get('domain') || 'capability');
@@ -18,6 +19,14 @@ export function App() {
     window.history.pushState({}, '', url);
   };
   return <Shell activeDomain={domain} onDomainChange={changeDomain}>
-    {domain === 'threat' ? <ThreatPage /> : domain === 'capability' ? <CapabilityPage /> : domain === 'news' ? <NewsPage /> : <div className="placeholder-page"><h1>漏洞洞察</h1><p>该业务域正在接入统一工作台。</p></div>}
+    {domain === 'threat'
+      ? <ThreatPage />
+      : domain === 'capability'
+        ? <CapabilityPage />
+      : domain === 'news'
+        ? <NewsPage />
+        : domain === 'vuln'
+          ? <VulnerabilityPage />
+          : <CapabilityPage />}
   </Shell>;
 }
