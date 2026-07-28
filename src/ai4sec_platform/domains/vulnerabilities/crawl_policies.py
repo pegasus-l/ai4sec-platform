@@ -1,14 +1,16 @@
 from __future__ import annotations
 
 import ipaddress
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 from urllib.parse import urlparse
 
 
 @dataclass(frozen=True)
 class VulnerabilityCrawlPolicy:
-    timeout_seconds: float = 20.0
+    timeout_seconds: float = 25.0
+    slow_site_timeout_seconds: float = 45.0
+    slow_site_domains: tuple[str, ...] = ("github.com", "gitlab.com")
     max_retries: int = 2
     retry_delay_seconds: float = 1.0
     js_wait_seconds: float = 1.0
@@ -25,7 +27,9 @@ class VulnerabilityCrawlPolicy:
     def from_params(cls, params: dict[str, Any], config: dict[str, Any]) -> VulnerabilityCrawlPolicy:
         merged = {**config, **params}
         return cls(
-            timeout_seconds=_float_value(merged.get("crawl_timeout", merged.get("timeout")), 20.0, minimum=1.0),
+            timeout_seconds=_float_value(merged.get("crawl_timeout", merged.get("timeout")), 25.0, minimum=1.0),
+            slow_site_timeout_seconds=_float_value(merged.get("crawl_slow_site_timeout"), 45.0, minimum=1.0),
+            slow_site_domains=_string_tuple(merged.get("crawl_slow_site_domains")) or cls.slow_site_domains,
             max_retries=_int_value(merged.get("crawl_max_retries", merged.get("max_retries")), 2, minimum=0, maximum=5),
             retry_delay_seconds=_float_value(merged.get("crawl_retry_delay"), 1.0, minimum=0.0),
             js_wait_seconds=_float_value(merged.get("crawl_js_wait"), 1.0, minimum=0.0),
@@ -51,6 +55,16 @@ class VulnerabilityCrawlPolicy:
         if self.block_private_networks and _is_private_hostname(hostname):
             return "private_network_blocked"
         return ""
+
+    def for_url(self, url: str) -> tuple[str, VulnerabilityCrawlPolicy]:
+        parsed = urlparse(url)
+        path = parsed.path.casefold()
+        hostname = (parsed.hostname or "").casefold().rstrip(".")
+        if path.endswith(".pdf"):
+            return "direct_download", replace(self, use_crawl4ai=False)
+        if _matches_domain(hostname, self.slow_site_domains):
+            return "slow_site", replace(self, timeout_seconds=self.slow_site_timeout_seconds)
+        return "standard_page", self
 
 
 def _matches_domain(hostname: str, domains: tuple[str, ...]) -> bool:

@@ -95,22 +95,23 @@ def _crawl_candidate(candidate: dict[str, Any], *, policy: VulnerabilityCrawlPol
     validation_error = policy.validate_url(url)
     if validation_error:
         return _failed(candidate, validation_error, failure_reason=validation_error, attempt_count=0)
+    strategy, effective_policy = policy.for_url(url)
 
     crawl4ai_error = ""
-    if policy.use_crawl4ai:
-        result, crawl4ai_error = _with_retries(lambda: _crawl4ai_sync(candidate, policy=policy), policy)
+    if effective_policy.use_crawl4ai:
+        result, crawl4ai_error = _with_retries(lambda: _crawl4ai_sync(candidate, policy=effective_policy), effective_policy)
         if result and result.get("success"):
-            return result
-        if not policy.allow_urllib_fallback:
-            return result or _failed(candidate, crawl4ai_error, failure_reason="crawl4ai_failed")
+            return _record_strategy(result, strategy, effective_policy)
+        if not effective_policy.allow_urllib_fallback:
+            return _record_strategy(result or _failed(candidate, crawl4ai_error, failure_reason="crawl4ai_failed"), strategy, effective_policy)
 
-    result, urllib_error = _with_retries(lambda: _urllib_crawl(candidate, policy=policy), policy)
+    result, urllib_error = _with_retries(lambda: _urllib_crawl(candidate, policy=effective_policy), effective_policy)
     if result and result.get("success"):
         if crawl4ai_error:
             result["crawl_info"]["fallback_reason"] = crawl4ai_error
-        return result
+        return _record_strategy(result, strategy, effective_policy)
     error = urllib_error or crawl4ai_error or "crawl_failed"
-    return result or _failed(candidate, error, failure_reason="all_crawlers_failed")
+    return _record_strategy(result or _failed(candidate, error, failure_reason="all_crawlers_failed"), strategy, effective_policy)
 
 
 def _with_retries(operation: Callable[[], dict[str, Any]], policy: VulnerabilityCrawlPolicy) -> tuple[dict[str, Any] | None, str]:
@@ -131,6 +132,14 @@ def _with_retries(operation: Callable[[], dict[str, Any]], policy: Vulnerability
     if last_result:
         last_result["failure_reason"] = last_result.get("failure_reason") or "retries_exhausted"
     return last_result, last_error
+
+
+def _record_strategy(result: dict[str, Any], strategy: str, policy: VulnerabilityCrawlPolicy) -> dict[str, Any]:
+    result["crawl_strategy"] = strategy
+    result["effective_timeout_seconds"] = policy.timeout_seconds
+    result.setdefault("crawl_info", {})["strategy"] = strategy
+    result["crawl_info"]["effective_timeout_seconds"] = policy.timeout_seconds
+    return result
 
 
 def _crawl4ai_sync(candidate: dict[str, Any], *, policy: VulnerabilityCrawlPolicy) -> dict[str, Any]:  # pragma: no cover - optional dependency
@@ -198,14 +207,6 @@ def _urllib_crawl(candidate: dict[str, Any], *, policy: VulnerabilityCrawlPolicy
             "Accept-Language": "en-US,en;q=0.8",
         },
     )
-
-
-def _bounded_int(value: Any, default: int, *, maximum: int) -> int:
-    try:
-        parsed = int(value)
-    except (TypeError, ValueError):
-        parsed = default
-    return max(1, min(parsed, maximum))
     started = time.time()
     try:
         with urllib.request.urlopen(request, timeout=policy.timeout_seconds) as response:  # noqa: S310 - validated public discovery URL
@@ -226,6 +227,14 @@ def _bounded_int(value: Any, default: int, *, maximum: int) -> int:
         mode="urllib",
         metadata={"content_type": content_type, "status_code": status_code, "elapsed_ms": int((time.time() - started) * 1000)},
     )
+
+
+def _bounded_int(value: Any, default: int, *, maximum: int) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        parsed = default
+    return max(1, min(parsed, maximum))
 
 
 def _success(

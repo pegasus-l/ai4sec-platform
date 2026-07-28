@@ -133,7 +133,7 @@ def _normalize_candidate(item: dict[str, Any], *, query: str, rank: int) -> dict
         "content": item.get("content") or item.get("markdown") or item.get("cleaned_text") or item.get("snippet") or "",
         "markdown": item.get("markdown") or "",
         "cleaned_text": item.get("cleaned_text") or "",
-        "score": item.get("score", 1.0),
+        "score": item.get("score"),
         "rank": rank,
         "search_keyword": query,
         "source_engine": "anysearch",

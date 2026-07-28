@@ -108,6 +108,10 @@ export function fetchVulnerabilityEvents(): Promise<ListResponse<DomainItem>> {
   return getJson('/api/vulnerabilities/events?limit=200');
 }
 
+export function fetchVulnerabilityEventDetail(itemId: number): Promise<DomainItem & { materials?: DomainItem<MaterialPayload>[] }> {
+  return getJson(`/api/vulnerabilities/events/${itemId}`);
+}
+
 export function fetchVulnerabilityExtractions(): Promise<ListResponse<DomainItem<KnowledgePayload>>> {
   return getJson('/api/vulnerabilities/extractions?limit=200');
 }

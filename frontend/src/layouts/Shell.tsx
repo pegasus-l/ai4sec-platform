@@ -15,7 +15,7 @@ interface ShellProps {
 }
 
 export function Shell({ children, activeDomain = 'news', onDomainChange }: PropsWithChildren<ShellProps>) {
-  return <div className={`shell ${activeDomain === 'news' ? 'news-shell' : ''}`}>
+  return <div className={`shell ${activeDomain}-shell`}>
     <header className="topbar">
       <div className="brand"><span className="brand-mark">TMG</span><div><strong>AI4SEC TMG · Insight Workbench</strong><span>{activeDomain === 'news' ? '资讯洞察：多源发现 + 精选阅读 + 主题追踪' : '统一 AI 安全洞察工作台'}</span></div></div>
       <nav className="top-tabs">{topTabs.map(tab => <button key={tab.id} className={`top-tab ${tab.id === activeDomain ? 'active' : ''}`} onClick={() => onDomainChange?.(tab.id)}><span className="dot" />{tab.label}</button>)}</nav>

@@ -45,7 +45,8 @@ class FieldReviewRequest(BaseModel):
 
 @router.get("/keyword-profiles")
 def keyword_profiles() -> dict:
-    return {"items": list_keyword_profiles(load_settings().project_root)}
+    settings = load_settings()
+    return {"items": list_keyword_profiles(settings.project_root, settings.output_dir)}
 
 
 @router.get("/runs/{run_id}/results")
