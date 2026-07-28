@@ -19,6 +19,8 @@ from ai4sec_platform.pipelines.registry import default_registry
 from ai4sec_platform.pipelines.runner import PipelineRunner
 
 router = APIRouter(prefix="/runs", tags=["runs"])
+_active_pipelines: set[str] = set()
+_active_pipelines_lock = threading.Lock()
 
 
 class RunPipelineRequest(BaseModel):
@@ -50,9 +52,12 @@ def start_run(request: RunPipelineRequest) -> dict:
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
+    if not _reserve_pipeline(request.pipeline_name):
+        raise HTTPException(status_code=409, detail=f"pipeline already running: {request.pipeline_name}")
+
     run_id = new_id("run")
-    _reserve_run_slot(run_id, reset=request.reset)
     try:
+        _reserve_run_slot(run_id, reset=request.reset)
         _create_queued_run(
             run_id=run_id,
             domain=definition.domain,
@@ -62,6 +67,7 @@ def start_run(request: RunPipelineRequest) -> dict:
         )
     except Exception:
         _release_run_slot(run_id)
+        _release_pipeline(request.pipeline_name)
         raise
 
     def execute() -> dict[str, Any]:
@@ -79,12 +85,19 @@ def start_run(request: RunPipelineRequest) -> dict:
             return {"run_id": run_id, "pipeline_name": definition.name, "domain": definition.domain, "status": "failed", "summary": {"params": params, "status": "failed", "error_message": str(exc)}}
         finally:
             _release_run_slot(run_id)
+            _release_pipeline(request.pipeline_name)
 
     if request.wait:
         return execute()
 
     thread = threading.Thread(target=execute, daemon=True, name=f"pipeline-{run_id}")
-    thread.start()
+    try:
+        thread.start()
+    except Exception as exc:
+        _mark_run_failed(run_id, definition.domain, definition.name, params, str(exc))
+        _release_run_slot(run_id)
+        _release_pipeline(request.pipeline_name)
+        raise
 
     return {
         "run_id": run_id,
@@ -93,6 +106,19 @@ def start_run(request: RunPipelineRequest) -> dict:
         "domain": definition.domain,
         "poll_url": f"/api/runs/{run_id}",
     }
+
+
+def _reserve_pipeline(pipeline_name: str) -> bool:
+    with _active_pipelines_lock:
+        if pipeline_name in _active_pipelines:
+            return False
+        _active_pipelines.add(pipeline_name)
+        return True
+
+
+def _release_pipeline(pipeline_name: str) -> None:
+    with _active_pipelines_lock:
+        _active_pipelines.discard(pipeline_name)
 
 
 @router.get("")

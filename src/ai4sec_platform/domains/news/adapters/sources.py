@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+import time
 from typing import Any
 
 import yaml
@@ -20,31 +23,95 @@ def collect_news_sources(settings: Settings, params: dict[str, Any]) -> list[dic
         raw_dir = Path(params.get("fixture_dir") or settings.legacy_sources.get("ai_for_sec_raw_dir", ""))
         return [{**record, "mode": mode, "errors": []} for record in load_raw_sources(raw_dir, date)]
     config = _load_config(settings.project_root)
-    registry = SourceRegistry()
     source_names = ["arxiv", "github", "rss", "x", "asis", "awesome"]
     requested = set(params["sources"]) if "sources" in params else set(source_names)
-    records: list[dict[str, Any]] = []
-    for source in source_names:
-        source_config = config.get("sources", {}).get(source, {})
-        if source not in requested or not source_config.get("enabled", True):
-            continue
-        connector = registry.get(source)
-        if source in {"arxiv", "github"}:
-            items: list[dict[str, Any]] = []
-            errors: list[str] = []
-            metadata: list[dict[str, Any]] = []
-            for query in source_config.get("queries") or []:
-                result = connector.fetch(SourceFetchRequest(source_name=source, config=source_config, params={"query": query, "max_results": params.get("max_results") or source_config.get("max_results", 30), "timeout_seconds": params.get("timeout_seconds", 30)}))
-                items.extend(result.items)
-                errors.extend(result.errors)
-                metadata.append(result.metadata)
-            records.append({"source": source, "path": f"connector:{source}", "exists": True, "mode": mode, "items": items, "errors": errors, "metadata": metadata})
-        else:
-            result = connector.fetch(SourceFetchRequest(source_name=source, config=source_config, params={"urls": source_config.get("urls", []), "timeout_seconds": params.get("timeout_seconds", 30)}))
-            records.append({"source": source, "path": f"connector:{source}", "exists": True, "mode": mode, "items": result.items, "errors": result.errors, "metadata": result.metadata})
-    return records
+    enabled_sources = [source for source in source_names if source in requested and config.get("sources", {}).get(source, {}).get("enabled", True)]
+    max_workers = max(1, min(len(enabled_sources), int(params.get("source_workers") or config.get("collection", {}).get("max_workers", 4))))
+    records_by_source: dict[str, dict[str, Any]] = {}
+    with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="news-source") as pool:
+        futures = {pool.submit(_collect_live_source, settings, source, config.get("sources", {}).get(source, {}), params, mode): source for source in enabled_sources}
+        for future in as_completed(futures):
+            source = futures[future]
+            try:
+                records_by_source[source] = future.result()
+            except Exception as exc:
+                records_by_source[source] = {"source": source, "path": f"connector:{source}", "exists": True, "mode": mode, "items": [], "errors": [str(exc)], "metadata": {"worker_failure": True}}
+    return [records_by_source[source] for source in enabled_sources]
+
+
+def _collect_live_source(settings: Settings, source: str, source_config: dict[str, Any], params: dict[str, Any], mode: str) -> dict[str, Any]:
+    connector = SourceRegistry().get(source)
+    if source in {"arxiv", "github"}:
+        items: list[dict[str, Any]] = []
+        errors: list[str] = []
+        metadata: list[dict[str, Any]] = []
+        requests = _arxiv_requests(source_config, params) if source == "arxiv" else _github_requests(source_config, params)
+        for index, request_params in enumerate(requests):
+            delay = float(request_params.pop("_delay_seconds", params.get("source_request_delay_seconds", source_config.get("request_delay_seconds", 0))))
+            result = connector.fetch(SourceFetchRequest(source_name=source, config=source_config, params={**request_params, "timeout_seconds": params.get("timeout_seconds", 30)}))
+            items.extend(result.items)
+            errors.extend(result.errors)
+            metadata.append(result.metadata)
+            if delay > 0 and index < len(requests) - 1:
+                time.sleep(delay)
+        items = _dedupe_collected_items(source, items)
+        return {"source": source, "path": f"connector:{source}", "exists": True, "mode": mode, "items": items, "errors": errors, "metadata": metadata}
+    source_params: dict[str, Any] = {"timeout_seconds": params.get("timeout_seconds", 30)}
+    if source == "rss":
+        raw_dir = Path(settings.legacy_sources.get("ai_for_sec_raw_dir", ""))
+        source_params["state_path"] = str(settings.output_dir / "source_state" / "rss.json")
+        if raw_dir:
+            source_params["legacy_state_path"] = str(raw_dir.parent.parent / "state_rss.json")
+    result = connector.fetch(SourceFetchRequest(source_name=source, config=source_config, params=source_params))
+    return {"source": source, "path": f"connector:{source}", "exists": True, "mode": mode, "items": result.items, "errors": result.errors, "metadata": result.metadata}
 
 
 def _load_config(project_root: Path) -> dict[str, Any]:
     path = project_root / "configs" / "news.yaml"
     return yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+
+
+def _arxiv_requests(config: dict[str, Any], params: dict[str, Any]) -> list[dict[str, Any]]:
+    requests = [{"category": category, "_delay_seconds": config.get("category_delay_seconds", 1)} for category in config.get("categories") or []]
+    backfill_days = int(params.get("arxiv_backfill_days") or config.get("category_backfill_days", 2))
+    backfill_cutoff = (datetime.now(timezone.utc) - timedelta(days=backfill_days)).date().isoformat()
+    backfill_max_results = min(int(config.get("max_results_per_category", 100)) * max(backfill_days, 1), 500)
+    requests.extend({"query": f"cat:{category}", "category_backfill": category, "max_results": backfill_max_results, "published_after": backfill_cutoff, "_delay_seconds": config.get("keyword_delay_seconds", 3)} for category in config.get("categories") or [])
+    keyword_max_results = int(params.get("max_results") or config.get("keyword_max_results", 50))
+    keyword_cutoff = (datetime.now(timezone.utc) - timedelta(days=int(config.get("keyword_lookback_days", 30)))).date().isoformat()
+    for keyword in config.get("keyword_queries") or []:
+        terms = [term for term in str(keyword).split() if term]
+        if terms:
+            requests.append({"query": " AND ".join(f"all:{term}" for term in terms), "max_results": keyword_max_results, "keyword": keyword, "published_after": keyword_cutoff, "_delay_seconds": config.get("keyword_delay_seconds", 3)})
+    return requests
+
+
+def _dedupe_collected_items(source: str, items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    output: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for item in items:
+        key = str(item.get("id") or item.get("full_name") or item.get("html_url") or item.get("url") or "")
+        normalized_key = key.lower() if source == "github" else key
+        if normalized_key and normalized_key in seen:
+            continue
+        if normalized_key:
+            seen.add(normalized_key)
+        output.append(item)
+    return output
+
+
+def _github_requests(config: dict[str, Any], params: dict[str, Any]) -> list[dict[str, Any]]:
+    lookback_days = int(params.get("lookback_days") or config.get("lookback_days", 7))
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=lookback_days)).date().isoformat()
+    max_pages = int(params.get("max_pages") or config.get("max_pages_per_query", 5))
+    per_page = int(params.get("max_results") or config.get("per_page", 100))
+    requests: list[dict[str, Any]] = []
+    base_queries = [f"topic:{topic}" for topic in config.get("topics") or []] + [str(query) for query in config.get("keyword_queries") or []]
+    for query in base_queries:
+        requests.append({"query": f"{query} created:>{cutoff}", "channel": "new", "max_pages": max_pages, "max_results": per_page})
+        requests.append({"query": f"{query} pushed:>{cutoff} stars:>={int(config.get('min_stars', 3))}", "channel": "updated", "max_pages": max_pages, "max_results": per_page})
+    for query in config.get("creation_queries") or []:
+        requests.append({"query": f"{query} created:>{cutoff} stars:>=0", "channel": "new", "max_pages": 1, "max_results": per_page})
+    for query in config.get("high_star_queries") or []:
+        requests.append({"query": f"{query} pushed:>{cutoff}", "channel": "high_star", "max_pages": 2, "max_results": per_page})
+    return requests
