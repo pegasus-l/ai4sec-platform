@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import base64
+import copy
 import json
 import os
 import re
@@ -34,7 +35,8 @@ REPRO_IMAGE = os.environ.get("REPRO_IMAGE", "repro-runner:v3")
 REPRO_RUNTIME = os.environ.get("REPRO_RUNTIME", "sysbox-runc")
 WORKSPACE_ROOT = Path(os.environ.get("REPRO_WORKSPACE_ROOT", str(Path.home() / "repro_workspaces")))
 CONTAINER_TIMEOUT = int(os.environ.get("REPRO_CONTAINER_TIMEOUT", str(30 * 60)))  # 30 分钟
-WEB_CONTAINER_TIMEOUT = int(os.environ.get("REPRO_WEB_CONTAINER_TIMEOUT", str(50 * 60)))  # 50 分钟
+WEB_CONTAINER_TIMEOUT = int(os.environ.get("REPRO_WEB_CONTAINER_TIMEOUT", str(60 * 60)))  # 60 分钟
+REPORT_GRACE_TIMEOUT = int(os.environ.get("REPRO_REPORT_GRACE_TIMEOUT", str(10 * 60)))  # 报告收尾宽限
 DOCKERD_WAIT = int(os.environ.get("REPRO_DOCKERD_WAIT", "30"))
 INTERNAL_CIDRS = ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"]
 
@@ -46,6 +48,14 @@ DASHSCOPE_PROXY_URL = os.environ.get("DASHSCOPE_PROXY_URL", "")
 REPRO_LLM_API_KEY = os.environ.get("REPRO_LLM_API_KEY", "")
 REPRO_LLM_BASE_URL = os.environ.get("REPRO_LLM_BASE_URL", DASHSCOPE_PROXY_URL or "")
 REPRO_LLM_MODEL = os.environ.get("REPRO_LLM_MODEL", "glm-5.1")
+
+
+def _repo_archive_url(repo_url: str) -> str:
+    match = re.match(r"https?://github\.com/([^/]+)/([^/#?]+)", repo_url)
+    if match:
+        owner, name = match.groups()
+        return f"https://codeload.github.com/{owner}/{name.removesuffix('.git')}/zip/refs/heads/main"
+    return repo_url.removesuffix(".git").rstrip("/") + "/archive/refs/heads/main.zip"
 
 
 # ============================================================================
@@ -150,6 +160,10 @@ def _build_web_repro_prompt() -> str:
 """
     return f"""你在一个隔离容器里(你是 root,可自由装包),需要复现一个项目。仓库已 clone 到 /workspace/repo。全程用中文说明。
 {llm_section}
+# 时间纪律
+- Web 复现总预算约 50 分钟。必须在第 45 分钟前停止继续探索，把已经验证的事实立即整理成结构化报告。
+- 核心闭环已经验证后，不要继续枚举非必要 API 或追求覆盖所有功能；优先输出报告，未覆盖部分写入 limitations。
+
 # 第零步(最重要):先判断这个项目【本身】到底有没有 Web 界面
 读 README、看项目结构,判断它是否【自带】一个真正的 Web 应用/界面:
 - 有真 Web 界面的标志:项目里有前端代码(React/Vue/HTML 应用)、或用 streamlit/gradio/flask/fastapi 写的、
@@ -166,9 +180,41 @@ def _build_web_repro_prompt() -> str:
   · Flask/FastAPI: `uvicorn main:app --host 0.0.0.0 --port 8080`
   · Node/Vite/React: `--host 0.0.0.0 --port 8080` 或 PORT=8080;前端项目先 npm install
 - 在【后台】启动(nohup/setsid &)。启动后【sleep 10 秒等服务起来】,再 `curl -s http://localhost:8080`。
-  ⚠️ 时间宝贵:服务一旦 curl 能返回 HTML/响应,就【立刻输出报告结束】,不要反复测试、不要再做多余的事。
   如果 curl 暂时没响应,最多等 30 秒重试 2-3 次,仍不行就如实报告 web_started=false 并结束。
 - 用项目【原有】的前端,不要自己另写页面。服务起成功后保持运行,不要停。
+
+# 启动命令纪律（避免“项目能跑但命令写错”导致假失败）
+- 启动前先定位真正的应用根目录。比如仓库是 `backend/app/main.py`,必须先 `cd backend` 再运行
+  `uvicorn app.main:app`;不能在仓库根目录直接运行同一命令。
+- 容器复现一律不要使用 `--reload` / hot reload。后台 reloader 会改变进程关系和导入上下文,容易假失败。
+- 后台启动后立刻记录 PID:`nohup ... >/tmp/service.log 2>&1 & echo $! >/tmp/service.pid`。
+  需要停止重试时用 `kill $(cat /tmp/service.pid)`,绝对不要用 `pkill -f`,它可能匹配并杀掉当前 shell 自己。
+- 首次启动失败不能直接结束:读取服务日志,检查工作目录、模块路径、端口和依赖,至少修正重试一次。
+- 前后端分离项目:后端按其真实目录启动到内部端口(如 8000),前端必须最终监听 0.0.0.0:8080,
+  并确认前端的 `/api` 代理指向已启动的后端。
+- 写配置前检查项目实际配置加载逻辑（如 Pydantic `env_file`、dotenv 调用和进程 cwd）。配置文件必须放在运行进程真正读取的位置；
+  启动后还要通过配置对象、进程环境或实际响应确认 provider/model 等关键配置已生效，不能只确认文件存在。
+- `curl http://localhost:8080` 只证明页面服务启动,不能单独作为项目复现成功的依据。
+- 如果页面需要登录/注册,不能只验证首页 HTML:必须实际调用注册或登录 API,确认能进入受保护页面。
+  如果项目没有预置账号但支持注册,创建专用 Demo 账号（不要复用真实个人账号）,并把账号和密码写入报告
+  `usage.prerequisites`；如果注册不可用,必须找到或创建安全的演示入口,不能把用户留在登录页。
+
+# 核心可用性验收（必须执行，禁止“首页 200 = 复现成功”）
+- 读 README 和页面功能,先用一句话定义该项目最核心的用户价值与最短操作闭环。
+- 至少实际完成一条超越登录和普通 CRUD 的核心业务链。例如 AI 平台要真实调用一次 AI 生成功能；扫描器要提交目标并拿到扫描结果；
+  分析工具要导入样例并产出分析报告。只创建账号、创建 Project、打开空 Dashboard 都不算核心功能验证。
+- 前后端分离或多目录项目必须确认配置文件放在【实际进程读取的位置】,并从运行中进程或生成结果验证配置已生效；
+  不能因为写过 `.env` 就声称已启用。若项目支持 mock,必须区分 mock 输出与真实能力输出。
+- 核心链依赖 LLM/API/数据库时,必须检查真实 provider/model、响应内容和错误信息；不能只检查 HTTP 状态码。
+- 若核心 LLM 阶段出现超时、JSON 解析失败或 schema 校验失败，不要立刻判定失败：先读取错误详情，
+  优先将可配置的 temperature 降低、启用 JSON/structured-output 模式（若项目支持），并对同一阶段至少重试 2 次。
+  后续重试成功时，以成功产物为最终结论，并把早先失败记录为 gotcha；全部重试仍失败才报告 partial/failed。
+- `status=success`:核心业务链完整跑通且结果可用；`status=partial`:页面和部分功能可用,但核心链仅部分跑通、使用 mock、
+  超时或关键阶段失败；`status=failed`:页面不可用或核心入口完全无法执行。
+- 报告必须写出 `core_workflow`、每一步实测结果、真实证据、最终产物以及失败阶段。未执行核心业务链时不得报告 success。
+- `core_workflow.mode` 必须区分 `real` 和 `mock`；使用 mock/fixture/静态占位输出时只能报告 partial。
+- 检查关键页面的入口是否真实可点击。若核心路由/API 可用但页面没有可发现入口,允许做最小导航修复（如增加“进入项目”按钮），
+  但不得重写业务功能，并必须在 gotchas 和 steps 中记录修改。
 
 # 步骤
 1. 读 README/项目结构,先做第零步判断。
@@ -187,6 +233,7 @@ def _build_web_repro_prompt() -> str:
   "web_framework": "如 Streamlit / Gradio / React+Vite;无则填空",
   "start_command": "你启动服务的命令;没启动填空",
   "verify": "curl 验证结果;没验证填空",
+  "core_workflow": {{"goal": "核心用户价值", "mode": "real|mock", "steps": [{{"action": "实际操作", "ok": true/false}}], "evidence": ["真实响应/产物摘要"], "result": "产物或失败阶段", "verified": true/false}},
   "environment": {{"language": "如 Python 3.10", "key_deps": ["关键依赖"]}},
   "steps": [{{"cmd": "关键命令", "ok": true/false, "note": "可选"}}],
   "blockers": ["卡点;若项目本身无Web界面,在此说明"],
@@ -203,6 +250,9 @@ def _build_web_repro_prompt() -> str:
 usage 字段是给用户看的"使用说明",不要写安装部署步骤,重点写怎么用:
 - what: 项目是干什么的; how_to_use: 打开页面后怎么操作; prerequisites: 必须先配好什么; limitations: 有什么限制
 - 用中文,站在"用户已经能访问这个服务了,告诉他怎么用"的角度写
+- `prerequisites` 只写当前使用者仍需自行完成的前置条件。若本次复现已经配置并验证了 LLM/API/数据库，
+  必须明确写“当前复现环境已配置并验证 …，无需用户额外配置”，不能泛泛写“需要配置 LLM API”；
+  只有缺失、未验证或用户确实必须自备的配置才写为前置条件。
 - 复现失败的话 usage 只填 what 和 limitations。
 
 诚实第一:项目没有 Web 界面就如实说,绝不自己编造页面充数。JSON 必须合法。
@@ -315,7 +365,7 @@ class ReproRunner:
             "done; "
             "if [ -z \"$(ls -A /workspace/repo 2>/dev/null)\" ]; then "
             "  echo '⚠ git clone 三次均失败,尝试 zip 下载…'; "
-            f"  ZIP_URL={shlex.quote(self.repo_url.rstrip('.git').rstrip('/') + '/archive/refs/heads/main.zip')}; "
+            f"  ZIP_URL={shlex.quote(_repo_archive_url(self.repo_url))}; "
             "  curl -fsSL --http1.1 --connect-timeout 30 --max-time 300 -o /tmp/repo.zip \"$ZIP_URL\" 2>&1 && "
             "  unzip -q /tmp/repo.zip -d /tmp/repo_unzip && "
             "  mv /tmp/repo_unzip/*/* /workspace/repo/ 2>/dev/null; mv /tmp/repo_unzip/*/.* /workspace/repo/ 2>/dev/null; "
@@ -397,7 +447,7 @@ class ReproRunner:
                         host_repo.mkdir(parents=True, exist_ok=True)
                 if not clone_ok:
                     self.on_log("• 尝试宿主机 zip 下载…")
-                    zip_url = self.repo_url.rstrip('.git').rstrip('/') + '/archive/refs/heads/main.zip'
+                    zip_url = _repo_archive_url(self.repo_url)
                     zr = subprocess.run(
                         ["curl", "-fsSL", "--http1.1", "--connect-timeout", "30", "--max-time", "600",
                          "-o", "/tmp/_repro_repo.zip", zip_url],
@@ -430,7 +480,7 @@ class ReproRunner:
             prompt = _build_web_repro_prompt() if self.web_port else _build_repro_prompt()
             self.on_log("┌─ 发给 AI agent 的复现指令(prompt)─────────────")
             for pl in prompt.strip().split("\n"):
-                self.on_log("│ " + pl)
+                self.on_log("│ " + redact_sensitive_log_value(pl))
             self.on_log("└──────────────────────────────────────────────")
             self.on_log("")
             exec_cmd = self.build_exec_command()
@@ -447,25 +497,43 @@ class ReproRunner:
                 env=_env,
             )
             start_ts = time.time()
+            grace_started = False
             while True:
                 line = self.proc.stdout.readline()
                 if not line:
                     if self.proc.poll() is not None:
                         break
                     continue
-                clean = line.rstrip("\n")
+                clean = redact_sensitive_log_value(strip_ansi(line.rstrip("\n")))
                 self.on_log(clean)
                 self._tail.append(clean)
                 self._full_output.append(clean)
                 if len(self._tail) > 40:
                     self._tail.pop(0)
                 timeout_limit = WEB_CONTAINER_TIMEOUT if self.web_port else CONTAINER_TIMEOUT
-                if time.time() - start_ts > timeout_limit:
-                    report = extract_report("\n".join(self._full_output))
+                elapsed = time.time() - start_ts
+                if elapsed > timeout_limit:
+                    report = enforce_report_acceptance(extract_report("\n".join(self._full_output)))
+                    if report:
+                        final_status = task_status_from_report(report)
+                        self.on_log("✓ 已在报告宽限阶段取得结构化报告")
+                        self._stop_agent_process()
+                        self._set_status(final_status, report=report, result="复现报告已完成")
+                        return
+                    if elapsed <= timeout_limit + REPORT_GRACE_TIMEOUT:
+                        if not grace_started:
+                            grace_started = True
+                            self.on_log(
+                                f"⏱ 已达到基础执行时限，额外保留 {REPORT_GRACE_TIMEOUT // 60} 分钟用于输出结构化报告"
+                            )
+                        continue
                     if self.web_port:
-                        self.on_log("⏱ Agent 流程超时,但容器保活(Web 服务可能已就绪,可尝试访问)")
-                        self._set_status("success", report=report,
-                                         result="agent 流程超时,容器保活,请尝试在线访问验证")
+                        report_status = task_status_from_report(report, fallback="partial")
+                        final_status = "failed" if report_status == "failed" else "partial"
+                        self.on_log("⏱ Agent 流程超时,容器保活;未完成核心验收时只能标记部分复现")
+                        self._stop_agent_process()
+                        self._set_status(final_status, report=report,
+                                         result="agent 流程超时,容器保活;核心可用性需要继续验证")
                     else:
                         self.on_log("⏱ 超时,停止容器")
                         self.stop()
@@ -474,18 +542,17 @@ class ReproRunner:
             rc = self.proc.wait()
             full = "\n".join(self._full_output)
             result_summary = "\n".join(self._tail[-20:])
-            report = extract_report(full)
+            report = enforce_report_acceptance(extract_report(full))
             # ★ 适配点:去掉旧 v1 的 import db + db.update_item_web_class 调用
             #   原 v1 在这里通过 on_status 回调通知外部，由外部处理 DB 回写
             #   （is_web 修正逻辑移到 on_status 回调处理）
             if not self.web_port:
                 subprocess.run(["docker", "stop", self.container_name], capture_output=True)
             if report and isinstance(report, dict) and report.get("status"):
-                rep_status = report["status"]
-                final = "success" if rep_status in ("success", "partial") else "failed"
+                final = task_status_from_report(report)
                 self._set_status(final, result=result_summary, report=report)
             elif rc == 0:
-                self._set_status("success", result=result_summary, report=report)
+                self._set_status("failed", result="Agent 未输出结构化复现报告\n" + result_summary, report=report)
             else:
                 self._set_status("failed", returncode=rc, result=result_summary, report=report)
         except Exception as e:
@@ -507,30 +574,75 @@ class ReproRunner:
 
     # ---- sysbox 端口代理（替代 docker -p）----
     def _start_port_proxy(self):
-        """在宿主机启动 socat 代理，通过 nsenter 进入容器网络命名空间转发流量。
+        """在宿主机启动 socat 代理，通过 docker exec 转发到容器端口。
         原因:sysbox 容器使用 user namespace 隔离，docker -p 端口映射的 docker-proxy
-        无法通过 ARP 到达容器 IP，导致连接被 reset。nsenter -n 绕过此限制。"""
+        无法通过 ARP 到达容器 IP，导致连接被 reset。docker exec 不需要宿主机 root 权限。"""
         self._proxy_proc = None
+        self._proxy_log_handle = None
         if not self.web_port:
             return
         try:
-            r = subprocess.run(
-                ["docker", "inspect", "--format", "{{.State.Pid}}", self.container_name],
-                capture_output=True, text=True,
+            bridge_script = """import os
+import socket
+import threading
+
+sock = socket.create_connection((\"127.0.0.1\", 8080), timeout=10)
+sock.settimeout(None)
+
+def upload():
+    try:
+        while True:
+            chunk = os.read(0, 65536)
+            if not chunk:
+                break
+            sock.sendall(chunk)
+    finally:
+        try:
+            sock.shutdown(socket.SHUT_WR)
+        except OSError:
+            pass
+
+thread = threading.Thread(target=upload, daemon=True)
+thread.start()
+while True:
+    chunk = sock.recv(65536)
+    if not chunk:
+        break
+    os.write(1, chunk)
+thread.join(timeout=1)
+sock.close()
+"""
+            install_bridge = subprocess.run(
+                ["docker", "exec", "-i", self.container_name, "sh", "-c", "cat > /tmp/repro_tcp_bridge.py"],
+                input=bridge_script,
+                capture_output=True,
+                text=True,
             )
-            cpid = r.stdout.strip()
-            if not cpid or cpid == "0":
-                self.on_log("⚠ 无法获取容器 PID,端口代理未启动")
+            if install_bridge.returncode != 0:
+                self.on_log(f"⚠ 安装端口桥接脚本失败: {install_bridge.stderr.strip()}")
                 return
             proxy_cmd = [
                 "socat",
                 f"TCP-LISTEN:{self.web_port},fork,reuseaddr",
-                f"EXEC:nsenter -t {cpid} -n socat - TCP\\:127.0.0.1\\:8080",
+                f"EXEC:docker exec -i {self.container_name} python3 /tmp/repro_tcp_bridge.py",
             ]
+            proxy_log = self.workspace / "port-proxy.log"
+            self._proxy_log_handle = proxy_log.open("a", encoding="utf-8")
             self._proxy_proc = subprocess.Popen(
-                proxy_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                proxy_cmd,
+                stdout=subprocess.DEVNULL,
+                stderr=self._proxy_log_handle,
             )
-            self.on_log(f"✓ 端口代理已启动: 宿主机:{self.web_port} → 容器:8080 (nsenter PID={cpid})")
+            time.sleep(0.3)
+            if self._proxy_proc.poll() is not None:
+                self._proxy_log_handle.flush()
+                error = proxy_log.read_text(encoding="utf-8", errors="replace").strip()
+                self.on_log(f"⚠ 端口代理启动失败: {error[-500:] or 'socat exited'}")
+                self._proxy_log_handle.close()
+                self._proxy_log_handle = None
+                self._proxy_proc = None
+                return
+            self.on_log(f"✓ 端口代理已启动: 宿主机:{self.web_port} → 容器:8080 (docker exec)")
         except Exception as e:
             self.on_log(f"⚠ 启动端口代理失败: {e}")
 
@@ -546,6 +658,19 @@ class ReproRunner:
                 except Exception:
                     pass
             self._proxy_proc = None
+        if getattr(self, '_proxy_log_handle', None):
+            self._proxy_log_handle.close()
+            self._proxy_log_handle = None
+
+    def _stop_agent_process(self):
+        if not self.proc or self.proc.poll() is not None:
+            return
+        self.proc.terminate()
+        try:
+            self.proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            self.proc.kill()
+            self.proc.wait(timeout=5)
 
     def stop(self):
         self._stop_port_proxy()
@@ -572,6 +697,69 @@ def strip_ansi(line: str) -> str:
     line = _ANSI_RE.sub('', line)
     line = _BARE_ANSI_RE.sub('', line)
     return line
+
+
+def redact_sensitive_log_value(value: str) -> str:
+    if REPRO_LLM_API_KEY:
+        value = value.replace(REPRO_LLM_API_KEY, "<redacted>")
+    value = re.sub(r"\bsk-[A-Za-z0-9_-]{8,}\b", "<redacted>", value)
+    value = re.sub(r"\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b", "<redacted-jwt>", value)
+    return value
+
+
+def enforce_report_acceptance(report: dict | None) -> dict | None:
+    if not isinstance(report, dict):
+        return report
+
+    normalized = copy.deepcopy(report)
+    status = normalized.get("status")
+    if status not in ("success", "partial", "failed"):
+        normalized["status"] = "failed"
+        status = "failed"
+
+    if not normalized.get("is_web"):
+        return normalized
+
+    issues: list[str] = []
+    if not normalized.get("web_started"):
+        issues.append("Web 服务未成功启动或未验证")
+
+    workflow = normalized.get("core_workflow")
+    if not isinstance(workflow, dict):
+        workflow = {}
+    if workflow.get("verified") is not True:
+        issues.append("未完成核心业务闭环验证")
+    mode = str(workflow.get("mode") or "").strip().lower()
+    if mode != "real":
+        issues.append("核心功能未使用真实模式验证")
+    if not workflow.get("steps"):
+        issues.append("核心业务闭环缺少实测步骤")
+    if not workflow.get("evidence"):
+        issues.append("核心业务闭环缺少真实结果证据")
+    if not str(workflow.get("result") or "").strip():
+        issues.append("核心业务闭环缺少结果说明")
+
+    if issues and status == "success":
+        normalized["status"] = "failed" if not normalized.get("web_started") else "partial"
+
+    if issues:
+        existing_issues = normalized.get("acceptance_issues")
+        if not isinstance(existing_issues, list):
+            existing_issues = []
+        normalized["acceptance_issues"] = list(dict.fromkeys([*existing_issues, *issues]))
+        blockers = normalized.get("blockers")
+        if not isinstance(blockers, list):
+            blockers = []
+        normalized["blockers"] = list(dict.fromkeys([*blockers, *[f"自动验收: {issue}" for issue in issues]]))
+
+    return normalized
+
+
+def task_status_from_report(report: dict | None, fallback: str = "failed") -> str:
+    normalized = enforce_report_acceptance(report)
+    if isinstance(normalized, dict) and normalized.get("status") in ("success", "partial", "failed"):
+        return normalized["status"]
+    return fallback
 
 
 def extract_report(full_output: str) -> dict | None:
@@ -697,7 +885,13 @@ class ReproManager:
             return True
         return False
 
-    def cleanup_task(self, task_id: int, container_name: str | None = None, workspace_path: str | None = None) -> bool:
+    def cleanup_task(
+        self,
+        task_id: int,
+        container_name: str | None = None,
+        workspace_path: str | None = None,
+        web_port: int | None = None,
+    ) -> bool:
         """清理:删容器 + 删产物。runner 可能不在内存（server 重启），
         所以支持传入 container_name/workspace_path 直接清理。"""
         r = self.runners.get(task_id)
@@ -707,6 +901,8 @@ class ReproManager:
             return True
         if container_name:
             subprocess.run(["docker", "rm", "-f", container_name], capture_output=True)
+        if web_port:
+            _stop_orphan_proxy(web_port)
         if workspace_path:
             p = Path(workspace_path)
             if p.exists():
@@ -716,3 +912,16 @@ class ReproManager:
 
 # 全局单例（API 层 import 它）
 manager = ReproManager()
+
+
+def _stop_orphan_proxy(web_port: int) -> None:
+    marker = f"TCP-LISTEN:{web_port},"
+    for proc_dir in Path("/proc").glob("[0-9]*"):
+        try:
+            cmdline = (proc_dir / "cmdline").read_bytes().split(b"\0")
+            if not cmdline or b"socat" not in Path(cmdline[0].decode(errors="ignore")).name.encode():
+                continue
+            if any(marker in part.decode(errors="ignore") for part in cmdline[1:]):
+                os.kill(int(proc_dir.name), 15)
+        except (FileNotFoundError, PermissionError, ProcessLookupError, ValueError):
+            continue

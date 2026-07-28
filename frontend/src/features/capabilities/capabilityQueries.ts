@@ -17,6 +17,10 @@ export function fetchReproRuns(): Promise<{ items: ReproTask[] }> {
   return getJson('/api/capabilities/repro-runs');
 }
 
+export function fetchReproTask(taskId: number): Promise<ReproTask> {
+  return getJson(`/api/capabilities/repro/${taskId}`);
+}
+
 export function fetchConversions(): Promise<{ items: ConversionRecord[] }> {
   return getJson('/api/capabilities/conversions');
 }
@@ -29,7 +33,15 @@ export function fetchStats(): Promise<CapStats> {
   return getJson('/api/capabilities/stats');
 }
 
-export function startRepro(itemId: number, web = false): Promise<{ ok: boolean; task_id: number; repo_url: string; web_port: number | null }> {
+export function startRepro(itemId: number, web = false): Promise<{
+  ok: boolean;
+  task_id?: number;
+  repo_url?: string;
+  web_port?: number | null;
+  skipped?: boolean;
+  reason?: 'official_demo';
+  demo_url?: string;
+}> {
   return postJson(`/api/capabilities/items/${itemId}/start-repro`, { web });
 }
 
@@ -65,7 +77,7 @@ export function streamReproLogs(
   es.addEventListener('log', (e: MessageEvent) => {
     try {
       const data = JSON.parse(e.data);
-      onLog(data.line, data.kind);
+      onLog(stripAnsi(data.line), data.kind);
     } catch { /* ignore parse errors */ }
   });
 
@@ -91,7 +103,7 @@ export function streamReproLogs(
 
 /** 日志行分类（迁自后端 classify_log_line，7 类上色） */
 export function classifyLogLine(line: string): string {
-  const s = line.trimStart();
+  const s = stripAnsi(line).trimStart();
   if (s.startsWith('✱') || s.startsWith('•') || s.startsWith('┌') || s.startsWith('│') || s.startsWith('└') || s.startsWith('>')) return 'tool';
   if (s.startsWith('→') || s.startsWith('[•]')) return 'read';
   if (s.startsWith('$')) return 'exec';
@@ -99,4 +111,10 @@ export function classifyLogLine(line: string): string {
   if (s.startsWith('!') || s.startsWith('⏱')) return 'warn';
   if (s.startsWith('✗') || s.toLowerCase().includes('error') || s.toLowerCase().includes('failed') || s.includes('Traceback')) return 'error';
   return 'text';
+}
+
+export function stripAnsi(line: string): string {
+  return line
+    .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '')
+    .replace(/\[[0-9]{1,3}(?:;[0-9]{1,3})*m/g, '');
 }

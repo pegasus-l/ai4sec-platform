@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+import socket
 from typing import Any
 
 from ai4sec_platform.db import repositories as repo
@@ -64,13 +65,14 @@ class StartReproTasksStep:
             if existing and existing[0]["status"] in ("queued", "running"):
                 continue  # 已有活跃 task，跳过
 
-            # 清理旧的 failed/timeout task
+            # 清理旧的非成功 task；partial 需要释放容器和端口后重新验证
             for old_task in repo.list_repro_tasks(context.conn, item_id=item_id, include_cleaned=True):
-                if old_task["status"] in ("failed", "timeout", "stopped"):
+                if old_task["status"] in ("partial", "failed", "timeout", "stopped"):
                     repro_manager.cleanup_task(
                         old_task["id"],
                         container_name=old_task.get("container_name"),
                         workspace_path=old_task.get("workspace_path"),
+                        web_port=old_task.get("web_port"),
                     )
                     repo.update_repro_task(
                         context.conn,
@@ -128,7 +130,7 @@ class StartReproTasksStep:
             # 决定是否 Web 复现
             payload = candidate.get("payload") or {}
             web_port = None
-            if payload.get("is_web") or payload.get("demo_url"):
+            if payload.get("is_web"):
                 web_port = _alloc_web_port(context.conn)
                 if web_port:
                     repo.update_repro_task(context.conn, task_id=task_id, web_port=web_port)
@@ -136,13 +138,21 @@ class StartReproTasksStep:
             context.conn.commit()
 
             # 启动 ReproRunner（异步）
-            repro_manager.start_task(
+            runner = repro_manager.start_task(
                 task_id=task_id,
                 repo_url=repo_url,
                 on_log=on_log,
                 on_status=on_status,
                 web_port=web_port,
             )
+            repo.update_repro_task(
+                context.conn,
+                task_id=task_id,
+                container_name=runner.container_name,
+                workspace_path=str(runner.workspace),
+                web_url=f"http://127.0.0.1:{web_port}" if web_port else "",
+            )
+            context.conn.commit()
 
             started.append(task_id)
 
@@ -215,6 +225,16 @@ def _alloc_web_port(conn) -> int | None:
     used = {row["web_port"] for row in rows}
 
     for port in range(base, max_port + 1):
-        if port not in used:
+        if port not in used and _port_is_available(port):
             return port
     return None
+
+
+def _port_is_available(port: int) -> bool:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+        probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            probe.bind(("0.0.0.0", port))
+        except OSError:
+            return False
+    return True

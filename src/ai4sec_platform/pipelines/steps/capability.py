@@ -139,6 +139,16 @@ class AssessCapabilitiesStep:
                     "code_url": (item_data.get("payload") or {}).get("code_url", ""),
                     "source_type": (item_data.get("payload") or {}).get("source_type", ""),
                     "source_news_score": (item_data.get("payload") or {}).get("source_news_score"),
+                    "implementation_depth": (item_data.get("payload") or {}).get("implementation_depth") or {
+                        "has_real_code": bool(
+                            (item_data.get("payload") or {}).get("code_url")
+                            or "github.com" in str(item_data.get("source_url") or "")
+                        ),
+                        "has_tests": bool(model_result.get("has_tests", False)),
+                        "has_eval": bool(model_result.get("has_eval", False)),
+                        "is_prompt_wrapper": bool(model_result.get("is_prompt_wrapper", False)),
+                        "is_thin_mcp_wrapper": bool(model_result.get("is_thin_mcp_wrapper", False)),
+                    },
                 },
             )
             # 评估完成后将 item_type 从 capability_candidate 改为 capability

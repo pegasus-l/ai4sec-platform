@@ -112,10 +112,10 @@ class SelectConversionCandidatesStep:
         items = repo.list_domain_items(
             context.conn, "capabilities", item_type="capability", limit=limit * 2,
         )
-        # 选已复现成功但还没转化的
+        # 只选完整复现成功且还没转化的；partial 不进入能力转化
         candidates = [
             it for it in items
-            if (it.get("payload") or {}).get("repro_status") in ("success", "partial")
+            if (it.get("payload") or {}).get("repro_status") == "success"
             and not (it.get("payload") or {}).get("conversion_status", "").startswith(("持续观察", "已转化"))
         ][:limit]
         context.outputs["conversion_candidates"] = candidates

@@ -26,7 +26,7 @@ def pick_top_repro_candidates(
       score DESC + has code_url + primary_date DESC
 
     跳过规则:
-      - 已成功复现的 item（capability_repro_tasks.status in success/partial）
+      - 已完整成功复现的 item（capability_repro_tasks.status=success；partial 允许重试）
       - 正在复现的 item（status in queued/running）
       - 有 demo_url 的 item（已有在线 demo，不需要复现）
       - web_only=True 时只选 is_web=True 的 item

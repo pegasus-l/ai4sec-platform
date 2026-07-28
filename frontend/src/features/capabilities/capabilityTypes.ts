@@ -71,14 +71,28 @@ export interface ReproReport {
   web_framework?: string;
   start_command?: string;
   verify?: string;
+  core_workflow?: {
+    goal?: string;
+    mode?: 'real' | 'mock' | string;
+    steps?: Array<string | { action?: string; ok?: boolean }>;
+    evidence?: string[];
+    result?: string;
+    verified?: boolean;
+  };
+  acceptance_issues?: string[];
 }
 
 export interface ReproTask {
   id: number;
+  task_id?: number;
+  display_id?: string;
   item_id: number;
+  title?: string;
   repo_url: string;
   status: string;
   trigger: string;
+  container_name?: string;
+  workspace_path?: string;
   web_port?: number | null;
   web_url?: string;
   created_at: string;

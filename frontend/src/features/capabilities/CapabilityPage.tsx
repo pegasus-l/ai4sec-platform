@@ -5,8 +5,8 @@ import { useToast } from '../../components/Toast';
 import { useDrawerStack } from '../../components/DrawerStack';
 import {
   fetchToday, fetchLibrary, fetchReproRuns, fetchConversions, fetchClassifyStats,
-  fetchDetail, startRepro, stopRepro, cleanupRepro, markConversion,
-  streamReproLogs, classifyLogLine,
+  fetchDetail, fetchReproTask, startRepro, stopRepro, cleanupRepro, markConversion,
+  streamReproLogs, classifyLogLine, stripAnsi,
 } from './capabilityQueries';
 import type { CapabilityItem, ReproTask, ConversionRecord, CapabilityView } from './capabilityTypes';
 import { CapabilityOps, CapabilityOpsQuality, CapabilityOpsRuns } from './CapabilityOps';
@@ -30,6 +30,18 @@ const conversionGroups = ['待评估', '待复现', '复现中', '复现成功',
 
 interface ConvertFormData { status: string; scenario: string; owner: string; next_action: string; notes: string; }
 
+function sourceNewsScore(payload: CapabilityItem['payload']): number | null {
+  const directScore = Number(payload?.source_news_score);
+  if (Number.isFinite(directScore) && directScore > 0) return directScore;
+  const sourceItem = payload?.source_news_item as Record<string, unknown> | undefined;
+  const inheritedScore = Number(sourceItem?.score);
+  return Number.isFinite(inheritedScore) && inheritedScore > 0 ? inheritedScore : null;
+}
+
+function formatScore(score: number): string {
+  return Number.isInteger(score) ? String(score) : score.toFixed(1);
+}
+
 export function CapabilityPage() {
   const [view, setView] = useState<CapabilityView>('today');
   const { push } = useDrawerStack();
@@ -38,7 +50,7 @@ export function CapabilityPage() {
 
   const { data: todayData, isLoading: todayLoading } = useQuery({ queryKey: ['cap-today'], queryFn: fetchToday, staleTime: 300_000 });
   const { data: libraryData } = useQuery({ queryKey: ['cap-library'], queryFn: () => fetchLibrary(50), staleTime: 300_000 });
-  const { data: reproData } = useQuery({ queryKey: ['cap-repro'], queryFn: fetchReproRuns, staleTime: 300_000 });
+  const { data: reproData } = useQuery({ queryKey: ['cap-repro'], queryFn: fetchReproRuns, staleTime: 1_000, refetchInterval: 5_000 });
   const { data: convData } = useQuery({ queryKey: ['cap-conversions'], queryFn: fetchConversions, staleTime: 300_000 });
   const { data: statsData } = useQuery({ queryKey: ['cap-classify-stats'], queryFn: fetchClassifyStats, staleTime: 300_000 });
 
@@ -57,7 +69,17 @@ export function CapabilityPage() {
       title: item.title,
       subtitle: `${item.payload?.source_type ?? ''} · score ${item.score}`,
       render: () => <CapabilityDetailContent itemId={item.id} initialItem={item} onRepro={async () => {
-        try { await startRepro(item.id, item.payload?.is_web ?? false); toast('已加入复现队列', 'success'); qc.invalidateQueries({ queryKey: ['cap-repro'] }); }
+        try {
+          const result = await startRepro(item.id, item.payload?.is_web ?? false);
+          if (result.skipped && result.demo_url) {
+            toast('检测到官方 Demo，无需启动本地复现', 'success');
+            window.open(result.demo_url, '_blank', 'noopener');
+            return;
+          }
+          toast('已加入复现队列，正在打开实时工作台', 'success');
+          await qc.invalidateQueries({ queryKey: ['cap-repro'] });
+          setView('repro');
+        }
         catch (e) { toast(`复现失败: ${e}`, 'error'); }
       }} onConvert={async (data: ConvertFormData) => {
         try { await markConversion(item.id, data); toast('已标记转化', 'success'); qc.invalidateQueries({ queryKey: ['cap-conversions'] }); }
@@ -151,6 +173,7 @@ function CapabilityToday({ items, stats, openDetail }: { items: CapabilityItem[]
 
 function CapabilityCard({ item, rank, onClick }: { item: CapabilityItem; rank: number; onClick: () => void; onRepro: () => void }) {
   const p = item.payload ?? {};
+  const newsScore = sourceNewsScore(p);
   const sourceType = p.source_type || (item.source_url?.includes('github.com') ? 'github' : 'arxiv');
   const reproTag = p.repro_status === 'candidate' ? 'green' : p.repro_status === 'in_progress' ? 'sky' : p.repro_status === 'no_code' ? 'slate' : 'amber';
   const reproText = { candidate: '可复现', in_progress: '复现中', no_code: '无代码', success: '已复现', failed: '复现失败' }[p.repro_status ?? ''] ?? p.repro_status;
@@ -163,16 +186,19 @@ function CapabilityCard({ item, rank, onClick }: { item: CapabilityItem; rank: n
         <Badge tone={sourceType === 'github' ? 'sky' : 'violet'}>{sourceType}</Badge>
         {p.capability_type && <Badge tone="green">{p.capability_type}</Badge>}
         <Badge tone={reproTag as 'green' | 'sky' | 'slate' | 'amber'}>{reproText}</Badge>
-        {p.is_web ? <Badge tone="amber">Web{p.web_framework ? `:${p.web_framework}` : ''}</Badge> : <Badge tone="slate">非Web</Badge>}
+        {p.demo_url ? <Badge tone="green">官方 Demo</Badge> : p.is_web ? <Badge tone="amber">Web{p.web_framework ? `:${p.web_framework}` : ''}</Badge> : <Badge tone="slate">非Web</Badge>}
       </div>
     </div>
-    <div className="score-ring">{item.score}</div>
+    <div style={{ display: 'grid', gap: 6, justifyItems: 'end' }}>
+      <div className="score-ring" title="能力综合评分（1–5）">{item.score}</div>
+      {newsScore !== null && <span className="small muted" title="来源资讯洞察评分">资讯 {formatScore(newsScore)}</span>}
+    </div>
   </div>;
 }
 
 // ========== 能力库（改动 1: 4 个视图 + 改动 3: classifyBatch 按钮）==========
 function CapabilityLibrary({ items, openDetail }: { items: CapabilityItem[]; openDetail: (item: CapabilityItem) => void }) {
-  const [viewMode, setViewMode] = useState<'列表视图' | '能力分类' | '应用场景' | '代码可用性'>('列表视图');
+  const [viewMode, setViewMode] = useState<'列表视图' | '能力分类' | '应用场景' | '工程可用性'>('列表视图');
 
   // 【改动 1】能力分类视图：按 capability_type 分组
   const typeGroups = useMemo(() => {
@@ -188,24 +214,29 @@ function CapabilityLibrary({ items, openDetail }: { items: CapabilityItem[]; ope
     return g;
   }, [items]);
 
-  // 【改动 1】代码可用性视图：按 has_real_code 分组
-  const codeGroups = useMemo(() => ({
-    '有代码': items.filter(i => i.payload?.implementation_depth?.has_real_code),
-    '无代码': items.filter(i => !i.payload?.implementation_depth?.has_real_code),
+  const engineeringGroups = useMemo(() => ({
+    '官方 Demo': items.filter(i => Boolean(i.payload?.demo_url)),
+    '完整复现': items.filter(i => !i.payload?.demo_url && i.payload?.repro_status === 'success'),
+    '部分复现': items.filter(i => !i.payload?.demo_url && i.payload?.repro_status === 'partial'),
+    '复现中': items.filter(i => !i.payload?.demo_url && i.payload?.repro_status === 'in_progress'),
+    '待 Web 复现': items.filter(i => !i.payload?.demo_url && Boolean(i.payload?.is_web) && ['candidate', 'no_code', undefined].includes(i.payload?.repro_status)),
+    '待命令行验证': items.filter(i => !i.payload?.demo_url && !i.payload?.is_web && ['candidate', 'no_code', undefined].includes(i.payload?.repro_status)),
+    '复现失败': items.filter(i => !i.payload?.demo_url && i.payload?.repro_status === 'failed'),
   }), [items]);
 
   return <div className="grid">
     <div className="view-switch">
-      {(['列表视图', '能力分类', '应用场景', '代码可用性'] as const).map(v => <span key={v} className={`view-pill ${viewMode === v ? 'active' : ''}`} onClick={() => setViewMode(v)}>{v}</span>)}
+      {(['列表视图', '能力分类', '应用场景', '工程可用性'] as const).map(v => <span key={v} className={`view-pill ${viewMode === v ? 'active' : ''}`} onClick={() => setViewMode(v)}>{v}</span>)}
     </div>
     {items.length === 0 && <EmptyState title="能力库为空" description="先跑 capabilities.from_news_pipeline 生成能力卡" />}
 
     {/* 列表视图 */}
-    {items.length > 0 && viewMode === '列表视图' && <div className="table-card"><table className="data-table"><thead><tr><th>能力</th><th>概述</th><th>评分</th><th>标签</th></tr></thead><tbody>
+    {items.length > 0 && viewMode === '列表视图' && <div className="table-card"><table className="data-table"><thead><tr><th>能力</th><th>概述</th><th>能力评分</th><th>资讯洞察</th><th>标签</th></tr></thead><tbody>
       {items.map(item => { const p = item.payload ?? {}; const st = p.source_type || (item.source_url?.includes('github.com') ? 'github' : 'arxiv'); const ov = p.overview || p.one_liner || ''; return <tr key={item.id} className="clickable" onClick={() => openDetail(item)}>
         <td><div className="table-title">{item.title}</div><div className="table-sub">{st}</div></td>
         <td style={{maxWidth: '320px'}} className="small muted">{ov.slice(0, 120)}{ov.length > 120 ? '…' : ''}</td>
         <td><div className="score-ring">{item.score}</div></td>
+        <td>{sourceNewsScore(p) !== null ? <Badge tone="sky">{formatScore(sourceNewsScore(p)!)}</Badge> : <span className="muted">—</span>}</td>
         <td><div className="badges">{p.capability_type && <Badge tone="green">{p.capability_type}</Badge>}<Badge tone={p.repro_status === 'candidate' ? 'green' : 'amber'}>{p.repro_status ?? '未知'}</Badge>{p.is_web ? <Badge tone="amber">Web</Badge> : <Badge tone="slate">非Web</Badge>}</div></td>
       </tr>; })}
     </tbody></table></div>}
@@ -230,9 +261,9 @@ function CapabilityLibrary({ items, openDetail }: { items: CapabilityItem[]; ope
       </div>
     ))}
 
-    {/* 代码可用性视图 */}
-    {items.length > 0 && viewMode === '代码可用性' && <div className="grid cols-2">
-      {Object.entries(codeGroups).map(([label, groupItems]) => (
+    {/* 工程可用性视图 */}
+    {items.length > 0 && viewMode === '工程可用性' && <div className="grid cols-2">
+      {Object.entries(engineeringGroups).map(([label, groupItems]) => (
         <div className="panel" key={label}>
           <div className="panel-head"><h3>{label}</h3><span>{groupItems.length} 个</span></div>
           <div className="panel-body"><div className="asis-list">
@@ -247,32 +278,50 @@ function CapabilityLibrary({ items, openDetail }: { items: CapabilityItem[]; ope
 
 // ========== 复现验证 ==========
 function CapabilityRepro({ runs, items, openDetail }: { runs: ReproTask[]; items: CapabilityItem[]; openDetail: (item: CapabilityItem) => void }) {
-  const [selectedIdx, setSelectedIdx] = useState(0);
-  const selected = runs[selectedIdx];
+  const [selectedTaskId, setSelectedTaskId] = useState<number | null>(null);
+  useEffect(() => {
+    if (runs.length > 0 && (selectedTaskId === null || !runs.some(run => run.id === selectedTaskId))) {
+      setSelectedTaskId(runs[0].id);
+    }
+  }, [runs, selectedTaskId]);
+  const selected = runs.find(run => run.id === selectedTaskId) ?? runs[0];
   const capabilityItem = items.find(i => i.id === selected?.item_id);
+  const runningCount = runs.filter(run => run.status === 'running' || run.status === 'queued').length;
+  const successCount = runs.filter(run => run.status === 'success' || run.status === 'partial').length;
+  const failedCount = runs.filter(run => run.status === 'failed' || run.status === 'timeout').length;
 
   return <div className="grid">
     {runs.length === 0 && <EmptyState title="暂无复现任务" description="从今日能力或能力库点击「加入复现」触发" />}
-    {runs.length > 0 && <div className="grid cols-2">
-      <div className="panel">
-        <div className="panel-head"><h3>复现任务 ({runs.length})</h3><span>自动复现状态</span></div>
-        <div className="panel-body">
-          {runs.map((r, i) => <div key={r.id} className={`asis-card clickable ${i === selectedIdx ? 'active' : ''}`} onClick={() => setSelectedIdx(i)}>
-            <div className="rank">{i + 1}</div>
-            <div><h4>{r.repo_url?.split('/').slice(-1)[0] ?? `task-${r.id}`}</h4>
-              <div className="badges"><Badge tone={r.status === 'failed' ? 'red' : r.status === 'success' ? 'green' : r.status === 'running' ? 'sky' : 'slate'}>{r.status}</Badge>
-              <Badge tone="slate">trigger: {r.trigger}</Badge>{r.web_port && <Badge tone="amber">port: {r.web_port}</Badge>}</div>
-            </div><div />
-          </div>)}
+    {runs.length > 0 && <>
+      <div className="repro-metrics">
+        <div><span>全部任务</span><b>{runs.length}</b></div>
+        <div><span>正在复现</span><b className="repro-running">{runningCount}</b></div>
+        <div><span>复现成功</span><b className="repro-success">{successCount}</b></div>
+        <div><span>失败 / 超时</span><b className="repro-failed">{failedCount}</b></div>
+      </div>
+      <div className="repro-workbench">
+        <div className="panel repro-task-panel">
+          <div className="panel-head"><h3>任务队列 ({runs.length})</h3><span>{runningCount > 0 ? '实时更新中' : '历史任务'}</span></div>
+          <div className="panel-body repro-task-list">
+            {runs.map((run, index) => <button type="button" key={run.id} className={`repro-task ${run.id === selected?.id ? 'active' : ''}`} onClick={() => setSelectedTaskId(run.id)}>
+              <span className={`repro-status-dot status-${run.status}`} />
+              <span className="repro-task-main">
+                <strong>{run.title || run.repo_url?.split('/').filter(Boolean).slice(-1)[0] || `task-${run.id}`}</strong>
+                <small>#{run.id} · {run.trigger || 'manual'} · {formatReproTime(run.created_at)}</small>
+              </span>
+              <span className={`repro-status status-${run.status}`}>{reproStatusLabel(run.status)}</span>
+              {index === 0 && (run.status === 'running' || run.status === 'queued') && <span className="repro-live">LIVE</span>}
+            </button>)}
+          </div>
+        </div>
+        <div className="panel repro-detail-panel">
+          <div className="panel-head"><h3>复现控制台</h3><span>实时日志 · 结构化报告 · Web 验证</span></div>
+          <div className="panel-body">
+            {selected && <ReproDetailContent task={selected} capabilityItem={capabilityItem} openDetail={openDetail} />}
+          </div>
         </div>
       </div>
-      <div className="panel">
-        <div className="panel-head"><h3>复现详情</h3><span>实时日志 / 报告 / 产物</span></div>
-        <div className="panel-body">
-          {selected && <ReproDetailContent task={selected} capabilityItem={capabilityItem} openDetail={openDetail} />}
-        </div>
-      </div>
-    </div>}
+    </>}
   </div>;
 }
 
@@ -283,44 +332,122 @@ function ReproDetailContent({ task, capabilityItem, openDetail }: { task: ReproT
   const [streaming, setStreaming] = useState(false);
   const logRef = useRef<HTMLDivElement>(null);
   const cleanupRef = useRef<(() => void) | null>(null);
+  const { data: taskDetail } = useQuery({
+    queryKey: ['cap-repro-task', task.id],
+    queryFn: () => fetchReproTask(task.id),
+    refetchInterval: task.status === 'running' || task.status === 'queued' ? 2_000 : false,
+  });
+  const currentTask = taskDetail ?? task;
+  const [liveStatus, setLiveStatus] = useState(currentTask.status);
+  const [liveReport, setLiveReport] = useState(currentTask.report ?? null);
 
   useEffect(() => {
-    if (task.status === 'running' || task.status === 'queued') {
+    setLogs([]);
+    setLiveStatus(currentTask.status);
+    setLiveReport(currentTask.report ?? null);
+  }, [currentTask.id]);
+
+  useEffect(() => {
+    setLiveStatus(currentTask.status);
+    if (currentTask.report) setLiveReport(currentTask.report);
+  }, [currentTask.status, currentTask.report]);
+
+  useEffect(() => {
+    if (currentTask.status === 'running' || currentTask.status === 'queued') {
       setStreaming(true);
       setLogs([]);
-      cleanupRef.current = streamReproLogs(task.id,
+      cleanupRef.current = streamReproLogs(currentTask.id,
         (line, kind) => setLogs(prev => [...prev, { line, kind }]),
-        (status) => { if (status === 'success' || status === 'failed' || status === 'timeout') { setStreaming(false); qc.invalidateQueries({ queryKey: ['cap-repro'] }); } },
+        (status, report) => {
+          setLiveStatus(status);
+          if (report) setLiveReport(report as NonNullable<ReproTask['report']>);
+          if (!['running', 'queued'].includes(status)) {
+            setStreaming(false);
+            qc.invalidateQueries({ queryKey: ['cap-repro'] });
+            qc.invalidateQueries({ queryKey: ['cap-repro-task', currentTask.id] });
+            qc.invalidateQueries({ queryKey: ['cap-library'] });
+          }
+        },
         () => setStreaming(false)
       );
       return () => { cleanupRef.current?.(); };
     }
-  }, [task.id, task.status, qc]);
+  }, [currentTask.id, currentTask.status, qc]);
 
   useEffect(() => { if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight; }, [logs]);
 
-  const report = task.report ?? capabilityItem?.payload?.repro_report;
+  const report = liveReport ?? currentTask.report ?? capabilityItem?.payload?.repro_report;
   const p = capabilityItem?.payload ?? {};
+  const displayedLogs = streaming ? logs : (currentTask.log_excerpt || currentTask.result || '').split('\n').filter(Boolean).map(line => ({ line: stripAnsi(line), kind: classifyLogLine(line) }));
 
-  return <div className="grid">
-    {streaming && <div className="log-stream" ref={logRef}>{logs.map((l, i) => <div key={i} className={`log-line log-${l.kind}`}>{l.line}</div>)}{logs.length === 0 && <div className="muted small">等待日志输出…</div>}</div>}
-    {!streaming && (task.log_excerpt || task.result) && <div className="log-stream">{(task.log_excerpt || task.result || '').split('\n').map((line, i) => <div key={i} className={`log-line log-${classifyLogLine(line)}`}>{line}</div>)}</div>}
-    {!streaming && !task.log_excerpt && !task.result && task.status === 'queued' && <div className="empty-hint">任务已排队，等待复现调度…</div>}
-    {report && <div className="field-grid">
-      <div className="cap-field"><span>报告状态</span><b style={{ color: report.status === 'success' ? 'var(--green)' : 'var(--rose)' }}>{report.status}</b></div>
-      <div className="cap-field"><span>Level</span><b>{report.level ?? '-'}</b></div>
-      <div className="cap-field"><span>项目类型</span><b>{report.project_type ?? '-'}</b></div>
-      <div className="cap-field"><span>摘要</span><b style={{ fontSize: 11, fontWeight: 400 }}>{report.summary}</b></div>
-    </div>}
-    {report?.blockers && report.blockers.length > 0 && <div className="cap-field"><span>Blockers</span>{report.blockers.map((b, i) => <div key={i} style={{ color: 'var(--rose)', fontSize: 11 }}>• {b}</div>)}</div>}
-    {report?.gotchas && report.gotchas.length > 0 && <div className="cap-field"><span>Gotchas</span>{report.gotchas.map((g, i) => <div key={i} style={{ color: 'var(--amber)', fontSize: 11 }}>• {g}</div>)}</div>}
-    <div className="split">
-      <button className="btn primary" onClick={async () => { if (capabilityItem) { try { await startRepro(capabilityItem.id, p.is_web ?? false); toast('已重跑复现', 'success'); qc.invalidateQueries({ queryKey: ['cap-repro'] }); } catch (e) { toast(`重跑失败: ${e}`, 'error'); } } }}>重跑</button>
-      <button className="btn" onClick={async () => { try { await stopRepro(task.id); toast('已停止', 'success'); qc.invalidateQueries({ queryKey: ['cap-repro'] }); } catch (e) { toast(`停止失败: ${e}`, 'error'); } }}>停止</button>
-      <button className="btn" onClick={async () => { try { await cleanupRepro(task.id); toast('已清理', 'success'); qc.invalidateQueries({ queryKey: ['cap-repro'] }); } catch (e) { toast(`清理失败: ${e}`, 'error'); } }}>清理</button>
+  return <div className="repro-console">
+    <div className="repro-console-head">
+      <div><span className={`repro-status status-${liveStatus}`}>{reproStatusLabel(liveStatus)}</span><strong>{currentTask.repo_url?.split('/').filter(Boolean).slice(-1)[0]}</strong></div>
+      <div className="repro-meta">任务 #{currentTask.id}{currentTask.web_port ? ` · Web ${currentTask.web_port}` : ''}</div>
+    </div>
+    <div className="repro-actions">
+      {p.demo_url && <a className="btn primary" href={p.demo_url} target="_blank" rel="noreferrer">打开官方 Demo ↗</a>}
+      {!p.demo_url && currentTask.web_url && report?.web_started && <a className="btn primary" href={currentTask.web_url} target="_blank" rel="noreferrer">打开 Web 验证 ↗</a>}
+      {!p.demo_url && <button className="btn primary" onClick={async () => { if (capabilityItem) { try { await startRepro(capabilityItem.id, p.is_web ?? false); toast('已重跑复现', 'success'); qc.invalidateQueries({ queryKey: ['cap-repro'] }); } catch (e) { toast(`重跑失败: ${e}`, 'error'); } } }}>重跑</button>}
+      {['running', 'queued'].includes(liveStatus) && <button className="btn" onClick={async () => { try { await stopRepro(currentTask.id); toast('已停止', 'success'); qc.invalidateQueries({ queryKey: ['cap-repro'] }); } catch (e) { toast(`停止失败: ${e}`, 'error'); } }}>停止</button>}
+      <button className="btn" onClick={async () => { try { await cleanupRepro(currentTask.id); toast('已清理', 'success'); qc.invalidateQueries({ queryKey: ['cap-repro'] }); } catch (e) { toast(`清理失败: ${e}`, 'error'); } }}>清理</button>
       {capabilityItem && <button className="btn" onClick={() => openDetail(capabilityItem)}>查看能力详情</button>}
     </div>
+    <section className="repro-section">
+      <div className="repro-section-title"><span>执行日志</span><small>{streaming ? 'SSE LIVE' : `${displayedLogs.length} 行摘要`}</small></div>
+      <div className="log-stream" ref={logRef}>{displayedLogs.map((log, index) => <div key={`${index}-${log.line}`} className={`log-line log-${log.kind}`}>{log.line}</div>)}{displayedLogs.length === 0 && <div className="muted small">{liveStatus === 'queued' ? '任务已排队，等待复现调度…' : '等待日志输出…'}</div>}</div>
+    </section>
+    {report && <>
+      <section className="repro-section">
+        <div className="repro-section-title"><span>复现结论</span><small>{report.level || report.web_framework || report.project_type || '自动报告'}</small></div>
+        <div className={`repro-summary ${report.status === 'success' ? 'success' : report.status === 'partial' ? 'partial' : 'failed'}`}><strong>{report.summary || '暂无摘要'}</strong>{report.verify && <p>验证：{report.verify}</p>}</div>
+        <div className="field-grid repro-fields">
+          <div className="cap-field"><span>报告状态</span><b>{reproStatusLabel(report.status)}</b></div>
+          <div className="cap-field"><span>项目类型</span><b>{report.web_framework || report.project_type || '-'}</b></div>
+          <div className="cap-field"><span>Web 启动</span><b>{report.is_web ? (report.web_started ? '已启动并验证' : '未启动') : '非 Web 项目'}</b></div>
+          <div className="cap-field"><span>启动命令</span><code>{report.start_command || '-'}</code></div>
+        </div>
+      </section>
+      {report.is_web && <section className="repro-section">
+        <div className="repro-section-title"><span>核心可用性验收</span><small>{report.core_workflow?.verified ? '已通过' : '未通过'}</small></div>
+        <div className={`repro-summary ${report.core_workflow?.verified ? 'success' : 'partial'}`}>
+          <strong>{report.core_workflow?.goal || '未定义核心用户闭环'}</strong>
+          <p>运行模式：{report.core_workflow?.mode === 'real' ? '真实模式' : report.core_workflow?.mode === 'mock' ? 'Mock 模式' : '未验证'}</p>
+          <p>验收结果：{report.core_workflow?.result || '未执行核心业务链'}</p>
+          {(report.core_workflow?.evidence?.length ?? 0) > 0 && <p>证据：{report.core_workflow?.evidence?.join('；')}</p>}
+        </div>
+        {(report.acceptance_issues?.length ?? 0) > 0 && <div className="repro-findings">
+          {(report.acceptance_issues ?? []).map((issue, index) => <div className="blocker" key={`acceptance-${index}`}>自动验收：{issue}</div>)}
+        </div>}
+      </section>}
+      {report.usage && Object.keys(report.usage).length > 0 && <section className="repro-section">
+        <div className="repro-section-title"><span>使用说明</span><small>面向使用者</small></div>
+        <div className="repro-usage">
+          {report.usage.what && <div><span>能力说明</span><p>{report.usage.what}</p></div>}
+          {report.usage.how_to_use && <div><span>如何使用</span><p>{report.usage.how_to_use}</p></div>}
+          {report.usage.prerequisites && <div><span>前置条件</span><p>{report.usage.prerequisites}</p></div>}
+          {report.usage.limitations && <div><span>当前限制</span><p>{report.usage.limitations}</p></div>}
+        </div>
+      </section>}
+      {report.steps && report.steps.length > 0 && <section className="repro-section">
+        <div className="repro-section-title"><span>关键步骤</span><small>{report.steps.length} 步</small></div>
+        <div className="repro-step-list">{report.steps.map((step, index) => <div className={step.ok ? 'ok' : 'failed'} key={`${index}-${step.cmd}`}><span>{step.ok ? '✓' : '✗'}</span><code>{step.cmd}</code>{step.note && <p>{step.note}</p>}</div>)}</div>
+      </section>}
+      {((report.blockers?.length ?? 0) > 0 || (report.gotchas?.length ?? 0) > 0) && <section className="repro-section repro-findings">
+        {(report.blockers ?? []).map((blocker, index) => <div className="blocker" key={`blocker-${index}`}>阻塞：{blocker}</div>)}
+        {(report.gotchas ?? []).map((gotcha, index) => <div className="gotcha" key={`gotcha-${index}`}>注意：{gotcha}</div>)}
+      </section>}
+    </>}
   </div>;
+}
+
+function reproStatusLabel(status: string): string {
+  return { queued: '排队中', running: '复现中', success: '复现成功', partial: '部分成功', failed: '复现失败', stopped: '已停止', timeout: '已超时', cleaned: '已清理' }[status] ?? status;
+}
+
+function formatReproTime(value?: string): string {
+  if (!value) return '时间未知';
+  return value.replace('T', ' ').replace('Z', '').slice(0, 16);
 }
 
 // ========== 能力转化 ==========
@@ -348,6 +475,7 @@ function CapabilityDetailContent({ itemId, initialItem, onRepro, onConvert }: { 
     staleTime: 0,
   });
   const p = item?.payload ?? initialItem.payload ?? {};
+  const newsScore = sourceNewsScore(p);
 
   // 【改动 2】转化表单状态
   const [showConvertForm, setShowConvertForm] = useState(false);
@@ -372,6 +500,14 @@ function CapabilityDetailContent({ itemId, initialItem, onRepro, onConvert }: { 
         </div>
       </div>
     </div>
+
+    {newsScore !== null && <div className="drawer-section">
+      <h3>来源资讯洞察评分</h3>
+      <div className="split" style={{ alignItems: 'center' }}>
+        <div className="score-ring">{formatScore(newsScore)}</div>
+        <p style={{ flex: 1 }}>该项目在资讯洞察阶段的原始综合评分；与上方能力综合评分独立，用于保留来源热度与价值判断。</p>
+      </div>
+    </div>}
 
     {/* LLM 评估 */}
     {p.overview && <div className="drawer-section"><h3>项目概述</h3><p>{p.overview}</p></div>}
@@ -400,7 +536,8 @@ function CapabilityDetailContent({ itemId, initialItem, onRepro, onConvert }: { 
     <div className="drawer-section"><h3>能力评估</h3><div className="badges">{p.capability_type && <Badge tone="green">{p.capability_type}</Badge>}{p.application_scenarios && p.application_scenarios.length > 0 && p.application_scenarios.map((s: string) => <Badge key={s} tone="violet">{s}</Badge>)}</div></div>
 
     {/* 复现 & 转化 */}
-    {p.repro_summary && <div className="drawer-section"><h3>复现摘要</h3><p style={{ color: 'var(--green)' }}>{p.repro_summary}</p></div>}
+    {p.demo_url && <div className="drawer-section"><h3>官方在线演示</h3><p style={{ color: 'var(--green)' }}>项目已提供官方 Demo，按复现策略直接使用官方环境，不启动本地容器。</p><p><a href={p.demo_url} target="_blank" rel="noopener" style={{ color: 'var(--sky)' }}>{p.demo_url}</a></p></div>}
+    {!p.demo_url && p.repro_summary && <div className="drawer-section"><h3>复现摘要</h3><p style={{ color: 'var(--green)' }}>{p.repro_summary}</p></div>}
     <div className="drawer-section"><h3>复现 & 转化</h3><div className="badges"><Badge tone={p.repro_status === 'candidate' ? 'green' : 'amber'}>{p.repro_status ?? '未知'}</Badge><Badge tone="violet">{p.conversion_status ?? '待评估'}</Badge>{p.is_web ? <Badge tone="amber">Web{p.web_framework ? `:${p.web_framework}` : ''}</Badge> : <Badge tone="slate">非Web</Badge>}</div></div>
 
     {/* 使用说明 */}
@@ -440,7 +577,8 @@ function CapabilityDetailContent({ itemId, initialItem, onRepro, onConvert }: { 
     </div>}
 
     <div className="drawer-actions">
-      {p.is_web && <button className="pill-button primary" onClick={onRepro}>加入复现</button>}
+      {p.demo_url && <a className="pill-button primary" href={p.demo_url} target="_blank" rel="noopener">打开官方 Demo</a>}
+      {!p.demo_url && p.is_web && <button className="pill-button primary" onClick={onRepro}>加入复现</button>}
       {!showConvertForm && <button className="pill-button" onClick={() => setShowConvertForm(true)}>加入转化</button>}
       {showConvertForm && <button className="pill-button primary" onClick={handleConvert} disabled={submitting}>{submitting ? '提交中…' : '确认转化'}</button>}
     </div>
