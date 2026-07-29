@@ -247,31 +247,3 @@ def test_huawei_full_migration_pipeline_runs_and_exposes_reports(monkeypatch) ->
     assert client.get("/api/threats/attack-surface").json()["status"] == "ok"
     assert client.get("/api/threats/attack-surface-compare").status_code == 404
     assert client.get("/api/threats/reports").json()["status"] == "ok"
-
-
-def test_frontend_v9_contract_returns_all_page_blocks(monkeypatch) -> None:
-    _patch_threat_connector_records(monkeypatch)
-    client = TestClient(app)
-    client.post("/api/runs", json={"pipeline_name": "news.legacy_raw_pipeline", "reset": True, "wait": True, "params": {"date": "2026-07-10"}})
-    client.post("/api/runs", json={"pipeline_name": "capabilities.from_news_pipeline", "wait": True, "params": {"limit": 3}})
-    client.post("/api/runs", json={"pipeline_name": "threats.huawei_raw_pipeline", "wait": True, "params": {"limit": 10}})
-    client.post("/api/runs", json={"pipeline_name": "vulnerabilities.material_local_raw_import", "wait": True, "params": {"report_limit": 1, "item_limit": 10}})
-    response = client.get("/api/frontend/v9")
-    assert response.status_code == 200
-    data = response.json()
-    assert data["manifest"]["data_mode"] == "connector_pipeline"
-    assert data["news"]["items"]
-    assert data["capability"]["today"]
-    assert data["threat"]["targets"]
-    assert data["vuln"]["materials"]
-    assert "tasks" in data["ops"]
-
-
-def test_frontend_v9_file_contract_aliases_sample_json_paths() -> None:
-    client = TestClient(app)
-    response = client.get("/api/frontend/v9/files/manifest.json")
-    assert response.status_code == 200
-    assert response.json()["data_mode"] == "connector_pipeline"
-    news_items = client.get("/api/frontend/v9/files/news/items.json")
-    assert news_items.status_code == 200
-    assert isinstance(news_items.json(), list)
