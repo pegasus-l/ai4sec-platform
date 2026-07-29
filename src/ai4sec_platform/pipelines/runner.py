@@ -123,6 +123,9 @@ class PipelineRunner:
                         result = step.run(context)
                     finally:
                         context.conn = conn
+                    step_status = str(result.status or "success")
+                    if step_status not in {"success", "partial"}:
+                        raise ValueError(f"Invalid StepResult status for {step.name}: {step_status}")
                     if step_savepoint_started:
                         conn.execute("RELEASE pipeline_step")
                         step_savepoint_started = False
@@ -131,12 +134,15 @@ class PipelineRunner:
                     artifacts.extend(result.artifacts)
                     summary["steps"].append({
                         "name": step.name,
-                        "status": "success",
+                        "status": step_status,
                         "transaction_mode": transaction_mode,
+                        "message": result.message,
                         "metrics": result.metrics,
                     })
+                    if step_status == "partial":
+                        status = "partial"
                     summary["completed_steps"] = len(summary["steps"])
-                    repo.create_task_run(conn, run_id=run_id, step_name=step.name, status="success", metrics=result.metrics)
+                    repo.create_task_run(conn, run_id=run_id, step_name=step.name, status=step_status, metrics=result.metrics, error_message=result.message)
                     repo.create_pipeline_run(
                         conn,
                         run_id=run_id,
@@ -169,16 +175,16 @@ class PipelineRunner:
                         _remove_failed_artifacts(failed_artifacts, self.settings.output_dir)
                     else:
                         conn.rollback()
-                    status = "failed"
+                    status = "timeout" if isinstance(exc, TimeoutError) else "failed"
                     error_message = str(exc)
                     summary["steps"].append({
                         "name": step.name,
-                        "status": "failed",
+                        "status": status,
                         "transaction_mode": transaction_mode,
                         "error": error_message,
                     })
                     summary["completed_steps"] = len(summary["steps"])
-                    repo.create_task_run(conn, run_id=run_id, step_name=step.name, status="failed", error_message=error_message)
+                    repo.create_task_run(conn, run_id=run_id, step_name=step.name, status=status, error_message=error_message)
                     break
             summary["current_step"] = ""
             summary["status"] = status

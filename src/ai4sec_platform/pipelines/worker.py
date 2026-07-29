@@ -81,7 +81,7 @@ class PipelineWorker:
                     should_cancel=lambda: self._cancel_requested(job["run_id"]),
                 )
             result_status = str(result.get("status") or "failed")
-            status = result_status if result_status in {"success", "cancelled"} else "failed"
+            status = result_status if result_status in {"success", "partial", "timeout", "cancelled"} else "failed"
             error_message = str((result.get("summary") or {}).get("error_message") or "")
         except Exception as exc:
             status = "failed"

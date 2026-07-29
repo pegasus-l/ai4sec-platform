@@ -28,6 +28,24 @@ class SuccessfulStep:
 
 
 @dataclass
+class PartialStep:
+    name: str = "partial_step"
+    step_type: str = "test"
+
+    def run(self, context) -> StepResult:
+        return StepResult(metrics={"completed": 2, "failed": 1}, status="partial", message="one item needs review")
+
+
+@dataclass
+class TimeoutStep:
+    name: str = "timeout_step"
+    step_type: str = "test"
+
+    def run(self, context) -> StepResult:
+        raise TimeoutError("step deadline exceeded")
+
+
+@dataclass
 class BlockingStep:
     started: threading.Event
     release: threading.Event
@@ -79,6 +97,12 @@ def _registry() -> PipelineRegistry:
     return registry
 
 
+def _status_registry(step) -> PipelineRegistry:
+    registry = PipelineRegistry()
+    registry.register(PipelineDefinition(name="test.persisted", domain="news", steps=[step]))
+    return registry
+
+
 def _blocking_registry(started: threading.Event, release: threading.Event) -> PipelineRegistry:
     registry = PipelineRegistry()
     registry.register(PipelineDefinition(name="test.persisted", domain="news", steps=[BlockingStep(started, release)]))
@@ -112,6 +136,40 @@ def test_worker_executes_persisted_job_and_records_attempt(tmp_path: Path) -> No
     assert job["status"] == "success"
     assert job["attempt_count"] == 1
     assert job["worker_id"] == "worker-test"
+
+
+def test_worker_propagates_partial_status_to_run_task_and_job(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    _enqueue(settings, "run_partial")
+
+    result = PipelineWorker(settings=settings, registry=_status_registry(PartialStep()), worker_id="partial-worker").run_once()
+
+    assert result is not None and result["status"] == "partial"
+    with connect(settings) as conn:
+        job_status = get_job(conn, "run_partial")["status"]
+        run_status = conn.execute("SELECT status FROM pipeline_runs WHERE run_id = 'run_partial'").fetchone()[0]
+        task = conn.execute("SELECT status, error_message FROM task_runs WHERE run_id = 'run_partial'").fetchone()
+    assert job_status == "partial"
+    assert run_status == "partial"
+    assert task["status"] == "partial"
+    assert task["error_message"] == "one item needs review"
+
+
+def test_worker_propagates_timeout_status_to_run_task_and_job(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    _enqueue(settings, "run_timeout")
+
+    result = PipelineWorker(settings=settings, registry=_status_registry(TimeoutStep()), worker_id="timeout-worker").run_once()
+
+    assert result is not None and result["status"] == "timeout"
+    with connect(settings) as conn:
+        job_status = get_job(conn, "run_timeout")["status"]
+        run_status = conn.execute("SELECT status FROM pipeline_runs WHERE run_id = 'run_timeout'").fetchone()[0]
+        task = conn.execute("SELECT status, error_message FROM task_runs WHERE run_id = 'run_timeout'").fetchone()
+    assert job_status == "timeout"
+    assert run_status == "timeout"
+    assert task["status"] == "timeout"
+    assert task["error_message"] == "step deadline exceeded"
 
 
 def test_worker_marks_interrupted_job_failed_until_safe_resume_exists(tmp_path: Path) -> None:

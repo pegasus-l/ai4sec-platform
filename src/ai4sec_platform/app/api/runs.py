@@ -131,8 +131,8 @@ def retry_run(run_id: str, request: RetryPipelineRequest = RetryPipelineRequest(
     ).fetchone()
     if not row:
         raise HTTPException(status_code=404, detail="run not found")
-    if row["status"] not in {"failed", "cancelled"}:
-        raise HTTPException(status_code=409, detail="only failed or cancelled runs can be retried")
+    if row["status"] not in {"failed", "timeout", "cancelled"}:
+        raise HTTPException(status_code=409, detail="only failed, timeout, or cancelled runs can be retried")
     checkpoint = conn.execute(
         "SELECT path FROM artifacts WHERE run_id = ? AND artifact_type = 'pipeline_checkpoint' ORDER BY id DESC LIMIT 1", (run_id,)
     ).fetchone()

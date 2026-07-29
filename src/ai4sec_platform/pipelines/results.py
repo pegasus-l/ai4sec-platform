@@ -8,3 +8,5 @@ from typing import Any
 class StepResult:
     metrics: dict[str, Any] = field(default_factory=dict)
     artifacts: list[dict[str, Any]] = field(default_factory=list)
+    status: str = "success"
+    message: str = ""

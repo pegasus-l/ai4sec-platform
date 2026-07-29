@@ -9,7 +9,7 @@ from ai4sec_platform.db import repositories as repo
 
 
 ACTIVE_JOB_STATUSES = ("queued", "running")
-FINAL_JOB_STATUSES = ("success", "failed", "cancelled")
+FINAL_JOB_STATUSES = ("success", "partial", "failed", "timeout", "cancelled")
 
 
 class JobConflictError(RuntimeError):

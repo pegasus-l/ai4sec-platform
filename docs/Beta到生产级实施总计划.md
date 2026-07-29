@@ -859,7 +859,7 @@ D11 暂缓的是公网入口和完整公网暴露治理，不代表复现容器�
 - [x] 实现单实例 Pipeline Worker 进程和独立 CLI。
 - [x] 实现原子任务领取、Worker 注册、空闲/运行 heartbeat、Job 租约续期和租约过期失联判定。
 - [x] 实现任务条件领取、同 Pipeline/全局 reset 冲突检查和单机 Worker 文件锁。
-- [ ] 已实现 queued/running/success/failed/cancelled；partial 和 timeout 尚未统一。
+- [x] 统一 queued/running/success/partial/failed/timeout/cancelled 状态在 Step、TaskRun、PipelineRun 和 PipelineJob 间的传播。
 - [ ] 已实现排队立即取消和运行中 Step 边界协作取消；系统级 kill switch 与子进程强杀尚未完成。
 - [ ] 已实现严格 JSON Step checkpoint、输入/实现 checksum 和恢复框架；四域 Step 的 `resume_safe` 审核仍待完成。
 - [ ] 已实现失败 Run 的白名单续跑入口；失败条目重跑与完整 Run 重跑策略仍待补充。
@@ -1784,3 +1784,13 @@ Python full test suite: 199 passed
 - 同 Pipeline 已有 queued/running Job 时，Scheduler 返回 `blocked` 并在宽限窗口内重试；超过窗口不会无限补跑。
 - Scheduler 使用独立单机文件锁；默认配置没有任何 enabled 计划，避免在资讯/漏洞/威胁真实日更验收前擅自触发采集。
 - Scheduler 专项测试：5 passed；全仓 Python 测试：231 passed；默认空配置 CLI `--once` 实测返回 `[]`。
+
+### 2026-07-29：统一 Pipeline partial 和 timeout 状态
+
+- `StepResult` 新增显式 `status` 与 `message`；模块只有明确返回 `partial` 时平台才传播部分成功，不根据错误数量或产出数量擅自推断。
+- Step 抛出 `TimeoutError` 时 Runner 将 TaskRun 和 PipelineRun 标记为 `timeout`，普通异常仍标记为 `failed`。
+- Pipeline Worker 将 `partial`、`timeout` 作为正式 Job 终态保存，不再折叠成 `failed`；超时 Run 可以进入现有受控 checkpoint 重试入口。
+- `partial` Step 可以继续执行后续 Step，最终 Run 保持 `partial`；任何后续失败、超时或取消会按更强终态覆盖。
+- 当前只统一“已发生超时”的状态表达，不使用 Python daemon Thread 强制终止任意 Step；外部 HTTP、模型、浏览器和子进程仍须各自在可中断边界实现真实 deadline/kill。
+- 回归覆盖 Run、TaskRun、PipelineJob 三层 partial/timeout 一致性。
+- 状态传播定向测试：24 passed；全仓 Python 测试：233 passed。
