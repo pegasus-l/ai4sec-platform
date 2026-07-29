@@ -30,6 +30,26 @@ class InspectProgressStep:
         return StepResult(metrics={"items": 1})
 
 
+@dataclass
+class RetryApprovedStep:
+    name: str
+    step_type: str = "test"
+    resume_safe: bool = True
+    resume_input_keys: tuple[str, ...] = ()
+
+    def run(self, context) -> StepResult:
+        return StepResult(metrics={"items": 1})
+
+
+@dataclass
+class RetryUnsafeStep:
+    name: str
+    step_type: str = "test"
+
+    def run(self, context) -> StepResult:
+        return StepResult(metrics={"items": 1})
+
+
 def test_runner_reuses_reserved_run_id_and_records_progress(tmp_path: Path) -> None:
     settings = Settings(project_root=tmp_path, output_dir=tmp_path / "output", database_path=tmp_path / "test.db")
     seen_current_step: list[str] = []
@@ -107,8 +127,18 @@ def test_failed_run_retry_api_uses_verified_checkpoint_mode(monkeypatch, tmp_pat
     settings = load_settings()
     checkpoint_path = tmp_path / "checkpoint.json"
     checkpoint_path.write_text(
-        '{"next_step":{"name":"aggregate","resume_safe":true,"resume_input_keys":[]}}', encoding="utf-8"
+        '{"completed_steps":[],"next_step":{"name":"aggregate","resume_safe":true,"resume_input_keys":[]}}',
+        encoding="utf-8",
     )
+    registry = PipelineRegistry()
+    registry.register(
+        PipelineDefinition(
+            name="vulnerabilities.event_aggregation_pipeline",
+            domain="vulnerabilities",
+            steps=[RetryApprovedStep("aggregate")],
+        )
+    )
+    monkeypatch.setattr(runs_api, "default_registry", lambda: registry)
     with connect(settings) as conn:
         init_db(conn)
         repo.create_pipeline_run(
@@ -117,7 +147,10 @@ def test_failed_run_retry_api_uses_verified_checkpoint_mode(monkeypatch, tmp_pat
             domain="vulnerabilities",
             pipeline_name="vulnerabilities.event_aggregation_pipeline",
             status="failed",
-            summary={"params": {"limit": 20, "reset": True}},
+            summary={
+                "params": {"limit": 20, "reset": True},
+                "steps": [{"name": "aggregate", "status": "failed"}],
+            },
         )
         repo.create_artifact(
             conn,
@@ -139,6 +172,54 @@ def test_failed_run_retry_api_uses_verified_checkpoint_mode(monkeypatch, tmp_pat
     assert response.json()["run_id"] == "run_retry"
     assert captured[0].reset is False
     assert captured[0].params == {"limit": 20, "_resume_from_run_id": "run_failed"}
+
+
+def test_failed_run_retry_api_rejects_stale_checkpoint(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("AI4SEC_DATABASE_PATH", str(tmp_path / "retry-stale.db"))
+    monkeypatch.setenv("AI4SEC_OUTPUT_DIR", str(tmp_path / "output"))
+    settings = load_settings()
+    checkpoint_path = tmp_path / "stale-checkpoint.json"
+    checkpoint_path.write_text(
+        '{"completed_steps":[],"next_step":{"name":"safe_prepare","resume_safe":true,"resume_input_keys":[]}}',
+        encoding="utf-8",
+    )
+    registry = PipelineRegistry()
+    registry.register(
+        PipelineDefinition(
+            name="test.stale_retry",
+            domain="vulnerabilities",
+            steps=[RetryApprovedStep("safe_prepare"), RetryUnsafeStep("unsafe_model")],
+        )
+    )
+    monkeypatch.setattr(runs_api, "default_registry", lambda: registry)
+    with connect(settings) as conn:
+        init_db(conn)
+        repo.create_pipeline_run(
+            conn,
+            run_id="run_stale",
+            domain="vulnerabilities",
+            pipeline_name="test.stale_retry",
+            status="failed",
+            summary={
+                "params": {},
+                "steps": [
+                    {"name": "safe_prepare", "status": "success"},
+                    {"name": "unsafe_model", "status": "failed"},
+                ],
+            },
+        )
+        repo.create_artifact(
+            conn,
+            run_id="run_stale",
+            artifact_type="pipeline_checkpoint",
+            path=str(checkpoint_path),
+        )
+        conn.commit()
+
+    response = TestClient(app).post("/api/runs/run_stale/retry")
+
+    assert response.status_code == 409
+    assert "Checkpoint is stale" in response.json()["detail"]
 
 
 def test_vulnerability_run_results_are_scoped_by_run_id(monkeypatch, tmp_path: Path) -> None:

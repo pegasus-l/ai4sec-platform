@@ -16,6 +16,7 @@ from ai4sec_platform.db.models import init_db
 from ai4sec_platform.db.session import connect
 from ai4sec_platform.pipelines.jobs import ExecutionDisabledError, JobConflictError, enqueue_job, get_job, request_job_cancel
 from ai4sec_platform.pipelines.registry import default_registry
+from ai4sec_platform.pipelines.runner import validate_checkpoint_resume_position
 
 router = APIRouter(prefix="/runs", tags=["runs"])
 
@@ -138,10 +139,21 @@ def retry_run(run_id: str, request: RetryPipelineRequest = RetryPipelineRequest(
         checkpoint_payload = json.loads(Path(str(checkpoint["path"])).read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc:
         raise HTTPException(status_code=409, detail="run checkpoint cannot be read") from exc
-    next_step = checkpoint_payload.get("next_step") or {}
-    if not next_step.get("resume_safe"):
-        raise HTTPException(status_code=409, detail=f"next step is not approved for automatic resume: {next_step.get('name') or 'unknown'}")
     summary = repo.loads(row["summary_json"], {})
+    try:
+        definition = default_registry().get(str(row["pipeline_name"]))
+        validate_checkpoint_resume_position(
+            definition,
+            source_status=str(row["status"]),
+            source_summary=summary,
+            checkpoint_payload=checkpoint_payload,
+        )
+        completed_steps = checkpoint_payload.get("completed_steps") or []
+        next_step = definition.steps[len(completed_steps)]
+        if not bool(getattr(next_step, "resume_safe", False)):
+            raise ValueError(f"Next step is not approved for automatic resume: {next_step.name}")
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     params = dict(summary.get("params") or {})
     params.pop("reset", None)
     params["_resume_from_run_id"] = run_id

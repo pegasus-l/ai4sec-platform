@@ -861,7 +861,7 @@ D11 暂缓的是公网入口和完整公网暴露治理，不代表复现容器�
 - [x] 实现任务条件领取、同 Pipeline/全局 reset 冲突检查和单机 Worker 文件锁。
 - [x] 统一 queued/running/success/partial/failed/timeout/cancelled 状态在 Step、TaskRun、PipelineRun 和 PipelineJob 间的传播。
 - [ ] 已实现持久系统 kill switch、拒绝新任务、批量取消 queued、running 协作取消、能力复现容器/宿主进程强停，以及 crawl4ai 取消后停止提交新 URL；已运行浏览器线程仍依赖单 URL deadline 和 context 退出。
-- [ ] 已实现严格 JSON Step checkpoint、输入/实现 checksum 和恢复框架；四域 Step 的 `resume_safe` 审核仍待完成。
+- [ ] 已实现严格 JSON Step checkpoint、输入/实现 checksum、陈旧检查点位置校验和恢复框架；首个白名单为漏洞候选选择步骤，四域其余 Step 的 `resume_safe` 审核仍待完成。
 - [ ] 已实现失败 Run 的白名单续跑入口；失败条目重跑与完整 Run 重跑策略仍待补充。
 - [x] 实现 Worker 启动对账；在 checkpoint 完成前将中断的 running 任务标记失败，不做不安全的自动重放。
 - [x] 实现单机统一 Scheduler、`Asia/Shanghai` 时区、确定性 Run ID、宽限窗口漏跑补偿和单机互斥；具体业务时刻默认禁用，待模块验收后配置启用。
@@ -1822,3 +1822,12 @@ Python full test suite: 199 passed
 - crawl4ai Connector 接入取消回调；每个 URL 完成后写入现有进度 checkpoint，取消后不再抓取剩余 URL，并在 metadata 记录 `cancelled` 和 `unsubmitted`。
 - 已经运行的 Python 线程不会被强杀，最多等待当前并发槽位按 URL timeout 和 crawl4ai context manager 正常关闭；这是为避免浏览器、SQLite 和文件状态损坏的明确安全边界。
 - 回归覆盖 Step Context 取消信号和 crawl 并发停止提交；取消/抓取/Worker 定向测试：36 passed；全仓 Python 测试：240 passed。
+
+### 2026-07-29：阻止陈旧检查点跨步骤重放
+
+- 审计发现旧检查点可能仍指向较早的安全 Step，而实际 Run 已在更晚的不安全 Step 失败；原重试入口只检查检查点声明的 `resume_safe`，存在重放中间模型调用或外部副作用的风险。
+- Runner 与 retry API 现在共用检查点位置校验：失败或超时 Run 的检查点必须紧邻实际失败 Step；取消 Run 的检查点必须紧邻第一个未完成 Step，历史更早的检查点一律拒绝。
+- Runner 将 `timeout` 纳入可恢复终态，但仍要求输入 checksum、Step 顺序、实现契约、Artifact checksum 和实际 Step 白名单全部通过。
+- 首个生产恢复白名单仅开放 `SelectVulnerabilityKnowledgeCandidatesStep`；该步骤是原子事务内的确定性数据库选择，只恢复 `vulnerability_material_ids`。抓取、模型调用、事件聚合和复杂写入步骤暂不开放自动恢复。
+- 新增 Runner 与 API 两层陈旧检查点回归，确认更晚的不安全 Step 不会因旧检查点而被再次调用。
+- 恢复相关聚焦测试：38 passed；全仓 Python 测试：242 passed；`compileall` 通过。

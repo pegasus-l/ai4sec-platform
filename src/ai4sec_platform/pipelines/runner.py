@@ -242,9 +242,11 @@ class PipelineRunner:
         )
 
     def _restore_checkpoint(self, conn, context: PipelineContext, definition, resume_from_run_id: str) -> list[dict[str, Any]]:
-        source_run = conn.execute("SELECT status FROM pipeline_runs WHERE run_id = ?", (resume_from_run_id,)).fetchone()
-        if not source_run or source_run["status"] not in {"failed", "cancelled"}:
-            raise ValueError("Only failed or cancelled pipeline runs can be resumed")
+        source_run = conn.execute(
+            "SELECT status, summary_json FROM pipeline_runs WHERE run_id = ?", (resume_from_run_id,)
+        ).fetchone()
+        if not source_run or source_run["status"] not in {"failed", "timeout", "cancelled"}:
+            raise ValueError("Only failed, timeout, or cancelled pipeline runs can be resumed")
         row = conn.execute(
             """
             SELECT path, sha256 FROM artifacts
@@ -276,6 +278,12 @@ class PipelineRunner:
         expected_names = [step.name for step in definition.steps[: len(completed_steps)]]
         if [step.get("name") for step in completed_steps] != expected_names:
             raise ValueError("Checkpoint step sequence does not match the current pipeline")
+        validate_checkpoint_resume_position(
+            definition,
+            source_status=str(source_run["status"]),
+            source_summary=repo.loads(source_run["summary_json"], {}),
+            checkpoint_payload=payload,
+        )
         next_step = definition.steps[len(completed_steps)]
         if not bool(getattr(next_step, "resume_safe", False)):
             raise ValueError(f"Pipeline step is not approved for automatic resume: {next_step.name}")
@@ -287,6 +295,45 @@ class PipelineRunner:
             raise ValueError("Checkpoint outputs are invalid")
         context.outputs.update(outputs)
         return [{**step, "status": "restored"} for step in completed_steps]
+
+
+def validate_checkpoint_resume_position(
+    definition,
+    *,
+    source_status: str,
+    source_summary: dict[str, Any],
+    checkpoint_payload: dict[str, Any],
+) -> None:
+    source_steps = source_summary.get("steps")
+    completed_steps = checkpoint_payload.get("completed_steps")
+    next_step = checkpoint_payload.get("next_step")
+    if not isinstance(source_steps, list) or not isinstance(completed_steps, list) or not isinstance(next_step, dict):
+        raise ValueError("Checkpoint resume position metadata is invalid")
+    if len(completed_steps) >= len(definition.steps) or len(source_steps) > len(definition.steps):
+        raise ValueError("Checkpoint resume position is outside the current pipeline")
+    if not all(isinstance(step, dict) for step in source_steps + completed_steps):
+        raise ValueError("Checkpoint resume step metadata is invalid")
+    definition_names = [step.name for step in definition.steps]
+    if [step.get("name") for step in completed_steps] != definition_names[: len(completed_steps)]:
+        raise ValueError("Checkpoint completed steps do not match the current pipeline")
+    if [step.get("name") for step in source_steps] != definition_names[: len(source_steps)]:
+        raise ValueError("Source run steps do not match the current pipeline")
+
+    if source_status in {"failed", "timeout"}:
+        if not source_steps or source_steps[-1].get("status") not in {"failed", "timeout"}:
+            raise ValueError("Source run does not record a resumable failed step")
+        expected_completed_count = len(source_steps) - 1
+        expected_next_name = source_steps[-1].get("name")
+    elif source_status == "cancelled":
+        expected_completed_count = len(source_steps)
+        if expected_completed_count >= len(definition.steps):
+            raise ValueError("Cancelled source run has no remaining pipeline step")
+        expected_next_name = definition.steps[expected_completed_count].name
+    else:
+        raise ValueError(f"Source run status is not resumable: {source_status}")
+
+    if len(completed_steps) != expected_completed_count or next_step.get("name") != expected_next_name:
+        raise ValueError(f"Checkpoint is stale for source run next step: {expected_next_name or 'unknown'}")
 
 
 def _step_transaction_mode(step: Any) -> str:

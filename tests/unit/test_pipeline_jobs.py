@@ -98,6 +98,31 @@ class CheckpointConsumerStep:
         return StepResult(metrics={"items": 1})
 
 
+@dataclass
+class CheckpointIntermediateStep:
+    calls: list[str]
+    name: str = "checkpoint_intermediate"
+    step_type: str = "test"
+    resume_safe: bool = True
+    resume_input_keys: tuple[str, ...] = ("checkpoint_value",)
+
+    def run(self, context) -> StepResult:
+        self.calls.append(self.name)
+        context.outputs["intermediate_value"] = "completed"
+        return StepResult(metrics={"items": 1})
+
+
+@dataclass
+class CheckpointUnsafeFailureStep:
+    calls: list[str]
+    name: str = "checkpoint_unsafe_failure"
+    step_type: str = "test"
+
+    def run(self, context) -> StepResult:
+        self.calls.append(self.name)
+        raise RuntimeError("unsafe planned failure")
+
+
 def _settings(tmp_path: Path) -> Settings:
     return Settings(project_root=tmp_path, output_dir=tmp_path / "output", database_path=tmp_path / "platform.db")
 
@@ -454,3 +479,28 @@ def test_runner_rejects_resume_for_step_without_explicit_safety_approval(tmp_pat
 
     with pytest.raises(ValueError, match="No recoverable checkpoint"):
         runner.run("test.checkpoint", {"_resume_from_run_id": "run_unsafe"}, run_id="run_rejected")
+
+
+def test_runner_rejects_stale_checkpoint_before_later_failed_step(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    calls: list[str] = []
+    registry = PipelineRegistry()
+    registry.register(
+        PipelineDefinition(
+            name="test.stale_checkpoint",
+            domain="news",
+            steps=[CheckpointSourceStep(calls), CheckpointIntermediateStep(calls), CheckpointUnsafeFailureStep(calls)],
+        )
+    )
+    runner = PipelineRunner(settings=settings, registry=registry)
+
+    failed = runner.run("test.stale_checkpoint", run_id="run_stale")
+
+    assert failed["status"] == "failed"
+    with pytest.raises(ValueError, match="Checkpoint is stale"):
+        runner.run(
+            "test.stale_checkpoint",
+            {"_resume_from_run_id": "run_stale"},
+            run_id="run_stale_rejected",
+        )
+    assert calls == ["checkpoint_source", "checkpoint_intermediate", "checkpoint_unsafe_failure"]
