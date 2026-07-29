@@ -26,7 +26,6 @@ from ai4sec_platform.schemas.sources import SourceFetchRequest
 from ai4sec_platform.sources.connectors.news.rss import RssConnector
 from ai4sec_platform.sources.connectors.news.awesome import AwesomeConnector
 from ai4sec_platform.sources.result import SourceFetchResult
-from ai4sec_platform.app.api.runs import _release_pipeline, _reserve_pipeline
 
 
 def connection() -> sqlite3.Connection:
@@ -81,18 +80,6 @@ def test_live_sources_run_with_bounded_concurrency(monkeypatch, tmp_path) -> Non
     records = source_adapter.collect_news_sources(settings, {"sources": ["rss", "x", "asis"], "source_workers": 3})
     assert [record["source"] for record in records] == ["rss", "x", "asis"]
     assert max_active == 3
-
-
-def test_pipeline_run_lock_rejects_duplicate_name() -> None:
-    pipeline_name = "news.test-lock"
-    _release_pipeline(pipeline_name)
-    try:
-        assert _reserve_pipeline(pipeline_name) is True
-        assert _reserve_pipeline(pipeline_name) is False
-    finally:
-        _release_pipeline(pipeline_name)
-    assert _reserve_pipeline(pipeline_name) is True
-    _release_pipeline(pipeline_name)
 
 
 def test_legacy_arxiv_and_github_channels_are_expanded() -> None:

@@ -91,6 +91,27 @@ CREATE TABLE IF NOT EXISTS pipeline_runs (
 );
 CREATE INDEX IF NOT EXISTS idx_pipeline_runs_domain ON pipeline_runs(domain);
 
+CREATE TABLE IF NOT EXISTS pipeline_jobs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id TEXT NOT NULL UNIQUE,
+    domain TEXT NOT NULL,
+    pipeline_name TEXT NOT NULL,
+    params_json TEXT NOT NULL DEFAULT '{}',
+    reset_requested INTEGER NOT NULL DEFAULT 0,
+    status TEXT NOT NULL DEFAULT 'queued',
+    attempt_count INTEGER NOT NULL DEFAULT 0,
+    worker_id TEXT NOT NULL DEFAULT '',
+    heartbeat_at TEXT NOT NULL DEFAULT '',
+    error_message TEXT NOT NULL DEFAULT '',
+    queued_at TEXT NOT NULL,
+    started_at TEXT NOT NULL DEFAULT '',
+    finished_at TEXT NOT NULL DEFAULT '',
+    updated_at TEXT NOT NULL,
+    FOREIGN KEY(run_id) REFERENCES pipeline_runs(run_id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_pipeline_jobs_status ON pipeline_jobs(status, id);
+CREATE INDEX IF NOT EXISTS idx_pipeline_jobs_pipeline ON pipeline_jobs(pipeline_name, status);
+
 CREATE TABLE IF NOT EXISTS task_runs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     run_id TEXT NOT NULL,
@@ -248,12 +269,15 @@ def init_db(conn: sqlite3.Connection) -> None:
 SUPPORTED_DOMAINS = frozenset({"news", "capabilities", "threats", "vulnerabilities"})
 
 
-def reset_domain(conn: sqlite3.Connection, domain: str) -> None:
+def reset_domain(conn: sqlite3.Connection, domain: str, *, preserve_run_id: str | None = None) -> None:
     if domain not in SUPPORTED_DOMAINS:
         raise ValueError(f"Unsupported domain reset: {domain}")
     try:
         conn.execute("BEGIN IMMEDIATE")
-        conn.execute("DELETE FROM pipeline_runs WHERE domain = ?", (domain,))
+        if preserve_run_id:
+            conn.execute("DELETE FROM pipeline_runs WHERE domain = ? AND run_id <> ?", (domain, preserve_run_id))
+        else:
+            conn.execute("DELETE FROM pipeline_runs WHERE domain = ?", (domain,))
         conn.execute("DELETE FROM human_queue_items WHERE domain = ?", (domain,))
         conn.execute("DELETE FROM quality_audits WHERE domain = ?", (domain,))
         conn.execute("DELETE FROM data_sources WHERE domain = ?", (domain,))
@@ -281,6 +305,7 @@ def reset_db(conn: sqlite3.Connection) -> None:
         "model_calls",
         "artifacts",
         "task_runs",
+        "pipeline_jobs",
         "pipeline_runs",
         "evidence_items",
         "domain_items",

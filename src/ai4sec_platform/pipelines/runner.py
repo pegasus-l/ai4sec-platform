@@ -37,7 +37,7 @@ class PipelineRunner:
         with connect(self.settings) as conn:
             if params.get("reset"):
                 init_db(conn)
-                reset_domain(conn, definition.domain)
+                reset_domain(conn, definition.domain, preserve_run_id=run_id)
             else:
                 init_db(conn)
             repo.create_pipeline_run(

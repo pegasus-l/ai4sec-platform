@@ -110,17 +110,27 @@ npm run build
 
 ## 后端任务触发
 
-当前已支持通过 API 或 CLI 触发第一版最小 pipeline：
+生产形态使用独立单机 Pipeline Worker。先启动 Worker：
 
 ```bash
-PYTHONPATH=src python3 -m ai4sec_platform.cli.run_pipeline --pipeline news.legacy_raw_pipeline --reset
+PYTHONPATH=src python3 -m ai4sec_platform.cli.pipeline_worker --poll-interval 1
 ```
 
-或通过 HTTP：
+API 提交的任务会先写入 SQLite `pipeline_jobs`，`wait=false` 时立即返回可轮询的 `run_id`：
 
 ```text
 POST /api/runs
-{"pipeline_name": "news.legacy_raw_pipeline", "reset": true, "params": {"date": "2026-07-10"}}
+{"pipeline_name": "news.legacy_raw_pipeline", "reset": true, "wait": false, "params": {"date": "2026-07-10"}}
+```
+
+`wait=true` 暂时保留给本地开发、测试和管理命令：它仍先持久入队，再在单 Worker 文件锁保护下同步领取该任务。正式部署的页面和调度器应使用 `wait=false`，由独立 Worker 执行。
+
+Worker 重启时，尚未领取的 `queued` 任务会保留。已经处于 `running` 的中断任务会明确标记为 `failed`，在 Step checkpoint 和幂等重放完成前不会自动从头执行，避免重复写入和重复模型调用。
+
+也可以绕过队列直接通过 CLI 执行调试 pipeline：
+
+```bash
+PYTHONPATH=src python3 -m ai4sec_platform.cli.run_pipeline --pipeline news.legacy_raw_pipeline --reset
 ```
 
 该 pipeline 会创建总控 PipelineRun，读取本地原始 JSON，执行标准化、去重、资讯对象构建、日报生成和质量审计，写入 TaskRun、Artifact 和 manifest，仍保持 `production_writes=false`。

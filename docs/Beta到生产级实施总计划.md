@@ -846,24 +846,24 @@ D11 暂缓的是公网入口和完整公网暴露治理，不代表复现容器�
 #### 数据库任务
 
 - [ ] 固定 SQLite 本机持久卷和文件权限。
-- [ ] 配置并验证 WAL、busy timeout 和 checkpoint 策略。
+- [x] 配置并验证 WAL 和 busy timeout；WAL checkpoint 自动化策略仍待补充。
 - [ ] 建立 `schema_migrations` 表和顺序迁移执行器。
 - [ ] 为 PipelineRun、TaskRun、Worker、Artifact、SourceHealth 和 Audit 表补齐约束与索引。
 - [ ] 为四域关键业务对象补齐幂等键和唯一约束。
 - [ ] 增加锁等待、数据库大小、WAL 大小和完整性检查指标。
-- [ ] 建立 SQLite backup API 或一致性快照备份流程。
+- [x] 建立 SQLite Backup API、一致性校验和恢复到指定文件流程。
 
 #### 任务系统任务
 
 - [ ] API 只创建 queued 任务，不直接启动线程。
-- [ ] 实现单实例 Pipeline Worker 进程。
+- [x] 实现单实例 Pipeline Worker 进程和独立 CLI。
 - [ ] 实现任务领取、租约、heartbeat 和 Worker 注册。
-- [ ] 实现运行锁记录、唯一约束、单机文件锁和全局 reset 排他锁。
+- [x] 实现任务条件领取、同 Pipeline/全局 reset 冲突检查和单机 Worker 文件锁。
 - [ ] 实现 queued/running/partial/success/failed/cancelled/timeout 状态机。
 - [ ] 实现任务取消和系统级 kill switch。
 - [ ] 实现 Step checkpoint 和输入 checksum。
 - [ ] 实现失败 Step、失败条目和完整 Run 重跑。
-- [ ] 实现 Worker 启动对账和过期任务回收。
+- [x] 实现 Worker 启动对账；在 checkpoint 完成前将中断的 running 任务标记失败，不做不安全的自动重放。
 - [ ] 实现统一 Scheduler 和漏跑补偿。
 
 #### 验收
@@ -1449,3 +1449,39 @@ CLI 初始化 → 在线备份 → 恢复 → 完整性校验：通过
 2. 再确认该能力是否属于当前产品架构，而不是 demo、迁移脚本或临时适配层。
 3. 测试与 README 如果和正式代码调用关系冲突，应优先判定其是否过期，不能为了让旧测试通过而恢复代码。
 4. 只有存在明确调用方、用户承诺或迁移窗口时才保留兼容层，并记录下线时间；否则删除历史遗留实现。
+
+### 2026-07-28：完成持久 Pipeline Job 与单机 Worker 第一批实现
+
+完成内容：
+
+- 新增 SQLite `pipeline_jobs` 持久任务表，记录参数、reset 请求、状态、领取次数、Worker、heartbeat、中断原因和起止时间。
+- API 的 `wait=false` 不再创建 daemon 执行线程，只原子写入 `pipeline_runs` 和 `pipeline_jobs` 后返回轮询地址。
+- 新增原子任务领取：SQLite `BEGIN IMMEDIATE` 与条件更新保证同一任务只能从 `queued` 转为一次 `running`。
+- 新增同 Pipeline 重复任务冲突、reset 全局排他和 reset 运行时保留当前 `run_id`，避免领域重置删除任务自身。
+- 新增独立 `pipeline_worker` CLI 和宿主机 `flock` 文件锁，阻止两个 Worker 进程并行执行 Pipeline。
+- `wait=true` 作为开发和测试兼容入口保留，但同样先持久入队并竞争同一 Worker 文件锁；正式页面和 Scheduler 必须使用 `wait=false`。
+- Worker 启动时对账遗留 `running` 任务。由于 Step checkpoint、上下文恢复和领域幂等尚未完成，中断任务安全地转为 `failed` 并要求人工重试，不自动从头重放。
+- Run 查询接口返回关联 Job 状态，前端可以区分排队、执行、完成和 Worker 中断。
+
+当前状态机：
+
+```text
+queued → running → success
+                 → failed
+worker interrupted running → failed（人工重试）
+```
+
+验证结果：
+
+```text
+持久任务、Worker、reset 与安全测试：11 passed
+全仓测试：162 passed
+compileall：通过
+```
+
+明确未完成：
+
+- heartbeat 字段已建立，但长步骤周期心跳、租约过期判定和 Worker 注册尚未完成。
+- cancelled、timeout、partial、kill switch 尚未进入统一 Job 状态机。
+- Step checkpoint、输入 checksum、上下文 Artifact 恢复和失败步骤续跑尚未完成。
+- 在上述恢复能力完成前，不允许自动重放被中断的 running 任务。

@@ -1,13 +1,10 @@
 from __future__ import annotations
 
-import threading
-import time
 from dataclasses import dataclass
 from pathlib import Path
 
 from fastapi.testclient import TestClient
 
-from ai4sec_platform.app.api import runs as runs_api
 from ai4sec_platform.app.main import app
 from ai4sec_platform.core.config import Settings, load_settings
 from ai4sec_platform.db import repositories as repo
@@ -17,6 +14,7 @@ from ai4sec_platform.pipelines.base import PipelineDefinition
 from ai4sec_platform.pipelines.registry import PipelineRegistry
 from ai4sec_platform.pipelines.results import StepResult
 from ai4sec_platform.pipelines.runner import PipelineRunner
+from ai4sec_platform.pipelines.worker import PipelineWorker
 
 
 @dataclass
@@ -49,34 +47,9 @@ def test_runner_reuses_reserved_run_id_and_records_progress(tmp_path: Path) -> N
         assert row["summary"]["current_step"] == ""
 
 
-def test_async_run_returns_pollable_run_id(monkeypatch, tmp_path: Path) -> None:
+def test_queued_run_is_pollable_and_executed_by_worker(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("AI4SEC_DATABASE_PATH", str(tmp_path / "async.db"))
     monkeypatch.setenv("AI4SEC_OUTPUT_DIR", str(tmp_path / "output"))
-    started = threading.Event()
-    release = threading.Event()
-
-    class FakeRunner:
-        def run(self, pipeline_name, params, *, run_id):
-            started.set()
-            release.wait(timeout=5)
-            settings = load_settings()
-            with connect(settings) as conn:
-                init_db(conn)
-                repo.create_pipeline_run(
-                    conn,
-                    run_id=run_id,
-                    domain="vulnerabilities",
-                    pipeline_name=pipeline_name,
-                    status="success",
-                    finished_at="done",
-                    summary={"steps": [], "completed_steps": 1, "total_steps": 1, "current_step": "", "status": "success"},
-                )
-                conn.commit()
-            return {"run_id": run_id, "pipeline_name": pipeline_name, "domain": "vulnerabilities", "status": "success", "summary": {}}
-
-    monkeypatch.setattr(runs_api, "PipelineRunner", FakeRunner)
-    with runs_api._active_runs_lock:
-        runs_api._active_runs.clear()
     client = TestClient(app)
 
     response = client.post("/api/runs", json={"pipeline_name": "vulnerabilities.event_aggregation_pipeline", "wait": False})
@@ -85,22 +58,18 @@ def test_async_run_returns_pollable_run_id(monkeypatch, tmp_path: Path) -> None:
     assert payload["status"] == "queued"
     assert payload["run_id"].startswith("run_")
     assert payload["poll_url"] == f"/api/runs/{payload['run_id']}"
-    assert started.wait(timeout=2)
 
     detail = client.get(payload["poll_url"])
     assert detail.status_code == 200
     assert detail.json()["run_id"] == payload["run_id"]
-    assert detail.json()["status"] in {"queued", "running"}
+    assert detail.json()["status"] == "queued"
+    assert detail.json()["job"]["status"] == "queued"
 
-    release.set()
-    deadline = time.time() + 5
-    while time.time() < deadline:
-        detail_payload = client.get(payload["poll_url"]).json()
-        if detail_payload["status"] == "success":
-            break
-        time.sleep(0.01)
+    result = PipelineWorker().run_once(run_id=payload["run_id"])
+    assert result is not None
+    detail_payload = client.get(payload["poll_url"]).json()
     assert detail_payload["status"] == "success"
-    assert detail_payload["progress"] == {"completed_steps": 1, "total_steps": 1, "current_step": ""}
+    assert detail_payload["job"]["status"] == "success"
     history = client.get("/api/vulnerabilities/runs")
     assert history.status_code == 200
     assert history.json()["items"][0]["run_id"] == payload["run_id"]

@@ -1,0 +1,161 @@
+from __future__ import annotations
+
+import sqlite3
+from typing import Any
+
+from ai4sec_platform.core.time import utc_now
+from ai4sec_platform.db import repositories as repo
+
+
+ACTIVE_JOB_STATUSES = ("queued", "running")
+FINAL_JOB_STATUSES = ("success", "failed", "cancelled")
+
+
+class JobConflictError(RuntimeError):
+    pass
+
+
+def enqueue_job(
+    conn: sqlite3.Connection,
+    *,
+    run_id: str,
+    domain: str,
+    pipeline_name: str,
+    params: dict[str, Any],
+    total_steps: int,
+    reset_requested: bool,
+) -> dict[str, Any]:
+    now = utc_now()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        conflict = _find_conflict(conn, pipeline_name=pipeline_name, reset_requested=reset_requested)
+        if conflict:
+            raise JobConflictError(_conflict_message(conflict, reset_requested=reset_requested))
+        repo.create_pipeline_run(
+            conn,
+            run_id=run_id,
+            domain=domain,
+            pipeline_name=pipeline_name,
+            status="queued",
+            started_at=now,
+            finished_at="",
+            production_writes=False,
+            summary={"params": params, "steps": [], "current_step": "", "completed_steps": 0, "total_steps": total_steps},
+        )
+        conn.execute(
+            """
+            INSERT INTO pipeline_jobs (
+                run_id, domain, pipeline_name, params_json, reset_requested, status,
+                queued_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, 'queued', ?, ?)
+            """,
+            (run_id, domain, pipeline_name, repo.dumps(params), int(reset_requested), now, now),
+        )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    return get_job(conn, run_id)
+
+
+def claim_next_job(conn: sqlite3.Connection, *, worker_id: str, run_id: str | None = None) -> dict[str, Any] | None:
+    now = utc_now()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        if run_id:
+            row = conn.execute("SELECT * FROM pipeline_jobs WHERE run_id = ? AND status = 'queued'", (run_id,)).fetchone()
+        else:
+            row = conn.execute("SELECT * FROM pipeline_jobs WHERE status = 'queued' ORDER BY id LIMIT 1").fetchone()
+        if not row:
+            conn.commit()
+            return None
+        updated = conn.execute(
+            """
+            UPDATE pipeline_jobs
+            SET status = 'running', attempt_count = attempt_count + 1, worker_id = ?,
+                heartbeat_at = ?, started_at = ?, updated_at = ?, error_message = ''
+            WHERE run_id = ? AND status = 'queued'
+            """,
+            (worker_id, now, now, now, row["run_id"]),
+        )
+        if updated.rowcount != 1:
+            conn.rollback()
+            return None
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    return get_job(conn, str(row["run_id"]))
+
+
+def finish_job(conn: sqlite3.Connection, *, run_id: str, status: str, error_message: str = "") -> None:
+    if status not in FINAL_JOB_STATUSES:
+        raise ValueError(f"Invalid final job status: {status}")
+    now = utc_now()
+    conn.execute(
+        """
+        UPDATE pipeline_jobs
+        SET status = ?, heartbeat_at = ?, error_message = ?, finished_at = ?, updated_at = ?
+        WHERE run_id = ? AND status = 'running'
+        """,
+        (status, now, error_message, now, now, run_id),
+    )
+    conn.commit()
+
+
+def reconcile_interrupted_jobs(conn: sqlite3.Connection) -> list[str]:
+    rows = conn.execute("SELECT run_id FROM pipeline_jobs WHERE status = 'running' ORDER BY id").fetchall()
+    run_ids = [str(row["run_id"]) for row in rows]
+    if not run_ids:
+        return []
+    now = utc_now()
+    placeholders = ",".join("?" for _ in run_ids)
+    conn.execute(
+        f"""
+        UPDATE pipeline_jobs
+        SET status = 'failed', heartbeat_at = ?, finished_at = ?,
+            error_message = 'worker interrupted; manual retry required', updated_at = ?
+        WHERE run_id IN ({placeholders})
+        """,
+        (now, now, now, *run_ids),
+    )
+    conn.execute(
+        f"UPDATE pipeline_runs SET status = 'failed', finished_at = ? WHERE run_id IN ({placeholders})",
+        (now, *run_ids),
+    )
+    conn.commit()
+    return run_ids
+
+
+def get_job(conn: sqlite3.Connection, run_id: str) -> dict[str, Any]:
+    row = conn.execute("SELECT * FROM pipeline_jobs WHERE run_id = ?", (run_id,)).fetchone()
+    if not row:
+        raise KeyError(run_id)
+    data = repo.row_to_dict(row)
+    data["params"] = repo.loads(data.pop("params_json"), {})
+    data["reset_requested"] = bool(data["reset_requested"])
+    return data
+
+
+def _find_conflict(conn: sqlite3.Connection, *, pipeline_name: str, reset_requested: bool) -> sqlite3.Row | None:
+    if reset_requested:
+        return conn.execute(
+            "SELECT run_id, pipeline_name, reset_requested FROM pipeline_jobs WHERE status IN ('queued', 'running') ORDER BY id LIMIT 1"
+        ).fetchone()
+    return conn.execute(
+        """
+        SELECT run_id, pipeline_name, reset_requested
+        FROM pipeline_jobs
+        WHERE status IN ('queued', 'running') AND (pipeline_name = ? OR reset_requested = 1)
+        ORDER BY id LIMIT 1
+        """,
+        (pipeline_name,),
+    ).fetchone()
+
+
+def _conflict_message(conflict: sqlite3.Row, *, reset_requested: bool) -> str:
+    if reset_requested:
+        return f"reset run cannot start while another pipeline is active: {conflict['run_id']}"
+    if bool(conflict["reset_requested"]):
+        return f"pipeline cannot start while a reset run is active: {conflict['run_id']}"
+    return f"pipeline already queued or running: {conflict['pipeline_name']}"
