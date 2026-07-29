@@ -14,7 +14,7 @@ import yaml
 from ai4sec_platform.core.config import Settings, load_settings
 from ai4sec_platform.db.models import init_db
 from ai4sec_platform.db.session import connect
-from ai4sec_platform.pipelines.jobs import JobConflictError, enqueue_job
+from ai4sec_platform.pipelines.jobs import ExecutionDisabledError, JobConflictError, enqueue_job
 from ai4sec_platform.pipelines.registry import PipelineRegistry, default_registry
 
 
@@ -92,6 +92,8 @@ class PipelineScheduler:
                 )
             except JobConflictError:
                 return {"schedule_id": schedule.schedule_id, "run_id": run_id, "status": "blocked"}
+            except ExecutionDisabledError:
+                return {"schedule_id": schedule.schedule_id, "run_id": run_id, "status": "disabled"}
         return {"schedule_id": schedule.schedule_id, "run_id": run_id, "status": "queued"}
 
     def _scheduler_lock(self):

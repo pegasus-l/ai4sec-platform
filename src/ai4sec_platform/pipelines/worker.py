@@ -14,7 +14,7 @@ from ai4sec_platform.core.time import utc_now
 from ai4sec_platform.db import repositories as repo
 from ai4sec_platform.db.models import init_db
 from ai4sec_platform.db.session import connect
-from ai4sec_platform.pipelines.jobs import claim_next_job, finish_job, heartbeat_job, heartbeat_worker, is_cancel_requested, reconcile_interrupted_jobs, register_worker, stop_worker
+from ai4sec_platform.pipelines.jobs import claim_next_job, finish_job, heartbeat_job, heartbeat_worker, is_cancel_requested, is_execution_kill_switch_active, reconcile_interrupted_jobs, register_worker, stop_worker
 from ai4sec_platform.pipelines.registry import PipelineRegistry, default_registry
 from ai4sec_platform.pipelines.runner import PipelineRunner
 
@@ -120,7 +120,7 @@ class PipelineWorker:
     def _cancel_requested(self, run_id: str) -> bool:
         with connect(self.settings) as conn:
             init_db(conn)
-            return is_cancel_requested(conn, run_id)
+            return is_cancel_requested(conn, run_id) or is_execution_kill_switch_active(conn)
 
     def serve_forever(self, *, poll_interval: float = 1.0) -> None:
         with self._worker_lock():

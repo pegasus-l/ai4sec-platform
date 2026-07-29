@@ -131,6 +131,13 @@ CREATE TABLE IF NOT EXISTS pipeline_workers (
 );
 CREATE INDEX IF NOT EXISTS idx_pipeline_workers_status_heartbeat ON pipeline_workers(status, heartbeat_at);
 
+CREATE TABLE IF NOT EXISTS platform_controls (
+    control_key TEXT PRIMARY KEY,
+    enabled INTEGER NOT NULL DEFAULT 0,
+    reason TEXT NOT NULL DEFAULT '',
+    updated_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS task_runs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     run_id TEXT NOT NULL,
@@ -332,6 +339,7 @@ def reset_db(conn: sqlite3.Connection) -> None:
         "task_runs",
         "pipeline_jobs",
         "pipeline_workers",
+        "platform_controls",
         "pipeline_runs",
         "evidence_items",
         "domain_items",

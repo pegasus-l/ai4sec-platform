@@ -4,6 +4,7 @@ import sqlite3
 from typing import Any
 
 from ai4sec_platform.core.time import utc_now
+from ai4sec_platform.pipelines.jobs import is_execution_kill_switch_active
 
 
 def claim_next_repro_task(
@@ -15,6 +16,9 @@ def claim_next_repro_task(
     now = utc_now()
     conn.execute("BEGIN IMMEDIATE")
     try:
+        if is_execution_kill_switch_active(conn):
+            conn.commit()
+            return None
         sql = (
             "SELECT * FROM capability_repro_tasks "
             "WHERE status = 'queued' AND cancel_requested = 0 AND cleanup_requested = 0"

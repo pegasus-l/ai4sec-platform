@@ -2,12 +2,12 @@ from __future__ import annotations
 
 import argparse
 
-from ai4sec_platform.cli import audit_run, database, init_db, inspect_run, pipeline_worker, repro_worker, run_pipeline, scheduler
+from ai4sec_platform.cli import audit_run, database, init_db, inspect_run, pipeline_control, pipeline_worker, repro_worker, run_pipeline, scheduler
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="AI4SEC Platform CLI")
-    parser.add_argument("command", choices=["init-db", "run-pipeline", "inspect-run", "audit-run", "database", "pipeline-worker", "repro-worker", "scheduler"])
+    parser.add_argument("command", choices=["init-db", "run-pipeline", "inspect-run", "audit-run", "database", "pipeline-worker", "repro-worker", "scheduler", "pipeline-control"])
     args, rest = parser.parse_known_args()
     if args.command == "init-db":
         return init_db.main()
@@ -25,6 +25,8 @@ def main() -> int:
         return repro_worker.main(rest)
     if args.command == "scheduler":
         return scheduler.main(rest)
+    if args.command == "pipeline-control":
+        return pipeline_control.main(rest)
     return 1
 
 

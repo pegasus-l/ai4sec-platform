@@ -71,6 +71,12 @@ MIGRATIONS: tuple[Migration, ...] = (
             "indexes pipeline_jobs(status,lease_expires_at),pipeline_workers(status,heartbeat_at)"
         ),
     ),
+    Migration(
+        version=7,
+        name="add_platform_execution_controls",
+        apply=lambda conn: _add_platform_execution_controls(conn),
+        checksum_source="platform_controls(control_key primary key,enabled,reason,updated_at);pipeline_execution_kill_switch",
+    ),
 )
 
 
@@ -207,4 +213,17 @@ def _add_pipeline_worker_leases(conn: sqlite3.Connection) -> None:
     conn.execute("CREATE INDEX IF NOT EXISTS idx_pipeline_jobs_lease ON pipeline_jobs(status, lease_expires_at)")
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_pipeline_workers_status_heartbeat ON pipeline_workers(status, heartbeat_at)"
+    )
+
+
+def _add_platform_execution_controls(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS platform_controls (
+            control_key TEXT PRIMARY KEY,
+            enabled INTEGER NOT NULL DEFAULT 0,
+            reason TEXT NOT NULL DEFAULT '',
+            updated_at TEXT NOT NULL
+        )
+        """
     )

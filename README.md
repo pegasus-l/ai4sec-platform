@@ -157,6 +157,16 @@ PYTHONPATH=src python3 -m ai4sec_platform.cli.scheduler --once
 
 在 `configs/schedules.yaml` 配置计划。默认配置为空，不会自动触发真实采集；每个计划需显式 `enabled: true`。时间统一按 `Asia/Shanghai` 解释，`grace_minutes` 定义错过时隙后的单次补跑窗口。Scheduler 使用计划 ID 与时隙生成确定性 Run ID，重启不会重复入队；如果同 Pipeline 仍有活动任务，会在宽限窗口内继续尝试，窗口结束后不再补跑。
 
+紧急停止或维护时使用本机 CLI，不通过尚未鉴权的 HTTP API 暴露 kill switch：
+
+```bash
+PYTHONPATH=src python3 -m ai4sec_platform.cli.pipeline_control status
+PYTHONPATH=src python3 -m ai4sec_platform.cli.pipeline_control stop --reason "maintenance"
+PYTHONPATH=src python3 -m ai4sec_platform.cli.pipeline_control resume
+```
+
+`stop` 会持久关闭新 Pipeline/Repro 任务领取，取消 queued Pipeline 和复现任务，并向 running 任务写入取消请求。普通 Pipeline 在当前 Step 的可中断边界退出；能力复现 Runner 最多约 0.5 秒轮询一次停止请求，随后执行 `docker stop` 和宿主进程 `terminate`。恢复前应先确认旧浏览器、线程或容器资源已经回收。
+
 API 提交的任务只写入 SQLite `pipeline_jobs`，立即返回可轮询的 `run_id`：
 
 ```text

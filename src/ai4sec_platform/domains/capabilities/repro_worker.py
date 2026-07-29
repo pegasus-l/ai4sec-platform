@@ -22,6 +22,7 @@ from ai4sec_platform.domains.capabilities.repro_jobs import (
     is_repro_cancel_requested,
     reconcile_interrupted_repro_tasks,
 )
+from ai4sec_platform.pipelines.jobs import is_execution_kill_switch_active
 
 
 class ReproWorkerAlreadyRunningError(RuntimeError):
@@ -114,7 +115,7 @@ class CapabilityReproWorker:
         def should_stop() -> bool:
             with connect(self.settings) as conn:
                 init_db(conn)
-                return is_repro_cancel_requested(conn, task_id)
+                return is_repro_cancel_requested(conn, task_id) or is_execution_kill_switch_active(conn)
 
         def heartbeat() -> None:
             nonlocal last_heartbeat

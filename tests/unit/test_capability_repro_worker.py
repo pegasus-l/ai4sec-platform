@@ -18,6 +18,7 @@ from ai4sec_platform.domains.capabilities.repro_jobs import (
     request_repro_stop,
 )
 from ai4sec_platform.domains.capabilities.repro_worker import CapabilityReproWorker
+from ai4sec_platform.pipelines.jobs import set_execution_kill_switch
 
 
 def _settings(tmp_path: Path) -> Settings:
@@ -121,6 +122,21 @@ def test_worker_executes_claimed_task_without_api_thread(monkeypatch, tmp_path: 
         task = repo.get_repro_task(conn, task_id)
     assert task and task["container_name"] == f"fake-{task_id}"
     assert "worker log" in task["log"]
+
+
+def test_platform_kill_switch_stops_queued_repro_task(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    task_id = _create_task(settings)
+
+    with connect(settings) as conn:
+        result = set_execution_kill_switch(conn, enabled=True, reason="emergency")
+        task = repo.get_repro_task(conn, task_id)
+
+    assert result["stopped_queued_repro_tasks"] == 1
+    assert task and task["status"] == "stopped"
+    assert bool(task["cancel_requested"]) is True
+    with connect(settings) as conn:
+        assert claim_next_repro_task(conn, worker_id="blocked-worker", task_id=task_id) is None
 
 
 def test_worker_records_runner_crash_and_keeps_serving(monkeypatch, tmp_path: Path) -> None:

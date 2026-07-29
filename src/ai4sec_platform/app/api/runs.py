@@ -14,7 +14,7 @@ from ai4sec_platform.core.ids import new_id
 from ai4sec_platform.db import repositories as repo
 from ai4sec_platform.db.models import init_db
 from ai4sec_platform.db.session import connect
-from ai4sec_platform.pipelines.jobs import JobConflictError, enqueue_job, get_job, request_job_cancel
+from ai4sec_platform.pipelines.jobs import ExecutionDisabledError, JobConflictError, enqueue_job, get_job, request_job_cancel
 from ai4sec_platform.pipelines.registry import default_registry
 
 router = APIRouter(prefix="/runs", tags=["runs"])
@@ -65,6 +65,8 @@ def start_run(request: RunPipelineRequest) -> dict:
             )
         except JobConflictError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except ExecutionDisabledError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
 
     return {
         "run_id": run_id,

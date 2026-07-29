@@ -10,9 +10,14 @@ from ai4sec_platform.db import repositories as repo
 
 ACTIVE_JOB_STATUSES = ("queued", "running")
 FINAL_JOB_STATUSES = ("success", "partial", "failed", "timeout", "cancelled")
+EXECUTION_KILL_SWITCH = "pipeline_execution_kill_switch"
 
 
 class JobConflictError(RuntimeError):
+    pass
+
+
+class ExecutionDisabledError(RuntimeError):
     pass
 
 
@@ -29,6 +34,8 @@ def enqueue_job(
     now = utc_now()
     try:
         conn.execute("BEGIN IMMEDIATE")
+        if is_execution_kill_switch_active(conn):
+            raise ExecutionDisabledError("pipeline execution is disabled by the platform kill switch")
         conflict = _find_conflict(conn, pipeline_name=pipeline_name, reset_requested=reset_requested)
         if conflict:
             raise JobConflictError(_conflict_message(conflict, reset_requested=reset_requested))
@@ -70,6 +77,9 @@ def claim_next_job(
     lease_expires_at = _lease_deadline(lease_seconds)
     try:
         conn.execute("BEGIN IMMEDIATE")
+        if is_execution_kill_switch_active(conn):
+            conn.commit()
+            return None
         if run_id:
             row = conn.execute("SELECT * FROM pipeline_jobs WHERE run_id = ? AND status = 'queued'", (run_id,)).fetchone()
         else:
@@ -186,6 +196,80 @@ def request_job_cancel(conn: sqlite3.Connection, run_id: str) -> dict[str, Any]:
 def is_cancel_requested(conn: sqlite3.Connection, run_id: str) -> bool:
     row = conn.execute("SELECT cancel_requested FROM pipeline_jobs WHERE run_id = ?", (run_id,)).fetchone()
     return bool(row and row["cancel_requested"])
+
+
+def is_execution_kill_switch_active(conn: sqlite3.Connection) -> bool:
+    row = conn.execute(
+        "SELECT enabled FROM platform_controls WHERE control_key = ?",
+        (EXECUTION_KILL_SWITCH,),
+    ).fetchone()
+    return bool(row and row["enabled"])
+
+
+def set_execution_kill_switch(conn: sqlite3.Connection, *, enabled: bool, reason: str = "") -> dict[str, Any]:
+    now = utc_now()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        conn.execute(
+            """
+            INSERT INTO platform_controls(control_key, enabled, reason, updated_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(control_key) DO UPDATE SET
+                enabled = excluded.enabled, reason = excluded.reason, updated_at = excluded.updated_at
+            """,
+            (EXECUTION_KILL_SWITCH, int(enabled), reason.strip(), now),
+        )
+        cancelled_queued = 0
+        cancellation_requested = 0
+        repro_stopped = 0
+        repro_cancellation_requested = 0
+        if enabled:
+            queued_rows = conn.execute("SELECT run_id FROM pipeline_jobs WHERE status = 'queued'").fetchall()
+            queued_run_ids = [str(row["run_id"]) for row in queued_rows]
+            cancelled_queued = conn.execute(
+                """
+                UPDATE pipeline_jobs
+                SET status = 'cancelled', cancel_requested = 1, finished_at = ?, updated_at = ?,
+                    error_message = 'cancelled by platform kill switch'
+                WHERE status = 'queued'
+                """,
+                (now, now),
+            ).rowcount
+            cancellation_requested = conn.execute(
+                "UPDATE pipeline_jobs SET cancel_requested = 1, updated_at = ? WHERE status = 'running'",
+                (now,),
+            ).rowcount
+            if queued_run_ids:
+                placeholders = ",".join("?" for _ in queued_run_ids)
+                conn.execute(
+                    f"UPDATE pipeline_runs SET status = 'cancelled', finished_at = ? WHERE run_id IN ({placeholders})",
+                    (now, *queued_run_ids),
+                )
+            repro_stopped = conn.execute(
+                """
+                UPDATE capability_repro_tasks
+                SET status = 'stopped', cancel_requested = 1, finished_at = ?, updated_at = ?
+                WHERE status = 'queued'
+                """,
+                (now, now),
+            ).rowcount
+            repro_cancellation_requested = conn.execute(
+                "UPDATE capability_repro_tasks SET cancel_requested = 1, updated_at = ? WHERE status = 'running'",
+                (now,),
+            ).rowcount
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    return {
+        "enabled": enabled,
+        "reason": reason.strip(),
+        "cancelled_queued_jobs": cancelled_queued,
+        "running_job_cancellations": cancellation_requested,
+        "stopped_queued_repro_tasks": repro_stopped,
+        "running_repro_cancellations": repro_cancellation_requested,
+        "updated_at": now,
+    }
 
 
 def reconcile_interrupted_jobs(conn: sqlite3.Connection, *, now: str | None = None) -> list[str]:

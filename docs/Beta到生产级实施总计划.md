@@ -860,7 +860,7 @@ D11 暂缓的是公网入口和完整公网暴露治理，不代表复现容器�
 - [x] 实现原子任务领取、Worker 注册、空闲/运行 heartbeat、Job 租约续期和租约过期失联判定。
 - [x] 实现任务条件领取、同 Pipeline/全局 reset 冲突检查和单机 Worker 文件锁。
 - [x] 统一 queued/running/success/partial/failed/timeout/cancelled 状态在 Step、TaskRun、PipelineRun 和 PipelineJob 间的传播。
-- [ ] 已实现排队立即取消和运行中 Step 边界协作取消；系统级 kill switch 与子进程强杀尚未完成。
+- [ ] 已实现持久系统 kill switch、拒绝新任务、批量取消 queued、running 协作取消，以及能力复现容器/宿主进程强停；普通 Pipeline 浏览器与线程仍依赖当前 Step 的 deadline 和资源退出边界。
 - [ ] 已实现严格 JSON Step checkpoint、输入/实现 checksum 和恢复框架；四域 Step 的 `resume_safe` 审核仍待完成。
 - [ ] 已实现失败 Run 的白名单续跑入口；失败条目重跑与完整 Run 重跑策略仍待补充。
 - [x] 实现 Worker 启动对账；在 checkpoint 完成前将中断的 running 任务标记失败，不做不安全的自动重放。
@@ -1803,3 +1803,13 @@ Python full test suite: 199 passed
 - 前端本来就使用异步提交，无需兼容改动；旧 API 业务测试改为“API 入队 → 显式测试 Worker 领取 → API 查询结果”，与生产架构一致。
 - 保留 Pipeline CLI 和 Worker `--once` 作为本地同步调试方式，不把开发便利入口重新放回 HTTP API。
 - 异步 API/业务定向测试：29 passed；全仓 Python 测试：234 passed。
+
+### 2026-07-29：增加持久平台 kill switch
+
+- 新增 migration v7 和 `platform_controls`；kill switch 状态、原因和更新时间持久化，API、Worker、Scheduler 重启后仍保持停止状态。
+- 新增本机 `pipeline-control status/stop/resume` CLI；未将高风险操作暴露到当前未完成认证/RBAC 的 HTTP API。
+- `stop` 原子取消 queued Pipeline Job、向 running Job 写入取消请求、停止 queued 复现任务并向 running 复现任务写入取消请求；新 Pipeline API 返回 503，Scheduler 返回 `disabled`。
+- Pipeline Worker 在 Step 边界读取全局开关；能力复现 Runner 在运行循环内读取全局开关，并沿用已有 `docker stop`、端口代理停止和宿主进程 `terminate` 强制回收路径。
+- `resume` 只重新开放任务领取，不自动重放被取消任务；需要运营人员依据 checkpoint 和业务重跑语义显式重试。
+- 普通 Pipeline 当前没有直接 `Popen` 子进程，主要长资源是 crawl4ai 浏览器和线程池；Python 无法安全强杀运行中线程，因此仍须完善 Connector deadline、浏览器 context 关闭和可取消批次提交，不能声称所有 Step 已即时强停。
+- kill switch/Worker/Scheduler/Repro/数据库定向测试：54 passed；全仓 Python 测试：238 passed；CLI status/stop/resume 实测通过。

@@ -11,7 +11,7 @@ from ai4sec_platform.core.config import Settings
 from ai4sec_platform.db.models import init_db
 from ai4sec_platform.db.session import connect
 from ai4sec_platform.pipelines.base import PipelineDefinition
-from ai4sec_platform.pipelines.jobs import JobConflictError, claim_next_job, enqueue_job, get_job, heartbeat_job, reconcile_interrupted_jobs, request_job_cancel
+from ai4sec_platform.pipelines.jobs import ExecutionDisabledError, JobConflictError, claim_next_job, enqueue_job, get_job, heartbeat_job, reconcile_interrupted_jobs, request_job_cancel, set_execution_kill_switch
 from ai4sec_platform.pipelines.registry import PipelineRegistry
 from ai4sec_platform.pipelines.results import StepResult
 from ai4sec_platform.pipelines.runner import PipelineRunner
@@ -284,6 +284,56 @@ def test_queued_job_can_be_cancelled_without_execution(tmp_path: Path) -> None:
     assert job["cancel_requested"] is True
     assert run_status == "cancelled"
     assert PipelineWorker(settings=settings, registry=_registry()).run_once() is None
+
+
+def test_platform_kill_switch_cancels_queue_and_rejects_new_jobs(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    _enqueue(settings, "run_kill_queued")
+    with connect(settings) as conn:
+        result = set_execution_kill_switch(conn, enabled=True, reason="maintenance")
+        job = get_job(conn, "run_kill_queued")
+
+        with pytest.raises(ExecutionDisabledError):
+            enqueue_job(
+                conn,
+                run_id="run_rejected",
+                domain="news",
+                pipeline_name="test.persisted",
+                params={},
+                total_steps=1,
+                reset_requested=False,
+            )
+
+    assert result["cancelled_queued_jobs"] == 1
+    assert job["status"] == "cancelled"
+    assert PipelineWorker(settings=settings, registry=_registry()).run_once() is None
+
+
+def test_platform_kill_switch_requests_running_cancel_and_resume_reopens_queue(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    _enqueue(settings, "run_kill_running")
+    with connect(settings) as conn:
+        claimed = claim_next_job(conn, worker_id="active-worker")
+        assert claimed is not None
+        stopped = set_execution_kill_switch(conn, enabled=True, reason="emergency")
+        running = get_job(conn, "run_kill_running")
+        resumed = set_execution_kill_switch(conn, enabled=False)
+
+    assert stopped["running_job_cancellations"] == 1
+    assert running["status"] == "running"
+    assert running["cancel_requested"] is True
+    assert resumed["enabled"] is False
+    with connect(settings) as conn:
+        enqueue_job(
+            conn,
+            run_id="run_after_resume",
+            domain="capabilities",
+            pipeline_name="test.other",
+            params={},
+            total_steps=1,
+            reset_requested=False,
+        )
+        assert get_job(conn, "run_after_resume")["status"] == "queued"
 
 
 def test_running_job_heartbeats_and_cancels_at_step_boundary(tmp_path: Path, monkeypatch) -> None:

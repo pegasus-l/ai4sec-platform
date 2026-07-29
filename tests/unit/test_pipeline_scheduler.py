@@ -9,6 +9,7 @@ from ai4sec_platform.db.models import init_db
 from ai4sec_platform.db.session import connect
 from ai4sec_platform.pipelines.base import PipelineDefinition
 from ai4sec_platform.pipelines.jobs import enqueue_job
+from ai4sec_platform.pipelines.jobs import set_execution_kill_switch
 from ai4sec_platform.pipelines.registry import PipelineRegistry
 from ai4sec_platform.pipelines.scheduler import PipelineScheduler, Schedule, SchedulerAlreadyRunningError
 from ai4sec_platform.pipelines.steps.audit import AuditStep
@@ -110,3 +111,15 @@ def test_scheduler_single_host_lock_rejects_second_instance(tmp_path: Path) -> N
                 raise AssertionError("second scheduler acquired the lock")
         except SchedulerAlreadyRunningError:
             pass
+
+
+def test_scheduler_reports_disabled_while_kill_switch_is_active(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    with connect(settings) as conn:
+        init_db(conn)
+        set_execution_kill_switch(conn, enabled=True, reason="maintenance")
+    now = datetime(2026, 7, 29, 7, 0, tzinfo=ZoneInfo("Asia/Shanghai"))
+
+    outcome = PipelineScheduler(settings=settings, registry=_registry(), schedules=[_schedule()]).tick(now)
+
+    assert outcome[0]["status"] == "disabled"
