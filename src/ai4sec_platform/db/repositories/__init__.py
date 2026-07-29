@@ -375,6 +375,12 @@ _REPRO_UPDATABLE_FIELDS = {
     "report_json",
     "web_port",
     "web_url",
+    "started_at",
+    "updated_at",
+    "worker_id",
+    "heartbeat_at",
+    "cancel_requested",
+    "cleanup_requested",
 }
 
 
@@ -387,9 +393,9 @@ def create_repro_task(
 ) -> int:
     """创建复现任务，返回 task_id"""
     cur = conn.execute(
-        "INSERT INTO capability_repro_tasks (item_id, repo_url, status, created_at, trigger) "
-        "VALUES (?, ?, 'queued', ?, ?)",
-        (item_id, repo_url, utc_now(), trigger),
+        "INSERT INTO capability_repro_tasks (item_id, repo_url, status, created_at, updated_at, trigger) "
+        "VALUES (?, ?, 'queued', ?, ?, ?)",
+        (item_id, repo_url, utc_now(), utc_now(), trigger),
     )
     return int(cur.lastrowid)
 
@@ -432,6 +438,7 @@ def list_repro_tasks(
 def update_repro_task(conn: sqlite3.Connection, *, task_id: int, **fields: Any) -> None:
     """更新复现任务字段，只允许白名单内字段"""
     sets, vals = [], []
+    fields.setdefault("updated_at", utc_now())
     for k, v in fields.items():
         if k in _REPRO_UPDATABLE_FIELDS:
             sets.append(f"{k} = ?")
@@ -464,4 +471,3 @@ def get_active_repro_item_ids(conn: sqlite3.Connection) -> set[int]:
         "SELECT DISTINCT item_id FROM capability_repro_tasks WHERE status IN ('queued', 'running')"
     ).fetchall()
     return {row["item_id"] for row in rows}
-

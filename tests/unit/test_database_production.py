@@ -123,6 +123,14 @@ def test_legacy_database_is_upgraded_without_losing_rows(tmp_path: Path) -> None
             error_message TEXT NOT NULL DEFAULT '', queued_at TEXT NOT NULL, started_at TEXT NOT NULL DEFAULT '',
             finished_at TEXT NOT NULL DEFAULT '', updated_at TEXT NOT NULL
         );
+        CREATE TABLE capability_repro_tasks (
+            id INTEGER PRIMARY KEY, item_id INTEGER NOT NULL, repo_url TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'queued', container_name TEXT NOT NULL DEFAULT '',
+            workspace_path TEXT NOT NULL DEFAULT '', log TEXT NOT NULL DEFAULT '', result TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL, finished_at TEXT NOT NULL DEFAULT '', cleaned_at TEXT NOT NULL DEFAULT '',
+            trigger TEXT NOT NULL DEFAULT 'manual', report_json TEXT NOT NULL DEFAULT '{}',
+            web_port INTEGER, web_url TEXT NOT NULL DEFAULT ''
+        );
         INSERT INTO domain_items(id, domain, item_type, title, created_at, updated_at)
         VALUES (1, 'news', 'article', 'legacy item', '2026-07-28T00:00:00Z', '2026-07-28T00:00:00Z');
         """
@@ -131,10 +139,13 @@ def test_legacy_database_is_upgraded_without_losing_rows(tmp_path: Path) -> None
 
     apply_migrations(conn)
 
-    assert current_schema_version(conn) == 3
+    assert current_schema_version(conn) == 4
     assert {row[1] for row in conn.execute("PRAGMA table_info(domain_items)")} >= {"last_synced_at"}
     assert {row[1] for row in conn.execute("PRAGMA table_info(human_queue_items)")} >= {"queue_source"}
     assert {row[1] for row in conn.execute("PRAGMA table_info(pipeline_jobs)")} >= {"cancel_requested"}
+    assert {row[1] for row in conn.execute("PRAGMA table_info(capability_repro_tasks)")} >= {
+        "started_at", "updated_at", "worker_id", "heartbeat_at", "cancel_requested", "cleanup_requested"
+    }
     assert conn.execute("SELECT title FROM domain_items WHERE id = 1").fetchone()[0] == "legacy item"
     conn.close()
 
@@ -184,7 +195,7 @@ def test_database_metrics_expose_wal_and_schema_state() -> None:
     assert metrics["path"] == str(settings.database_path.resolve())
     assert metrics["journal_mode"] == "wal"
     assert metrics["busy_timeout_ms"] == 30_000
-    assert metrics["schema_version"] == 3
+    assert metrics["schema_version"] == 4
     assert metrics["database_bytes"] > 0
     assert metrics["allocated_bytes"] >= metrics["database_bytes"]
 
@@ -220,4 +231,4 @@ def test_readiness_reports_database_metrics() -> None:
     payload = response.json()
     assert payload["status"] == "ok"
     assert payload["database"]["journal_mode"] == "wal"
-    assert payload["database"]["schema_version"] == 3
+    assert payload["database"]["schema_version"] == 4

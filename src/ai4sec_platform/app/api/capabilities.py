@@ -21,8 +21,6 @@ from __future__ import annotations
 import asyncio
 import json
 import sqlite3
-from datetime import datetime
-from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
@@ -30,8 +28,9 @@ from pydantic import BaseModel
 
 from ai4sec_platform.app.dependencies import get_db
 from ai4sec_platform.db import repositories as repo
-from ai4sec_platform.domains.capabilities.adapters.repro_runner import classify_log_line, manager as repro_manager
+from ai4sec_platform.domains.capabilities.adapters.repro_runner import classify_log_line
 from ai4sec_platform.domains.capabilities.assessments import classify_batch
+from ai4sec_platform.domains.capabilities.repro_jobs import request_repro_cleanup, request_repro_stop
 from ai4sec_platform.domains.capabilities.schemas import ReproTaskResponse
 from ai4sec_platform.domains.capabilities.selectors import pick_top_repro_candidates, _resolve_repo_url
 from ai4sec_platform.services import domain_items, operations
@@ -120,7 +119,7 @@ class StartReproRequest(BaseModel):
 
 @router.post("/items/{item_id}/start-repro")
 def start_repro(item_id: int, body: StartReproRequest = StartReproRequest(), conn: sqlite3.Connection = Depends(get_db)) -> dict:
-    """启动复现任务（迁自旧 /api/repro/start）"""
+    """创建持久复现任务，由独立 Repro Worker 异步执行。"""
     item = repo.get_domain_item(conn, DOMAIN, item_id)
     if not item:
         raise HTTPException(status_code=404, detail="capability item not found")
@@ -129,15 +128,14 @@ def start_repro(item_id: int, body: StartReproRequest = StartReproRequest(), con
     if not repo_url:
         raise HTTPException(status_code=400, detail="no repo URL found in item")
 
-    # 清理旧 failed task
+    active_tasks = repo.list_repro_tasks(conn, item_id=item_id, limit=1)
+    if active_tasks and active_tasks[0]["status"] in ("queued", "running"):
+        raise HTTPException(status_code=409, detail="an active repro task already exists for this item")
+
+    # 旧失败任务交给 Worker 异步清理，API 不直接操作 Docker 或工作目录。
     for old_task in repo.list_repro_tasks(conn, item_id=item_id, include_cleaned=True):
         if old_task["status"] in ("failed", "timeout", "stopped"):
-            repro_manager.cleanup_task(
-                old_task["id"],
-                container_name=old_task.get("container_name"),
-                workspace_path=old_task.get("workspace_path"),
-            )
-            repo.update_repro_task(conn, task_id=old_task["id"], status="cleaned", cleaned_at=datetime.utcnow().isoformat())
+            request_repro_cleanup(conn, int(old_task["id"]))
 
     # 创建 task
     task_id = repo.create_repro_task(conn, item_id=item_id, repo_url=repo_url, trigger="manual")
@@ -149,35 +147,7 @@ def start_repro(item_id: int, body: StartReproRequest = StartReproRequest(), con
         if web_port:
             repo.update_repro_task(conn, task_id=task_id, web_port=web_port)
 
-    # 回调
-    def on_log(line: str):
-        repo.append_repro_log(conn, task_id=task_id, line=line)
-
-    def on_status(status: str, _tid=task_id, _iid=item_id, **kw):
-        update_fields: dict[str, Any] = {"status": status}
-        if "result" in kw:
-            update_fields["result"] = str(kw["result"])[:10000]
-        if status in ("success", "failed", "timeout", "stopped", "partial"):
-            update_fields["finished_at"] = datetime.utcnow().isoformat()
-        if "report" in kw and kw["report"]:
-            update_fields["report_json"] = json.dumps(kw["report"], ensure_ascii=False) if isinstance(kw["report"], dict) else str(kw["report"])
-        if "web_port" in kw:
-            update_fields["web_port"] = kw["web_port"]
-        repo.update_repro_task(conn, task_id=_tid, **update_fields)
-        if "report" in kw and kw["report"]:
-            from ai4sec_platform.domains.capabilities.adapters.repro_results import update_capability_from_report
-            update_capability_from_report(conn, item_id=_iid, report=kw["report"])
-
-    # 启动 ReproRunner
-    repro_manager.start_task(
-        task_id=task_id,
-        repo_url=repo_url,
-        on_log=on_log,
-        on_status=on_status,
-        web_port=web_port,
-    )
-
-    return {"ok": True, "task_id": task_id, "repo_url": repo_url, "web_port": web_port}
+    return {"ok": True, "task_id": task_id, "repo_url": repo_url, "web_port": web_port, "status": "queued"}
 
 
 @router.get("/repro/{task_id}")
@@ -191,28 +161,20 @@ def get_repro_task(task_id: int, conn: sqlite3.Connection = Depends(get_db)) -> 
 
 @router.post("/repro/{task_id}/stop")
 def stop_repro(task_id: int, conn: sqlite3.Connection = Depends(get_db)) -> dict:
-    """停止复现任务"""
-    task = repo.get_repro_task(conn, task_id)
-    if not task:
+    """持久化停止请求；运行中任务由 Repro Worker 终止。"""
+    status = request_repro_stop(conn, task_id)
+    if status is None:
         raise HTTPException(status_code=404, detail="repro task not found")
-    repro_manager.stop_task(task_id)
-    repo.update_repro_task(conn, task_id=task_id, status="stopped", finished_at=datetime.utcnow().isoformat())
-    return {"ok": True}
+    return {"ok": True, "status": status}
 
 
 @router.post("/repro/{task_id}/cleanup")
 def cleanup_repro(task_id: int, conn: sqlite3.Connection = Depends(get_db)) -> dict:
-    """清理复现任务（删容器 + 产物）"""
-    task = repo.get_repro_task(conn, task_id)
-    if not task:
+    """持久化清理请求；由 Repro Worker 删除容器和工作目录。"""
+    status = request_repro_cleanup(conn, task_id)
+    if status is None:
         raise HTTPException(status_code=404, detail="repro task not found")
-    repro_manager.cleanup_task(
-        task_id,
-        container_name=task.get("container_name"),
-        workspace_path=task.get("workspace_path"),
-    )
-    repo.update_repro_task(conn, task_id=task_id, status="cleaned", cleaned_at=datetime.utcnow().isoformat())
-    return {"ok": True}
+    return {"ok": True, "status": status}
 
 
 # ============================================================================

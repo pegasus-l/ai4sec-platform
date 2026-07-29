@@ -1,8 +1,8 @@
 """能力复现 pipeline steps。
 
-由于复现是异步的（ReproRunner.start() 启动后台线程），pipeline 只负责：
+复现由独立持久 Worker 异步执行，pipeline 只负责：
   1. 选择候选
-  2. 创建 task + 启动 ReproRunner（异步执行，on_log/on_status 回调写 DB）
+  2. 创建 queued task
   3. 从已完成的 task 提取报告 + 回写能力卡
 
 实际等待和实时日志推送在 API 层（SSE 端点）处理。
@@ -10,12 +10,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
 from typing import Any
 
 from ai4sec_platform.db import repositories as repo
-from ai4sec_platform.domains.capabilities.adapters.repro_runner import manager as repro_manager
 from ai4sec_platform.domains.capabilities.adapters.repro_results import update_capability_from_report
+from ai4sec_platform.domains.capabilities.repro_jobs import request_repro_cleanup
 from ai4sec_platform.domains.capabilities.selectors import pick_top_repro_candidates
 from ai4sec_platform.pipelines.context import PipelineContext
 from ai4sec_platform.pipelines.results import StepResult
@@ -47,7 +46,7 @@ class SelectReproCandidatesStep:
 
 @dataclass
 class StartReproTasksStep:
-    """为每个候选创建 task + 启动 ReproRunner（异步执行）"""
+    """为每个候选创建持久任务，由 Repro Worker 异步认领。"""
     name: str = "start_repro_tasks"
     step_type: str = "start_repro"
 
@@ -64,20 +63,10 @@ class StartReproTasksStep:
             if existing and existing[0]["status"] in ("queued", "running"):
                 continue  # 已有活跃 task，跳过
 
-            # 清理旧的 failed/timeout task
+            # 旧失败任务由 Worker 清理，Pipeline 不直接操作 Docker。
             for old_task in repo.list_repro_tasks(context.conn, item_id=item_id, include_cleaned=True):
                 if old_task["status"] in ("failed", "timeout", "stopped"):
-                    repro_manager.cleanup_task(
-                        old_task["id"],
-                        container_name=old_task.get("container_name"),
-                        workspace_path=old_task.get("workspace_path"),
-                    )
-                    repo.update_repro_task(
-                        context.conn,
-                        task_id=old_task["id"],
-                        status="cleaned",
-                        cleaned_at=datetime.utcnow().isoformat(),
-                    )
+                    request_repro_cleanup(context.conn, int(old_task["id"]))
 
             # 创建新 task
             task_id = repo.create_repro_task(
@@ -87,30 +76,6 @@ class StartReproTasksStep:
                 trigger=context.params.get("trigger", "auto"),
             )
 
-            # 定义回调（写 DB + 回写能力卡）
-            def on_log(line: str, _tid=task_id, _conn=context.conn):
-                repo.append_repro_log(_conn, task_id=_tid, line=line)
-
-            def on_status(status: str, _tid=task_id, _iid=item_id, _conn=context.conn, **kw):
-                # 更新 task status
-                update_fields: dict[str, Any] = {"status": status}
-                if "result" in kw:
-                    update_fields["result"] = str(kw["result"])[:10000]
-                if status in ("success", "failed", "timeout", "stopped", "partial"):
-                    update_fields["finished_at"] = datetime.utcnow().isoformat()
-                if "report" in kw and kw["report"]:
-                    import json
-                    update_fields["report_json"] = json.dumps(kw["report"], ensure_ascii=False) if isinstance(kw["report"], dict) else str(kw["report"])
-                if "web_port" in kw:
-                    update_fields["web_port"] = kw["web_port"]
-                if "web_url" in kw:
-                    update_fields["web_url"] = kw["web_url"]
-                repo.update_repro_task(_conn, task_id=_tid, **update_fields)
-
-                # 如果有报告，回写能力卡
-                if "report" in kw and kw["report"]:
-                    update_capability_from_report(_conn, item_id=_iid, report=kw["report"])
-
             # 决定是否 Web 复现
             payload = candidate.get("payload") or {}
             web_port = None
@@ -118,15 +83,6 @@ class StartReproTasksStep:
                 web_port = _alloc_web_port(context.conn)
                 if web_port:
                     repo.update_repro_task(context.conn, task_id=task_id, web_port=web_port)
-
-            # 启动 ReproRunner（异步）
-            repro_manager.start_task(
-                task_id=task_id,
-                repo_url=repo_url,
-                on_log=on_log,
-                on_status=on_status,
-                web_port=web_port,
-            )
 
             started.append(task_id)
 

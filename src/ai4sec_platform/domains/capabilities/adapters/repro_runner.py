@@ -282,11 +282,7 @@ usage 字段是给用户看的"使用说明",不要写安装部署步骤,重点�
 class ReproRunner:
     """运行单个复现任务。把日志流通过回调推出去（供 SSE/WebSocket 用）。
 
-    用法:
-        runner = ReproRunner(task_id=1, repo_url="https://github.com/...",
-                             on_log=lambda line: print(line),
-                             on_status=lambda s: print("STATUS", s))
-        runner.start()   # 异步,在后台线程跑
+    由 CapabilityReproWorker 在当前 Worker 线程中调用 run()。
     """
 
     def __init__(
@@ -296,6 +292,8 @@ class ReproRunner:
         on_log: Callable[[str], None] | None = None,
         on_status: Callable[..., None] | None = None,
         web_port: int | None = None,
+        should_stop: Callable[[], bool] | None = None,
+        on_heartbeat: Callable[[], None] | None = None,
     ):
         self.task_id = task_id
         self.repo_url = repo_url
@@ -304,12 +302,13 @@ class ReproRunner:
         self._secret_values = _task_secret_values()
         self.on_log = self._emit_log
         self.on_status = on_status or (lambda status, **kw: None)
+        self.should_stop = should_stop or (lambda: False)
+        self.on_heartbeat = on_heartbeat or (lambda: None)
         _stamp = int(time.time())
         self.container_name = f"repro-{task_id}-{_stamp}"
         self.workspace = WORKSPACE_ROOT / f"task-{task_id}-{_stamp}"
         self.proc: subprocess.Popen | None = None
         self.status = "queued"
-        self._thread: threading.Thread | None = None
         self.web_port = web_port  # 主机端口（有则映射到容器内 8080，用于 Web 项目复现）
         self._logged_bytes = 0
         self._log_truncated = False
@@ -419,15 +418,17 @@ class ReproRunner:
             "bash", "-lc", inner,
         ]
 
-    # ---- 启动（后台线程）----
-    def start(self):
+    def run(self) -> None:
+        """在当前线程执行，供持久 Worker 管理生命周期。"""
+        self._prepare_workspace()
+        self._run()
+
+    def _prepare_workspace(self) -> None:
         self.workspace.mkdir(parents=True, exist_ok=True)
         try:
             os.chown(self.workspace, 1000, 1000)
         except (PermissionError, OSError):
             pass
-        self._thread = threading.Thread(target=self._run, daemon=True)
-        self._thread.start()
 
     def _set_status(self, status, **kw):
         self.status = status
@@ -584,6 +585,15 @@ class ReproRunner:
                     self._remember_output(clean)
                     if len(self._tail) > 40:
                         self._tail.pop(0)
+                self.on_heartbeat()
+                if self.should_stop():
+                    self.on_log("■ 收到停止请求，正在终止复现任务")
+                    self._stop_port_proxy()
+                    _safe_run(["docker", "stop", self.container_name], capture_output=True)
+                    if self.proc.poll() is None:
+                        self.proc.terminate()
+                    self._set_status("stopped")
+                    return
                 timeout_limit = WEB_CONTAINER_TIMEOUT if self.web_port else CONTAINER_TIMEOUT
                 if time.time() - start_ts > timeout_limit:
                     report = extract_report("\n".join(self._full_output))
@@ -620,7 +630,7 @@ class ReproRunner:
                 _safe_run(["docker", "stop", self.container_name], capture_output=True)
             if report and isinstance(report, dict) and report.get("status"):
                 rep_status = report["status"]
-                final = "success" if rep_status in ("success", "partial") else "failed"
+                final = rep_status if rep_status in ("success", "partial") else "failed"
                 self._set_status(final, result=result_summary, report=report)
             elif rc == 0:
                 self._set_status("success", result=result_summary, report=report)
@@ -684,19 +694,6 @@ class ReproRunner:
                 except Exception:
                     pass
             self._proxy_proc = None
-
-    def stop(self):
-        self._stop_port_proxy()
-        _safe_run(["docker", "stop", self.container_name], capture_output=True)
-        self._set_status("stopped")
-
-    def cleanup(self):
-        self._stop_port_proxy()
-        _safe_run(["docker", "rm", "-f", self.container_name], capture_output=True)
-        if self.workspace.exists():
-            shutil.rmtree(self.workspace, ignore_errors=True)
-        self._set_status("cleaned")
-
 
 # ============================================================================
 # 输出行分类（给大屏/SSE 上色用）- 迁自旧 repro.py 第 623-726 行
@@ -800,57 +797,3 @@ def classify_log_line(line: str) -> str:
     if s.startswith("#") or s.startswith("["):
         return "tool"
     return "text"
-
-
-# ============================================================================
-# 任务管理器（迁自旧 repro.py ReproManager）
-# ============================================================================
-class ReproManager:
-    """持有所有运行中的 ReproRunner，供 API/SSE 层启动/停止/清理。
-
-    通过 on_log / on_status 回调拿到日志和状态变化，
-    调用方负责写库 + 推 SSE（线程安全问题由调用方处理）。
-    """
-
-    def __init__(self):
-        self.runners: dict[int, ReproRunner] = {}
-
-    def start_task(
-        self,
-        task_id: int,
-        repo_url: str,
-        on_log: Callable[[str], None],
-        on_status: Callable[..., None],
-        web_port: int | None = None,
-    ) -> ReproRunner:
-        runner = ReproRunner(task_id, repo_url, on_log=on_log, on_status=on_status, web_port=web_port)
-        self.runners[task_id] = runner
-        runner.start()
-        return runner
-
-    def stop_task(self, task_id: int) -> bool:
-        r = self.runners.get(task_id)
-        if r:
-            r.stop()
-            return True
-        return False
-
-    def cleanup_task(self, task_id: int, container_name: str | None = None, workspace_path: str | None = None) -> bool:
-        """清理:删容器 + 删产物。runner 可能不在内存（server 重启），
-        所以支持传入 container_name/workspace_path 直接清理。"""
-        r = self.runners.get(task_id)
-        if r:
-            r.cleanup()
-            self.runners.pop(task_id, None)
-            return True
-        if container_name:
-            _safe_run(["docker", "rm", "-f", container_name], capture_output=True)
-        if workspace_path:
-            p = Path(workspace_path)
-            if p.exists():
-                shutil.rmtree(p, ignore_errors=True)
-        return True
-
-
-# 全局单例（API 层 import 它）
-manager = ReproManager()

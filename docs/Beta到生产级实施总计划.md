@@ -534,9 +534,9 @@ OpenCode 模型流量：只允许访问 AI4SEC Model Gateway
 
 不得将高权限宿主机 Docker socket 挂入 API 容器。若开发期为兼容现有实现临时使用 Docker socket，只能由专用复现 Worker 访问，并应记录为上线前必须关闭的过渡风险。
 
-#### 当前实现审计基线
+#### 实施前审计基线
 
-当前 Beta 实现已经具备 Docker 29、`sysbox-runc` 和 `repro-runner:v3` 运行条件，但尚未满足上述目标架构：
+以下内容记录独立 Repro Worker 实施前的 Beta 基线，用于保留问题来源；完成状态以文档后续实施记录为准：
 
 1. API 直接通过全局 ReproManager 和 daemon Thread 调用宿主机 Docker，尚未拆成独立持久 Worker。
 2. OpenCode 在 Sysbox 容器内以 root 身份运行，且 bash、读写、webfetch、external directory 等权限全部允许。
@@ -1258,7 +1258,7 @@ D13 调度：已确认采用北京时间和模块化日更/补跑策略
 - D05 已确认使用 Compose Secret/宿主机只读 Secret 文件，并为应用增加 `_FILE` 配置读取和日志脱敏。
 - D06 已确认使用单机受控本地持久卷，通过 ArtifactStore 抽象访问，并增加容量、保留周期和备份管理。
 - D07 已确认能力复现 Worker 与平台部署在同一宿主机，但使用独立系统账号、独立进程、独立目录和 rootless Docker/Podman。
-- API 不挂载系统 Docker socket，不直接执行容器操作；复现 Worker 不直接访问 SQLite，只通过 API 领取任务和回写结果。
+- API 不挂载系统 Docker socket，不直接执行容器操作；在当前单机 SQLite 架构下，复现 Worker通过 Repository 和短连接直接认领任务、写心跳与结果，不通过 API 回调，也不持有 API 请求连接。
 - 本记录最初建议依赖准备阶段受限联网、复现运行阶段默认断网；后续确认 OpenCode 运行依赖模型，该建议已被“全过程受控联网”方案替代。
 - 同机 rootless 容器共享宿主机内核，隔离弱于独立 VM，该剩余风险需要在上线验收时明确接受并记录。
 
@@ -1266,7 +1266,7 @@ D13 调度：已确认采用北京时间和模块化日更/补跑策略
 
 用户指出能力复现通过 OpenCode 自动部署，复现运行阶段仍需连接模型，不能采用运行阶段断网方案。
 
-代码和环境审计结论：
+代码和环境审计结论（当时状态，后续已有部分关闭）：
 
 - 当前 API 通过内存 ReproManager 和 daemon Thread 直接调用宿主机 Docker。
 - 当前统一使用 `sysbox-runc` 和 `repro-runner:v3`，容器内运行 Docker daemon，OpenCode 以 root 身份执行。
@@ -1633,7 +1633,7 @@ TRUNCATE checkpoint：busy=0，wal_bytes=0
 
 - 当前若未配置任务 token 文件，OpenCode 配置仍兼容读取镜像内 `/root/.local/share/opencode/auth.json`；必须审计并最终移除镜像长期凭据。
 - 当前 Secret 文件可能仍是长期 token；目标方案仍是 AI4SEC Model Gateway 签发任务级短期令牌。
-- 复现 API 和 ReproManager 仍在 API 进程内启动后台线程并持有请求级数据库连接，下一批必须拆为独立持久 Repro Worker。
+- 复现 API 和 ReproManager 当时仍在 API 进程内启动后台线程并持有请求级数据库连接；该问题已在 2026-07-29 的独立持久 Repro Worker 实现中关闭。
 
 ### 2026-07-28：补充能力复现资源、日志、超时和端口边界
 
@@ -1661,3 +1661,20 @@ TRUNCATE checkpoint：busy=0，wal_bytes=0
 - workspace 周期扫描是软限制，不是文件系统 quota；任务在两个扫描周期之间可能短暂超限。
 - sysbox 容器内启动的嵌套 Docker 容器仍需单独验证是否继承/绕过外层资源限制。
 - 当前 Docker 命令仍使用宿主机全局 Docker daemon 和 API 内后台线程；独立 rootless Repro Worker 仍是下一阶段 P0。
+
+### 2026-07-29：完成能力复现持久 Worker 第一批实现
+
+- `capability_repro_tasks` 新增 `started_at`、`updated_at`、`worker_id`、`heartbeat_at`、`cancel_requested` 和 `cleanup_requested`，由第 4 版数据库迁移兼容已有 SQLite。
+- 能力 API 与 `StartReproTasksStep` 只创建 `queued` 任务，不再持有请求级数据库连接启动 daemon 后台线程，也不直接执行 Docker 清理。
+- 新增独立 `repro-worker` CLI 和单机 `flock` 文件锁；Worker 原子认领任务，并使用独立短连接写日志、心跳、状态和报告。
+- 停止请求持久化：排队任务直接进入 `stopped`，运行任务设置 `cancel_requested`，Runner 在流式执行阶段终止进程和容器。
+- 清理请求持久化：Worker 统一删除容器与 workspace；运行中清理先触发停止，再执行清理。
+- Worker 启动对账遗留 `running` 任务。当前不会自动重放不确定是否产生外部副作用的任务，而是标记 `failed`、清理残留资源并由人工重新发起。
+- 删除已无调用方的内存 `ReproManager` 及 Runner 异步 `start/stop/cleanup` 接口，数据库成为复现任务唯一状态真相源。
+- 专项测试覆盖原子认领、持久停止、异常恢复、Worker 执行、异步清理和 API 只排队，不实际启动 Docker。
+
+当前边界：
+
+- 首期仍使用宿主机 Docker daemon 与 Sysbox Profile，尚未完成 rootless Docker 验收。
+- 取消检查主要发生在 OpenCode 流式执行阶段；clone、容器启动和 dockerd 等待阶段的更细粒度取消仍需后续补齐。
+- 单机部署必须同时托管 API、Pipeline Worker 和 Repro Worker；当前仓库尚无正式镜像和 Compose 文件，本批不虚构未经验证的容器构建方案。

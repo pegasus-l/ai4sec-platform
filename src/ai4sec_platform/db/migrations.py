@@ -39,6 +39,17 @@ MIGRATIONS: tuple[Migration, ...] = (
         apply=lambda conn: _add_column_if_missing(conn, "pipeline_jobs", "cancel_requested", "INTEGER NOT NULL DEFAULT 0"),
         checksum_source="pipeline_jobs.cancel_requested INTEGER NOT NULL DEFAULT 0",
     ),
+    Migration(
+        version=4,
+        name="add_capability_repro_worker_fields",
+        apply=lambda conn: _add_repro_worker_fields(conn),
+        checksum_source=(
+            "capability_repro_tasks.started_at TEXT NOT NULL DEFAULT '';"
+            "updated_at TEXT NOT NULL DEFAULT '';worker_id TEXT NOT NULL DEFAULT '';"
+            "heartbeat_at TEXT NOT NULL DEFAULT '';cancel_requested INTEGER NOT NULL DEFAULT 0;"
+            "cleanup_requested INTEGER NOT NULL DEFAULT 0"
+        ),
+    ),
 )
 
 
@@ -103,3 +114,15 @@ def _add_column_if_missing(conn: sqlite3.Connection, table: str, column: str, de
     columns = {str(row[1]) for row in conn.execute(f'PRAGMA table_info("{table}")').fetchall()}
     if column not in columns:
         conn.execute(f'ALTER TABLE "{table}" ADD COLUMN "{column}" {definition}')
+
+
+def _add_repro_worker_fields(conn: sqlite3.Connection) -> None:
+    for column, definition in (
+        ("started_at", "TEXT NOT NULL DEFAULT ''"),
+        ("updated_at", "TEXT NOT NULL DEFAULT ''"),
+        ("worker_id", "TEXT NOT NULL DEFAULT ''"),
+        ("heartbeat_at", "TEXT NOT NULL DEFAULT ''"),
+        ("cancel_requested", "INTEGER NOT NULL DEFAULT 0"),
+        ("cleanup_requested", "INTEGER NOT NULL DEFAULT 0"),
+    ):
+        _add_column_if_missing(conn, "capability_repro_tasks", column, definition)

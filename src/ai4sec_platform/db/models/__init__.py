@@ -251,6 +251,12 @@ CREATE TABLE IF NOT EXISTS capability_repro_tasks (
     report_json TEXT NOT NULL DEFAULT '{}',
     web_port INTEGER,
     web_url TEXT NOT NULL DEFAULT '',
+    started_at TEXT NOT NULL DEFAULT '',
+    updated_at TEXT NOT NULL DEFAULT '',
+    worker_id TEXT NOT NULL DEFAULT '',
+    heartbeat_at TEXT NOT NULL DEFAULT '',
+    cancel_requested INTEGER NOT NULL DEFAULT 0,
+    cleanup_requested INTEGER NOT NULL DEFAULT 0,
     FOREIGN KEY (item_id) REFERENCES domain_items(id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS idx_cap_repro_item ON capability_repro_tasks(item_id);

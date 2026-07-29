@@ -140,6 +140,14 @@ POST /api/runs
 
 Worker 重启时，尚未领取的 `queued` 任务会保留。已经处于 `running` 的中断任务会明确标记为 `failed`，在 Step checkpoint 和幂等重放完成前不会自动从头执行，避免重复写入和重复模型调用。
 
+能力复现使用独立的单机持久 Worker。API 和能力 Pipeline 只创建 `queued` 任务，不在请求进程中启动 Docker 后台线程：
+
+```bash
+PYTHONPATH=src python -m ai4sec_platform.cli repro-worker
+```
+
+运维检查可使用 `--once --task-id <id>` 只领取指定任务，或使用 `--recover-only` 对账异常退出时遗留的 `running` 任务。单机文件锁禁止同时启动两个复现 Worker。停止和清理接口只写持久请求，Worker 负责终止容器、删除 workspace 并更新最终状态；API 重启不会丢失尚未领取的任务。
+
 任务可以通过以下接口请求取消：
 
 ```text
