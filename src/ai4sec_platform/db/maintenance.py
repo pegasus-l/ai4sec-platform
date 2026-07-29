@@ -7,6 +7,7 @@ import sqlite3
 from typing import Any
 
 from ai4sec_platform.core.config import Settings, load_settings
+from ai4sec_platform.db.migrations import current_schema_version
 from ai4sec_platform.db.session import connect
 
 
@@ -64,6 +65,46 @@ def verify_database(path: Path) -> dict[str, Any]:
     return {"path": str(database_path), "integrity": "ok", "table_count": table_count}
 
 
+def database_metrics(conn: sqlite3.Connection, settings: Settings | None = None) -> dict[str, Any]:
+    cfg = settings or load_settings()
+    database_path = cfg.database_path.expanduser().resolve()
+    page_size = int(conn.execute("PRAGMA page_size").fetchone()[0])
+    page_count = int(conn.execute("PRAGMA page_count").fetchone()[0])
+    freelist_count = int(conn.execute("PRAGMA freelist_count").fetchone()[0])
+    return {
+        "path": str(database_path),
+        "database_bytes": _file_size(database_path),
+        "wal_bytes": _file_size(Path(f"{database_path}-wal")),
+        "shm_bytes": _file_size(Path(f"{database_path}-shm")),
+        "journal_mode": str(conn.execute("PRAGMA journal_mode").fetchone()[0]),
+        "synchronous": int(conn.execute("PRAGMA synchronous").fetchone()[0]),
+        "busy_timeout_ms": int(conn.execute("PRAGMA busy_timeout").fetchone()[0]),
+        "page_size": page_size,
+        "page_count": page_count,
+        "freelist_count": freelist_count,
+        "allocated_bytes": page_size * page_count,
+        "free_bytes": page_size * freelist_count,
+        "schema_version": current_schema_version(conn),
+    }
+
+
+def checkpoint_wal(mode: str = "PASSIVE", settings: Settings | None = None) -> dict[str, Any]:
+    checkpoint_mode = mode.strip().upper()
+    if checkpoint_mode not in {"PASSIVE", "FULL", "RESTART", "TRUNCATE"}:
+        raise ValueError(f"Unsupported WAL checkpoint mode: {mode}")
+    cfg = settings or load_settings()
+    with connect(cfg) as conn:
+        row = conn.execute(f"PRAGMA wal_checkpoint({checkpoint_mode})").fetchone()
+        metrics = database_metrics(conn, cfg)
+    return {
+        "mode": checkpoint_mode,
+        "busy": int(row[0]),
+        "log_frames": int(row[1]),
+        "checkpointed_frames": int(row[2]),
+        "wal_bytes": metrics["wal_bytes"],
+    }
+
+
 def _default_backup_path(settings: Settings) -> Path:
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
     return settings.output_dir / "backups" / f"ai4sec-platform-{timestamp}.db"
@@ -71,3 +112,10 @@ def _default_backup_path(settings: Settings) -> Path:
 
 def _connect_read_only(path: Path) -> sqlite3.Connection:
     return sqlite3.connect(f"{path.as_uri()}?mode=ro", uri=True)
+
+
+def _file_size(path: Path) -> int:
+    try:
+        return path.stat().st_size
+    except FileNotFoundError:
+        return 0

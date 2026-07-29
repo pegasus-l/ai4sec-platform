@@ -4,7 +4,7 @@ import argparse
 import json
 from pathlib import Path
 
-from ai4sec_platform.db.maintenance import backup_database, restore_database, verify_database
+from ai4sec_platform.db.maintenance import backup_database, checkpoint_wal, restore_database, verify_database
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -22,6 +22,9 @@ def main(argv: list[str] | None = None) -> int:
     restore_parser.add_argument("--destination", type=Path, required=True)
     restore_parser.add_argument("--overwrite", action="store_true", help="Replace the destination; stop platform services first")
 
+    checkpoint_parser = subparsers.add_parser("checkpoint", help="Run a controlled SQLite WAL checkpoint")
+    checkpoint_parser.add_argument("--mode", choices=["passive", "full", "restart", "truncate"], default="passive")
+
     args = parser.parse_args(argv)
     if args.action == "backup":
         path = backup_database(args.destination)
@@ -29,6 +32,9 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.action == "verify":
         print(json.dumps(verify_database(args.path), ensure_ascii=False))
+        return 0
+    if args.action == "checkpoint":
+        print(json.dumps(checkpoint_wal(args.mode), ensure_ascii=False))
         return 0
     path = restore_database(args.backup, args.destination, overwrite=args.overwrite)
     print(json.dumps(verify_database(path), ensure_ascii=False))

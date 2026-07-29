@@ -22,6 +22,7 @@ http://127.0.0.1:8000/
 
 ```text
 GET /api/health
+GET /api/health/ready
 GET /api/dashboard/overview
 GET /api/runs/pipelines
 POST /api/runs
@@ -73,6 +74,16 @@ AGENTS.md
 PYTHONPATH=src python3 -m ai4sec_platform.cli.database backup
 PYTHONPATH=src python3 -m ai4sec_platform.cli.database verify output/backups/ai4sec-platform-*.db
 ```
+
+查看 readiness 中的数据库/WAL/迁移指标，或执行受控 WAL checkpoint：
+
+```bash
+curl http://127.0.0.1:8000/api/health/ready
+PYTHONPATH=src python3 -m ai4sec_platform.cli.database checkpoint --mode passive
+PYTHONPATH=src python3 -m ai4sec_platform.cli.database checkpoint --mode truncate
+```
+
+日常检查使用 `passive`；`truncate` 用于备份或维护窗口，并应确认没有长事务和持续读连接。WAL checkpoint 只提供 CLI，不在当前未完成认证的 HTTP API 中暴露。
 
 恢复到指定文件：
 

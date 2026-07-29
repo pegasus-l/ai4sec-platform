@@ -850,7 +850,7 @@ D11 暂缓的是公网入口和完整公网暴露治理，不代表复现容器�
 - [x] 建立 `schema_migrations` 表、顺序迁移执行器、checksum 校验和单版本失败回滚。
 - [ ] 为 PipelineRun、TaskRun、Worker、Artifact、SourceHealth 和 Audit 表补齐约束与索引。
 - [ ] 为四域关键业务对象补齐幂等键和唯一约束。
-- [ ] 增加锁等待、数据库大小、WAL 大小和完整性检查指标。
+- [ ] 已增加 busy timeout、数据库大小、WAL/SHM 大小、页使用量和迁移版本 readiness 指标；锁等待累计指标与定期完整性任务仍待补充。
 - [x] 建立 SQLite Backup API、一致性校验和恢复到指定文件流程。
 
 #### 任务系统任务
@@ -1575,3 +1575,30 @@ CLI 新库 schema version：3
 
 - 当前迁移规模较小，使用代码内顺序迁移；未来复杂表重建需采用新表复制、校验、切换策略，不能直接堆高风险 ALTER。
 - 当前只支持单机 SQLite，不提供多节点同时执行迁移；部署顺序必须是备份、停 Worker/API、升级数据库、启动服务、健康检查。
+
+### 2026-07-28：补充 SQLite Readiness 指标与受控 WAL Checkpoint
+
+完成内容：
+
+- 保留 `/api/health` 作为不访问数据库的轻量存活探针。
+- 新增 `/api/health/ready`，验证数据库查询并返回数据库文件、WAL、SHM、journal mode、synchronous、busy timeout、页数量、空闲页、分配空间和迁移版本。
+- readiness 不执行完整 `PRAGMA integrity_check`，避免每次探针扫描数据库；完整校验仍由备份流程和运维 CLI 执行。
+- 新增 `database checkpoint --mode passive|full|restart|truncate`，返回 busy、WAL frame 和已 checkpoint frame。
+- 非法 checkpoint 模式在执行 SQL 前拒绝，避免动态 PRAGMA 注入。
+- checkpoint 只提供本地 CLI，不暴露到当前尚未认证的 HTTP 运维 API。
+
+验证结果：
+
+```text
+SQLite 运维专项：14 passed
+全仓测试：177 passed
+compileall：通过
+PASSIVE checkpoint：busy=0
+TRUNCATE checkpoint：busy=0，wal_bytes=0
+```
+
+运维建议：
+
+- 普通周期维护使用 PASSIVE，不阻塞活跃读连接。
+- TRUNCATE 仅在备份或维护窗口使用，并确认不存在长事务。
+- 后续 Prometheus 指标应采集 WAL 增长、数据库容量和 busy/locked 错误累计次数；readiness 只反映当前状态，不替代趋势监控。

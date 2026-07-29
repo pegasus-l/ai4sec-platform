@@ -4,10 +4,12 @@ from pathlib import Path
 import sqlite3
 
 import pytest
+from fastapi.testclient import TestClient
 
 from ai4sec_platform.app.dependencies import get_db
+from ai4sec_platform.app.main import app
 from ai4sec_platform.core.config import load_settings
-from ai4sec_platform.db.maintenance import backup_database, restore_database, verify_database
+from ai4sec_platform.db.maintenance import backup_database, checkpoint_wal, database_metrics, restore_database, verify_database
 from ai4sec_platform.db.migrations import MIGRATIONS, Migration, apply_migrations, current_schema_version
 from ai4sec_platform.db.models import init_db
 from ai4sec_platform.db.session import connect
@@ -171,3 +173,51 @@ def test_failed_migration_rolls_back_schema_and_version_record(tmp_path: Path) -
 def _apply_failing_migration(conn: sqlite3.Connection) -> None:
     conn.execute("ALTER TABLE sample ADD COLUMN temporary_column TEXT")
     raise RuntimeError("planned migration failure")
+
+
+def test_database_metrics_expose_wal_and_schema_state() -> None:
+    settings = load_settings()
+    with connect(settings) as conn:
+        init_db(conn)
+        metrics = database_metrics(conn, settings)
+
+    assert metrics["path"] == str(settings.database_path.resolve())
+    assert metrics["journal_mode"] == "wal"
+    assert metrics["busy_timeout_ms"] == 30_000
+    assert metrics["schema_version"] == 3
+    assert metrics["database_bytes"] > 0
+    assert metrics["allocated_bytes"] >= metrics["database_bytes"]
+
+
+def test_wal_checkpoint_supports_controlled_modes() -> None:
+    with connect() as conn:
+        init_db(conn)
+        conn.execute(
+            "INSERT INTO data_sources(domain, name, source_type, created_at) VALUES (?, ?, ?, ?)",
+            ("news", "checkpoint-source", "test", "2026-07-28T00:00:00Z"),
+        )
+        conn.commit()
+
+    passive = checkpoint_wal("passive")
+    truncated = checkpoint_wal("truncate")
+
+    assert passive["mode"] == "PASSIVE"
+    assert passive["busy"] == 0
+    assert truncated["mode"] == "TRUNCATE"
+    assert truncated["busy"] == 0
+    assert truncated["wal_bytes"] == 0
+
+
+def test_wal_checkpoint_rejects_unknown_mode() -> None:
+    with pytest.raises(ValueError, match="Unsupported WAL checkpoint mode"):
+        checkpoint_wal("unsafe")
+
+
+def test_readiness_reports_database_metrics() -> None:
+    response = TestClient(app).get("/api/health/ready")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "ok"
+    assert payload["database"]["journal_mode"] == "wal"
+    assert payload["database"]["schema_version"] == 3
