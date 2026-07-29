@@ -9,7 +9,7 @@ from ai4sec_platform.core.config import Settings, load_settings
 from ai4sec_platform.core.ids import new_id
 from ai4sec_platform.core.time import utc_now
 from ai4sec_platform.db import repositories as repo
-from ai4sec_platform.db.models import init_db, reset_db
+from ai4sec_platform.db.models import init_db, reset_domain
 from ai4sec_platform.db.session import connect
 from ai4sec_platform.pipelines.context import PipelineContext
 from ai4sec_platform.pipelines.registry import PipelineRegistry, default_registry
@@ -36,7 +36,8 @@ class PipelineRunner:
         }
         with connect(self.settings) as conn:
             if params.get("reset"):
-                reset_db(conn)
+                init_db(conn)
+                reset_domain(conn, definition.domain)
             else:
                 init_db(conn)
             repo.create_pipeline_run(

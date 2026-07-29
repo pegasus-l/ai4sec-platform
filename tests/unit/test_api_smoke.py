@@ -48,7 +48,7 @@ def _patch_threat_connector_records(monkeypatch) -> None:
         return records
 
     from ai4sec_platform.domains.threats.adapters import huawei_sources
-    from ai4sec_platform.pipelines.steps import threat_asset_import, threat_cve_scout, threat_raw, threat_score_filter
+    from ai4sec_platform.pipelines.steps import threat_asset_import, threat_cve_scout, threat_raw, threat_score_filter, threat_sources
 
     monkeypatch.setattr(huawei_sources, "load_huawei_sources", fake_load)
     monkeypatch.setattr(huawei_sources, "load_huawei_live", lambda params: records)
@@ -56,6 +56,7 @@ def _patch_threat_connector_records(monkeypatch) -> None:
     monkeypatch.setattr(threat_cve_scout, "load_huawei_sources", fake_load)
     monkeypatch.setattr(threat_score_filter, "load_huawei_sources", fake_load)
     monkeypatch.setattr(threat_asset_import, "load_huawei_sources", fake_load)
+    monkeypatch.setattr(threat_sources, "load_huawei_sources", fake_load)
 
 
 def test_health_endpoint() -> None:

@@ -3,15 +3,9 @@ from __future__ import annotations
 import sys
 from dataclasses import dataclass
 
-from ai4sec_platform.domains.threats.adapters.huawei_sources import (
-    _collect_repo_records,
-    _collect_live_assets,
-    _requested_sources,
-    load_huawei_sources,
-)
+from ai4sec_platform.domains.threats.adapters.huawei_sources import load_huawei_sources
 from ai4sec_platform.pipelines.context import PipelineContext
 from ai4sec_platform.pipelines.results import StepResult
-from ai4sec_platform.sources.registry import SourceRegistry
 
 
 @dataclass
@@ -20,59 +14,8 @@ class CollectHuaweiSourcesStep:
     step_type: str = "collect_sources"
 
     def run(self, context: PipelineContext) -> StepResult:
-        params = context.params
-
-        # Always use live path with incremental DB writes — cache path had no incremental progress
-        # and refresh_source_cache=true means cache is re-fetched anyway (cache files are pointless)
-        registry = SourceRegistry()
-        requested = _requested_sources(params)
-        records: list[dict] = []
-        artifacts = []
-
-        # 1. Repos (the big one — 25 orgs × multiple pages)
-        if "repos" in requested:
-            print("[collect] Fetching repos from GitCode/AtomGit...", file=sys.stderr, flush=True)
-            repo_records = _collect_repo_records(registry, params)
-            for record in repo_records:
-                records.append(record)
-                # Write each source record as a raw_artifact immediately
-                art = context.artifact_store.write_json(
-                    context.conn, run_id=context.run_id,
-                    artifact_type="huawei_source_records",
-                    name=f"threats/{record.get('source', 'unknown')}.json",
-                    data={"records": [record], "params": params},
-                )
-                artifacts.append(art)
-                context.conn.commit()
-                print(f"[collect] {record.get('source')}: {len(record.get('items') or [])} items written", file=sys.stderr, flush=True)
-
-        # 2. Assets (firmware, ascendhub, mirrors, openx)
-        asset_records = _collect_live_assets(registry, params, requested_sources=requested)
-        if isinstance(asset_records, list):
-            for record in asset_records:
-                if isinstance(record, dict):
-                    records.append(record)
-                    art = context.artifact_store.write_json(
-                        context.conn, run_id=context.run_id,
-                        artifact_type="huawei_source_records",
-                        name=f"threats/{record.get('source', 'unknown')}.json",
-                        data={"records": [record], "params": params},
-                    )
-                    artifacts.append(art)
-                    context.conn.commit()
-                    print(f"[collect] {record.get('source')}: {len(record.get('items') or [])} items written", file=sys.stderr, flush=True)
-        elif isinstance(asset_records, dict):
-            records.append(asset_records)
-            art = context.artifact_store.write_json(
-                context.conn, run_id=context.run_id,
-                artifact_type="huawei_source_records",
-                name=f"threats/{asset_records.get('source', 'unknown')}.json",
-                data={"records": [asset_records], "params": params},
-            )
-            artifacts.append(art)
-            context.conn.commit()
-            print(f"[collect] {asset_records.get('source')}: {len(asset_records.get('items') or [])} items written", file=sys.stderr, flush=True)
-
+        records = load_huawei_sources(context.settings, context.params)
+        artifacts = self._write_records(context, records)
         context.outputs["huawei_source_records"] = records
         metrics = self._metrics(records)
         print(f"[collect] Done. {metrics['items']} total items from {metrics['sources']} sources", file=sys.stderr, flush=True)

@@ -38,16 +38,12 @@ class LiveJsonConnector(JsonFileConnector):
             return json.loads(resp.read().decode("utf-8"))
 
     def get_text(self, url: str, *, timeout: int = 30, retries: int = 3) -> str:
-        import ssl
         import time
-        ctx = ssl.create_default_context()
-        ctx.check_hostname = False
-        ctx.verify_mode = ssl.CERT_NONE
         last_exc: Exception | None = None
         for attempt in range(retries):
             try:
                 req = urllib.request.Request(url, headers={"Accept": "text/html,*/*"})
-                with urllib.request.urlopen(req, timeout=timeout, context=ctx) as resp:  # noqa: S310
+                with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310 - explicit configured source
                     return resp.read().decode("utf-8", errors="replace")
             except Exception as exc:
                 last_exc = exc

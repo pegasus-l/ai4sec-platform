@@ -245,6 +245,28 @@ def init_db(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
+SUPPORTED_DOMAINS = frozenset({"news", "capabilities", "threats", "vulnerabilities"})
+
+
+def reset_domain(conn: sqlite3.Connection, domain: str) -> None:
+    if domain not in SUPPORTED_DOMAINS:
+        raise ValueError(f"Unsupported domain reset: {domain}")
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        conn.execute("DELETE FROM pipeline_runs WHERE domain = ?", (domain,))
+        conn.execute("DELETE FROM human_queue_items WHERE domain = ?", (domain,))
+        conn.execute("DELETE FROM quality_audits WHERE domain = ?", (domain,))
+        conn.execute("DELETE FROM data_sources WHERE domain = ?", (domain,))
+        conn.execute("DELETE FROM evidence_items WHERE domain = ?", (domain,))
+        conn.execute("DELETE FROM domain_items WHERE domain = ?", (domain,))
+        if domain == "news":
+            conn.execute("DELETE FROM news_daily_reports")
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+
+
 def reset_db(conn: sqlite3.Connection) -> None:
     tables = [
         "news_daily_reports",

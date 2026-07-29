@@ -786,12 +786,12 @@ D11 暂缓的是公网入口和完整公网暴露治理，不代表复现容器�
 #### 任务
 
 - [x] 用户确认 D01-D13，或明确哪些决策延后；D01-D10、D13 已确认，D11-D12 已明确暂缓。
-- [ ] 建立全仓生产风险清单并标记 P0/P1/P2。
+- [x] 建立全仓生产风险清单并标记 P0/P1/P2。
 - [ ] 固定 PipelineRun、TaskRun、Worker 和 Step 状态机。
 - [ ] 固定任务租约、heartbeat、超时、取消和恢复语义。
 - [ ] 固定四模块业务动作和权限编码。
 - [ ] 固定 ConnectorHealth、ModelCall、Artifact 和 QualityMetric 契约。
-- [ ] 记录现有数据库 schema、测试结果和前端构建基线。
+- [x] 记录现有数据库 schema、测试结果和前端构建基线。
 - [ ] 备份当前 Beta 数据库和有价值的 shadow Artifact。
 
 #### 验收
@@ -808,8 +808,8 @@ D11 暂缓的是公网入口和完整公网暴露治理，不代表复现容器�
 
 #### 平台任务
 
-- [ ] 将全库 reset 改为显式的领域清理和测试库重建两种操作。
-- [ ] 禁止普通 API 请求触发全库 reset。
+- [x] 将 Pipeline reset 从全库重建改为显式领域清理；全库重建只保留给显式数据库初始化 CLI。
+- [x] 禁止普通 Pipeline API 请求触发全库 reset。
 - [ ] 明确 Pipeline/Step 事务边界和失败回滚规则。
 - [ ] 为关键业务对象增加唯一约束和幂等键设计。
 - [ ] 建立最小备份、校验和恢复流程。
@@ -818,7 +818,7 @@ D11 暂缓的是公网入口和完整公网暴露治理，不代表复现容器�
 
 #### 模块任务
 
-- [ ] 威胁连接器恢复 TLS 验证，特殊证书使用受控 CA。
+- [x] 威胁连接器恢复系统默认 TLS 验证；特殊证书后续使用受控 CA，不允许全局跳过验证。
 - [ ] 能力复现增加 CPU、内存、磁盘、PIDs、超时和日志上限。
 - [ ] 能力复现停止将模型 Key 写入 Prompt、SQLite 日志、SSE 和前端响应。
 - [ ] 审计 `repro-runner:v3` 镜像，确认镜像层和 OpenCode auth 文件不包含长期密钥。
@@ -1313,3 +1313,54 @@ D13 调度：已确认采用北京时间和模块化日更/补跑策略
 - 暂不实现公开注册、自助找回密码、短信、邮件和复杂组织管理。
 - D04 可以排在阶段 4 实现，但正式生产验收前必须完成。
 - D01-D10、D13 已确认，D11-D12 已明确暂缓；用户决策阶段完成，进入阶段 0 基线审计。
+
+### 2026-07-28：完成阶段 0 首轮基线并关闭首批 P0
+
+完成内容：
+
+- Python `compileall` 通过。
+- 安装锁定前端依赖后，TypeScript 和 Vite 生产构建通过。
+- 前端构建存在单 bundle 超过 500 kB 的警告，生产依赖审计报告 1 个 moderate 和 1 个 high 风险项，未使用 `npm audit fix --force` 做破坏性升级。
+- 新增 `reset_domain()`，Pipeline 的 `reset=true` 只删除当前业务域的运行、制品元数据、领域对象、审计和队列数据，不再删除其他三个模块。
+- 全库 `reset_db()` 仅保留给显式数据库初始化 CLI，不再由普通 Pipeline Runner 调用。
+- 威胁 `LiveJsonConnector.get_text()` 删除 `CERT_NONE` 和 `check_hostname=False`，恢复系统默认 CA 与主机名校验。
+- Huawei `CollectHuaweiSourcesStep` 恢复调用统一 `load_huawei_sources()`，重新支持 source cache、`resume_from_run_id`、显式 source records 和合并 Artifact。
+- 修复 Huawei API smoke mock，单元测试不再意外执行真实 8k 级在线采集。
+- 新增领域 reset 隔离、非法 domain 拒绝和 TLS 默认校验测试。
+
+专项验证：
+
+```text
+tests/unit/test_production_safety.py
+Huawei full migration API smoke
+Huawei source resume/cache
+结果：6 passed
+```
+
+全仓回归基线：
+
+```text
+147 passed
+5 failed
+2 deselected（已知缺失 /api/frontend/v9 路由）
+耗时约 33 秒
+```
+
+剩余 5 个既有失败，不由本次 P0 修改引入：
+
+1. 异步运行进度响应新增 `item_progress=None`，旧测试仍要求完全相等。
+2. Huawei full scan 页数期望 400，当前实现返回 100。
+3. 内容模型 timeout 测试期望 600 秒，当前配置返回 180 秒。
+4. 威胁语义评审 Prompt 缺少旧测试要求的 `broad_sec_items` 文本。
+5. 威胁语义评审标准化结果缺少 `recommended_tracking_level`。
+
+另外两个既有 API 契约缺口：
+
+- `/api/frontend/v9`
+- `/api/frontend/v9/files/{path}`
+
+下一步：
+
+1. 在继续其他 P0 前，修复上述测试契约或明确删除已经废弃的 v9 API 契约。
+2. 进入 Pipeline 事务边界、幂等约束和 SQLite 备份恢复设计。
+3. 开始能力复现密钥泄漏、后台线程和资源限制修复。
