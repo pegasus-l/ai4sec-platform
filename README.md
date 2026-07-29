@@ -167,6 +167,8 @@ PYTHONPATH=src python3 -m ai4sec_platform.cli.pipeline_control resume
 
 `stop` 会持久关闭新 Pipeline/Repro 任务领取，取消 queued Pipeline 和复现任务，并向 running 任务写入取消请求。普通 Pipeline 在当前 Step 的可中断边界退出；能力复现 Runner 最多约 0.5 秒轮询一次停止请求，随后执行 `docker stop` 和宿主进程 `terminate`。恢复前应先确认旧浏览器、线程或容器资源已经回收。
 
+漏洞 crawl4ai 批处理会在每个 URL 完成时检查取消信号；取消后不再向线程池提交剩余 URL，并取消尚未开始的 Future。已经进入运行状态的 URL 不使用不安全的线程强杀，而是等待其 HTTP/浏览器 timeout 和 crawler context 正常关闭，因此停止延迟上限仍取决于单 URL timeout 与当前并发数。
+
 API 提交的任务只写入 SQLite `pipeline_jobs`，立即返回可轮询的 `run_id`：
 
 ```text

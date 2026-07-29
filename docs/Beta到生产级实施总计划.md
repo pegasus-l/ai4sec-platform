@@ -860,7 +860,7 @@ D11 暂缓的是公网入口和完整公网暴露治理，不代表复现容器�
 - [x] 实现原子任务领取、Worker 注册、空闲/运行 heartbeat、Job 租约续期和租约过期失联判定。
 - [x] 实现任务条件领取、同 Pipeline/全局 reset 冲突检查和单机 Worker 文件锁。
 - [x] 统一 queued/running/success/partial/failed/timeout/cancelled 状态在 Step、TaskRun、PipelineRun 和 PipelineJob 间的传播。
-- [ ] 已实现持久系统 kill switch、拒绝新任务、批量取消 queued、running 协作取消，以及能力复现容器/宿主进程强停；普通 Pipeline 浏览器与线程仍依赖当前 Step 的 deadline 和资源退出边界。
+- [ ] 已实现持久系统 kill switch、拒绝新任务、批量取消 queued、running 协作取消、能力复现容器/宿主进程强停，以及 crawl4ai 取消后停止提交新 URL；已运行浏览器线程仍依赖单 URL deadline 和 context 退出。
 - [ ] 已实现严格 JSON Step checkpoint、输入/实现 checksum 和恢复框架；四域 Step 的 `resume_safe` 审核仍待完成。
 - [ ] 已实现失败 Run 的白名单续跑入口；失败条目重跑与完整 Run 重跑策略仍待补充。
 - [x] 实现 Worker 启动对账；在 checkpoint 完成前将中断的 running 任务标记失败，不做不安全的自动重放。
@@ -1813,3 +1813,12 @@ Python full test suite: 199 passed
 - `resume` 只重新开放任务领取，不自动重放被取消任务；需要运营人员依据 checkpoint 和业务重跑语义显式重试。
 - 普通 Pipeline 当前没有直接 `Popen` 子进程，主要长资源是 crawl4ai 浏览器和线程池；Python 无法安全强杀运行中线程，因此仍须完善 Connector deadline、浏览器 context 关闭和可取消批次提交，不能声称所有 Step 已即时强停。
 - kill switch/Worker/Scheduler/Repro/数据库定向测试：54 passed；全仓 Python 测试：238 passed；CLI status/stop/resume 实测通过。
+
+### 2026-07-29：让 crawl4ai 批处理响应 Pipeline 取消
+
+- `PipelineContext` 新增统一 `should_cancel` 回调，Runner 将 Job 取消和平台 kill switch 信号注入 Step，不要求业务 Step 自行访问任务表。
+- 公共 `bounded_map` 改为最多只维持 `max_workers` 个在途 Future，不再一次性提交全部输入；取消后停止补充新任务并取消尚未开始的 Future。
+- `bounded_map` 保持已完成结果的输入顺序，并提供 completion callback，供 Connector 在每项完成后持久化进度。
+- crawl4ai Connector 接入取消回调；每个 URL 完成后写入现有进度 checkpoint，取消后不再抓取剩余 URL，并在 metadata 记录 `cancelled` 和 `unsubmitted`。
+- 已经运行的 Python 线程不会被强杀，最多等待当前并发槽位按 URL timeout 和 crawl4ai context manager 正常关闭；这是为避免浏览器、SQLite 和文件状态损坏的明确安全边界。
+- 回归覆盖 Step Context 取消信号和 crawl 并发停止提交；取消/抓取/Worker 定向测试：36 passed；全仓 Python 测试：240 passed。

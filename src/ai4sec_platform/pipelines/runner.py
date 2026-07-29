@@ -65,6 +65,7 @@ class PipelineRunner:
                 conn=conn,
                 artifact_store=self.artifact_store,
                 params=params,
+                should_cancel=should_cancel or (lambda: False),
             )
             resumed_steps = self._restore_checkpoint(conn, context, definition, resume_from_run_id) if resume_from_run_id else []
             if resumed_steps:

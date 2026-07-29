@@ -46,6 +46,17 @@ class TimeoutStep:
 
 
 @dataclass
+class ContextCancellationStep:
+    observed: list[bool]
+    name: str = "context_cancellation_step"
+    step_type: str = "test"
+
+    def run(self, context) -> StepResult:
+        self.observed.append(context.should_cancel())
+        return StepResult(metrics={"observed": True})
+
+
+@dataclass
 class BlockingStep:
     started: threading.Event
     release: threading.Event
@@ -170,6 +181,25 @@ def test_worker_propagates_timeout_status_to_run_task_and_job(tmp_path: Path) ->
     assert run_status == "timeout"
     assert task["status"] == "timeout"
     assert task["error_message"] == "step deadline exceeded"
+
+
+def test_runner_injects_cancellation_signal_into_step_context(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    observed: list[bool] = []
+    calls = 0
+
+    def should_cancel() -> bool:
+        nonlocal calls
+        calls += 1
+        return calls >= 2
+
+    result = PipelineRunner(
+        settings=settings,
+        registry=_status_registry(ContextCancellationStep(observed)),
+    ).run("test.persisted", run_id="run_context_cancel", should_cancel=should_cancel)
+
+    assert observed == [True]
+    assert result["status"] == "cancelled"
 
 
 def test_worker_marks_interrupted_job_failed_until_safe_resume_exists(tmp_path: Path) -> None:

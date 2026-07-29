@@ -6,10 +6,10 @@ import re
 import time
 import urllib.error
 import urllib.request
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from html import unescape
 from typing import Any, Callable
 
+from ai4sec_platform.core.concurrency import bounded_map
 from ai4sec_platform.domains.vulnerabilities.crawl_policies import VulnerabilityCrawlPolicy
 from ai4sec_platform.schemas.sources import SourceFetchRequest, SourceHealth
 from ai4sec_platform.sources.result import SourceFetchResult
@@ -39,6 +39,7 @@ class Crawl4aiConnector:
         max_items = int(params.get("max_items") or request.config.get("max_items") or len(candidates) or 0)
         max_concurrency = _bounded_int(params.get("crawl_max_concurrency"), 10, maximum=10)
         on_item = params.get("on_crawl_item")
+        should_cancel = params.get("should_cancel")
         items: list[dict[str, Any]] = []
         errors: list[str] = []
         seen_urls: set[str] = set()
@@ -55,19 +56,27 @@ class Crawl4aiConnector:
             selected.append(candidate)
 
         prefer_url_fetch = bool(params.get("prefer_url_fetch", False))
-        with ThreadPoolExecutor(max_workers=min(max_concurrency, len(selected) or 1)) as executor:
-            futures = {executor.submit(_crawl_candidate, candidate, policy=policy, prefer_url_fetch=prefer_url_fetch): candidate for candidate in selected}
-            for future in as_completed(futures):
-                candidate = futures[future]
-                try:
-                    item = future.result()
-                except Exception as exc:  # pragma: no cover - defensive worker isolation
-                    item = _failed(candidate, f"{type(exc).__name__}: {exc}", failure_reason="crawl_worker_error")
-                items.append(item)
-                if callable(on_item):
-                    on_item(item, len(items), len(selected))
-                if not item.get("success"):
-                    errors.append(f"{item.get('url')}: {item.get('failure_reason') or item.get('error')}")
+        def crawl(candidate: dict[str, Any]) -> dict[str, Any]:
+            try:
+                return _crawl_candidate(candidate, policy=policy, prefer_url_fetch=prefer_url_fetch)
+            except Exception as exc:  # pragma: no cover - defensive worker isolation
+                return _failed(candidate, f"{type(exc).__name__}: {exc}", failure_reason="crawl_worker_error")
+
+        def collect(item: dict[str, Any], completed: int, total: int) -> None:
+            items.append(item)
+            if callable(on_item):
+                on_item(item, completed, total)
+            if not item.get("success"):
+                errors.append(f"{item.get('url')}: {item.get('failure_reason') or item.get('error')}")
+
+        bounded_map(
+            selected,
+            crawl,
+            max_workers=max_concurrency,
+            should_cancel=should_cancel if callable(should_cancel) else None,
+            on_result=collect,
+        )
+        cancelled = bool(callable(should_cancel) and should_cancel())
 
         return SourceFetchResult(
             source_name=request.source_name,
@@ -81,6 +90,8 @@ class Crawl4aiConnector:
                 "max_retries": policy.max_retries,
                 "max_concurrency": max_concurrency,
                 "deduplicated": len(candidates[:max_items]) - len(selected),
+                "cancelled": cancelled,
+                "unsubmitted": max(len(selected) - len(items), 0),
             },
             errors=errors,
         )
