@@ -3,20 +3,16 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from ai4sec_platform.core.config import PROJECT_ROOT
-
-
-_LOADED = False
+_LOADED_PATHS: set[Path] = set()
 
 
 def load_env_file(path: Path | None = None, *, override: bool = False) -> dict[str, str]:
-    global _LOADED
-    env_path = path or PROJECT_ROOT / ".env"
+    env_path = (path or Path(__file__).resolve().parents[3] / ".env").resolve()
     loaded: dict[str, str] = {}
-    if _LOADED and not override:
+    if env_path in _LOADED_PATHS and not override:
         return loaded
     if not env_path.exists():
-        _LOADED = True
+        _LOADED_PATHS.add(env_path)
         return loaded
     for raw_line in env_path.read_text(encoding="utf-8").splitlines():
         line = raw_line.strip()
@@ -30,7 +26,7 @@ def load_env_file(path: Path | None = None, *, override: bool = False) -> dict[s
         if override or key not in os.environ:
             os.environ[key] = value
             loaded[key] = value
-    _LOADED = True
+    _LOADED_PATHS.add(env_path)
     return loaded
 
 

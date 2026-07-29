@@ -8,20 +8,24 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from ai4sec_platform.app.api.router import api_router
+from ai4sec_platform.core.config import Settings, load_settings
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 FRONTEND_DIST = PROJECT_ROOT / "frontend" / "dist"
 
 
-def create_app() -> FastAPI:
+def create_app(settings: Settings | None = None) -> FastAPI:
+    config = settings or load_settings()
     app = FastAPI(title="AI4SEC Platform", version="0.1.0")
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=["*"],
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
+    if config.cors_allowed_origins:
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=config.cors_allowed_origins,
+            allow_credentials=True,
+            allow_methods=["GET", "POST", "OPTIONS"],
+            allow_headers=["Accept", "Content-Type"],
+            max_age=600,
+        )
     app.include_router(api_router)
     if (FRONTEND_DIST / "assets").exists():
         app.mount("/assets", StaticFiles(directory=FRONTEND_DIST / "assets"), name="assets")

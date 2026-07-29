@@ -813,7 +813,7 @@ D11 暂缓的是公网入口和完整公网暴露治理，不代表复现容器�
 - [ ] 明确 Pipeline/Step 事务边界和失败回滚规则。
 - [ ] 为关键业务对象增加唯一约束和幂等键设计。
 - [ ] 建立最小备份、校验和恢复流程。
-- [ ] CORS 改为环境化白名单。
+- [x] CORS 默认同源关闭，确需跨域时使用 `AI4SEC_CORS_ALLOWED_ORIGINS` 显式白名单；禁止通配符、路径、查询、URL 凭据和非 HTTP(S) Origin。
 - [ ] 健康检查增加数据库写入隔离后的连通性检查。
 
 #### 模块任务
@@ -1715,3 +1715,14 @@ Python full test suite: 199 passed
 1. 立即在原凭据提供方轮换 `v3` 镜像中的旧 token；代码无法替代凭据提供方执行吊销。
 2. 将新 token 写入宿主机 `0600` Secret 文件，并配置 `REPRO_MODEL_TOKEN_FILE`、`REPRO_LLM_BASE_URL`、`REPRO_IMAGE=repro-runner:v4`。
 3. 确认两个旧 Web 复现容器是否仍需保留；迁移或验收结束后停止容器，并删除 `repro-runner:v3`。
+
+### 2026-07-29：关闭全开放 CORS
+
+- 删除 `allow_origins=["*"]`、全方法和全请求头配置。
+- 平台默认同源部署且不挂 CORS 中间件；FastAPI 正式前端和 Vite `/api` 开发代理均不需要跨域。
+- 新增 `AI4SEC_CORS_ALLOWED_ORIGINS`，支持逗号分隔的可信 `http/https` Origin，并进行规范化、去重和严格校验。
+- 禁止通配符、路径、查询、fragment、URL 用户名密码和 `file://`，非法配置直接阻止启动。
+- 白名单开启时只允许 `GET`、`POST`、`OPTIONS` 与 `Accept`、`Content-Type`，并保留后续 Session Cookie 所需的 credentials 支持。
+- `load_settings()` 统一加载项目 `.env`，按文件绝对路径幂等，且不覆盖部署环境已注入的变量；移除此前依赖模型模块导入顺序的偶然行为。
+- 专项测试覆盖默认无 CORS、可信 Origin、非可信预检拒绝、非法配置和 `.env`/进程环境优先级。
+- 全仓 Python 测试：210 passed。

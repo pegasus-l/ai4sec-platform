@@ -62,6 +62,18 @@ AGENTS.md
 - 资讯洞察支持 arXiv/GitHub/RSS shadow 采集，也支持本地 raw 回归导入；漏洞当前仍按既定范围读取本地 raw 输入。
 - 模型配置从 `.env` 自动读取，优先使用 DeepSeek / DashScope / Local LLM 这类 OpenAI-compatible 配置；测试环境默认回退到 `local_rules`，避免单测触发真实模型费用。
 
+### CORS
+
+平台默认采用同源部署，不挂载 CORS 中间件，也不会向任意来源返回跨域许可。正式前端由 FastAPI 提供 `frontend/dist`，本地 Vite 开发通过 `/api` 反向代理访问后端，因此两种默认路径都不需要开启跨域。
+
+只有前后端确实使用不同可信 Origin 时，才配置逗号分隔的白名单：
+
+```bash
+AI4SEC_CORS_ALLOWED_ORIGINS=https://console.internal.example,http://127.0.0.1:5173
+```
+
+只接受完整的 `http://` 或 `https://` Origin。禁止 `*`、路径、查询参数、URL 凭据和 `file://`；非法配置会阻止应用启动。跨域请求仅允许 `GET`、`POST`、`OPTIONS` 及 `Accept`、`Content-Type` 请求头。进程环境变量优先于 `.env`，适合部署平台进行受控覆盖。
+
 ## SQLite 运维
 
 单机部署默认启用 WAL、外键校验、30 秒 busy timeout 和 `synchronous=NORMAL`。可以通过 `AI4SEC_SQLITE_BUSY_TIMEOUT_MS` 与 `AI4SEC_SQLITE_SYNCHRONOUS` 调整；生产环境建议保持 `NORMAL` 或 `FULL`。
