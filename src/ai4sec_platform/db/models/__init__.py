@@ -91,6 +91,8 @@ CREATE TABLE IF NOT EXISTS pipeline_runs (
     created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_pipeline_runs_domain ON pipeline_runs(domain);
+CREATE INDEX IF NOT EXISTS idx_pipeline_runs_domain_recent ON pipeline_runs(domain, id DESC);
+CREATE INDEX IF NOT EXISTS idx_pipeline_runs_pipeline_status ON pipeline_runs(pipeline_name, status, id);
 
 CREATE TABLE IF NOT EXISTS pipeline_jobs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -183,6 +185,7 @@ CREATE TABLE IF NOT EXISTS quality_audits (
     created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_quality_audits_domain ON quality_audits(domain);
+CREATE INDEX IF NOT EXISTS idx_quality_audits_domain_type_recent ON quality_audits(domain, audit_type, id DESC);
 
 CREATE TABLE IF NOT EXISTS human_queue_items (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -199,6 +202,7 @@ CREATE TABLE IF NOT EXISTS human_queue_items (
     updated_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_human_queue_domain ON human_queue_items(domain);
+CREATE INDEX IF NOT EXISTS idx_human_queue_status_priority ON human_queue_items(status, priority, id);
 
 CREATE TABLE IF NOT EXISTS news_item_index (
     canonical_key TEXT PRIMARY KEY,

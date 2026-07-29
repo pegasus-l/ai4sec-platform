@@ -12,6 +12,7 @@ from fastapi.testclient import TestClient
 from ai4sec_platform.app.dependencies import get_db
 from ai4sec_platform.app.main import app
 from ai4sec_platform.core.config import load_settings
+from ai4sec_platform.db import repositories as repo
 from ai4sec_platform.db.maintenance import BackupRetentionPolicy, backup_database, checkpoint_wal, database_metrics, database_write_probe, prune_database_backups, restore_database, verify_database
 from ai4sec_platform.db.migrations import MIGRATIONS, Migration, apply_migrations, current_schema_version
 from ai4sec_platform.db.models import init_db
@@ -230,9 +231,9 @@ def test_legacy_database_is_upgraded_without_losing_rows(tmp_path: Path) -> None
     )
     conn.commit()
 
-    apply_migrations(conn)
+    init_db(conn)
 
-    assert current_schema_version(conn) == 4
+    assert current_schema_version(conn) == MIGRATIONS[-1].version
     assert {row[1] for row in conn.execute("PRAGMA table_info(domain_items)")} >= {"last_synced_at"}
     assert {row[1] for row in conn.execute("PRAGMA table_info(human_queue_items)")} >= {"queue_source"}
     assert {row[1] for row in conn.execute("PRAGMA table_info(pipeline_jobs)")} >= {"cancel_requested"}
@@ -241,6 +242,56 @@ def test_legacy_database_is_upgraded_without_losing_rows(tmp_path: Path) -> None
     }
     assert conn.execute("SELECT title FROM domain_items WHERE id = 1").fetchone()[0] == "legacy item"
     conn.close()
+
+
+def test_platform_identity_migration_deduplicates_legacy_rows() -> None:
+    with connect() as conn:
+        init_db(conn)
+        for index_name in ("uq_task_runs_run_step", "uq_artifacts_run_path", "uq_data_sources_domain_name"):
+            conn.execute(f'DROP INDEX "{index_name}"')
+        conn.execute("DELETE FROM schema_migrations WHERE version = 5")
+        repo.create_pipeline_run(conn, run_id="legacy-duplicates", domain="news", pipeline_name="test.pipeline")
+        conn.execute(
+            "INSERT INTO task_runs(run_id, step_name, status, metrics_json) VALUES (?, ?, 'failed', '{}'), (?, ?, 'success', '{}')",
+            ("legacy-duplicates", "collect", "legacy-duplicates", "collect"),
+        )
+        conn.execute(
+            "INSERT INTO artifacts(run_id, artifact_type, path, sha256, bytes, payload_summary_json, created_at) VALUES (?, 'raw', ?, 'old', 1, '{}', 'old'), (?, 'raw', ?, 'new', 2, '{}', 'new')",
+            ("legacy-duplicates", "/tmp/artifact.json", "legacy-duplicates", "/tmp/artifact.json"),
+        )
+        conn.execute(
+            "INSERT INTO data_sources(domain, name, source_type, status, summary_json, created_at) VALUES ('news', 'arxiv', 'api', 'failed', '{}', 'old'), ('news', 'arxiv', 'api', 'success', '{}', 'new')"
+        )
+        conn.commit()
+
+        apply_migrations(conn)
+
+        assert conn.execute("SELECT status FROM task_runs WHERE run_id = 'legacy-duplicates'").fetchall()[0][0] == "success"
+        assert conn.execute("SELECT sha256 FROM artifacts WHERE run_id = 'legacy-duplicates'").fetchall()[0][0] == "new"
+        assert conn.execute("SELECT status FROM data_sources WHERE domain = 'news' AND name = 'arxiv'").fetchall()[0][0] == "success"
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute("INSERT INTO task_runs(run_id, step_name, status) VALUES ('legacy-duplicates', 'collect', 'failed')")
+
+
+def test_platform_repository_identity_writes_are_idempotent() -> None:
+    with connect() as conn:
+        init_db(conn)
+        repo.create_pipeline_run(conn, run_id="idempotent-run", domain="news", pipeline_name="test.pipeline")
+        repo.create_task_run(conn, run_id="idempotent-run", step_name="collect", status="failed", metrics={"items": 1})
+        repo.create_task_run(conn, run_id="idempotent-run", step_name="collect", status="success", metrics={"items": 2})
+        repo.create_artifact(conn, run_id="idempotent-run", artifact_type="raw", path="/tmp/item.json", sha256="old")
+        repo.create_artifact(conn, run_id="idempotent-run", artifact_type="raw", path="/tmp/item.json", sha256="new")
+        repo.create_data_source(conn, domain="news", name="arxiv", source_type="api", status="failed")
+        repo.create_data_source(conn, domain="news", name="arxiv", source_type="api", status="success")
+        conn.commit()
+
+        task = conn.execute("SELECT status, metrics_json FROM task_runs WHERE run_id = 'idempotent-run'").fetchall()
+        artifact = conn.execute("SELECT sha256 FROM artifacts WHERE run_id = 'idempotent-run'").fetchall()
+        source = conn.execute("SELECT status FROM data_sources WHERE domain = 'news' AND name = 'arxiv'").fetchall()
+
+    assert len(task) == 1 and task[0]["status"] == "success" and json.loads(task[0]["metrics_json"])["items"] == 2
+    assert len(artifact) == 1 and artifact[0]["sha256"] == "new"
+    assert len(source) == 1 and source[0]["status"] == "success"
 
 
 def test_migrations_are_idempotent_and_detect_history_mismatch() -> None:
@@ -288,7 +339,7 @@ def test_database_metrics_expose_wal_and_schema_state() -> None:
     assert metrics["path"] == str(settings.database_path.resolve())
     assert metrics["journal_mode"] == "wal"
     assert metrics["busy_timeout_ms"] == 30_000
-    assert metrics["schema_version"] == 4
+    assert metrics["schema_version"] == MIGRATIONS[-1].version
     assert metrics["database_bytes"] > 0
     assert metrics["allocated_bytes"] >= metrics["database_bytes"]
 
@@ -338,7 +389,7 @@ def test_readiness_reports_database_metrics() -> None:
     payload = response.json()
     assert payload["status"] == "ok"
     assert payload["database"]["journal_mode"] == "wal"
-    assert payload["database"]["schema_version"] == 4
+    assert payload["database"]["schema_version"] == MIGRATIONS[-1].version
     assert payload["database"]["write_probe"]["writable"] is True
 
 

@@ -848,7 +848,7 @@ D11 暂缓的是公网入口和完整公网暴露治理，不代表复现容器�
 - [ ] 固定 SQLite 本机持久卷和文件权限。
 - [x] 配置并验证 WAL 和 busy timeout；WAL checkpoint 自动化策略仍待补充。
 - [x] 建立 `schema_migrations` 表、顺序迁移执行器、checksum 校验和单版本失败回滚。
-- [ ] 为 PipelineRun、TaskRun、Worker、Artifact、SourceHealth 和 Audit 表补齐约束与索引。
+- [ ] 已为 PipelineRun 查询、TaskRun、Artifact、DataSource/SourceHealth、QualityAudit 查询和 HumanQueue 补齐首批约束与索引；Worker 注册表、QualityAudit 显式 `run_id` 及审计身份约束仍待补充。
 - [ ] 为四域关键业务对象补齐幂等键和唯一约束。
 - [ ] 已增加 busy timeout、数据库大小、WAL/SHM 大小、页使用量和迁移版本 readiness 指标；锁等待累计指标与定期完整性任务仍待补充。
 - [x] 建立 SQLite Backup API、一致性校验和恢复到指定文件流程。
@@ -1756,3 +1756,12 @@ Python full test suite: 199 passed
 - 恢复工具禁止直接覆盖当前 `AI4SEC_DATABASE_PATH`；只能先恢复到旁路文件并校验，停止所有服务后由运维执行离线切换。覆盖旁路文件时会清理其旧 WAL/SHM sidecar，防止旧日志帧污染恢复库。
 - 仍未完成：Compose/宿主机每日调度、独立备份磁盘位置、Artifact 备份、实际部署环境首次计时恢复演练；因此 D10 的 RPO/RTO 目标尚不能仅凭代码视为验收通过。
 - 数据库专项测试：21 passed；全仓 Python 测试：221 passed；CLI 实际备份、清单校验和旁路恢复通过。
+
+### 2026-07-29：增加平台公共记录身份约束
+
+- 新增 schema migration v5；升级旧库时先按最大 `id` 保留最新记录，再建立 `TaskRun(run_id, step_name)`、`Artifact(run_id, path)` 和 `DataSource(domain, name)` 唯一索引。
+- `create_task_run`、`create_artifact` 和 `create_data_source` 改为基于上述身份的 upsert，重复执行同一平台写入时更新当前状态，不再无限追加重复记录。
+- 增加 PipelineRun 域/状态查询、QualityAudit 域类型查询和 HumanQueue 状态优先级查询索引；没有给 QualityAudit 增加错误唯一键，因为当前表尚缺显式 `run_id`。
+- v5 不使用 `executescript`，确保去重、索引创建和迁移历史写入仍位于同一个 `BEGIN IMMEDIATE` 事务；旧库升级失败可以整体回滚。
+- 回归覆盖旧重复数据迁移、唯一约束生效和 Repository 重复写更新；四域领域对象的幂等键仍需逐模块依据 CVE、canonical key、repo 身份等业务语义设计。
+- 数据库专项测试：23 passed；全仓 Python 测试：223 passed。

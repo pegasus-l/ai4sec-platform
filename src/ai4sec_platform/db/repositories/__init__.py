@@ -190,6 +190,12 @@ def create_task_run(conn: sqlite3.Connection, *, run_id: str, step_name: str, st
         """
         INSERT INTO task_runs (run_id, step_name, status, started_at, finished_at, metrics_json, error_message)
         VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(run_id, step_name) DO UPDATE SET
+            status = excluded.status,
+            started_at = excluded.started_at,
+            finished_at = excluded.finished_at,
+            metrics_json = excluded.metrics_json,
+            error_message = excluded.error_message
         """,
         (run_id, step_name, status, now, now, dumps(metrics or {}), error_message),
     )
@@ -200,6 +206,12 @@ def create_artifact(conn: sqlite3.Connection, *, run_id: str, artifact_type: str
         """
         INSERT INTO artifacts (run_id, artifact_type, path, sha256, bytes, payload_summary_json, created_at)
         VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(run_id, path) DO UPDATE SET
+            artifact_type = excluded.artifact_type,
+            sha256 = excluded.sha256,
+            bytes = excluded.bytes,
+            payload_summary_json = excluded.payload_summary_json,
+            created_at = excluded.created_at
         """,
         (run_id, artifact_type, path, sha256, bytes_size, dumps(payload_summary or {}), utc_now()),
     )
@@ -210,6 +222,12 @@ def create_data_source(conn: sqlite3.Connection, *, domain: str, name: str, sour
         """
         INSERT INTO data_sources (domain, name, source_type, status, latest_at, health, summary_json, created_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(domain, name) DO UPDATE SET
+            source_type = excluded.source_type,
+            status = excluded.status,
+            latest_at = excluded.latest_at,
+            health = excluded.health,
+            summary_json = excluded.summary_json
         """,
         (domain, name, source_type, status, latest_at, health, dumps(summary or {}), utc_now()),
     )

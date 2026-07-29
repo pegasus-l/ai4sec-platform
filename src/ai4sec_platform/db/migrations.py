@@ -50,6 +50,17 @@ MIGRATIONS: tuple[Migration, ...] = (
             "cleanup_requested INTEGER NOT NULL DEFAULT 0"
         ),
     ),
+    Migration(
+        version=5,
+        name="add_platform_identity_constraints",
+        apply=lambda conn: _add_platform_identity_constraints(conn),
+        checksum_source=(
+            "dedupe task_runs(run_id,step_name), artifacts(run_id,path), data_sources(domain,name);"
+            "unique indexes uq_task_runs_run_step,uq_artifacts_run_path,uq_data_sources_domain_name;"
+            "query indexes pipeline_runs(domain,id),pipeline_runs(pipeline_name,status,id),"
+            "quality_audits(domain,audit_type,id),human_queue_items(status,priority,id)"
+        ),
+    ),
 )
 
 
@@ -126,3 +137,29 @@ def _add_repro_worker_fields(conn: sqlite3.Connection) -> None:
         ("cleanup_requested", "INTEGER NOT NULL DEFAULT 0"),
     ):
         _add_column_if_missing(conn, "capability_repro_tasks", column, definition)
+
+
+def _add_platform_identity_constraints(conn: sqlite3.Connection) -> None:
+    for table in ("task_runs", "artifacts", "data_sources", "pipeline_runs", "quality_audits", "human_queue_items"):
+        exists = conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", (table,)).fetchone()
+        if not exists:
+            raise RuntimeError(f"Migration target table does not exist: {table}")
+    conn.execute(
+        "DELETE FROM task_runs WHERE id NOT IN (SELECT MAX(id) FROM task_runs GROUP BY run_id, step_name)"
+    )
+    conn.execute(
+        "DELETE FROM artifacts WHERE id NOT IN (SELECT MAX(id) FROM artifacts GROUP BY run_id, path)"
+    )
+    conn.execute(
+        "DELETE FROM data_sources WHERE id NOT IN (SELECT MAX(id) FROM data_sources GROUP BY domain, name)"
+    )
+    for statement in (
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_task_runs_run_step ON task_runs(run_id, step_name)",
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_artifacts_run_path ON artifacts(run_id, path)",
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_data_sources_domain_name ON data_sources(domain, name)",
+        "CREATE INDEX IF NOT EXISTS idx_pipeline_runs_domain_recent ON pipeline_runs(domain, id DESC)",
+        "CREATE INDEX IF NOT EXISTS idx_pipeline_runs_pipeline_status ON pipeline_runs(pipeline_name, status, id)",
+        "CREATE INDEX IF NOT EXISTS idx_quality_audits_domain_type_recent ON quality_audits(domain, audit_type, id DESC)",
+        "CREATE INDEX IF NOT EXISTS idx_human_queue_status_priority ON human_queue_items(status, priority, id)",
+    ):
+        conn.execute(statement)
