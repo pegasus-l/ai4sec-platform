@@ -1364,3 +1364,30 @@ Huawei source resume/cache
 1. 在继续其他 P0 前，修复上述测试契约或明确删除已经废弃的 v9 API 契约。
 2. 进入 Pipeline 事务边界、幂等约束和 SQLite 备份恢复设计。
 3. 开始能力复现密钥泄漏、后台线程和资源限制修复。
+
+### 2026-07-28：清零阶段 0 全仓回归失败
+
+完成内容：
+
+- 运行进度响应只在存在条目级进度时返回 `item_progress`，恢复异步任务查询接口的兼容契约。
+- Huawei full scan 测试改为验证 Pipeline 将分页职责委托给 Connector，避免 Pipeline 和 Connector 重复实现分页。
+- 漏洞内容抽取模型的默认超时恢复为 600 秒；素材审核和知识抽取保持 180 秒，其他模型保持 45 秒。
+- 威胁语义评审 Prompt 恢复 `broad_sec_items` 分类说明，并补齐旧版字段与当前字段的兼容标准化输出。
+- Git 历史确认 `/api/frontend/v9` 曾被作为死代码删除，但 README、开发记录、demo 数据契约和测试仍依赖该接口，因此恢复只读聚合服务和静态 JSON 路径兼容接口。
+- v9 聚合接口只读取平台数据库和现有服务，不绕过 Pipeline，不增加生产数据写入入口。
+- 敏感信息模式扫描未发现已跟踪的 GitHub Token、OpenAI 风格 Key 或私钥文件内容。
+
+验证结果：
+
+```text
+python -m compileall -q src tests
+pytest -q --tb=short
+结果：154 passed
+耗时约 40 秒
+```
+
+阶段 0 当前结论：
+
+- Python 全仓测试已全部通过，首轮已知 5 个失败和 2 个 v9 契约缺口全部关闭。
+- 前端生产构建已通过，但 bundle 体积警告和 npm 依赖风险仍需在后续前端生产化阶段处理。
+- 下一步进入 SQLite 事务、WAL、幂等约束、持久任务执行器和恢复机制设计与实现。

@@ -182,7 +182,7 @@ def _build_assessment(target: dict[str, Any], output: dict[str, Any]) -> dict[st
 
 def _semantic_review_prompt() -> str:
     return """
-你是漏洞挖掘专家。payload 里有仓库的攻击面评分数据（attack_surface）和 CVE 列表（cves）。
+你是漏洞挖掘专家。payload 里有仓库的攻击面评分数据（attack_surface）、CVE 列表（cves）和广义安全线索（broad_sec_items）。
 
 请做 3 件事：
 
@@ -201,6 +201,13 @@ def _semantic_review_prompt() -> str:
   "cve_priority": [{"cve_id": "CVE-xxx", "value": "high|medium|low", "reason": "..."}],
   "false_positives": ["CVE-yyy 可能是误报因为..."],
   "hypotheses": ["具体挖洞方向1", "具体挖洞方向2"],
+  "is_real_security_target": true,
+  "valid_security_findings": ["确认有效的安全发现"],
+  "false_positive_risks": ["可能的误报原因"],
+  "attack_surface_summary": "攻击面总结",
+  "vulnerability_hypotheses": ["具体漏洞假设"],
+  "recommended_tracking_level": "高风险跟踪|持续观察|低优先级观察",
+  "recommended_actions": ["下一步行动"],
   "summary": "一句话风险总结",
   "confidence": 0.8
 }
@@ -261,7 +268,14 @@ def _normalize_semantic_review(value: Any) -> dict[str, Any]:
         "rule_score_assessment": result.get("rule_score_assessment") or "",
         "cve_priority": result.get("cve_priority") if isinstance(result.get("cve_priority"), list) else [],
         "false_positives": _as_list(result.get("false_positives")),
-        "hypotheses": _as_list(result.get("hypotheses")),
+        "hypotheses": _as_list(result.get("hypotheses") or result.get("vulnerability_hypotheses")),
+        "is_real_security_target": bool(result.get("is_real_security_target", True)),
+        "valid_security_findings": _as_list(result.get("valid_security_findings")),
+        "false_positive_risks": _as_list(result.get("false_positive_risks") or result.get("false_positives")),
+        "attack_surface_summary": result.get("attack_surface_summary") or result.get("attack_surface_calibration") or "",
+        "vulnerability_hypotheses": _as_list(result.get("vulnerability_hypotheses") or result.get("hypotheses")),
+        "recommended_tracking_level": result.get("recommended_tracking_level") or "",
+        "recommended_actions": _as_list(result.get("recommended_actions")),
         "confidence": _safe_confidence(result.get("confidence")),
     }
 

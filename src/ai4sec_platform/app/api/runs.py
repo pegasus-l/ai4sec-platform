@@ -144,12 +144,14 @@ def run_detail(run_id: str, conn: sqlite3.Connection = Depends(get_db)) -> dict:
         child = conn.execute("SELECT summary_json FROM pipeline_runs WHERE run_id = ?", (str(child_run_ids[-1]),)).fetchone()
         child_summary = repo.loads(child["summary_json"], {}) if child else {}
         item_progress = child_summary.get("item_progress") or item_progress
-    data["progress"] = {
+    progress = {
         "completed_steps": int(summary.get("completed_steps") or len(data["tasks"])),
         "total_steps": int(summary.get("total_steps") or 0),
         "current_step": str(summary.get("current_step") or ""),
-        "item_progress": item_progress,
     }
+    if item_progress is not None:
+        progress["item_progress"] = item_progress
+    data["progress"] = progress
     return data
 
 
