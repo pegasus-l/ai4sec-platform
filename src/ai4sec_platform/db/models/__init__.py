@@ -18,7 +18,8 @@ CREATE TABLE IF NOT EXISTS domain_items (
     metrics_json TEXT NOT NULL DEFAULT '{}',
     payload_json TEXT NOT NULL DEFAULT '{}',
     created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
+    updated_at TEXT NOT NULL,
+    last_synced_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_domain_items_domain ON domain_items(domain);
 CREATE INDEX IF NOT EXISTS idx_domain_items_type ON domain_items(domain, item_type);
@@ -192,6 +193,7 @@ CREATE TABLE IF NOT EXISTS human_queue_items (
     priority INTEGER NOT NULL DEFAULT 3,
     reason TEXT NOT NULL DEFAULT '',
     assignee TEXT NOT NULL DEFAULT '',
+    queue_source TEXT NOT NULL DEFAULT 'pipeline',
     payload_json TEXT NOT NULL DEFAULT '{}',
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
@@ -259,14 +261,9 @@ CREATE INDEX IF NOT EXISTS idx_cap_repro_created ON capability_repro_tasks(creat
 
 def init_db(conn: sqlite3.Connection) -> None:
     conn.executescript(SCHEMA_SQL)
-    # Migrations
-    try: conn.execute("ALTER TABLE domain_items ADD COLUMN last_synced_at TEXT")
-    except Exception: pass
-    try: conn.execute("ALTER TABLE human_queue_items ADD COLUMN queue_source TEXT DEFAULT 'pipeline'")
-    except Exception: pass
-    try: conn.execute("ALTER TABLE pipeline_jobs ADD COLUMN cancel_requested INTEGER NOT NULL DEFAULT 0")
-    except Exception: pass
-    conn.commit()
+    from ai4sec_platform.db.migrations import apply_migrations
+
+    apply_migrations(conn)
 
 
 SUPPORTED_DOMAINS = frozenset({"news", "capabilities", "threats", "vulnerabilities"})
@@ -312,6 +309,7 @@ def reset_db(conn: sqlite3.Connection) -> None:
         "pipeline_runs",
         "evidence_items",
         "domain_items",
+        "schema_migrations",
     ]
     for table in tables:
         conn.execute(f"DROP TABLE IF EXISTS {table}")

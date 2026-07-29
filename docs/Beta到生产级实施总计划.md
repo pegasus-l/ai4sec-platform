@@ -847,7 +847,7 @@ D11 暂缓的是公网入口和完整公网暴露治理，不代表复现容器�
 
 - [ ] 固定 SQLite 本机持久卷和文件权限。
 - [x] 配置并验证 WAL 和 busy timeout；WAL checkpoint 自动化策略仍待补充。
-- [ ] 建立 `schema_migrations` 表和顺序迁移执行器。
+- [x] 建立 `schema_migrations` 表、顺序迁移执行器、checksum 校验和单版本失败回滚。
 - [ ] 为 PipelineRun、TaskRun、Worker、Artifact、SourceHealth 和 Audit 表补齐约束与索引。
 - [ ] 为四域关键业务对象补齐幂等键和唯一约束。
 - [ ] 增加锁等待、数据库大小、WAL 大小和完整性检查指标。
@@ -1543,3 +1543,35 @@ compileall：通过
 2. 对可幂等重放 Step 增加唯一键、upsert 或清理补偿后再声明 `resume_safe=true`。
 3. 对不可重放 Step 定义失败条目级重试或人工恢复，而不是强行开放整 Step 续跑。
 4. 增加 checkpoint 大小、保留周期和敏感字段治理，避免输出快照无限增长或保存不应持久化的数据。
+
+### 2026-07-28：完成 SQLite 顺序迁移与历史校验
+
+背景：
+
+- 原 `init_db()` 在每次启动时执行三个 `ALTER TABLE`，并通过 `except Exception: pass` 吞掉所有异常。
+- 该写法无法区分“列已经存在”和磁盘、锁、SQL 或 Schema 损坏等真实失败，也没有数据库版本和升级审计记录。
+
+完成内容：
+
+- 新增 `schema_migrations(version, name, checksum, applied_at)`。
+- 将 `last_synced_at`、`queue_source` 和 `cancel_requested` 纳入最新基线 Schema，同时保留版本 1–3 的旧库增量迁移。
+- 迁移前显式检查目标表和列；列已存在视为兼容成功，目标表不存在或 SQL 失败则抛出错误。
+- 每个版本使用独立 `BEGIN IMMEDIATE` 事务；DDL 或后续逻辑失败时回滚 Schema 变化且不写版本记录。
+- 已应用迁移再次启动时验证名称和 checksum，禁止修改历史迁移后静默继续运行。
+- 新库直接建立最新表结构并记录 1–3 基线迁移；旧库按顺序补列且保留现有数据。
+- `reset_db()` 同时删除迁移历史并重新建立最新 Schema，仍只用于显式初始化 CLI。
+
+验证结果：
+
+```text
+迁移专项：10 passed
+覆盖新库版本记录、旧库无损升级、幂等执行、历史篡改检测和 DDL 失败回滚
+全仓测试：173 passed
+compileall：通过
+CLI 新库 schema version：3
+```
+
+后续边界：
+
+- 当前迁移规模较小，使用代码内顺序迁移；未来复杂表重建需采用新表复制、校验、切换策略，不能直接堆高风险 ALTER。
+- 当前只支持单机 SQLite，不提供多节点同时执行迁移；部署顺序必须是备份、停 Worker/API、升级数据库、启动服务、健康检查。
