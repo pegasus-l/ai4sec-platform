@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+from pathlib import Path
 import sqlite3
 from typing import Any
 
@@ -24,6 +26,10 @@ class RunPipelineRequest(BaseModel):
     reset: bool = False
     wait: bool = False
     params: dict[str, Any] = Field(default_factory=dict)
+
+
+class RetryPipelineRequest(BaseModel):
+    wait: bool = False
 
 
 @router.get("/pipelines")
@@ -116,3 +122,31 @@ def cancel_run(run_id: str, conn: sqlite3.Connection = Depends(get_db)) -> dict:
         return request_job_cancel(conn, run_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="run job not found") from exc
+
+
+@router.post("/{run_id}/retry")
+def retry_run(run_id: str, request: RetryPipelineRequest = RetryPipelineRequest(), conn: sqlite3.Connection = Depends(get_db)) -> dict:
+    row = conn.execute(
+        "SELECT pipeline_name, status, summary_json FROM pipeline_runs WHERE run_id = ?", (run_id,)
+    ).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="run not found")
+    if row["status"] not in {"failed", "cancelled"}:
+        raise HTTPException(status_code=409, detail="only failed or cancelled runs can be retried")
+    checkpoint = conn.execute(
+        "SELECT path FROM artifacts WHERE run_id = ? AND artifact_type = 'pipeline_checkpoint' ORDER BY id DESC LIMIT 1", (run_id,)
+    ).fetchone()
+    if not checkpoint:
+        raise HTTPException(status_code=409, detail="run has no recoverable checkpoint")
+    try:
+        checkpoint_payload = json.loads(Path(str(checkpoint["path"])).read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise HTTPException(status_code=409, detail="run checkpoint cannot be read") from exc
+    next_step = checkpoint_payload.get("next_step") or {}
+    if not next_step.get("resume_safe"):
+        raise HTTPException(status_code=409, detail=f"next step is not approved for automatic resume: {next_step.get('name') or 'unknown'}")
+    summary = repo.loads(row["summary_json"], {})
+    params = dict(summary.get("params") or {})
+    params.pop("reset", None)
+    params["_resume_from_run_id"] = run_id
+    return start_run(RunPipelineRequest(pipeline_name=row["pipeline_name"], reset=False, wait=request.wait, params=params))

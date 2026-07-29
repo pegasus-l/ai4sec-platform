@@ -14,6 +14,7 @@ from ai4sec_platform.pipelines.base import PipelineDefinition
 from ai4sec_platform.pipelines.jobs import JobConflictError, claim_next_job, enqueue_job, get_job, request_job_cancel
 from ai4sec_platform.pipelines.registry import PipelineRegistry
 from ai4sec_platform.pipelines.results import StepResult
+from ai4sec_platform.pipelines.runner import PipelineRunner
 from ai4sec_platform.pipelines.worker import PipelineWorker, WorkerAlreadyRunningError
 
 
@@ -36,6 +37,35 @@ class BlockingStep:
     def run(self, context) -> StepResult:
         self.started.set()
         self.release.wait(timeout=5)
+        return StepResult(metrics={"items": 1})
+
+
+@dataclass
+class CheckpointSourceStep:
+    calls: list[str]
+    name: str = "checkpoint_source"
+    step_type: str = "test"
+
+    def run(self, context) -> StepResult:
+        self.calls.append(self.name)
+        context.outputs["checkpoint_value"] = {"value": "persisted"}
+        return StepResult(metrics={"items": 1})
+
+
+@dataclass
+class CheckpointConsumerStep:
+    calls: list[str]
+    fail: bool = True
+    name: str = "checkpoint_consumer"
+    step_type: str = "test"
+    resume_safe: bool = True
+    resume_input_keys: tuple[str, ...] = ("checkpoint_value",)
+
+    def run(self, context) -> StepResult:
+        self.calls.append(self.name)
+        assert context.outputs["checkpoint_value"] == {"value": "persisted"}
+        if self.fail:
+            raise RuntimeError("planned failure")
         return StepResult(metrics={"items": 1})
 
 
@@ -185,3 +215,57 @@ def test_running_job_heartbeats_and_cancels_at_step_boundary(tmp_path: Path, mon
     with connect(settings) as conn:
         job = get_job(conn, "run_running_cancel")
     assert job["status"] == "cancelled"
+
+
+def test_runner_resumes_from_verified_checkpoint_without_replaying_completed_step(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    calls: list[str] = []
+    source = CheckpointSourceStep(calls)
+    consumer = CheckpointConsumerStep(calls)
+    registry = PipelineRegistry()
+    registry.register(PipelineDefinition(name="test.checkpoint", domain="news", steps=[source, consumer]))
+    runner = PipelineRunner(settings=settings, registry=registry)
+
+    failed = runner.run("test.checkpoint", run_id="run_failed")
+    consumer.fail = False
+    resumed = runner.run("test.checkpoint", {"_resume_from_run_id": "run_failed"}, run_id="run_resumed")
+
+    assert failed["status"] == "failed"
+    assert resumed["status"] == "success"
+    assert calls == ["checkpoint_source", "checkpoint_consumer", "checkpoint_consumer"]
+    assert resumed["summary"]["resumed_from_run_id"] == "run_failed"
+    with connect(settings) as conn:
+        restored = conn.execute(
+            "SELECT status FROM task_runs WHERE run_id = ? AND step_name = ?", ("run_resumed", "checkpoint_source")
+        ).fetchone()[0]
+    assert restored == "restored"
+
+
+def test_runner_rejects_checkpoint_when_semantic_inputs_change(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    calls: list[str] = []
+    source = CheckpointSourceStep(calls)
+    consumer = CheckpointConsumerStep(calls)
+    registry = PipelineRegistry()
+    registry.register(PipelineDefinition(name="test.checkpoint", domain="news", steps=[source, consumer]))
+    runner = PipelineRunner(settings=settings, registry=registry)
+
+    runner.run("test.checkpoint", {"limit": 1}, run_id="run_failed")
+
+    with pytest.raises(ValueError, match="Checkpoint does not match"):
+        runner.run("test.checkpoint", {"limit": 2, "_resume_from_run_id": "run_failed"}, run_id="run_mismatch")
+
+
+def test_runner_rejects_resume_for_step_without_explicit_safety_approval(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    calls: list[str] = []
+    source = CheckpointSourceStep(calls)
+    consumer = CheckpointConsumerStep(calls, resume_safe=False)
+    registry = PipelineRegistry()
+    registry.register(PipelineDefinition(name="test.checkpoint", domain="news", steps=[source, consumer]))
+    runner = PipelineRunner(settings=settings, registry=registry)
+
+    runner.run("test.checkpoint", run_id="run_unsafe")
+
+    with pytest.raises(ValueError, match="No recoverable checkpoint"):
+        runner.run("test.checkpoint", {"_resume_from_run_id": "run_unsafe"}, run_id="run_rejected")

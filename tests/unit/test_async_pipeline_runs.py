@@ -5,6 +5,7 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
+from ai4sec_platform.app.api import runs as runs_api
 from ai4sec_platform.app.main import app
 from ai4sec_platform.core.config import Settings, load_settings
 from ai4sec_platform.db import repositories as repo
@@ -89,6 +90,46 @@ def test_queued_run_can_be_cancelled_through_api(monkeypatch, tmp_path: Path) ->
     assert cancelled.json()["status"] == "cancelled"
     assert detail.json()["status"] == "cancelled"
     assert detail.json()["job"]["status"] == "cancelled"
+
+
+def test_failed_run_retry_api_uses_verified_checkpoint_mode(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("AI4SEC_DATABASE_PATH", str(tmp_path / "retry.db"))
+    monkeypatch.setenv("AI4SEC_OUTPUT_DIR", str(tmp_path / "output"))
+    settings = load_settings()
+    checkpoint_path = tmp_path / "checkpoint.json"
+    checkpoint_path.write_text(
+        '{"next_step":{"name":"aggregate","resume_safe":true,"resume_input_keys":[]}}', encoding="utf-8"
+    )
+    with connect(settings) as conn:
+        init_db(conn)
+        repo.create_pipeline_run(
+            conn,
+            run_id="run_failed",
+            domain="vulnerabilities",
+            pipeline_name="vulnerabilities.event_aggregation_pipeline",
+            status="failed",
+            summary={"params": {"limit": 20, "reset": True}},
+        )
+        repo.create_artifact(
+            conn,
+            run_id="run_failed",
+            artifact_type="pipeline_checkpoint",
+            path=str(checkpoint_path),
+        )
+        conn.commit()
+    captured: list[runs_api.RunPipelineRequest] = []
+
+    def fake_start_run(request):
+        captured.append(request)
+        return {"run_id": "run_retry", "status": "queued"}
+
+    monkeypatch.setattr(runs_api, "start_run", fake_start_run)
+    response = TestClient(app).post("/api/runs/run_failed/retry")
+
+    assert response.status_code == 200
+    assert response.json()["run_id"] == "run_retry"
+    assert captured[0].reset is False
+    assert captured[0].params == {"limit": 20, "_resume_from_run_id": "run_failed"}
 
 
 def test_vulnerability_run_results_are_scoped_by_run_id(monkeypatch, tmp_path: Path) -> None:

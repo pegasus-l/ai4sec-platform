@@ -135,6 +135,15 @@ POST /api/runs/{run_id}/cancel
 
 排队任务会立即变为 `cancelled`；运行中任务会设置取消请求，并在当前 Pipeline Step 完成后的安全边界停止。该接口目前不是进程、浏览器或容器级强制终止，阻塞 Step 的 timeout 和 kill switch 仍需单独实现。
 
+失败或取消的 Run 如果存在校验通过的 checkpoint，并且下一个 Step 已显式声明 `resume_safe=true`，可以创建新的续跑任务：
+
+```text
+POST /api/runs/{run_id}/retry
+{"wait": false}
+```
+
+Checkpoint 绑定 Pipeline、业务参数、Step 顺序、Step 类实现源码摘要和版本。参数或实现变化时拒绝恢复；待恢复 Step 还必须显式声明 `resume_input_keys`，只持久化经过审核的必要上下文字段。未完成幂等和输出敏感性审计的 Step 默认不生成可恢复 checkpoint。当前四个业务域仍需逐 Step 完成审核，不能把历史任务存在等同于可安全重放。
+
 也可以绕过队列直接通过 CLI 执行调试 pipeline：
 
 ```bash

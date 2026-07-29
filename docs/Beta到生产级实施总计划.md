@@ -861,8 +861,8 @@ D11 暂缓的是公网入口和完整公网暴露治理，不代表复现容器�
 - [x] 实现任务条件领取、同 Pipeline/全局 reset 冲突检查和单机 Worker 文件锁。
 - [ ] 已实现 queued/running/success/failed/cancelled；partial 和 timeout 尚未统一。
 - [ ] 已实现排队立即取消和运行中 Step 边界协作取消；系统级 kill switch 与子进程强杀尚未完成。
-- [ ] 实现 Step checkpoint 和输入 checksum。
-- [ ] 实现失败 Step、失败条目和完整 Run 重跑。
+- [ ] 已实现严格 JSON Step checkpoint、输入/实现 checksum 和恢复框架；四域 Step 的 `resume_safe` 审核仍待完成。
+- [ ] 已实现失败 Run 的白名单续跑入口；失败条目重跑与完整 Run 重跑策略仍待补充。
 - [x] 实现 Worker 启动对账；在 checkpoint 完成前将中断的 running 任务标记失败，不做不安全的自动重放。
 - [ ] 实现统一 Scheduler 和漏跑补偿。
 
@@ -1510,3 +1510,36 @@ compileall：通过
 - 当前取消是 Step 边界协作取消，不会中途杀死正在阻塞的 HTTP、模型、浏览器、子进程或复现容器。
 - 强制终止必须由各执行器实现 timeout、进程组终止、浏览器回收和容器 stop/kill，再接入平台 kill switch。
 - heartbeat 当前用于运行可见性；在单 Worker 文件锁方案下，启动对账不依据时间自动抢占任务，避免长 Step 被误判后重复执行。
+
+### 2026-07-28：建立校验型 Step Checkpoint 与白名单续跑框架
+
+实现原则：
+
+- 不根据 `task_runs` 状态直接跳过 Step，因为现有 Pipeline 大量依赖 `context.outputs` 内存对象。
+- 只有下一个 Step 显式声明 `resume_safe=true` 和 `resume_input_keys` 时，才从 `context.outputs` 选择经过审核的必要字段做严格 JSON 序列化并写入 `pipeline_checkpoint` Artifact。
+- Checkpoint 保存已完成 Step、输出快照、下一个 Step 恢复契约和语义输入 checksum。
+- checksum 绑定 Pipeline 名称、Domain、业务参数、Step 名称/类型/类、`checkpoint_version`、`resume_safe` 和 Step 类源码 SHA256。
+- 恢复时校验 Artifact 路径必须位于来源 Run 目录、文件 SHA256、来源 Run 状态、Pipeline 定义、参数和 Step 顺序。
+- 恢复创建新 Run，来源 Run 保持不可变；新 Run 为已恢复 Step 写入 `restored` TaskRun，只执行 checkpoint 之后的 Step。
+
+安全白名单：
+
+- 下一个失败 Step 必须显式声明 `resume_safe=true` 和 `resume_input_keys` 才能续跑；空列表表示只依赖数据库或 Artifact，不需要内存输出。
+- 未声明的 Step 默认拒绝，原因是失败前可能已经提交部分数据库、模型调用、外部文件或容器副作用。
+- `/api/runs/{run_id}/retry` 在入队前检查 checkpoint 的下一 Step 恢复契约；Runner 执行前再次做完整校验，不能只信 API 预检查。
+- 当前框架和测试已完成，但四个业务域的生产 Step 尚未逐项完成幂等审计，因此默认不会自动开放续跑。
+
+验证结果：
+
+```text
+checkpoint 输出恢复、完成 Step 不重放、参数变化拒绝、未审批 Step 拒绝、Retry API：15 passed
+最终全仓回归：169 passed
+compileall：通过
+```
+
+后续工作：
+
+1. 按资讯、威胁、漏洞、能力顺序审计每个 Step 的数据库、Artifact、模型和外部副作用。
+2. 对可幂等重放 Step 增加唯一键、upsert 或清理补偿后再声明 `resume_safe=true`。
+3. 对不可重放 Step 定义失败条目级重试或人工恢复，而不是强行开放整 Step 续跑。
+4. 增加 checkpoint 大小、保留周期和敏感字段治理，避免输出快照无限增长或保存不应持久化的数据。
