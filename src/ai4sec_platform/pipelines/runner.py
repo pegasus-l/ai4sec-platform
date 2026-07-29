@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import inspect
 import json
+import sqlite3
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -93,6 +94,10 @@ class PipelineRunner:
                     status = "cancelled"
                     error_message = "cancelled at step boundary"
                     break
+                transaction_mode = "atomic"
+                artifact_baseline_id = 0
+                step_savepoint_started = False
+                step_committed = False
                 try:
                     summary["current_step"] = step.name
                     repo.create_pipeline_run(
@@ -107,12 +112,29 @@ class PipelineRunner:
                         summary=summary,
                     )
                     conn.commit()
+                    transaction_mode = _step_transaction_mode(step)
+                    artifact_baseline_id = _latest_artifact_id(conn, run_id)
+                    if transaction_mode == "atomic":
+                        conn.execute("SAVEPOINT pipeline_step")
+                        step_savepoint_started = True
+                        context.conn = _AtomicStepConnection(conn)  # type: ignore[assignment]
                     step_started = time.perf_counter()
-                    result = step.run(context)
+                    try:
+                        result = step.run(context)
+                    finally:
+                        context.conn = conn
+                    if step_savepoint_started:
+                        conn.execute("RELEASE pipeline_step")
+                        step_savepoint_started = False
                     result.metrics["duration_ms"] = int((time.perf_counter() - step_started) * 1000)
                     context.outputs.setdefault("_step_metrics", {})[step.name] = dict(result.metrics)
                     artifacts.extend(result.artifacts)
-                    summary["steps"].append({"name": step.name, "status": "success", "metrics": result.metrics})
+                    summary["steps"].append({
+                        "name": step.name,
+                        "status": "success",
+                        "transaction_mode": transaction_mode,
+                        "metrics": result.metrics,
+                    })
                     summary["completed_steps"] = len(summary["steps"])
                     repo.create_task_run(conn, run_id=run_id, step_name=step.name, status="success", metrics=result.metrics)
                     repo.create_pipeline_run(
@@ -127,6 +149,7 @@ class PipelineRunner:
                         summary=summary,
                     )
                     conn.commit()
+                    step_committed = True
                     checkpoint = self._write_checkpoint(conn, context, definition, summary)
                     if checkpoint:
                         artifacts.append(checkpoint)
@@ -136,9 +159,24 @@ class PipelineRunner:
                         error_message = "cancelled at step boundary"
                         break
                 except Exception as exc:  # pragma: no cover - defensive run recording
+                    context.conn = conn
+                    if not step_committed and transaction_mode == "atomic":
+                        failed_artifacts = _artifact_paths_after(conn, run_id, artifact_baseline_id)
+                        if step_savepoint_started:
+                            _rollback_step_savepoint(conn)
+                        else:
+                            conn.rollback()
+                        _remove_failed_artifacts(failed_artifacts, self.settings.output_dir)
+                    else:
+                        conn.rollback()
                     status = "failed"
                     error_message = str(exc)
-                    summary["steps"].append({"name": step.name, "status": "failed", "error": error_message})
+                    summary["steps"].append({
+                        "name": step.name,
+                        "status": "failed",
+                        "transaction_mode": transaction_mode,
+                        "error": error_message,
+                    })
                     summary["completed_steps"] = len(summary["steps"])
                     repo.create_task_run(conn, run_id=run_id, step_name=step.name, status="failed", error_message=error_message)
                     break
@@ -244,6 +282,56 @@ class PipelineRunner:
         return [{**step, "status": "restored"} for step in completed_steps]
 
 
+def _step_transaction_mode(step: Any) -> str:
+    mode = str(getattr(step, "transaction_mode", "atomic"))
+    if mode not in {"atomic", "checkpointed"}:
+        raise ValueError(f"Invalid transaction_mode for step {step.name}: {mode}")
+    return mode
+
+
+def _latest_artifact_id(conn: sqlite3.Connection, run_id: str) -> int:
+    row = conn.execute("SELECT COALESCE(MAX(id), 0) FROM artifacts WHERE run_id = ?", (run_id,)).fetchone()
+    return int(row[0])
+
+
+def _artifact_paths_after(conn: sqlite3.Connection, run_id: str, artifact_id: int) -> list[str]:
+    rows = conn.execute(
+        "SELECT path FROM artifacts WHERE run_id = ? AND id > ?",
+        (run_id, artifact_id),
+    ).fetchall()
+    return [str(row[0]) for row in rows]
+
+
+def _rollback_step_savepoint(conn: sqlite3.Connection) -> None:
+    try:
+        conn.execute("ROLLBACK TO pipeline_step")
+        conn.execute("RELEASE pipeline_step")
+    except sqlite3.Error:
+        conn.rollback()
+
+
+def _remove_failed_artifacts(paths: list[str], output_dir: Path) -> None:
+    root = output_dir.resolve()
+    for raw_path in paths:
+        path = Path(raw_path).resolve()
+        if path.is_relative_to(root) and path.is_file():
+            path.unlink(missing_ok=True)
+
+
+class _AtomicStepConnection:
+    def __init__(self, conn: sqlite3.Connection) -> None:
+        self._conn = conn
+
+    def commit(self) -> None:
+        raise RuntimeError("Atomic pipeline steps must not commit; declare transaction_mode='checkpointed'")
+
+    def rollback(self) -> None:
+        raise RuntimeError("Atomic pipeline steps must not rollback the Runner-owned transaction")
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._conn, name)
+
+
 def _input_checksum(pipeline_name: str, domain: str, steps: list[Any], params: dict[str, Any]) -> str:
     semantic_params = {key: value for key, value in params.items() if key not in {"reset", "_resume_from_run_id"}}
     payload = {
@@ -265,6 +353,7 @@ def _step_identity(step: Any) -> dict[str, Any]:
     return {
         "name": step.name,
         "step_type": step.step_type,
+        "transaction_mode": _step_transaction_mode(step),
         "class": f"{step_class.__module__}.{step_class.__qualname__}",
         "checkpoint_version": getattr(step, "checkpoint_version", 1),
         "resume_safe": bool(getattr(step, "resume_safe", False)),

@@ -139,6 +139,7 @@ class DeduplicateNewsStep:
 class GateNewsCandidatesStep:
     name: str = "gate_news_candidates_with_tech_map"
     step_type: str = "llm_gate"
+    transaction_mode: str = "checkpointed"
 
     def run(self, context: PipelineContext) -> StepResult:
         candidates = context.outputs.get("deduped_news_items") or []
@@ -170,6 +171,7 @@ class GateNewsCandidatesStep:
 class EnrichNewsCandidatesStep:
     name: str = "enrich_news_candidates_with_model"
     step_type: str = "llm_enrich"
+    transaction_mode: str = "checkpointed"
 
     def run(self, context: PipelineContext) -> StepResult:
         candidates = context.outputs.get("gated_news_items") or []

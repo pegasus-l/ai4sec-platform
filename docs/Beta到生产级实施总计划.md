@@ -810,7 +810,7 @@ D11 暂缓的是公网入口和完整公网暴露治理，不代表复现容器�
 
 - [x] 将 Pipeline reset 从全库重建改为显式领域清理；全库重建只保留给显式数据库初始化 CLI。
 - [x] 禁止普通 Pipeline API 请求触发全库 reset。
-- [ ] 明确 Pipeline/Step 事务边界和失败回滚规则。
+- [x] Step 默认采用 Runner 管理的 `atomic` SAVEPOINT，失败回滚业务写并清理新 Artifact；仅显式 `checkpointed` 长任务允许分段提交。
 - [ ] 为关键业务对象增加唯一约束和幂等键设计。
 - [ ] 建立最小备份、校验和恢复流程。
 - [x] CORS 默认同源关闭，确需跨域时使用 `AI4SEC_CORS_ALLOWED_ORIGINS` 显式白名单；禁止通配符、路径、查询、URL 凭据和非 HTTP(S) Origin。
@@ -1735,3 +1735,13 @@ Python full test suite: 199 passed
 - 数据库写锁、只读文件、普通 SQLite 错误和迁移历史 RuntimeError 都返回 HTTP 503；响应只暴露 `database_locked`、`database_read_only`、`database_schema_error` 或 `database_error` 稳定错误码。
 - 专项测试覆盖成功写入回滚、零残留、busy timeout 恢复和持有 `BEGIN IMMEDIATE` 写锁时的 503 降级。
 - 全仓 Python 测试：212 passed。
+
+### 2026-07-29：固定 Pipeline Step 事务边界
+
+- 所有 Step 默认 `transaction_mode=atomic`，Runner 在 Step 前创建 `SAVEPOINT pipeline_step`，成功后释放并统一提交。
+- atomic Step 获得受控 connection wrapper；调用 `commit()` 或 `rollback()` 会立即失败，防止业务代码绕过 Runner 提交半成品。
+- atomic Step 失败时回滚本步骤全部数据库写入，并删除本步骤通过 ArtifactStore 新建但尚未提交的文件，避免数据库记录回滚后留下孤儿制品。
+- 资讯模型门控/深评、漏洞逐条抓取/抽取/审核和漏洞批次编排显式声明 `checkpointed`，允许保留已提交的模型调用、逐条结果和批次进度；失败时回滚最后一个未提交尾部事务。
+- 事务模式写入每个 Step 的 Run summary，并纳入 Pipeline checkpoint 输入 checksum；事务模式改变后旧 checkpoint 不可恢复。
+- 新增回归测试覆盖 atomic 业务写回滚、违规 commit 阻断、失败 Artifact 清理，以及 checkpointed 已提交检查点保留/尾部回滚。
+- 全仓 Python 测试：216 passed。
