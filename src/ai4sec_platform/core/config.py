@@ -23,6 +23,8 @@ class Settings(BaseModel):
     backup_daily_retention_days: int = 7
     backup_weekly_retention_weeks: int = 4
     backup_monthly_retention_months: int = 6
+    pipeline_worker_heartbeat_seconds: int = 10
+    pipeline_job_lease_seconds: int = 45
     sqlite_synchronous: str = "NORMAL"
     cors_allowed_origins: list[str] = []
     production_writes: bool = False
@@ -50,6 +52,10 @@ def load_settings(project_root: Path | None = None) -> Settings:
     backup_daily_retention_days = _positive_int(os.getenv("AI4SEC_BACKUP_DAILY_RETENTION_DAYS", "7"), 7)
     backup_weekly_retention_weeks = _positive_int(os.getenv("AI4SEC_BACKUP_WEEKLY_RETENTION_WEEKS", "4"), 4)
     backup_monthly_retention_months = _positive_int(os.getenv("AI4SEC_BACKUP_MONTHLY_RETENTION_MONTHS", "6"), 6)
+    pipeline_worker_heartbeat_seconds = _positive_int(os.getenv("AI4SEC_PIPELINE_WORKER_HEARTBEAT_SECONDS", "10"), 10)
+    pipeline_job_lease_seconds = _positive_int(os.getenv("AI4SEC_PIPELINE_JOB_LEASE_SECONDS", "45"), 45)
+    if pipeline_job_lease_seconds < pipeline_worker_heartbeat_seconds * 3:
+        pipeline_job_lease_seconds = pipeline_worker_heartbeat_seconds * 3
     sqlite_synchronous = os.getenv("AI4SEC_SQLITE_SYNCHRONOUS", "NORMAL").strip().upper()
     if sqlite_synchronous not in {"OFF", "NORMAL", "FULL", "EXTRA"}:
         sqlite_synchronous = "NORMAL"
@@ -66,6 +72,8 @@ def load_settings(project_root: Path | None = None) -> Settings:
         backup_daily_retention_days=backup_daily_retention_days,
         backup_weekly_retention_weeks=backup_weekly_retention_weeks,
         backup_monthly_retention_months=backup_monthly_retention_months,
+        pipeline_worker_heartbeat_seconds=pipeline_worker_heartbeat_seconds,
+        pipeline_job_lease_seconds=pipeline_job_lease_seconds,
         sqlite_synchronous=sqlite_synchronous,
         cors_allowed_origins=cors_allowed_origins,
         production_writes=bool(app.get("production_writes", False)),

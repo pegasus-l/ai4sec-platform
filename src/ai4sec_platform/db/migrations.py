@@ -61,6 +61,16 @@ MIGRATIONS: tuple[Migration, ...] = (
             "quality_audits(domain,audit_type,id),human_queue_items(status,priority,id)"
         ),
     ),
+    Migration(
+        version=6,
+        name="add_pipeline_worker_leases",
+        apply=lambda conn: _add_pipeline_worker_leases(conn),
+        checksum_source=(
+            "pipeline_jobs.lease_expires_at TEXT NOT NULL DEFAULT '';"
+            "pipeline_workers(worker_id,status,hostname,pid,started_at,heartbeat_at,stopped_at,current_run_id,metadata_json,updated_at);"
+            "indexes pipeline_jobs(status,lease_expires_at),pipeline_workers(status,heartbeat_at)"
+        ),
+    ),
 )
 
 
@@ -163,3 +173,38 @@ def _add_platform_identity_constraints(conn: sqlite3.Connection) -> None:
         "CREATE INDEX IF NOT EXISTS idx_human_queue_status_priority ON human_queue_items(status, priority, id)",
     ):
         conn.execute(statement)
+
+
+def _add_pipeline_worker_leases(conn: sqlite3.Connection) -> None:
+    _add_column_if_missing(conn, "pipeline_jobs", "lease_expires_at", "TEXT NOT NULL DEFAULT ''")
+    conn.execute(
+        """
+        UPDATE pipeline_jobs
+        SET lease_expires_at = CASE
+            WHEN heartbeat_at != '' THEN heartbeat_at
+            WHEN updated_at != '' THEN updated_at
+            ELSE queued_at
+        END
+        WHERE status = 'running' AND lease_expires_at = ''
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS pipeline_workers (
+            worker_id TEXT PRIMARY KEY,
+            status TEXT NOT NULL DEFAULT 'running',
+            hostname TEXT NOT NULL DEFAULT '',
+            pid INTEGER NOT NULL DEFAULT 0,
+            started_at TEXT NOT NULL,
+            heartbeat_at TEXT NOT NULL,
+            stopped_at TEXT NOT NULL DEFAULT '',
+            current_run_id TEXT NOT NULL DEFAULT '',
+            metadata_json TEXT NOT NULL DEFAULT '{}',
+            updated_at TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_pipeline_jobs_lease ON pipeline_jobs(status, lease_expires_at)")
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_pipeline_workers_status_heartbeat ON pipeline_workers(status, heartbeat_at)"
+    )

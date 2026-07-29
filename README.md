@@ -146,6 +146,8 @@ npm run build
 PYTHONPATH=src python3 -m ai4sec_platform.cli.pipeline_worker --poll-interval 1
 ```
 
+Worker 启动后写入 `pipeline_workers` 注册记录，空闲和执行任务期间持续 heartbeat；领取任务时写入 `lease_expires_at`。默认 heartbeat 为 10 秒、Job 租约为 45 秒，可通过 `AI4SEC_PIPELINE_WORKER_HEARTBEAT_SECONDS` 和 `AI4SEC_PIPELINE_JOB_LEASE_SECONDS` 调整，租约会自动收紧为不少于三个 heartbeat 周期。Worker 崩溃后任务不会在刚启动新进程时被立即误杀，只有租约到期后才标记为 `failed` 并要求通过受控重试恢复。
+
 API 提交的任务会先写入 SQLite `pipeline_jobs`，`wait=false` 时立即返回可轮询的 `run_id`：
 
 ```text

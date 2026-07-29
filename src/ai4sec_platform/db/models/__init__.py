@@ -105,6 +105,7 @@ CREATE TABLE IF NOT EXISTS pipeline_jobs (
     attempt_count INTEGER NOT NULL DEFAULT 0,
     worker_id TEXT NOT NULL DEFAULT '',
     heartbeat_at TEXT NOT NULL DEFAULT '',
+    lease_expires_at TEXT NOT NULL DEFAULT '',
     cancel_requested INTEGER NOT NULL DEFAULT 0,
     error_message TEXT NOT NULL DEFAULT '',
     queued_at TEXT NOT NULL,
@@ -115,6 +116,20 @@ CREATE TABLE IF NOT EXISTS pipeline_jobs (
 );
 CREATE INDEX IF NOT EXISTS idx_pipeline_jobs_status ON pipeline_jobs(status, id);
 CREATE INDEX IF NOT EXISTS idx_pipeline_jobs_pipeline ON pipeline_jobs(pipeline_name, status);
+
+CREATE TABLE IF NOT EXISTS pipeline_workers (
+    worker_id TEXT PRIMARY KEY,
+    status TEXT NOT NULL DEFAULT 'running',
+    hostname TEXT NOT NULL DEFAULT '',
+    pid INTEGER NOT NULL DEFAULT 0,
+    started_at TEXT NOT NULL,
+    heartbeat_at TEXT NOT NULL,
+    stopped_at TEXT NOT NULL DEFAULT '',
+    current_run_id TEXT NOT NULL DEFAULT '',
+    metadata_json TEXT NOT NULL DEFAULT '{}',
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_pipeline_workers_status_heartbeat ON pipeline_workers(status, heartbeat_at);
 
 CREATE TABLE IF NOT EXISTS task_runs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -316,6 +331,7 @@ def reset_db(conn: sqlite3.Connection) -> None:
         "artifacts",
         "task_runs",
         "pipeline_jobs",
+        "pipeline_workers",
         "pipeline_runs",
         "evidence_items",
         "domain_items",

@@ -788,7 +788,7 @@ D11 暂缓的是公网入口和完整公网暴露治理，不代表复现容器�
 - [x] 用户确认 D01-D13，或明确哪些决策延后；D01-D10、D13 已确认，D11-D12 已明确暂缓。
 - [x] 建立全仓生产风险清单并标记 P0/P1/P2。
 - [ ] 固定 PipelineRun、TaskRun、Worker 和 Step 状态机。
-- [ ] 固定任务租约、heartbeat、超时、取消和恢复语义。
+- [ ] 已固定 Worker 注册、Job 租约、heartbeat、Step 边界取消和租约过期恢复；统一 timeout、kill switch 与子进程强杀仍待完成。
 - [ ] 固定四模块业务动作和权限编码。
 - [ ] 固定 ConnectorHealth、ModelCall、Artifact 和 QualityMetric 契约。
 - [x] 记录现有数据库 schema、测试结果和前端构建基线。
@@ -857,7 +857,7 @@ D11 暂缓的是公网入口和完整公网暴露治理，不代表复现容器�
 
 - [ ] API 只创建 queued 任务，不直接启动线程。
 - [x] 实现单实例 Pipeline Worker 进程和独立 CLI。
-- [x] 实现原子任务领取和运行中周期 heartbeat；租约过期判定与 Worker 注册仍待补充。
+- [x] 实现原子任务领取、Worker 注册、空闲/运行 heartbeat、Job 租约续期和租约过期失联判定。
 - [x] 实现任务条件领取、同 Pipeline/全局 reset 冲突检查和单机 Worker 文件锁。
 - [ ] 已实现 queued/running/success/failed/cancelled；partial 和 timeout 尚未统一。
 - [ ] 已实现排队立即取消和运行中 Step 边界协作取消；系统级 kill switch 与子进程强杀尚未完成。
@@ -1765,3 +1765,13 @@ Python full test suite: 199 passed
 - v5 不使用 `executescript`，确保去重、索引创建和迁移历史写入仍位于同一个 `BEGIN IMMEDIATE` 事务；旧库升级失败可以整体回滚。
 - 回归覆盖旧重复数据迁移、唯一约束生效和 Repository 重复写更新；四域领域对象的幂等键仍需逐模块依据 CVE、canonical key、repo 身份等业务语义设计。
 - 数据库专项测试：23 passed；全仓 Python 测试：223 passed。
+
+### 2026-07-29：实现 Pipeline Worker 注册和任务租约
+
+- 新增 migration v6：`pipeline_workers` 持久记录 Worker 的 hostname、PID、启动/心跳/停止时间、当前 Run 和状态；`pipeline_jobs` 新增 `lease_expires_at` 及失联扫描索引。
+- Worker 在持有单机文件锁后注册，空闲时续 Worker heartbeat，执行任务时同时续 Worker heartbeat 和 Job 租约，正常退出记录 `stopped`。
+- Job 领取写入租约截止时间；只有持有相同 `worker_id` 的 Worker 才能续租和完成任务，避免旧 Worker 在租约所有权丢失后覆盖新状态。
+- 恢复逻辑不再把所有 `running` 任务立即判失败，只处理租约已经过期的任务，并将对应 Worker 标记为 `lost`；未过期任务保持运行状态。
+- v6 会把升级时遗留且没有租约的 `running` Job 按最后 heartbeat/更新时间回填为已到期候选，避免历史中断任务永久卡住。
+- 默认 heartbeat 10 秒、租约 45 秒，配置强制租约不少于三个 heartbeat 周期；回归覆盖活租约不误杀、过期恢复、非 Owner 续租失败和 Worker 正常停止登记。
+- Worker/数据库定向测试：36 passed；全仓 Python 测试：226 passed。

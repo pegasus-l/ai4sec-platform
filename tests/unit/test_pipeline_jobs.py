@@ -11,7 +11,7 @@ from ai4sec_platform.core.config import Settings
 from ai4sec_platform.db.models import init_db
 from ai4sec_platform.db.session import connect
 from ai4sec_platform.pipelines.base import PipelineDefinition
-from ai4sec_platform.pipelines.jobs import JobConflictError, claim_next_job, enqueue_job, get_job, request_job_cancel
+from ai4sec_platform.pipelines.jobs import JobConflictError, claim_next_job, enqueue_job, get_job, heartbeat_job, reconcile_interrupted_jobs, request_job_cancel
 from ai4sec_platform.pipelines.registry import PipelineRegistry
 from ai4sec_platform.pipelines.results import StepResult
 from ai4sec_platform.pipelines.runner import PipelineRunner
@@ -119,6 +119,11 @@ def test_worker_marks_interrupted_job_failed_until_safe_resume_exists(tmp_path: 
     _enqueue(settings, "run_interrupted")
     with connect(settings) as conn:
         claimed = claim_next_job(conn, worker_id="dead-worker")
+        conn.execute(
+            "UPDATE pipeline_jobs SET lease_expires_at = '2020-01-01T00:00:00Z' WHERE run_id = ?",
+            ("run_interrupted",),
+        )
+        conn.commit()
     assert claimed is not None
     assert claimed["status"] == "running"
 
@@ -129,8 +134,50 @@ def test_worker_marks_interrupted_job_failed_until_safe_resume_exists(tmp_path: 
         job = get_job(conn, "run_interrupted")
         run_status = conn.execute("SELECT status FROM pipeline_runs WHERE run_id = ?", ("run_interrupted",)).fetchone()[0]
     assert job["status"] == "failed"
-    assert job["error_message"] == "worker interrupted; manual retry required"
+    assert job["error_message"] == "worker lease expired; manual retry required"
     assert run_status == "failed"
+
+
+def test_recovery_does_not_fail_job_with_live_lease(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    _enqueue(settings, "run_live_lease")
+    with connect(settings) as conn:
+        claimed = claim_next_job(conn, worker_id="live-worker", lease_seconds=60)
+        recovered = reconcile_interrupted_jobs(conn)
+
+    assert claimed is not None
+    assert recovered == []
+    with connect(settings) as conn:
+        assert get_job(conn, "run_live_lease")["status"] == "running"
+
+
+def test_job_heartbeat_extends_lease_only_for_owner(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    _enqueue(settings, "run_heartbeat_lease")
+    with connect(settings) as conn:
+        claimed = claim_next_job(conn, worker_id="owner", lease_seconds=1)
+        assert claimed is not None
+        original_lease = get_job(conn, "run_heartbeat_lease")["lease_expires_at"]
+        assert heartbeat_job(conn, run_id="run_heartbeat_lease", worker_id="intruder", lease_seconds=60) is False
+        assert get_job(conn, "run_heartbeat_lease")["lease_expires_at"] == original_lease
+        assert heartbeat_job(conn, run_id="run_heartbeat_lease", worker_id="owner", lease_seconds=60) is True
+        assert get_job(conn, "run_heartbeat_lease")["lease_expires_at"] > original_lease
+
+
+def test_run_once_registers_and_stops_worker(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    _enqueue(settings, "run_worker_registry")
+
+    result = PipelineWorker(settings=settings, registry=_registry(), worker_id="registered-worker").run_once()
+
+    assert result is not None
+    with connect(settings) as conn:
+        worker = conn.execute("SELECT * FROM pipeline_workers WHERE worker_id = ?", ("registered-worker",)).fetchone()
+    assert worker["status"] == "stopped"
+    assert worker["pid"] > 0
+    assert worker["heartbeat_at"]
+    assert worker["stopped_at"]
+    assert worker["current_run_id"] == ""
 
 
 def test_reset_job_survives_domain_reset_and_finishes(tmp_path: Path) -> None:

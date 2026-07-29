@@ -11,7 +11,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--once", action="store_true", help="Process at most one queued job and exit")
     parser.add_argument("--run-id", help="With --once, claim only this queued run")
     parser.add_argument("--poll-interval", type=float, default=1.0)
-    parser.add_argument("--recover-only", action="store_true", help="Mark interrupted running jobs failed and exit")
+    parser.add_argument("--recover-only", action="store_true", help="Mark only lease-expired running jobs failed and exit")
     args = parser.parse_args(argv)
     worker = PipelineWorker()
     if args.recover_only:

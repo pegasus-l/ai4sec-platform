@@ -41,6 +41,8 @@ def test_invalid_sqlite_settings_fall_back_to_safe_defaults(monkeypatch) -> None
     assert settings.backup_daily_retention_days == 7
     assert settings.backup_weekly_retention_weeks == 4
     assert settings.backup_monthly_retention_months == 6
+    assert settings.pipeline_worker_heartbeat_seconds == 10
+    assert settings.pipeline_job_lease_seconds == 45
 
 
 def test_request_database_dependency_rolls_back_on_error() -> None:
@@ -237,6 +239,8 @@ def test_legacy_database_is_upgraded_without_losing_rows(tmp_path: Path) -> None
     assert {row[1] for row in conn.execute("PRAGMA table_info(domain_items)")} >= {"last_synced_at"}
     assert {row[1] for row in conn.execute("PRAGMA table_info(human_queue_items)")} >= {"queue_source"}
     assert {row[1] for row in conn.execute("PRAGMA table_info(pipeline_jobs)")} >= {"cancel_requested"}
+    assert {row[1] for row in conn.execute("PRAGMA table_info(pipeline_jobs)")} >= {"lease_expires_at"}
+    assert conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'pipeline_workers'").fetchone()
     assert {row[1] for row in conn.execute("PRAGMA table_info(capability_repro_tasks)")} >= {
         "started_at", "updated_at", "worker_id", "heartbeat_at", "cancel_requested", "cleanup_requested"
     }

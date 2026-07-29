@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import fcntl
+import os
 from pathlib import Path
+import socket
 import threading
 import time
 from typing import Any, TextIO
@@ -12,7 +14,7 @@ from ai4sec_platform.core.time import utc_now
 from ai4sec_platform.db import repositories as repo
 from ai4sec_platform.db.models import init_db
 from ai4sec_platform.db.session import connect
-from ai4sec_platform.pipelines.jobs import claim_next_job, finish_job, heartbeat_job, is_cancel_requested, reconcile_interrupted_jobs
+from ai4sec_platform.pipelines.jobs import claim_next_job, finish_job, heartbeat_job, heartbeat_worker, is_cancel_requested, reconcile_interrupted_jobs, register_worker, stop_worker
 from ai4sec_platform.pipelines.registry import PipelineRegistry, default_registry
 from ai4sec_platform.pipelines.runner import PipelineRunner
 
@@ -28,16 +30,22 @@ class PipelineWorker:
         registry: PipelineRegistry | None = None,
         *,
         worker_id: str | None = None,
-        heartbeat_interval: float = 10.0,
+        heartbeat_interval: float | None = None,
     ) -> None:
         self.settings = settings or load_settings()
         self.registry = registry or default_registry()
         self.worker_id = worker_id or new_id("worker")
-        self.heartbeat_interval = max(heartbeat_interval, 0.1)
+        configured_interval = heartbeat_interval if heartbeat_interval is not None else self.settings.pipeline_worker_heartbeat_seconds
+        self.heartbeat_interval = max(float(configured_interval), 0.1)
+        self.lease_seconds = max(self.settings.pipeline_job_lease_seconds, int(self.heartbeat_interval * 3))
 
     def recover(self) -> list[str]:
         with self._worker_lock():
-            return self._recover()
+            self._register()
+            try:
+                return self._recover()
+            finally:
+                self._stop()
 
     def _recover(self) -> list[str]:
         with connect(self.settings) as conn:
@@ -46,12 +54,22 @@ class PipelineWorker:
 
     def run_once(self, *, run_id: str | None = None) -> dict[str, Any] | None:
         with self._worker_lock():
-            return self._run_once(run_id=run_id)
+            self._register()
+            try:
+                self._recover()
+                return self._run_once(run_id=run_id)
+            finally:
+                self._stop()
 
     def _run_once(self, *, run_id: str | None = None) -> dict[str, Any] | None:
         with connect(self.settings) as conn:
             init_db(conn)
-            job = claim_next_job(conn, worker_id=self.worker_id, run_id=run_id)
+            job = claim_next_job(
+                conn,
+                worker_id=self.worker_id,
+                run_id=run_id,
+                lease_seconds=self.lease_seconds,
+            )
         if not job:
             return None
         try:
@@ -78,13 +96,26 @@ class PipelineWorker:
             }
         with connect(self.settings) as conn:
             init_db(conn)
-            finish_job(conn, run_id=job["run_id"], status=status, error_message=error_message)
+            finished = finish_job(
+                conn,
+                run_id=job["run_id"],
+                worker_id=self.worker_id,
+                status=status,
+                error_message=error_message,
+            )
+            if not finished:
+                raise RuntimeError(f"job lease ownership lost before finish: {job['run_id']}")
         return result
 
     def _heartbeat(self, run_id: str) -> bool:
         with connect(self.settings) as conn:
             init_db(conn)
-            return heartbeat_job(conn, run_id=run_id, worker_id=self.worker_id)
+            return heartbeat_job(
+                conn,
+                run_id=run_id,
+                worker_id=self.worker_id,
+                lease_seconds=self.lease_seconds,
+            )
 
     def _cancel_requested(self, run_id: str) -> bool:
         with connect(self.settings) as conn:
@@ -93,11 +124,37 @@ class PipelineWorker:
 
     def serve_forever(self, *, poll_interval: float = 1.0) -> None:
         with self._worker_lock():
-            self._recover()
-            while True:
-                result = self._run_once()
-                if result is None:
-                    time.sleep(poll_interval)
+            self._register()
+            try:
+                while True:
+                    self._recover()
+                    result = self._run_once()
+                    if result is None:
+                        self._worker_heartbeat()
+                        time.sleep(poll_interval)
+            finally:
+                self._stop()
+
+    def _register(self) -> None:
+        with connect(self.settings) as conn:
+            init_db(conn)
+            register_worker(
+                conn,
+                worker_id=self.worker_id,
+                hostname=socket.gethostname(),
+                pid=os.getpid(),
+                metadata={"kind": "pipeline", "lease_seconds": self.lease_seconds},
+            )
+
+    def _worker_heartbeat(self, current_run_id: str = "") -> bool:
+        with connect(self.settings) as conn:
+            init_db(conn)
+            return heartbeat_worker(conn, worker_id=self.worker_id, current_run_id=current_run_id)
+
+    def _stop(self) -> None:
+        with connect(self.settings) as conn:
+            init_db(conn)
+            stop_worker(conn, worker_id=self.worker_id)
 
     def _record_crash(self, job: dict[str, Any], error_message: str) -> None:
         with connect(self.settings) as conn:
