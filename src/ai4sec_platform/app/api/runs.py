@@ -6,7 +6,7 @@ import sqlite3
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from ai4sec_platform.app.dependencies import get_db
 from ai4sec_platform.core.config import load_settings
@@ -16,20 +16,20 @@ from ai4sec_platform.db.models import init_db
 from ai4sec_platform.db.session import connect
 from ai4sec_platform.pipelines.jobs import JobConflictError, enqueue_job, get_job, request_job_cancel
 from ai4sec_platform.pipelines.registry import default_registry
-from ai4sec_platform.pipelines.worker import PipelineWorker
 
 router = APIRouter(prefix="/runs", tags=["runs"])
 
 
 class RunPipelineRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     pipeline_name: str = Field(default="news.legacy_raw_pipeline")
     reset: bool = False
-    wait: bool = False
     params: dict[str, Any] = Field(default_factory=dict)
 
 
 class RetryPipelineRequest(BaseModel):
-    wait: bool = False
+    model_config = ConfigDict(extra="forbid")
 
 
 @router.get("/pipelines")
@@ -65,12 +65,6 @@ def start_run(request: RunPipelineRequest) -> dict:
             )
         except JobConflictError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
-
-    if request.wait:
-        result = PipelineWorker(settings=settings, registry=registry).run_once(run_id=run_id)
-        if result is None:
-            raise HTTPException(status_code=409, detail="queued run was claimed by another worker")
-        return result
 
     return {
         "run_id": run_id,
@@ -149,4 +143,4 @@ def retry_run(run_id: str, request: RetryPipelineRequest = RetryPipelineRequest(
     params = dict(summary.get("params") or {})
     params.pop("reset", None)
     params["_resume_from_run_id"] = run_id
-    return start_run(RunPipelineRequest(pipeline_name=row["pipeline_name"], reset=False, wait=request.wait, params=params))
+    return start_run(RunPipelineRequest(pipeline_name=row["pipeline_name"], reset=False, params=params))

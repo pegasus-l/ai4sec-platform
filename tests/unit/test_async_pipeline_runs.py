@@ -53,7 +53,7 @@ def test_queued_run_is_pollable_and_executed_by_worker(monkeypatch, tmp_path: Pa
     monkeypatch.setenv("AI4SEC_OUTPUT_DIR", str(tmp_path / "output"))
     client = TestClient(app)
 
-    response = client.post("/api/runs", json={"pipeline_name": "vulnerabilities.event_aggregation_pipeline", "wait": False})
+    response = client.post("/api/runs", json={"pipeline_name": "vulnerabilities.event_aggregation_pipeline"})
     assert response.status_code == 200
     payload = response.json()
     assert payload["status"] == "queued"
@@ -80,7 +80,7 @@ def test_queued_run_can_be_cancelled_through_api(monkeypatch, tmp_path: Path) ->
     monkeypatch.setenv("AI4SEC_DATABASE_PATH", str(tmp_path / "cancel.db"))
     monkeypatch.setenv("AI4SEC_OUTPUT_DIR", str(tmp_path / "output"))
     client = TestClient(app)
-    response = client.post("/api/runs", json={"pipeline_name": "vulnerabilities.event_aggregation_pipeline", "wait": False})
+    response = client.post("/api/runs", json={"pipeline_name": "vulnerabilities.event_aggregation_pipeline"})
     run_id = response.json()["run_id"]
 
     cancelled = client.post(f"/api/runs/{run_id}/cancel")
@@ -90,6 +90,15 @@ def test_queued_run_can_be_cancelled_through_api(monkeypatch, tmp_path: Path) ->
     assert cancelled.json()["status"] == "cancelled"
     assert detail.json()["status"] == "cancelled"
     assert detail.json()["job"]["status"] == "cancelled"
+
+
+def test_run_api_rejects_removed_synchronous_wait_field() -> None:
+    response = TestClient(app).post(
+        "/api/runs",
+        json={"pipeline_name": "vulnerabilities.event_aggregation_pipeline", "wait": True},
+    )
+
+    assert response.status_code == 422
 
 
 def test_failed_run_retry_api_uses_verified_checkpoint_mode(monkeypatch, tmp_path: Path) -> None:

@@ -855,7 +855,7 @@ D11 暂缓的是公网入口和完整公网暴露治理，不代表复现容器�
 
 #### 任务系统任务
 
-- [ ] API 只创建 queued 任务，不直接启动线程。
+- [x] API 只创建 queued 任务，不实例化 Worker 或执行 Pipeline；已删除 `wait=true` 同步兼容入口。
 - [x] 实现单实例 Pipeline Worker 进程和独立 CLI。
 - [x] 实现原子任务领取、Worker 注册、空闲/运行 heartbeat、Job 租约续期和租约过期失联判定。
 - [x] 实现任务条件领取、同 Pipeline/全局 reset 冲突检查和单机 Worker 文件锁。
@@ -1794,3 +1794,12 @@ Python full test suite: 199 passed
 - 当前只统一“已发生超时”的状态表达，不使用 Python daemon Thread 强制终止任意 Step；外部 HTTP、模型、浏览器和子进程仍须各自在可中断边界实现真实 deadline/kill。
 - 回归覆盖 Run、TaskRun、PipelineJob 三层 partial/timeout 一致性。
 - 状态传播定向测试：24 passed；全仓 Python 测试：233 passed。
+
+### 2026-07-29：删除 API 同步执行 Worker 入口
+
+- 删除 `/api/runs` 请求模型中的 `wait` 字段和请求进程内 `PipelineWorker.run_once()` 分支；API 现在只验证 Pipeline、持久化 queued Job 并返回轮询 URL。
+- Run 与 retry 请求模型禁止额外字段；旧客户端继续发送 `wait=true/false` 会得到 HTTP 422，而不是被静默忽略或意外同步执行。
+- retry API 仍只创建新的 queued 恢复任务，不在 API 进程执行 checkpoint 恢复。
+- 前端本来就使用异步提交，无需兼容改动；旧 API 业务测试改为“API 入队 → 显式测试 Worker 领取 → API 查询结果”，与生产架构一致。
+- 保留 Pipeline CLI 和 Worker `--once` 作为本地同步调试方式，不把开发便利入口重新放回 HTTP API。
+- 异步 API/业务定向测试：29 passed；全仓 Python 测试：234 passed。

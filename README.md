@@ -157,14 +157,14 @@ PYTHONPATH=src python3 -m ai4sec_platform.cli.scheduler --once
 
 在 `configs/schedules.yaml` 配置计划。默认配置为空，不会自动触发真实采集；每个计划需显式 `enabled: true`。时间统一按 `Asia/Shanghai` 解释，`grace_minutes` 定义错过时隙后的单次补跑窗口。Scheduler 使用计划 ID 与时隙生成确定性 Run ID，重启不会重复入队；如果同 Pipeline 仍有活动任务，会在宽限窗口内继续尝试，窗口结束后不再补跑。
 
-API 提交的任务会先写入 SQLite `pipeline_jobs`，`wait=false` 时立即返回可轮询的 `run_id`：
+API 提交的任务只写入 SQLite `pipeline_jobs`，立即返回可轮询的 `run_id`：
 
 ```text
 POST /api/runs
-{"pipeline_name": "news.legacy_raw_pipeline", "reset": true, "wait": false, "params": {"date": "2026-07-10"}}
+{"pipeline_name": "news.legacy_raw_pipeline", "reset": true, "params": {"date": "2026-07-10"}}
 ```
 
-`wait=true` 暂时保留给本地开发、测试和管理命令：它仍先持久入队，再在单 Worker 文件锁保护下同步领取该任务。正式部署的页面和调度器应使用 `wait=false`，由独立 Worker 执行。
+API 不接受 `wait` 或其他未声明字段，也不会在 Uvicorn 请求进程内创建 Worker。需要同步调试时使用 Pipeline CLI，集成测试则显式提交任务后调用测试 Worker 领取。
 
 Worker 重启时，尚未领取的 `queued` 任务会保留。已经处于 `running` 的中断任务会明确标记为 `failed`，在 Step checkpoint 和幂等重放完成前不会自动从头执行，避免重复写入和重复模型调用。
 
@@ -188,7 +188,7 @@ POST /api/runs/{run_id}/cancel
 
 ```text
 POST /api/runs/{run_id}/retry
-{"wait": false}
+{}
 ```
 
 Checkpoint 绑定 Pipeline、业务参数、Step 顺序、Step 类实现源码摘要和版本。参数或实现变化时拒绝恢复；待恢复 Step 还必须显式声明 `resume_input_keys`，只持久化经过审核的必要上下文字段。未完成幂等和输出敏感性审计的 Step 默认不生成可恢复 checkpoint。当前四个业务域仍需逐 Step 完成审核，不能把历史任务存在等同于可安全重放。
