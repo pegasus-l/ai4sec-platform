@@ -12,5 +12,9 @@ def get_db() -> Iterator[sqlite3.Connection]:
     init_db(conn)
     try:
         yield conn
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
     finally:
         conn.close()

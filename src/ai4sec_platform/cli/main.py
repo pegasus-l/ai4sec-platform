@@ -2,12 +2,12 @@ from __future__ import annotations
 
 import argparse
 
-from ai4sec_platform.cli import audit_run, init_db, inspect_run, run_pipeline
+from ai4sec_platform.cli import audit_run, database, init_db, inspect_run, run_pipeline
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="AI4SEC Platform CLI")
-    parser.add_argument("command", choices=["init-db", "run-pipeline", "inspect-run", "audit-run"])
+    parser.add_argument("command", choices=["init-db", "run-pipeline", "inspect-run", "audit-run", "database"])
     args, rest = parser.parse_known_args()
     if args.command == "init-db":
         return init_db.main()
@@ -17,6 +17,8 @@ def main() -> int:
         return inspect_run.main(rest)
     if args.command == "audit-run":
         return audit_run.main(rest)
+    if args.command == "database":
+        return database.main(rest)
     return 1
 
 

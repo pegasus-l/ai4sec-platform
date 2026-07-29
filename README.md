@@ -63,6 +63,27 @@ AGENTS.md
 - 资讯洞察支持 arXiv/GitHub/RSS shadow 采集，也支持本地 raw 回归导入；漏洞当前仍按既定范围读取本地 raw 输入。
 - 模型配置从 `.env` 自动读取，优先使用 DeepSeek / DashScope / Local LLM 这类 OpenAI-compatible 配置；测试环境默认回退到 `local_rules`，避免单测触发真实模型费用。
 
+## SQLite 运维
+
+单机部署默认启用 WAL、外键校验、30 秒 busy timeout 和 `synchronous=NORMAL`。可以通过 `AI4SEC_SQLITE_BUSY_TIMEOUT_MS` 与 `AI4SEC_SQLITE_SYNCHRONOUS` 调整；生产环境建议保持 `NORMAL` 或 `FULL`。
+
+在线创建一致性备份并校验：
+
+```bash
+PYTHONPATH=src python3 -m ai4sec_platform.cli.database backup
+PYTHONPATH=src python3 -m ai4sec_platform.cli.database verify output/backups/ai4sec-platform-*.db
+```
+
+恢复到指定文件：
+
+```bash
+PYTHONPATH=src python3 -m ai4sec_platform.cli.database restore \
+  output/backups/ai4sec-platform-20260728T000000000000Z.db \
+  --destination output/ai4sec-platform-restored.db
+```
+
+覆盖已有数据库必须显式增加 `--overwrite`。替换正在使用的主数据库前必须停止 API、Pipeline Worker 和复现 Worker，并先保留当前数据库备份。
+
 
 ## 前端页面
 

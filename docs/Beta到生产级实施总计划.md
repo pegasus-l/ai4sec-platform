@@ -1391,3 +1391,38 @@ pytest -q --tb=short
 - Python 全仓测试已全部通过，首轮已知 5 个失败和 2 个 v9 契约缺口全部关闭。
 - 前端生产构建已通过，但 bundle 体积警告和 npm 依赖风险仍需在后续前端生产化阶段处理。
 - 下一步进入 SQLite 事务、WAL、幂等约束、持久任务执行器和恢复机制设计与实现。
+
+### 2026-07-28：完成 SQLite 单机生产化第一批基础能力
+
+完成内容：
+
+- SQLite 连接统一启用 WAL、外键校验、可配置 busy timeout 和可配置 synchronous 级别。
+- 默认 `AI4SEC_SQLITE_BUSY_TIMEOUT_MS=30000`、`AI4SEC_SQLITE_SYNCHRONOUS=NORMAL`；非法配置回退到安全默认值。
+- FastAPI 请求级数据库依赖在正常结束时提交未提交变更，在异常结束时回滚未提交变更并始终关闭连接。
+- 新增 SQLite 在线一致性备份，使用 SQLite Backup API 读取包含 WAL 已提交内容的完整快照。
+- 备份先写同目录临时文件，通过 `PRAGMA integrity_check` 后再原子替换目标文件，失败时清理临时文件。
+- 新增只读完整性校验和恢复到指定数据库文件能力；已有目标默认拒绝覆盖，必须显式使用 `--overwrite`。
+- 新增 `ai4sec_platform.cli.database backup|verify|restore` 薄 CLI，并在 README 中记录操作方式和停服恢复要求。
+
+验证结果：
+
+```text
+SQLite 专项测试：6 passed
+全仓测试：160 passed
+compileall：通过
+CLI 初始化 → 在线备份 → 恢复 → 完整性校验：通过
+恢复数据库表数量：16
+```
+
+边界说明：
+
+- 请求级回滚只能回滚尚未提交的事务；部分旧 Service 和 Pipeline Step 为了进度可见性会主动 `commit()`，不能依赖请求级依赖撤销这些已提交阶段结果。
+- Pipeline 的正确生产语义应是“步骤级事务 + 幂等结果 + 可恢复状态机”，而不是把长时间采集和模型调用包进一个超长数据库事务。
+- 覆盖正式数据库文件前必须停止 API、Pipeline Worker 和复现 Worker；不能在仍有活跃连接时用文件替换方式恢复。
+- 本批次尚未实现每日调度、备份保留周期和异地副本，后续由统一调度与运维阶段补齐。
+
+下一步：
+
+1. 设计持久任务表和单 Pipeline Worker 的领取、心跳、超时回收与停机恢复状态机。
+2. 为 Pipeline 增加步骤 checkpoint、输入 checksum 和失败步骤续跑语义。
+3. 逐步补充领域幂等键，避免恢复和重跑产生重复条目、日报与模型调用。

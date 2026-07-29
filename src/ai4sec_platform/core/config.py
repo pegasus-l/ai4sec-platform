@@ -15,6 +15,8 @@ class Settings(BaseModel):
     project_root: Path
     output_dir: Path
     database_path: Path
+    sqlite_busy_timeout_ms: int = 30_000
+    sqlite_synchronous: str = "NORMAL"
     production_writes: bool = False
     legacy_sources: dict[str, str] = {}
     import_limits: dict[str, int] = {}
@@ -34,11 +36,25 @@ def load_settings(project_root: Path | None = None) -> Settings:
     database_path = Path(os.getenv("AI4SEC_DATABASE_PATH", paths.get("database_path", "output/ai4sec_platform.db")))
     if not database_path.is_absolute():
         database_path = root / database_path
+    sqlite_busy_timeout_ms = _positive_int(os.getenv("AI4SEC_SQLITE_BUSY_TIMEOUT_MS", "30000"), 30_000)
+    sqlite_synchronous = os.getenv("AI4SEC_SQLITE_SYNCHRONOUS", "NORMAL").strip().upper()
+    if sqlite_synchronous not in {"OFF", "NORMAL", "FULL", "EXTRA"}:
+        sqlite_synchronous = "NORMAL"
     return Settings(
         project_root=root,
         output_dir=output_dir,
         database_path=database_path,
+        sqlite_busy_timeout_ms=sqlite_busy_timeout_ms,
+        sqlite_synchronous=sqlite_synchronous,
         production_writes=bool(app.get("production_writes", False)),
         legacy_sources=dict(data.get("legacy_sources", {})),
         import_limits=dict(data.get("import_limits", {})),
     )
+
+
+def _positive_int(value: str, default: int) -> int:
+    try:
+        parsed = int(value)
+    except ValueError:
+        return default
+    return parsed if parsed > 0 else default
