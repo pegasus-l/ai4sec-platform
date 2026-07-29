@@ -12,7 +12,7 @@ from ai4sec_platform.core.ids import new_id
 from ai4sec_platform.db import repositories as repo
 from ai4sec_platform.db.models import init_db
 from ai4sec_platform.db.session import connect
-from ai4sec_platform.pipelines.jobs import JobConflictError, enqueue_job, get_job
+from ai4sec_platform.pipelines.jobs import JobConflictError, enqueue_job, get_job, request_job_cancel
 from ai4sec_platform.pipelines.registry import default_registry
 from ai4sec_platform.pipelines.worker import PipelineWorker
 
@@ -108,3 +108,11 @@ def run_detail(run_id: str, conn: sqlite3.Connection = Depends(get_db)) -> dict:
         progress["item_progress"] = item_progress
     data["progress"] = progress
     return data
+
+
+@router.post("/{run_id}/cancel")
+def cancel_run(run_id: str, conn: sqlite3.Connection = Depends(get_db)) -> dict:
+    try:
+        return request_job_cancel(conn, run_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="run job not found") from exc

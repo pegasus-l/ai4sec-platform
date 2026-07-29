@@ -102,6 +102,7 @@ CREATE TABLE IF NOT EXISTS pipeline_jobs (
     attempt_count INTEGER NOT NULL DEFAULT 0,
     worker_id TEXT NOT NULL DEFAULT '',
     heartbeat_at TEXT NOT NULL DEFAULT '',
+    cancel_requested INTEGER NOT NULL DEFAULT 0,
     error_message TEXT NOT NULL DEFAULT '',
     queued_at TEXT NOT NULL,
     started_at TEXT NOT NULL DEFAULT '',
@@ -262,6 +263,8 @@ def init_db(conn: sqlite3.Connection) -> None:
     try: conn.execute("ALTER TABLE domain_items ADD COLUMN last_synced_at TEXT")
     except Exception: pass
     try: conn.execute("ALTER TABLE human_queue_items ADD COLUMN queue_source TEXT DEFAULT 'pipeline'")
+    except Exception: pass
+    try: conn.execute("ALTER TABLE pipeline_jobs ADD COLUMN cancel_requested INTEGER NOT NULL DEFAULT 0")
     except Exception: pass
     conn.commit()
 

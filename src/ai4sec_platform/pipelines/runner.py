@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+from collections.abc import Callable
 from typing import Any
 
 from ai4sec_platform.artifacts.manifest import write_manifest
@@ -21,7 +22,14 @@ class PipelineRunner:
         self.registry = registry or default_registry()
         self.artifact_store = ArtifactStore(self.settings.output_dir)
 
-    def run(self, pipeline_name: str, params: dict[str, Any] | None = None, *, run_id: str | None = None) -> dict[str, Any]:
+    def run(
+        self,
+        pipeline_name: str,
+        params: dict[str, Any] | None = None,
+        *,
+        run_id: str | None = None,
+        should_cancel: Callable[[], bool] | None = None,
+    ) -> dict[str, Any]:
         params = params or {}
         definition = self.registry.get(pipeline_name)
         run_id = run_id or new_id("run")
@@ -64,6 +72,10 @@ class PipelineRunner:
             status = "success"
             error_message = ""
             for step in definition.steps:
+                if should_cancel and should_cancel():
+                    status = "cancelled"
+                    error_message = "cancelled at step boundary"
+                    break
                 try:
                     summary["current_step"] = step.name
                     repo.create_pipeline_run(
@@ -98,6 +110,10 @@ class PipelineRunner:
                         summary=summary,
                     )
                     conn.commit()
+                    if should_cancel and should_cancel():
+                        status = "cancelled"
+                        error_message = "cancelled at step boundary"
+                        break
                 except Exception as exc:  # pragma: no cover - defensive run recording
                     status = "failed"
                     error_message = str(exc)

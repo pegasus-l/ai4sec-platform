@@ -75,6 +75,22 @@ def test_queued_run_is_pollable_and_executed_by_worker(monkeypatch, tmp_path: Pa
     assert history.json()["items"][0]["run_id"] == payload["run_id"]
 
 
+def test_queued_run_can_be_cancelled_through_api(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("AI4SEC_DATABASE_PATH", str(tmp_path / "cancel.db"))
+    monkeypatch.setenv("AI4SEC_OUTPUT_DIR", str(tmp_path / "output"))
+    client = TestClient(app)
+    response = client.post("/api/runs", json={"pipeline_name": "vulnerabilities.event_aggregation_pipeline", "wait": False})
+    run_id = response.json()["run_id"]
+
+    cancelled = client.post(f"/api/runs/{run_id}/cancel")
+    detail = client.get(f"/api/runs/{run_id}")
+
+    assert cancelled.status_code == 200
+    assert cancelled.json()["status"] == "cancelled"
+    assert detail.json()["status"] == "cancelled"
+    assert detail.json()["job"]["status"] == "cancelled"
+
+
 def test_vulnerability_run_results_are_scoped_by_run_id(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("AI4SEC_DATABASE_PATH", str(tmp_path / "results.db"))
     monkeypatch.setenv("AI4SEC_OUTPUT_DIR", str(tmp_path / "output"))

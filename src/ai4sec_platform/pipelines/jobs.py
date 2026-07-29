@@ -103,6 +103,62 @@ def finish_job(conn: sqlite3.Connection, *, run_id: str, status: str, error_mess
     conn.commit()
 
 
+def heartbeat_job(conn: sqlite3.Connection, *, run_id: str, worker_id: str) -> bool:
+    now = utc_now()
+    updated = conn.execute(
+        "UPDATE pipeline_jobs SET heartbeat_at = ?, updated_at = ? WHERE run_id = ? AND worker_id = ? AND status = 'running'",
+        (now, now, run_id, worker_id),
+    )
+    conn.commit()
+    return updated.rowcount == 1
+
+
+def request_job_cancel(conn: sqlite3.Connection, run_id: str) -> dict[str, Any]:
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute("SELECT status FROM pipeline_jobs WHERE run_id = ?", (run_id,)).fetchone()
+        if not row:
+            raise KeyError(run_id)
+        status = str(row["status"])
+        now = utc_now()
+        if status == "queued":
+            conn.execute(
+                """
+                UPDATE pipeline_jobs
+                SET status = 'cancelled', cancel_requested = 1, error_message = 'cancelled before execution',
+                    finished_at = ?, updated_at = ?
+                WHERE run_id = ? AND status = 'queued'
+                """,
+                (now, now, run_id),
+            )
+            pipeline_row = conn.execute("SELECT summary_json FROM pipeline_runs WHERE run_id = ?", (run_id,)).fetchone()
+            summary = repo.loads(pipeline_row["summary_json"], {}) if pipeline_row else {}
+            summary.update({"status": "cancelled", "error_message": "cancelled before execution"})
+            conn.execute(
+                "UPDATE pipeline_runs SET status = 'cancelled', finished_at = ?, summary_json = ? WHERE run_id = ?",
+                (now, repo.dumps(summary), run_id),
+            )
+            outcome = "cancelled"
+        elif status == "running":
+            conn.execute(
+                "UPDATE pipeline_jobs SET cancel_requested = 1, updated_at = ? WHERE run_id = ? AND status = 'running'",
+                (now, run_id),
+            )
+            outcome = "cancellation_requested"
+        else:
+            outcome = status
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    return {"run_id": run_id, "status": outcome}
+
+
+def is_cancel_requested(conn: sqlite3.Connection, run_id: str) -> bool:
+    row = conn.execute("SELECT cancel_requested FROM pipeline_jobs WHERE run_id = ?", (run_id,)).fetchone()
+    return bool(row and row["cancel_requested"])
+
+
 def reconcile_interrupted_jobs(conn: sqlite3.Connection) -> list[str]:
     rows = conn.execute("SELECT run_id FROM pipeline_jobs WHERE status = 'running' ORDER BY id").fetchall()
     run_ids = [str(row["run_id"]) for row in rows]
@@ -134,6 +190,7 @@ def get_job(conn: sqlite3.Connection, run_id: str) -> dict[str, Any]:
     data = repo.row_to_dict(row)
     data["params"] = repo.loads(data.pop("params_json"), {})
     data["reset_requested"] = bool(data["reset_requested"])
+    data["cancel_requested"] = bool(data["cancel_requested"])
     return data
 
 

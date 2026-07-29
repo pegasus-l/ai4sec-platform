@@ -127,6 +127,14 @@ POST /api/runs
 
 Worker 重启时，尚未领取的 `queued` 任务会保留。已经处于 `running` 的中断任务会明确标记为 `failed`，在 Step checkpoint 和幂等重放完成前不会自动从头执行，避免重复写入和重复模型调用。
 
+任务可以通过以下接口请求取消：
+
+```text
+POST /api/runs/{run_id}/cancel
+```
+
+排队任务会立即变为 `cancelled`；运行中任务会设置取消请求，并在当前 Pipeline Step 完成后的安全边界停止。该接口目前不是进程、浏览器或容器级强制终止，阻塞 Step 的 timeout 和 kill switch 仍需单独实现。
+
 也可以绕过队列直接通过 CLI 执行调试 pipeline：
 
 ```bash

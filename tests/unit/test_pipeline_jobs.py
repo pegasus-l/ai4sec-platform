@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+import threading
+import time
 
 import pytest
 
@@ -9,7 +11,7 @@ from ai4sec_platform.core.config import Settings
 from ai4sec_platform.db.models import init_db
 from ai4sec_platform.db.session import connect
 from ai4sec_platform.pipelines.base import PipelineDefinition
-from ai4sec_platform.pipelines.jobs import JobConflictError, claim_next_job, enqueue_job, get_job
+from ai4sec_platform.pipelines.jobs import JobConflictError, claim_next_job, enqueue_job, get_job, request_job_cancel
 from ai4sec_platform.pipelines.registry import PipelineRegistry
 from ai4sec_platform.pipelines.results import StepResult
 from ai4sec_platform.pipelines.worker import PipelineWorker, WorkerAlreadyRunningError
@@ -24,6 +26,19 @@ class SuccessfulStep:
         return StepResult(metrics={"items": 1})
 
 
+@dataclass
+class BlockingStep:
+    started: threading.Event
+    release: threading.Event
+    name: str = "blocking_step"
+    step_type: str = "test"
+
+    def run(self, context) -> StepResult:
+        self.started.set()
+        self.release.wait(timeout=5)
+        return StepResult(metrics={"items": 1})
+
+
 def _settings(tmp_path: Path) -> Settings:
     return Settings(project_root=tmp_path, output_dir=tmp_path / "output", database_path=tmp_path / "platform.db")
 
@@ -31,6 +46,12 @@ def _settings(tmp_path: Path) -> Settings:
 def _registry() -> PipelineRegistry:
     registry = PipelineRegistry()
     registry.register(PipelineDefinition(name="test.persisted", domain="news", steps=[SuccessfulStep()]))
+    return registry
+
+
+def _blocking_registry(started: threading.Event, release: threading.Event) -> PipelineRegistry:
+    registry = PipelineRegistry()
+    registry.register(PipelineDefinition(name="test.persisted", domain="news", steps=[BlockingStep(started, release)]))
     return registry
 
 
@@ -112,3 +133,55 @@ def test_single_host_worker_lock_rejects_second_worker(tmp_path: Path) -> None:
         with pytest.raises(WorkerAlreadyRunningError):
             with second._worker_lock():
                 pass
+
+
+def test_queued_job_can_be_cancelled_without_execution(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    _enqueue(settings, "run_queued_cancel")
+
+    with connect(settings) as conn:
+        result = request_job_cancel(conn, "run_queued_cancel")
+        job = get_job(conn, "run_queued_cancel")
+        run_status = conn.execute("SELECT status FROM pipeline_runs WHERE run_id = ?", ("run_queued_cancel",)).fetchone()[0]
+
+    assert result["status"] == "cancelled"
+    assert job["status"] == "cancelled"
+    assert job["cancel_requested"] is True
+    assert run_status == "cancelled"
+    assert PipelineWorker(settings=settings, registry=_registry()).run_once() is None
+
+
+def test_running_job_heartbeats_and_cancels_at_step_boundary(tmp_path: Path, monkeypatch) -> None:
+    settings = _settings(tmp_path)
+    _enqueue(settings, "run_running_cancel")
+    started = threading.Event()
+    release = threading.Event()
+    worker = PipelineWorker(settings=settings, registry=_blocking_registry(started, release), heartbeat_interval=0.05)
+    heartbeat_calls: list[str] = []
+    original_heartbeat = worker._heartbeat
+
+    def recording_heartbeat(run_id: str) -> bool:
+        heartbeat_calls.append(run_id)
+        return original_heartbeat(run_id)
+
+    monkeypatch.setattr(worker, "_heartbeat", recording_heartbeat)
+    results: list[dict | None] = []
+    thread = threading.Thread(target=lambda: results.append(worker.run_once()))
+    thread.start()
+    assert started.wait(timeout=2)
+    deadline = time.time() + 2
+    while not heartbeat_calls and time.time() < deadline:
+        time.sleep(0.01)
+
+    with connect(settings) as conn:
+        cancel_result = request_job_cancel(conn, "run_running_cancel")
+    release.set()
+    thread.join(timeout=5)
+
+    assert cancel_result["status"] == "cancellation_requested"
+    assert heartbeat_calls
+    assert results[0] is not None
+    assert results[0]["status"] == "cancelled"
+    with connect(settings) as conn:
+        job = get_job(conn, "run_running_cancel")
+    assert job["status"] == "cancelled"

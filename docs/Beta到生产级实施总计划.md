@@ -857,10 +857,10 @@ D11 暂缓的是公网入口和完整公网暴露治理，不代表复现容器�
 
 - [ ] API 只创建 queued 任务，不直接启动线程。
 - [x] 实现单实例 Pipeline Worker 进程和独立 CLI。
-- [ ] 实现任务领取、租约、heartbeat 和 Worker 注册。
+- [x] 实现原子任务领取和运行中周期 heartbeat；租约过期判定与 Worker 注册仍待补充。
 - [x] 实现任务条件领取、同 Pipeline/全局 reset 冲突检查和单机 Worker 文件锁。
-- [ ] 实现 queued/running/partial/success/failed/cancelled/timeout 状态机。
-- [ ] 实现任务取消和系统级 kill switch。
+- [ ] 已实现 queued/running/success/failed/cancelled；partial 和 timeout 尚未统一。
+- [ ] 已实现排队立即取消和运行中 Step 边界协作取消；系统级 kill switch 与子进程强杀尚未完成。
 - [ ] 实现 Step checkpoint 和输入 checksum。
 - [ ] 实现失败 Step、失败条目和完整 Run 重跑。
 - [x] 实现 Worker 启动对账；在 checkpoint 完成前将中断的 running 任务标记失败，不做不安全的自动重放。
@@ -1485,3 +1485,28 @@ compileall：通过
 - cancelled、timeout、partial、kill switch 尚未进入统一 Job 状态机。
 - Step checkpoint、输入 checksum、上下文 Artifact 恢复和失败步骤续跑尚未完成。
 - 在上述恢复能力完成前，不允许自动重放被中断的 running 任务。
+
+### 2026-07-28：补充 Pipeline Job 心跳与协作取消
+
+完成内容：
+
+- Worker 执行 Job 期间使用独立短连接周期更新 `heartbeat_at`，不在 Pipeline 外部调用期间持有数据库写事务。
+- 新增 `cancel_requested` 持久字段和 `POST /api/runs/{run_id}/cancel`。
+- `queued` 任务取消时原子更新 Job 与 PipelineRun 为 `cancelled`，Worker 不会再领取。
+- `running` 任务只写取消请求；Runner 在每个 Step 开始前和完成后检查，在安全边界将 Run 与 Job 收尾为 `cancelled`。
+- 所有 `wait=true`、独立 Worker 和单次 Worker CLI 执行仍共享同一宿主机文件锁，避免 API 兼容路径与 Worker 并行执行不同 Pipeline。
+- `--recover-only` 同样必须取得 Worker 文件锁，不能在正常 Worker 执行期间误将任务标记为中断。
+
+验证结果：
+
+```text
+心跳、排队取消、运行中协作取消与 API 测试：11 passed
+全仓测试：165 passed
+compileall：通过
+```
+
+安全边界：
+
+- 当前取消是 Step 边界协作取消，不会中途杀死正在阻塞的 HTTP、模型、浏览器、子进程或复现容器。
+- 强制终止必须由各执行器实现 timeout、进程组终止、浏览器回收和容器 stop/kill，再接入平台 kill switch。
+- heartbeat 当前用于运行可见性；在单 Worker 文件锁方案下，启动对账不依据时间自动抢占任务，避免长 Step 被误判后重复执行。
