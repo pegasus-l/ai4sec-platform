@@ -148,6 +148,15 @@ PYTHONPATH=src python3 -m ai4sec_platform.cli.pipeline_worker --poll-interval 1
 
 Worker 启动后写入 `pipeline_workers` 注册记录，空闲和执行任务期间持续 heartbeat；领取任务时写入 `lease_expires_at`。默认 heartbeat 为 10 秒、Job 租约为 45 秒，可通过 `AI4SEC_PIPELINE_WORKER_HEARTBEAT_SECONDS` 和 `AI4SEC_PIPELINE_JOB_LEASE_SECONDS` 调整，租约会自动收紧为不少于三个 heartbeat 周期。Worker 崩溃后任务不会在刚启动新进程时被立即误杀，只有租约到期后才标记为 `failed` 并要求通过受控重试恢复。
 
+统一调度器与 Worker 分开运行，只负责把到期任务写入同一持久队列：
+
+```bash
+PYTHONPATH=src python3 -m ai4sec_platform.cli.scheduler --poll-interval 30
+PYTHONPATH=src python3 -m ai4sec_platform.cli.scheduler --once
+```
+
+在 `configs/schedules.yaml` 配置计划。默认配置为空，不会自动触发真实采集；每个计划需显式 `enabled: true`。时间统一按 `Asia/Shanghai` 解释，`grace_minutes` 定义错过时隙后的单次补跑窗口。Scheduler 使用计划 ID 与时隙生成确定性 Run ID，重启不会重复入队；如果同 Pipeline 仍有活动任务，会在宽限窗口内继续尝试，窗口结束后不再补跑。
+
 API 提交的任务会先写入 SQLite `pipeline_jobs`，`wait=false` 时立即返回可轮询的 `run_id`：
 
 ```text

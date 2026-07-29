@@ -864,7 +864,7 @@ D11 暂缓的是公网入口和完整公网暴露治理，不代表复现容器�
 - [ ] 已实现严格 JSON Step checkpoint、输入/实现 checksum 和恢复框架；四域 Step 的 `resume_safe` 审核仍待完成。
 - [ ] 已实现失败 Run 的白名单续跑入口；失败条目重跑与完整 Run 重跑策略仍待补充。
 - [x] 实现 Worker 启动对账；在 checkpoint 完成前将中断的 running 任务标记失败，不做不安全的自动重放。
-- [ ] 实现统一 Scheduler 和漏跑补偿。
+- [x] 实现单机统一 Scheduler、`Asia/Shanghai` 时区、确定性 Run ID、宽限窗口漏跑补偿和单机互斥；具体业务时刻默认禁用，待模块验收后配置启用。
 
 #### 验收
 
@@ -1775,3 +1775,12 @@ Python full test suite: 199 passed
 - v6 会把升级时遗留且没有租约的 `running` Job 按最后 heartbeat/更新时间回填为已到期候选，避免历史中断任务永久卡住。
 - 默认 heartbeat 10 秒、租约 45 秒，配置强制租约不少于三个 heartbeat 周期；回归覆盖活租约不误杀、过期恢复、非 Owner 续租失败和 Worker 正常停止登记。
 - Worker/数据库定向测试：36 passed；全仓 Python 测试：226 passed。
+
+### 2026-07-29：实现默认禁用的统一 Scheduler
+
+- 新增 `configs/schedules.yaml` 和独立 Scheduler CLI；Scheduler 只向 `pipeline_jobs` 入队，不执行 Pipeline，执行仍由单 Pipeline Worker 串行负责。
+- 时区固定使用 `Asia/Shanghai`；计划支持每日时刻、可选周几、参数、reset 标记和 `grace_minutes` 单次补跑窗口。
+- 每个时隙的 Run ID 由计划 ID 哈希和北京时间时隙确定；重启或重复 tick 会识别既有 Run，避免重复入队和重复模型调用。
+- 同 Pipeline 已有 queued/running Job 时，Scheduler 返回 `blocked` 并在宽限窗口内重试；超过窗口不会无限补跑。
+- Scheduler 使用独立单机文件锁；默认配置没有任何 enabled 计划，避免在资讯/漏洞/威胁真实日更验收前擅自触发采集。
+- Scheduler 专项测试：5 passed；全仓 Python 测试：231 passed；默认空配置 CLI `--once` 实测返回 `[]`。
