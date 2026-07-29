@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from ai4sec_platform.domains.capabilities.adapters.repro_runner import extract_report
+from ai4sec_platform.domains.capabilities.adapters.repro_runner import enforce_report_acceptance, extract_report
 
 
 def normalize_repro_result(item: dict) -> dict:
@@ -44,6 +44,10 @@ def update_capability_from_report(
         report = extract_report(report)
         if not report:
             return {"updated": False, "reason": "report string parse failed"}
+
+    report = enforce_report_acceptance(report)
+    if not report:
+        return {"updated": False, "reason": "report acceptance failed"}
 
     # 映射报告 status → domain_item status
     rep_status = report.get("status", "failed")

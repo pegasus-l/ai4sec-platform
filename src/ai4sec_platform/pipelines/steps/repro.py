@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+import socket
 from typing import Any
 
 from ai4sec_platform.db import repositories as repo
@@ -29,7 +30,7 @@ class SelectReproCandidatesStep:
 
     def run(self, context: PipelineContext) -> StepResult:
         n = int(context.params.get("repro_topn", 3))
-        web_only = bool(context.params.get("web_only", False))
+        web_only = bool(context.params.get("web_only", True))
         candidates = pick_top_repro_candidates(context.conn, n=n, web_only=web_only)
         context.outputs["repro_candidates"] = candidates
         artifact = context.artifact_store.write_json(
@@ -64,13 +65,14 @@ class StartReproTasksStep:
             if existing and existing[0]["status"] in ("queued", "running"):
                 continue  # 已有活跃 task，跳过
 
-            # 清理旧的 failed/timeout task
+            # 清理旧的非成功 task；partial 需要释放容器和端口后重新验证
             for old_task in repo.list_repro_tasks(context.conn, item_id=item_id, include_cleaned=True):
-                if old_task["status"] in ("failed", "timeout", "stopped"):
+                if old_task["status"] in ("partial", "failed", "timeout", "stopped"):
                     repro_manager.cleanup_task(
                         old_task["id"],
                         container_name=old_task.get("container_name"),
                         workspace_path=old_task.get("workspace_path"),
+                        web_port=old_task.get("web_port"),
                     )
                     repo.update_repro_task(
                         context.conn,
@@ -88,10 +90,20 @@ class StartReproTasksStep:
             )
 
             # 定义回调（写 DB + 回写能力卡）
-            def on_log(line: str, _tid=task_id, _conn=context.conn):
-                repo.append_repro_log(_conn, task_id=_tid, line=line)
+            def on_log(line: str, _tid=task_id):
+                from ai4sec_platform.db.session import connect as db_connect
 
-            def on_status(status: str, _tid=task_id, _iid=item_id, _conn=context.conn, **kw):
+                callback_conn = db_connect()
+                try:
+                    repo.append_repro_log(callback_conn, task_id=_tid, line=line)
+                    callback_conn.commit()
+                finally:
+                    callback_conn.close()
+
+            def on_status(status: str, _tid=task_id, _iid=item_id, **kw):
+                from ai4sec_platform.db.session import connect as db_connect
+
+                callback_conn = db_connect()
                 # 更新 task status
                 update_fields: dict[str, Any] = {"status": status}
                 if "result" in kw:
@@ -105,28 +117,42 @@ class StartReproTasksStep:
                     update_fields["web_port"] = kw["web_port"]
                 if "web_url" in kw:
                     update_fields["web_url"] = kw["web_url"]
-                repo.update_repro_task(_conn, task_id=_tid, **update_fields)
+                try:
+                    repo.update_repro_task(callback_conn, task_id=_tid, **update_fields)
 
-                # 如果有报告，回写能力卡
-                if "report" in kw and kw["report"]:
-                    update_capability_from_report(_conn, item_id=_iid, report=kw["report"])
+                    # 如果有报告，回写能力卡
+                    if "report" in kw and kw["report"]:
+                        update_capability_from_report(callback_conn, item_id=_iid, report=kw["report"])
+                    callback_conn.commit()
+                finally:
+                    callback_conn.close()
 
             # 决定是否 Web 复现
             payload = candidate.get("payload") or {}
             web_port = None
-            if payload.get("is_web") or payload.get("demo_url"):
+            if payload.get("is_web"):
                 web_port = _alloc_web_port(context.conn)
                 if web_port:
                     repo.update_repro_task(context.conn, task_id=task_id, web_port=web_port)
 
+            context.conn.commit()
+
             # 启动 ReproRunner（异步）
-            repro_manager.start_task(
+            runner = repro_manager.start_task(
                 task_id=task_id,
                 repo_url=repo_url,
                 on_log=on_log,
                 on_status=on_status,
                 web_port=web_port,
             )
+            repo.update_repro_task(
+                context.conn,
+                task_id=task_id,
+                container_name=runner.container_name,
+                workspace_path=str(runner.workspace),
+                web_url=f"http://127.0.0.1:{web_port}" if web_port else "",
+            )
+            context.conn.commit()
 
             started.append(task_id)
 
@@ -199,6 +225,16 @@ def _alloc_web_port(conn) -> int | None:
     used = {row["web_port"] for row in rows}
 
     for port in range(base, max_port + 1):
-        if port not in used:
+        if port not in used and _port_is_available(port):
             return port
     return None
+
+
+def _port_is_available(port: int) -> bool:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+        probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            probe.bind(("0.0.0.0", port))
+        except OSError:
+            return False
+    return True

@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import socket
 import sqlite3
 from datetime import datetime
 from typing import Any
@@ -63,24 +64,24 @@ def item_detail(item_id: int, conn: sqlite3.Connection = Depends(get_db)) -> dic
 
 @router.get("/repro-runs")
 def repro_runs(conn: sqlite3.Connection = Depends(get_db)) -> dict:
-    """复现任务列表（对齐 demo repro_runs.json）"""
+    """复现任务列表，返回可直接用于详情、操作和 SSE 的真实 task id。"""
     tasks = repo.list_repro_tasks(conn)
+    items = []
+    for task in tasks:
+        task_data = ReproTaskResponse.from_row(task).model_dump()
+        task_data.update({
+            "task_id": task["id"],
+            "display_id": f"repro-{task['item_id']}",
+            "capability_id": str(task["item_id"]),
+            "title": task.get("repo_url", "").split("/")[-1] if task.get("repo_url") else "",
+            "environment": "auto-runner",
+            "last_event": task.get("result", "")[:100] if task.get("result") else "",
+            "artifacts": [],
+        })
+        items.append(task_data)
     return {
         "domain": DOMAIN,
-        "items": [
-            {
-                "id": f"repro-{t['item_id']}",
-                "capability_id": str(t["item_id"]),
-                "title": t.get("repo_url", "").split("/")[-1] if t.get("repo_url") else "",
-                "status": t["status"],
-                "repo_url": t.get("repo_url", ""),
-                "environment": "auto-runner",
-                "last_event": t.get("result", "")[:100] if t.get("result") else "",
-                "artifacts": [],
-                "task_id": t["id"],
-            }
-            for t in tasks
-        ],
+        "items": items,
     }
 
 
@@ -125,17 +126,28 @@ def start_repro(item_id: int, body: StartReproRequest = StartReproRequest(), con
     if not item:
         raise HTTPException(status_code=404, detail="capability item not found")
 
+    demo_url = str((item.get("payload") or {}).get("demo_url") or "").strip()
+    if demo_url:
+        return {
+            "ok": True,
+            "skipped": True,
+            "reason": "official_demo",
+            "item_id": item_id,
+            "demo_url": demo_url,
+        }
+
     repo_url = _resolve_repo_url(item)
     if not repo_url:
         raise HTTPException(status_code=400, detail="no repo URL found in item")
 
-    # 清理旧 failed task
+    # 清理旧的非成功 task；partial 重试前也要释放容器和端口
     for old_task in repo.list_repro_tasks(conn, item_id=item_id, include_cleaned=True):
-        if old_task["status"] in ("failed", "timeout", "stopped"):
+        if old_task["status"] in ("partial", "failed", "timeout", "stopped"):
             repro_manager.cleanup_task(
                 old_task["id"],
                 container_name=old_task.get("container_name"),
                 workspace_path=old_task.get("workspace_path"),
+                web_port=old_task.get("web_port"),
             )
             repo.update_repro_task(conn, task_id=old_task["id"], status="cleaned", cleaned_at=datetime.utcnow().isoformat())
 
@@ -149,11 +161,23 @@ def start_repro(item_id: int, body: StartReproRequest = StartReproRequest(), con
         if web_port:
             repo.update_repro_task(conn, task_id=task_id, web_port=web_port)
 
+    conn.commit()
+
     # 回调
     def on_log(line: str):
-        repo.append_repro_log(conn, task_id=task_id, line=line)
+        from ai4sec_platform.db.session import connect as db_connect
+
+        callback_conn = db_connect()
+        try:
+            repo.append_repro_log(callback_conn, task_id=task_id, line=line)
+            callback_conn.commit()
+        finally:
+            callback_conn.close()
 
     def on_status(status: str, _tid=task_id, _iid=item_id, **kw):
+        from ai4sec_platform.db.session import connect as db_connect
+
+        callback_conn = db_connect()
         update_fields: dict[str, Any] = {"status": status}
         if "result" in kw:
             update_fields["result"] = str(kw["result"])[:10000]
@@ -163,19 +187,31 @@ def start_repro(item_id: int, body: StartReproRequest = StartReproRequest(), con
             update_fields["report_json"] = json.dumps(kw["report"], ensure_ascii=False) if isinstance(kw["report"], dict) else str(kw["report"])
         if "web_port" in kw:
             update_fields["web_port"] = kw["web_port"]
-        repo.update_repro_task(conn, task_id=_tid, **update_fields)
-        if "report" in kw and kw["report"]:
-            from ai4sec_platform.domains.capabilities.adapters.repro_results import update_capability_from_report
-            update_capability_from_report(conn, item_id=_iid, report=kw["report"])
+        try:
+            repo.update_repro_task(callback_conn, task_id=_tid, **update_fields)
+            if "report" in kw and kw["report"]:
+                from ai4sec_platform.domains.capabilities.adapters.repro_results import update_capability_from_report
+                update_capability_from_report(callback_conn, item_id=_iid, report=kw["report"])
+            callback_conn.commit()
+        finally:
+            callback_conn.close()
 
     # 启动 ReproRunner
-    repro_manager.start_task(
+    runner = repro_manager.start_task(
         task_id=task_id,
         repo_url=repo_url,
         on_log=on_log,
         on_status=on_status,
         web_port=web_port,
     )
+    repo.update_repro_task(
+        conn,
+        task_id=task_id,
+        container_name=runner.container_name,
+        workspace_path=str(runner.workspace),
+        web_url=f"http://127.0.0.1:{web_port}" if web_port else "",
+    )
+    conn.commit()
 
     return {"ok": True, "task_id": task_id, "repo_url": repo_url, "web_port": web_port}
 
@@ -197,6 +233,7 @@ def stop_repro(task_id: int, conn: sqlite3.Connection = Depends(get_db)) -> dict
         raise HTTPException(status_code=404, detail="repro task not found")
     repro_manager.stop_task(task_id)
     repo.update_repro_task(conn, task_id=task_id, status="stopped", finished_at=datetime.utcnow().isoformat())
+    conn.commit()
     return {"ok": True}
 
 
@@ -210,8 +247,16 @@ def cleanup_repro(task_id: int, conn: sqlite3.Connection = Depends(get_db)) -> d
         task_id,
         container_name=task.get("container_name"),
         workspace_path=task.get("workspace_path"),
+        web_port=task.get("web_port"),
     )
-    repo.update_repro_task(conn, task_id=task_id, status="cleaned", cleaned_at=datetime.utcnow().isoformat())
+    repo.update_repro_task(
+        conn,
+        task_id=task_id,
+        status="cleaned",
+        cleaned_at=datetime.utcnow().isoformat(),
+        web_url="",
+    )
+    conn.commit()
     return {"ok": True}
 
 
@@ -387,6 +432,46 @@ def _alloc_web_port(conn) -> int | None:
     ).fetchall()
     used = {row["web_port"] for row in rows}
     for port in range(base, max_port + 1):
-        if port not in used:
+        if port not in used and _port_is_available(port):
             return port
     return None
+
+
+def _port_is_available(port: int) -> bool:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+        probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            probe.bind(("0.0.0.0", port))
+        except OSError:
+            return False
+    return True
+
+
+# ============================================================================
+# 运营端点（ops）
+# ============================================================================
+@router.get("/ops/overview")
+def ops_overview(conn: sqlite3.Connection = Depends(get_db)) -> dict:
+    """运营概览：KPI + 审计摘要"""
+    from ai4sec_platform.domains.capabilities.service import stats as cap_stats, classify_stats
+    from ai4sec_platform.domains.capabilities.audits import audit_repro_failures, audit_missing_fields
+    return {
+        "stats": cap_stats(conn),
+        "classify_stats": classify_stats(conn),
+        "repro_failures": audit_repro_failures(conn),
+        "missing_fields": audit_missing_fields(conn),
+    }
+
+
+@router.get("/ops/repro-failures")
+def ops_repro_failures(conn: sqlite3.Connection = Depends(get_db)) -> dict:
+    """复现失败审计"""
+    from ai4sec_platform.domains.capabilities.audits import audit_repro_failures
+    return audit_repro_failures(conn)
+
+
+@router.get("/ops/missing-fields")
+def ops_missing_fields(conn: sqlite3.Connection = Depends(get_db)) -> dict:
+    """能力卡缺字段审计"""
+    from ai4sec_platform.domains.capabilities.audits import audit_missing_fields
+    return audit_missing_fields(conn)

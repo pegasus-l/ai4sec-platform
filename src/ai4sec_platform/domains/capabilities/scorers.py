@@ -24,8 +24,13 @@ def score_capability_candidate(item: dict[str, Any]) -> ScoreResult:
     payload: dict[str, Any] = item.get("payload") or {}
     candidate_news = item.get("source_news_item") or payload.get("source_news_item")
     news_item: dict[str, Any] = candidate_news if isinstance(candidate_news, dict) else item
-    # 资讯分归一化到 0-1（score 0-100 或 source_news_score 0-100）
-    raw_news_score = float(news_item.get("score") or item.get("source_news_score") or 0)
+    # 资讯分归一化到 0-1（多个 fallback 路径：candidate.source_news_score → news.score → payload.source_news_score）
+    raw_news_score = float(
+        news_item.get("source_news_score")         # candidate dict 的 source_news_score
+        or news_item.get("score")                  # 如果 news_item 是原始 news item
+        or payload.get("source_news_score")         # domain_item payload 里的
+        or 0
+    )
     news_score = min(raw_news_score / 100.0, 1.0)  # 0-100 → 0-1
 
     code_url = item.get("code_url") or payload.get("code_url") or news_item.get("code_url") or ""

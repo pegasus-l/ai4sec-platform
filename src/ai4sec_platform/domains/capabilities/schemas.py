@@ -76,6 +76,8 @@ class ReproReport(BaseModel):
     web_framework: str = ""
     start_command: str = ""
     verify: str = ""
+    core_workflow: dict[str, Any] = Field(default_factory=dict)
+    acceptance_issues: list[str] = Field(default_factory=list)
 
 
 class ReproTaskResponse(BaseModel):
@@ -94,6 +96,7 @@ class ReproTaskResponse(BaseModel):
     report: ReproReport | None = None
     web_port: int | None = None
     web_url: str = ""
+    result: str = ""
     log_excerpt: str = ""  # API 层截断最后 N 行，避免大日志爆响应
 
     @classmethod
@@ -130,5 +133,6 @@ class ReproTaskResponse(BaseModel):
             report=report,
             web_port=row.get("web_port"),
             web_url=row.get("web_url", ""),
+            result=row.get("result", ""),
             log_excerpt=log_excerpt,
         )

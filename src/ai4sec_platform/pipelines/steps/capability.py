@@ -16,7 +16,7 @@ class BuildCapabilitiesFromNewsStep:
     step_type: str = "build_domain_item"
 
     def run(self, context: PipelineContext) -> StepResult:
-        limit = int(context.params.get("limit", 100))
+        limit = int(context.params.get("limit", 100000))
         existing = repo.list_domain_items(context.conn, "capabilities", limit=limit, status="待能力评估")
         selected = [item["id"] for item in existing[:limit]]
         created: list[int] = []
@@ -25,12 +25,22 @@ class BuildCapabilitiesFromNewsStep:
             candidates = capability_candidates_from_news(news_items)
             for item in candidates[:limit]:
                 payload = item.get("payload") or {}
+                # 从 source_news_item 提取资讯洞察的展示字段
+                sni = item.get("source_news_item", {})
+                np = sni.get("payload", {}) if isinstance(sni, dict) else {}
+                display_theme = np.get("display_theme", "")
+                display_topic = np.get("display_topic", "")
+                display_work_name = np.get("display_work_name", "")
+                one_liner = np.get("one_liner", "")
+                highlight = np.get("highlight", "")
+                news_summary = np.get("summary", "") or sni.get("summary", "")
+                tech_points = np.get("technical_points", [])
                 capability_id = repo.create_domain_item(
                     context.conn,
                     domain="capabilities",
                     item_type="capability_candidate",
-                    title=item.get("title") or payload.get("title") or "未命名能力候选",
-                    summary=item.get("summary") or payload.get("summary") or "来自资讯 raw pipeline 的能力候选。",
+                    title=display_theme or item.get("title") or "未命名能力候选",
+                    summary=news_summary or one_liner or "能力候选",
                     score=None,
                     status="待能力评估",
                     source="news_pipeline",
@@ -38,7 +48,19 @@ class BuildCapabilitiesFromNewsStep:
                     primary_date=item.get("primary_date") or payload.get("primary_date") or "",
                     tags=["能力候选", "from_news", "raw_pipeline"],
                     metrics={"source_news_item_id": item.get("id"), "pipeline_run": context.run_id},
-                    payload={"source_news_item": item},
+                    payload={
+                        "source_news_item": item,
+                        "display_theme": display_theme,
+                        "display_topic": display_topic,
+                        "display_work_name": display_work_name,
+                        "one_liner": one_liner,
+                        "highlight": highlight,
+                        "summary": news_summary,
+                        "tech_points": tech_points,
+                        "code_url": item.get("code_url", ""),
+                        "source_type": item.get("source_type", ""),
+                        "source_news_score": item.get("source_news_score"),
+                    },
                 )
                 created.append(capability_id)
             selected = created
@@ -57,13 +79,31 @@ class AssessCapabilitiesStep:
         ids = context.outputs.get("capability_candidate_ids") or []
         router = LLMRouter()
         assessed = 0
+        failed = 0
         for item_id in ids:
             item = context.conn.execute("SELECT * FROM domain_items WHERE id = ?", (item_id,)).fetchone()
             if not item:
                 continue
             item_data = repo.row_to_dict(item)
-            prompt = "评估该论文或项目是否值得复现和能力转化，输出结构化建议。"
-            output = router.complete_json(profile=self.model_profile, prompt=prompt, payload=item_data)
+            prompt = """你是安全能力评估专家。评估这个项目是否值得复现和能力转化。输出 JSON：
+{"overview":"一句话说清这个项目是做什么的","security_value":"一段话说明它解决了什么安全问题、为什么重要","reproducibility_assessment":"能不能跑起来？需要什么环境/依赖？有什么坑？","code_quality":"README质量、有没有测试、代码结构如何","application_advice":"适合用在什么场景？怎么集成到团队工作流？","recommended_score":1到5的整数,"score_reason":"给这个分的理由（自然语言段落）","capability_type":"从以下选一个：验证与评估 | 推理与规划 | 工具调用","application_scenarios":["场景1","场景2"]}"""
+            try:
+                output = router.complete_json(profile=self.model_profile, prompt=prompt, payload=item_data)
+            except Exception as exc:
+                # 单个候选超时/失败，跳过继续评估下一个
+                failed += 1
+                repo.create_model_call(
+                    context.conn,
+                    run_id=context.run_id,
+                    agent_name="capability_assess",
+                    model_profile=self.model_profile,
+                    provider=self.model_profile,
+                    status="failed",
+                    error_message=str(exc)[:500],
+                    input_payload={"item_id": item_id, "title": item_data.get("title", "")},
+                    output_payload={},
+                )
+                continue
             scoring = score_capability_candidate(item_data)
             model_result = output.get("result") or output.get("parsed") or {}
             recommended_status = model_result.get("recommended_status") or ("待复现验证" if scoring.priority in {"high", "medium"} else "待资料补齐")
@@ -81,11 +121,39 @@ class AssessCapabilitiesStep:
                 context.conn,
                 item_id=item_id,
                 status=recommended_status,
-                score=scoring.score,
-                metrics={"assessment_status": "model_assessed", "score_breakdown": scoring.breakdown},
-                payload={"assessment": output, "capability_scoring": scoring.as_payload()},
+                score=float(model_result.get("recommended_score") or scoring.score),
+                metrics={"assessment_status": "model_assessed", "score_breakdown": scoring.breakdown, "llm_score": model_result.get("recommended_score")},
+                payload={
+                    "assessment": output,
+                    "capability_scoring": scoring.as_payload(),
+                    "capability_type": model_result.get("capability_type", ""),
+                    "application_scenarios": model_result.get("application_scenarios", []),
+                    "repro_status": model_result.get("repro_status", "candidate" if (item_data.get("payload") or {}).get("code_url") else "no_code"),
+                    "conversion_status": model_result.get("conversion_status", "待评估"),
+                    "score_reason": model_result.get("score_reason", ""),
+                    "overview": model_result.get("overview", ""),
+                    "security_value": model_result.get("security_value", ""),
+                    "reproducibility_assessment": model_result.get("reproducibility_assessment", ""),
+                    "code_quality": model_result.get("code_quality", ""),
+                    "application_advice": model_result.get("application_advice", ""),
+                    "code_url": (item_data.get("payload") or {}).get("code_url", ""),
+                    "source_type": (item_data.get("payload") or {}).get("source_type", ""),
+                    "source_news_score": (item_data.get("payload") or {}).get("source_news_score"),
+                    "implementation_depth": (item_data.get("payload") or {}).get("implementation_depth") or {
+                        "has_real_code": bool(
+                            (item_data.get("payload") or {}).get("code_url")
+                            or "github.com" in str(item_data.get("source_url") or "")
+                        ),
+                        "has_tests": bool(model_result.get("has_tests", False)),
+                        "has_eval": bool(model_result.get("has_eval", False)),
+                        "is_prompt_wrapper": bool(model_result.get("is_prompt_wrapper", False)),
+                        "is_thin_mcp_wrapper": bool(model_result.get("is_thin_mcp_wrapper", False)),
+                    },
+                },
             )
+            # 评估完成后将 item_type 从 capability_candidate 改为 capability
+            context.conn.execute("UPDATE domain_items SET item_type='capability' WHERE id=?", (item_id,))
             assessed += 1
-        artifact = context.artifact_store.write_json(context.conn, run_id=context.run_id, artifact_type="capability_assessments", name="capabilities/assessments.json", data={"assessed": assessed, "model_profile": self.model_profile})
-        repo.create_quality_audit(context.conn, domain="capabilities", audit_type="capability_assessment", status="pass" if assessed else "warn", score=0.8 if assessed else 0.2, summary=f"能力评估 {assessed} 条，当前使用本地规则引擎。", details={"run_id": context.run_id})
-        return StepResult(metrics={"assessed": assessed, "model_profile": self.model_profile}, artifacts=[artifact])
+        artifact = context.artifact_store.write_json(context.conn, run_id=context.run_id, artifact_type="capability_assessments", name="capabilities/assessments.json", data={"assessed": assessed, "failed": failed, "model_profile": self.model_profile})
+        repo.create_quality_audit(context.conn, domain="capabilities", audit_type="capability_assessment", status="pass" if assessed else "warn", score=0.8 if assessed else 0.2, summary=f"能力评估 {assessed} 条成功，{failed} 条失败。", details={"run_id": context.run_id})
+        return StepResult(metrics={"assessed": assessed, "failed": failed, "model_profile": self.model_profile}, artifacts=[artifact])
