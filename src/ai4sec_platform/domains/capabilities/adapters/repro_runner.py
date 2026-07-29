@@ -20,6 +20,7 @@ import stat
 import subprocess
 import threading
 import time
+import queue
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
@@ -38,6 +39,12 @@ CONTAINER_TIMEOUT = int(os.environ.get("REPRO_CONTAINER_TIMEOUT", str(30 * 60)))
 WEB_CONTAINER_TIMEOUT = int(os.environ.get("REPRO_WEB_CONTAINER_TIMEOUT", str(50 * 60)))  # 50 分钟
 DOCKERD_WAIT = int(os.environ.get("REPRO_DOCKERD_WAIT", "30"))
 INTERNAL_CIDRS = ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"]
+REPRO_CPUS = os.environ.get("REPRO_CPUS", "2.0")
+REPRO_MEMORY = os.environ.get("REPRO_MEMORY", "4g")
+REPRO_MEMORY_SWAP = os.environ.get("REPRO_MEMORY_SWAP", REPRO_MEMORY)
+REPRO_PIDS_LIMIT = os.environ.get("REPRO_PIDS_LIMIT", "1024")
+REPRO_WORKSPACE_MAX_BYTES = int(os.environ.get("REPRO_WORKSPACE_MAX_BYTES", str(10 * 1024 * 1024 * 1024)))
+REPRO_LOG_MAX_BYTES = int(os.environ.get("REPRO_LOG_MAX_BYTES", str(5 * 1024 * 1024)))
 
 # DashScope API 代理（sysbox 容器内直连会卡死，通过宿主机 nginx 反代转发）
 DASHSCOPE_PROXY_URL = os.environ.get("DASHSCOPE_PROXY_URL", "")
@@ -293,8 +300,9 @@ class ReproRunner:
         self.task_id = task_id
         self.repo_url = repo_url
         raw_on_log = on_log or (lambda line: None)
+        self._raw_on_log = raw_on_log
         self._secret_values = _task_secret_values()
-        self.on_log = lambda line: raw_on_log(redact_sensitive_text(str(line), self._secret_values))
+        self.on_log = self._emit_log
         self.on_status = on_status or (lambda status, **kw: None)
         _stamp = int(time.time())
         self.container_name = f"repro-{task_id}-{_stamp}"
@@ -303,6 +311,8 @@ class ReproRunner:
         self.status = "queued"
         self._thread: threading.Thread | None = None
         self.web_port = web_port  # 主机端口（有则映射到容器内 8080，用于 Web 项目复现）
+        self._logged_bytes = 0
+        self._log_truncated = False
 
     # ---- docker 命令构建 ----
     def build_run_command(self):
@@ -312,7 +322,11 @@ class ReproRunner:
             "--runtime", REPRO_RUNTIME,
             "-d",
             "--name", self.container_name,
-            "--pids-limit", os.environ.get("REPRO_PIDS_LIMIT", "4096"),
+            "--cpus", REPRO_CPUS,
+            "--memory", REPRO_MEMORY,
+            "--memory-swap", REPRO_MEMORY_SWAP,
+            "--pids-limit", REPRO_PIDS_LIMIT,
+            "--security-opt", "no-new-privileges=true",
             "-v", f"{self.workspace}:/workspace",
         ]
         token_path = _validated_token_path()
@@ -419,25 +433,58 @@ class ReproRunner:
         self.status = status
         self.on_status(status, **kw)
 
+    def _emit_log(self, line: str) -> None:
+        line = redact_sensitive_text(str(line), self._secret_values)
+        if self._log_truncated:
+            return
+        encoded_bytes = len(line.encode("utf-8", errors="replace")) + 1
+        if self._logged_bytes + encoded_bytes <= REPRO_LOG_MAX_BYTES:
+            self._logged_bytes += encoded_bytes
+            self._raw_on_log(line)
+            return
+        if not self._log_truncated:
+            self._log_truncated = True
+            self._raw_on_log(f"⚠ 日志达到 {REPRO_LOG_MAX_BYTES} 字节上限，后续输出已截断")
+
+    def _remember_output(self, line: str) -> None:
+        self._full_output.append(line)
+        self._full_output_bytes += len(line.encode("utf-8", errors="replace")) + 1
+        while self._full_output and self._full_output_bytes > REPRO_LOG_MAX_BYTES:
+            removed = self._full_output.pop(0)
+            self._full_output_bytes -= len(removed.encode("utf-8", errors="replace")) + 1
+
+    def _workspace_size_exceeded(self) -> bool:
+        total = 0
+        try:
+            for path in self.workspace.rglob("*"):
+                if path.is_file() and not path.is_symlink():
+                    total += path.stat().st_size
+                    if total > REPRO_WORKSPACE_MAX_BYTES:
+                        return True
+        except OSError:
+            return False
+        return False
+
     def _run(self):
         self._set_status("running")
         self._tail: list[str] = []
         self._full_output: list[str] = []
+        self._full_output_bytes = 0
         try:
             # 1. 起 systemd 容器（后台）
             _safe_run(["docker", "rm", "-f", self.container_name], capture_output=True, text=True)
             run_cmd = self.build_run_command()
-            self.on_log(f"$ {' '.join(shlex.quote(c) for c in run_cmd)}")
+            self._emit_log(f"$ {' '.join(shlex.quote(c) for c in run_cmd)}")
             r = _safe_run(run_cmd, capture_output=True, text=True)
             if r.returncode != 0:
-                self.on_log(f"✗ 起容器失败: {r.stderr.strip()}")
+                self._emit_log(f"✗ 起容器失败: {r.stderr.strip()}")
                 self._set_status("failed", error=r.stderr.strip())
                 return
 
             # 2. 等容器内 docker 守护进程就绪
-            self.on_log("• 等待容器内服务就绪…")
+            self._emit_log("• 等待容器内服务就绪…")
             if not self._wait_dockerd():
-                self.on_log("⚠ 容器内 docker 未在预期时间就绪,仍继续(纯 Python 项目不受影响)")
+                self._emit_log("⚠ 容器内 docker 未在预期时间就绪,仍继续(纯 Python 项目不受影响)")
 
             # 2.1 启动端口代理（sysbox 容器用 nsenter 替代 docker -p）
             self._start_port_proxy()
@@ -493,11 +540,11 @@ class ReproRunner:
 
             # 3. exec 进去跑复现，流式读输出
             prompt = _build_web_repro_prompt() if self.web_port else _build_repro_prompt()
-            self.on_log("┌─ 发给 AI agent 的复现指令(prompt)─────────────")
+            self._emit_log("┌─ 发给 AI agent 的复现指令(prompt)─────────────")
             for pl in prompt.strip().split("\n"):
-                self.on_log("│ " + pl)
-            self.on_log("└──────────────────────────────────────────────")
-            self.on_log("")
+                self._emit_log("│ " + pl)
+            self._emit_log("└──────────────────────────────────────────────")
+            self._emit_log("")
             exec_cmd = self.build_exec_command()
             _env = sanitized_subprocess_env()
             _env.update({"LANG": "C.UTF-8", "LC_ALL": "C.UTF-8", "PYTHONIOENCODING": "utf-8"})
@@ -512,30 +559,56 @@ class ReproRunner:
                 env=_env,
             )
             start_ts = time.time()
+            output_queue: queue.Queue[str | None] = queue.Queue()
+
+            def read_output() -> None:
+                try:
+                    for output_line in self.proc.stdout:
+                        output_queue.put(output_line)
+                finally:
+                    output_queue.put(None)
+
+            threading.Thread(target=read_output, name=f"repro-output-{self.task_id}", daemon=True).start()
+            next_workspace_check = start_ts
             while True:
-                line = self.proc.stdout.readline()
-                if not line:
-                    if self.proc.poll() is not None:
-                        break
-                    continue
-                clean = line.rstrip("\n")
-                self.on_log(clean)
-                self._tail.append(clean)
-                self._full_output.append(clean)
-                if len(self._tail) > 40:
-                    self._tail.pop(0)
+                try:
+                    line = output_queue.get(timeout=0.5)
+                except queue.Empty:
+                    line = ""
+                if line is None:
+                    break
+                if line:
+                    clean = line.rstrip("\n")
+                    self.on_log(clean)
+                    self._tail.append(clean)
+                    self._remember_output(clean)
+                    if len(self._tail) > 40:
+                        self._tail.pop(0)
                 timeout_limit = WEB_CONTAINER_TIMEOUT if self.web_port else CONTAINER_TIMEOUT
                 if time.time() - start_ts > timeout_limit:
                     report = extract_report("\n".join(self._full_output))
                     if self.web_port:
                         self.on_log("⏱ Agent 流程超时,但容器保活(Web 服务可能已就绪,可尝试访问)")
+                        if self.proc.poll() is None:
+                            self.proc.terminate()
                         self._set_status("success", report=report,
                                          result="agent 流程超时,容器保活,请尝试在线访问验证")
                     else:
                         self.on_log("⏱ 超时,停止容器")
-                        self.stop()
+                        _safe_run(["docker", "stop", self.container_name], capture_output=True)
+                        if self.proc.poll() is None:
+                            self.proc.terminate()
                         self._set_status("timeout", report=report)
                     return
+                if time.time() >= next_workspace_check:
+                    next_workspace_check = time.time() + 5
+                    if self._workspace_size_exceeded():
+                        self.on_log(f"✗ workspace 超过 {REPRO_WORKSPACE_MAX_BYTES} 字节上限，停止任务")
+                        _safe_run(["docker", "stop", self.container_name], capture_output=True)
+                        if self.proc.poll() is None:
+                            self.proc.terminate()
+                        self._set_status("failed", error="workspace size limit exceeded")
+                        return
             rc = self.proc.wait()
             full = "\n".join(self._full_output)
             result_summary = "\n".join(self._tail[-20:])
@@ -589,13 +662,13 @@ class ReproRunner:
                 return
             proxy_cmd = [
                 "socat",
-                f"TCP-LISTEN:{self.web_port},fork,reuseaddr",
+                f"TCP-LISTEN:{self.web_port},bind=127.0.0.1,fork,reuseaddr",
                 f"EXEC:nsenter -t {cpid} -n socat - TCP\\:127.0.0.1\\:8080",
             ]
             self._proxy_proc = _safe_popen(
                 proxy_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             )
-            self.on_log(f"✓ 端口代理已启动: 宿主机:{self.web_port} → 容器:8080 (nsenter PID={cpid})")
+            self.on_log(f"✓ 端口代理已启动: 127.0.0.1:{self.web_port} → 容器:8080 (nsenter PID={cpid})")
         except Exception as e:
             self.on_log(f"⚠ 启动端口代理失败: {e}")
 

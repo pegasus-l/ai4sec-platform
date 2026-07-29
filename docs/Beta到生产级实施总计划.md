@@ -819,10 +819,10 @@ D11 暂缓的是公网入口和完整公网暴露治理，不代表复现容器�
 #### 模块任务
 
 - [x] 威胁连接器恢复系统默认 TLS 验证；特殊证书后续使用受控 CA，不允许全局跳过验证。
-- [ ] 能力复现增加 CPU、内存、磁盘、PIDs、超时和日志上限。
+- [ ] 能力复现已增加 CPU、内存、swap、PIDs、墙钟超时、日志和 workspace 软上限；文件系统硬 quota 与嵌套容器资源治理仍待完成。
 - [x] 能力复现停止将模型 Key 写入 Prompt，并在日志回调进入 SQLite/SSE 前统一脱敏；任务 token 改为只读 Secret 文件挂载。
 - [ ] 审计 `repro-runner:v3` 镜像，确认镜像层和 OpenCode auth 文件不包含长期密钥。
-- [ ] 能力复现 Web 端口默认只绑定回环地址，并通过受控反向代理访问。
+- [x] 能力复现 Web 端口代理默认只绑定 `127.0.0.1`；受认证反向代理将在部署阶段接入。
 - [ ] 修复请求级 SQLite connection 被后台线程继续使用的问题。
 - [ ] 漏洞抓取 URL 增加统一安全策略接入点。
 - [ ] 资讯明确 legacy raw 仅用于迁移，不进入正式运行菜单。
@@ -1634,3 +1634,30 @@ TRUNCATE checkpoint：busy=0，wal_bytes=0
 - 当前若未配置任务 token 文件，OpenCode 配置仍兼容读取镜像内 `/root/.local/share/opencode/auth.json`；必须审计并最终移除镜像长期凭据。
 - 当前 Secret 文件可能仍是长期 token；目标方案仍是 AI4SEC Model Gateway 签发任务级短期令牌。
 - 复现 API 和 ReproManager 仍在 API 进程内启动后台线程并持有请求级数据库连接，下一批必须拆为独立持久 Repro Worker。
+
+### 2026-07-28：补充能力复现资源、日志、超时和端口边界
+
+完成内容：
+
+- 容器启动增加 `--cpus`、`--memory`、`--memory-swap`、`--pids-limit` 和 `no-new-privileges=true`。
+- 默认资源为 2 CPU、4 GiB 内存、4 GiB memory+swap 和 1024 PIDs，可通过受控环境变量调整。
+- workspace 默认 10 GiB 软上限，Runner 每 5 秒扫描普通非符号链接文件，超限后停止容器并将任务标记失败。
+- 数据库/SSE 日志默认 5 MiB 上限；首次超限写一条截断告警，后续日志全部丢弃。
+- `_full_output` 同样按字节上限保留尾部，避免虽然数据库日志截断但进程内报告缓冲继续无限增长。
+- OpenCode stdout 改为独立读取线程和 Queue；主循环每 0.5 秒检查墙钟超时，因此静默进程不能再通过阻塞 `readline()` 绕过超时。
+- 非 Web 任务超时会停止容器并终止 OpenCode 客户端进程；Web 任务保留服务容器，但终止超时的 OpenCode 客户端。
+- socat 监听从所有网卡改为 `127.0.0.1`，正式访问需经过后续受认证反向代理。
+
+验证结果：
+
+```text
+能力资源与安全专项：42 passed
+覆盖资源参数、日志截断、workspace 超限、回环监听和静默进程超时
+全仓测试：188 passed
+```
+
+剩余边界：
+
+- workspace 周期扫描是软限制，不是文件系统 quota；任务在两个扫描周期之间可能短暂超限。
+- sysbox 容器内启动的嵌套 Docker 容器仍需单独验证是否继承/绕过外层资源限制。
+- 当前 Docker 命令仍使用宿主机全局 Docker daemon 和 API 内后台线程；独立 rootless Repro Worker 仍是下一阶段 P0。

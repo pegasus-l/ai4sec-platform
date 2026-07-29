@@ -167,6 +167,8 @@ PYTHONPATH=src python3 -m ai4sec_platform.cli.run_pipeline --pipeline news.legac
 
 能力复现如需向项目注入受管模型凭据，只允许配置 `REPRO_MODEL_TOKEN_FILE` 指向权限为 `0600` 的普通文件。Runner 将其只读挂载到容器，不会把 token 放入 Prompt、Docker 命令行或宿主机子进程环境。符号链接、目录、缺失文件和 group/other 可读文件会被拒绝。
 
+能力复现默认限制为 `REPRO_CPUS=2.0`、`REPRO_MEMORY=4g`、`REPRO_MEMORY_SWAP=4g`、`REPRO_PIDS_LIMIT=1024`、workspace 10 GiB 软上限和数据库日志 5 MiB 上限。Web 端口代理只监听 `127.0.0.1`。workspace 上限通过周期扫描实现，不是文件系统硬 quota；生产部署仍建议为复现目录使用独立受限文件系统或项目配额。
+
 如需获取最新资讯，可运行 shadow 采集：
 
 ```bash

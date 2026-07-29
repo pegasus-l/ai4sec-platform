@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import time
 
 from ai4sec_platform.domains.capabilities.adapters import repro_runner
 from ai4sec_platform.domains.capabilities.adapters.from_news import capability_candidates_from_news
@@ -303,6 +304,109 @@ def test_repro_rejects_overly_permissive_token_file(monkeypatch, tmp_path: Path)
     import pytest
     with pytest.raises(RuntimeError, match="permissions"):
         runner.build_run_command()
+
+
+def test_repro_container_command_has_resource_and_privilege_limits(monkeypatch) -> None:
+    monkeypatch.setattr(repro_runner, "REPRO_MODEL_TOKEN_FILE", "")
+    runner = ReproRunner(4, "https://github.com/example/repo")
+
+    command = runner.build_run_command()
+
+    assert command[command.index("--cpus") + 1] == repro_runner.REPRO_CPUS
+    assert command[command.index("--memory") + 1] == repro_runner.REPRO_MEMORY
+    assert command[command.index("--memory-swap") + 1] == repro_runner.REPRO_MEMORY_SWAP
+    assert command[command.index("--pids-limit") + 1] == repro_runner.REPRO_PIDS_LIMIT
+    assert "no-new-privileges=true" in command
+
+
+def test_repro_log_output_is_bounded(monkeypatch) -> None:
+    monkeypatch.setattr(repro_runner, "REPRO_LOG_MAX_BYTES", 20)
+    lines: list[str] = []
+    runner = ReproRunner(5, "https://github.com/example/repo", on_log=lines.append)
+
+    runner.on_log("1234567890")
+    runner.on_log("abcdefghij")
+    runner.on_log("ignored")
+
+    assert lines[0] == "1234567890"
+    assert sum("日志达到" in line for line in lines) == 1
+    assert "ignored" not in lines
+
+
+def test_workspace_limit_detects_excess_files(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(repro_runner, "WORKSPACE_ROOT", tmp_path)
+    monkeypatch.setattr(repro_runner, "REPRO_WORKSPACE_MAX_BYTES", 5)
+    runner = ReproRunner(6, "https://github.com/example/repo")
+    runner.workspace.mkdir(parents=True)
+    (runner.workspace / "large.bin").write_bytes(b"123456")
+
+    assert runner._workspace_size_exceeded() is True
+
+
+def test_web_proxy_binds_only_loopback(monkeypatch) -> None:
+    runner = ReproRunner(7, "https://github.com/example/repo", web_port=18080)
+
+    class Result:
+        stdout = "1234\n"
+
+    commands: list[list[str]] = []
+    monkeypatch.setattr(repro_runner, "_safe_run", lambda *_args, **_kwargs: Result())
+    monkeypatch.setattr(repro_runner, "_safe_popen", lambda command, **_kwargs: commands.append(command) or object())
+
+    runner._start_port_proxy()
+
+    assert commands
+    assert "bind=127.0.0.1" in commands[0][1]
+
+
+def test_silent_repro_process_still_times_out(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(repro_runner, "WORKSPACE_ROOT", tmp_path)
+    monkeypatch.setattr(repro_runner, "CONTAINER_TIMEOUT", 0.1)
+    monkeypatch.setattr(repro_runner, "REPRO_MODEL_TOKEN_FILE", "")
+    statuses: list[str] = []
+    runner = ReproRunner(8, "https://github.com/example/repo", on_status=lambda status, **_kw: statuses.append(status))
+    repo_dir = runner.workspace / "repo"
+    repo_dir.mkdir(parents=True)
+    (repo_dir / "README.md").write_text("ready", encoding="utf-8")
+
+    class Result:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    class SilentStream:
+        def __iter__(self):
+            return self
+
+        def __next__(self):
+            while not process.terminated:
+                time.sleep(0.01)
+            raise StopIteration
+
+    class SilentProcess:
+        def __init__(self):
+            self.stdout = SilentStream()
+            self.terminated = False
+
+        def poll(self):
+            return 0 if self.terminated else None
+
+        def terminate(self):
+            self.terminated = True
+
+        def wait(self):
+            return 0
+
+    process = SilentProcess()
+    monkeypatch.setattr(repro_runner, "_safe_run", lambda *_args, **_kwargs: Result())
+    monkeypatch.setattr(repro_runner, "_safe_popen", lambda *_args, **_kwargs: process)
+    monkeypatch.setattr(runner, "_wait_dockerd", lambda: True)
+    monkeypatch.setattr(runner, "_start_port_proxy", lambda: None)
+
+    runner._run()
+
+    assert process.terminated is True
+    assert statuses[-1] == "timeout"
 
 
 def test_subprocess_environment_removes_sensitive_variables(monkeypatch) -> None:
