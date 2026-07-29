@@ -32,7 +32,7 @@ load_env_file()
 # ============================================================================
 # 配置（集中在这里，方便调整。从 .env 读，去硬编码）
 # ============================================================================
-REPRO_IMAGE = os.environ.get("REPRO_IMAGE", "repro-runner:v3")
+REPRO_IMAGE = os.environ.get("REPRO_IMAGE", "repro-runner:v4")
 REPRO_RUNTIME = os.environ.get("REPRO_RUNTIME", "sysbox-runc")
 WORKSPACE_ROOT = Path(os.environ.get("REPRO_WORKSPACE_ROOT", str(Path.home() / "repro_workspaces")))
 CONTAINER_TIMEOUT = int(os.environ.get("REPRO_CONTAINER_TIMEOUT", str(30 * 60)))  # 30 分钟
@@ -70,16 +70,12 @@ _SECRET_VALUE_PATTERNS = (
 def _managed_llm_prompt_section() -> str:
     if not REPRO_LLM_BASE_URL:
         return ""
-    credential_guidance = (
-        "- 任务凭据已由执行器注入 OPENAI_API_KEY / LLM_API_KEY；不要读取、输出、记录或复制任何凭据。\n"
-        if REPRO_MODEL_TOKEN_FILE
-        else "- OpenCode 自身模型认证由执行环境管理；项目若需要独立 API Key，禁止读取 OpenCode auth 文件，应在报告中列为前置条件。\n"
-    )
     return f"""
 # 受管模型服务（项目确实需要 LLM 时使用）
 - Base URL: {REPRO_LLM_BASE_URL}
 - 模型: {REPRO_LLM_MODEL}
-{credential_guidance}- 使用上面的 Base URL；禁止把凭据写入源码、报告或日志。
+- 任务凭据由执行器通过只读 Secret 文件管理；不要读取、输出、记录或复制任何凭据。
+- 使用上面的 Base URL；禁止把凭据写入源码、报告或日志。
 """
 
 
@@ -120,9 +116,9 @@ def _task_secret_values() -> tuple[str, ...]:
     return tuple(dict.fromkeys(values))
 
 
-def _validated_token_path() -> Path | None:
+def _validated_token_path() -> Path:
     if not REPRO_MODEL_TOKEN_FILE:
-        return None
+        raise RuntimeError("REPRO_MODEL_TOKEN_FILE is required for capability reproduction")
     token_path = Path(REPRO_MODEL_TOKEN_FILE).expanduser()
     try:
         file_stat = token_path.lstat()
@@ -133,6 +129,27 @@ def _validated_token_path() -> Path | None:
     if file_stat.st_mode & 0o077:
         raise RuntimeError("Repro model token file permissions must not allow group or other access")
     return token_path.resolve()
+
+
+def validate_repro_runtime_config(*, check_image: bool = False) -> Path:
+    token_path = _validated_token_path()
+    if not REPRO_LLM_BASE_URL:
+        raise RuntimeError("REPRO_LLM_BASE_URL is required for capability reproduction")
+    if check_image:
+        image_check = _safe_run(
+            [
+                "docker", "run", "--rm", "--entrypoint", "/bin/sh", REPRO_IMAGE, "-c",
+                "test ! -e /root/.local/share/opencode/auth.json "
+                "-a ! -e /home/repro/.local/share/opencode/auth.json",
+            ],
+            capture_output=True,
+            text=True,
+        )
+        if image_check.returncode != 0:
+            raise RuntimeError(
+                f"Repro image is unavailable or contains a baked OpenCode auth file: {REPRO_IMAGE}"
+            )
+    return token_path
 
 
 # ============================================================================
@@ -326,50 +343,44 @@ class ReproRunner:
             "--memory-swap", REPRO_MEMORY_SWAP,
             "--pids-limit", REPRO_PIDS_LIMIT,
             "--security-opt", "no-new-privileges=true",
+            "--tmpfs", "/root/.local/share/opencode:rw,nosuid,nodev,noexec,mode=700",
             "-v", f"{self.workspace}:/workspace",
         ]
         token_path = _validated_token_path()
-        if token_path:
-            cmd.extend(["--mount", f"type=bind,src={token_path},dst={CONTAINER_MODEL_TOKEN_FILE},readonly"])
+        cmd.extend(["--mount", f"type=bind,src={token_path},dst={CONTAINER_MODEL_TOKEN_FILE},readonly"])
         cmd.append(REPRO_IMAGE)
         return cmd
 
     def build_exec_command(self):
         """docker exec 进容器，以 root 跑 clone + opencode。"""
-        inject_proxy = ""
-        if DASHSCOPE_PROXY_URL:
-            _oc_cfg = json.dumps({
-                "$schema": "https://opencode.ai/config.json",
-                "provider": {
-                    "dashscope-proxy": {
-                        "npm": "@ai-sdk/openai-compatible",
-                        "name": "DashScope-Proxy",
-                        "options": {"baseURL": DASHSCOPE_PROXY_URL},
-                        "models": {REPRO_LLM_MODEL: {"name": REPRO_LLM_MODEL}},
-                    }
-                },
-                "model": f"dashscope-proxy/{REPRO_LLM_MODEL}",
-                "permission": {
-                    "*": "allow", "bash": "allow", "edit": "allow",
-                    "write": "allow", "read": "allow", "webfetch": "allow",
-                    "external_directory": "allow", "doom_loop": "allow",
-                },
-            })
-            _b64_cfg = base64.b64encode(_oc_cfg.encode()).decode()
-            inject_proxy = (
-                f"echo '{_b64_cfg}' | base64 -d > /tmp/_oc_tpl.json; "
-                "python3 -c \""
-                "import json,os; "
-                "cfg=json.load(open('/tmp/_oc_tpl.json')); "
-                f"tp='{CONTAINER_MODEL_TOKEN_FILE}'; "
-                "ap='/root/.local/share/opencode/auth.json'; "
-                "auth=json.load(open(ap)) if os.path.exists(ap) else {}; "
-                "key=open(tp).read().strip() if os.path.exists(tp) else (auth.get('alibaba-cn') or {}).get('key',''); "
-                "cfg['provider']['dashscope-proxy']['options']['apiKey']=key; "
-                "json.dump(cfg,open('/root/.config/opencode/opencode.json','w'),indent=2); "
-                f"print('✓ opencode 已配置 DashScope 代理: {DASHSCOPE_PROXY_URL}')"
-                "\"; "
-            )
+        validate_repro_runtime_config()
+        managed_provider = "ai4sec-managed"
+        opencode_config = json.dumps({
+            "$schema": "https://opencode.ai/config.json",
+            "provider": {
+                managed_provider: {
+                    "npm": "@ai-sdk/openai-compatible",
+                    "name": "AI4SEC Managed Model",
+                    "options": {
+                        "baseURL": REPRO_LLM_BASE_URL,
+                        "apiKey": f"{{file:{CONTAINER_MODEL_TOKEN_FILE}}}",
+                    },
+                    "models": {REPRO_LLM_MODEL: {"name": REPRO_LLM_MODEL}},
+                }
+            },
+            "model": f"{managed_provider}/{REPRO_LLM_MODEL}",
+            "permission": {
+                "*": "allow", "bash": "allow", "edit": "allow",
+                "write": "allow", "read": "allow", "webfetch": "allow",
+                "external_directory": "allow", "doom_loop": "allow",
+            },
+        })
+        encoded_config = base64.b64encode(opencode_config.encode()).decode()
+        inject_managed_config = (
+            "mkdir -p /root/.config/opencode; "
+            f"echo '{encoded_config}' | base64 -d > /root/.config/opencode/opencode.json; "
+            f"echo '✓ opencode 已配置受管模型服务: {REPRO_LLM_BASE_URL}'; "
+        )
 
         prompt = _build_web_repro_prompt() if self.web_port else _build_repro_prompt()
 
@@ -379,7 +390,7 @@ class ReproRunner:
             f"export OPENAI_API_KEY=\"$(cat {CONTAINER_MODEL_TOKEN_FILE})\" LLM_API_KEY=\"$(cat {CONTAINER_MODEL_TOKEN_FILE})\"; fi; "
             "export GIT_HTTP_LOW_SPEED_LIMIT=1000 GIT_HTTP_LOW_SPEED_TIME=30; "
             "set -e; "
-            + inject_proxy +
+            + inject_managed_config +
             "mkdir -p /root/.pip /root/.config/pip; "
             "printf '[global]\\nindex-url = https://pypi.tuna.tsinghua.edu.cn/simple\\n"
             "trusted-host = pypi.tuna.tsinghua.edu.cn\\ntimeout = 120\\nretries = 5\\n' "

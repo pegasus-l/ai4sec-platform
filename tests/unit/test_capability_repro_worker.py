@@ -24,6 +24,10 @@ def _settings(tmp_path: Path) -> Settings:
     return Settings(project_root=tmp_path, output_dir=tmp_path / "output", database_path=tmp_path / "test.db")
 
 
+def _allow_test_runtime(monkeypatch) -> None:
+    monkeypatch.setattr(worker_module, "validate_repro_runtime_config", lambda **_kwargs: Path("/test/token"))
+
+
 def _create_task(settings: Settings, *, status: str = "queued") -> int:
     with connect(settings) as conn:
         init_db(conn)
@@ -92,6 +96,7 @@ def test_recovery_requeues_interrupted_cleanup(tmp_path: Path) -> None:
 def test_worker_executes_claimed_task_without_api_thread(monkeypatch, tmp_path: Path) -> None:
     settings = _settings(tmp_path)
     task_id = _create_task(settings)
+    _allow_test_runtime(monkeypatch)
 
     class FakeRunner:
         def __init__(self, task_id, repo_url, on_log, on_status, web_port, should_stop, on_heartbeat):
@@ -121,6 +126,7 @@ def test_worker_executes_claimed_task_without_api_thread(monkeypatch, tmp_path: 
 def test_worker_records_runner_crash_and_keeps_serving(monkeypatch, tmp_path: Path) -> None:
     settings = _settings(tmp_path)
     task_id = _create_task(settings)
+    _allow_test_runtime(monkeypatch)
 
     class CrashingRunner:
         def __init__(self, task_id, repo_url, **_kwargs):
@@ -141,6 +147,7 @@ def test_worker_records_runner_crash_and_keeps_serving(monkeypatch, tmp_path: Pa
 def test_cleanup_is_queued_and_executed_by_worker(monkeypatch, tmp_path: Path) -> None:
     settings = _settings(tmp_path)
     task_id = _create_task(settings, status="failed")
+    _allow_test_runtime(monkeypatch)
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     with connect(settings) as conn:

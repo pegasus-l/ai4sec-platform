@@ -821,9 +821,9 @@ D11 暂缓的是公网入口和完整公网暴露治理，不代表复现容器�
 - [x] 威胁连接器恢复系统默认 TLS 验证；特殊证书后续使用受控 CA，不允许全局跳过验证。
 - [ ] 能力复现已增加 CPU、内存、swap、PIDs、墙钟超时、日志和 workspace 软上限；文件系统硬 quota 与嵌套容器资源治理仍待完成。
 - [x] 能力复现停止将模型 Key 写入 Prompt，并在日志回调进入 SQLite/SSE 前统一脱敏；任务 token 改为只读 Secret 文件挂载。
-- [ ] 审计 `repro-runner:v3` 镜像，确认镜像层和 OpenCode auth 文件不包含长期密钥。
+- [ ] 已确认 `repro-runner:v3` 镜像含长期认证文件，并构建通过 Sysbox 验收的干净 `v4`；旧凭据轮换、两个运行中 `v3` 容器迁移及旧镜像删除仍需人工完成。
 - [x] 能力复现 Web 端口代理默认只绑定 `127.0.0.1`；受认证反向代理将在部署阶段接入。
-- [ ] 修复请求级 SQLite connection 被后台线程继续使用的问题。
+- [x] 能力 API/Pipeline 只写持久任务，独立 Repro Worker 使用短连接写日志与状态，不再复用请求级 SQLite connection。
 - [ ] 漏洞抓取 URL 增加统一安全策略接入点。
 - [ ] 资讯明确 legacy raw 仅用于迁移，不进入正式运行菜单。
 
@@ -1677,4 +1677,41 @@ TRUNCATE checkpoint：busy=0，wal_bytes=0
 
 - 首期仍使用宿主机 Docker daemon 与 Sysbox Profile，尚未完成 rootless Docker 验收。
 - 取消检查主要发生在 OpenCode 流式执行阶段；clone、容器启动和 dockerd 等待阶段的更细粒度取消仍需后续补齐。
-- 单机部署必须同时托管 API、Pipeline Worker 和 Repro Worker；当前仓库尚无正式镜像和 Compose 文件，本批不虚构未经验证的容器构建方案。
+- 单机部署必须同时托管 API、Pipeline Worker 和 Repro Worker；能力复现已有实际验收的 `v4` 镜像定义，API、Pipeline Worker、Repro Worker 和前端的正式镜像及 Compose 编排仍待后续实现。
+
+### 2026-07-29：关闭复现镜像长期凭据回退
+
+审计结论：
+
+- 本机 `repro-runner:v3` 的 `/root/.local/share/opencode/auth.json` 确实存在，是 93 字节、权限 `0600` 的 root 文件；此前代码在未配置任务 Secret 时会读取其中 `alibaba-cn` 凭据。
+- `v3` 顶层来自手工 commit，仓库中没有可信 Dockerfile，无法证明从镜像历史层删除认证数据。
+- 当前仍有 `repro-5-1785207583` 和 `repro-6-1785211000` 两个 `v3` 容器运行。为避免中断现有 Web 复现，本次未强制停止或删除。
+
+完成内容：
+
+- 删除所有 `auth.json` 读取和 fallback；未配置 `REPRO_MODEL_TOKEN_FILE` 或 `REPRO_LLM_BASE_URL` 时 Repro Worker 启动预检失败，不领取任务。
+- OpenCode `1.15.12` 官方支持 `{file:path}`，受管 provider 配置改为直接引用 `/run/secrets/repro_model_token`，不再把 token 复制到 `opencode.json`。
+- 容器启动使用 `tmpfs` 覆盖 `/root/.local/share/opencode`，即使错误选择旧镜像，运行时认证目录也不可见。
+- 新增镜像预检：Worker 会启动一次性检查容器，镜像不存在或 root/repro 用户目录含 OpenCode auth 文件时拒绝运行。
+- 新增 `configs/repro-runner/Dockerfile`，固定 Ubuntu digest、Node、Docker、containerd 和 OpenCode 版本，不复制任何认证文件；默认镜像升级为 `repro-runner:v4`。
+- 新增 `.env.example` 和 `repro-worker --check-config`，明确 Secret 文件必须同时对 Worker 和宿主机 Docker daemon 使用同一绝对路径可见。
+
+实际验收：
+
+```text
+repro-runner:v4 image id: sha256:0acb4041177c879293f75e9a660c76c5cda884370a5252e957d2fad58844b8d4
+OpenCode: 1.15.12
+Node.js: 20.20.2
+containerd: 2.2.6
+Docker client/server: 29.6.2 / 29.6.2
+Sysbox nested Docker: ready
+root/repro auth.json: absent
+tmpfs runtime auth hiding: verified
+Python full test suite: 199 passed
+```
+
+仍需用户/运维完成：
+
+1. 立即在原凭据提供方轮换 `v3` 镜像中的旧 token；代码无法替代凭据提供方执行吊销。
+2. 将新 token 写入宿主机 `0600` Secret 文件，并配置 `REPRO_MODEL_TOKEN_FILE`、`REPRO_LLM_BASE_URL`、`REPRO_IMAGE=repro-runner:v4`。
+3. 确认两个旧 Web 复现容器是否仍需保留；迁移或验收结束后停止容器，并删除 `repro-runner:v3`。

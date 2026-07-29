@@ -13,6 +13,8 @@
 """
 from __future__ import annotations
 
+import base64
+import json
 from pathlib import Path
 import time
 
@@ -255,7 +257,7 @@ def test_repro_prompt_never_contains_model_secret(monkeypatch) -> None:
 
     assert secret not in prompt
     assert "API Key:" not in prompt
-    assert "OPENAI_API_KEY / LLM_API_KEY" in prompt
+    assert "只读 Secret 文件" in prompt
 
 
 def test_repro_log_callback_redacts_known_and_pattern_secrets(monkeypatch, tmp_path: Path) -> None:
@@ -291,6 +293,63 @@ def test_repro_token_is_read_only_mounted_and_not_on_command_line(monkeypatch, t
     assert f"src={token_file.resolve()}" in mount
     assert f"dst={repro_runner.CONTAINER_MODEL_TOKEN_FILE}" in mount
     assert mount.endswith("readonly")
+    assert command[command.index("--tmpfs") + 1].startswith("/root/.local/share/opencode:")
+
+
+def test_repro_requires_managed_token_file(monkeypatch) -> None:
+    monkeypatch.setattr(repro_runner, "REPRO_MODEL_TOKEN_FILE", "")
+
+    import pytest
+    with pytest.raises(RuntimeError, match="REPRO_MODEL_TOKEN_FILE is required"):
+        ReproRunner(3, "https://github.com/example/repo").build_run_command()
+
+
+def test_repro_requires_managed_model_base_url(monkeypatch, tmp_path: Path) -> None:
+    token_file = tmp_path / "token"
+    token_file.write_text("secret", encoding="utf-8")
+    token_file.chmod(0o600)
+    monkeypatch.setattr(repro_runner, "REPRO_MODEL_TOKEN_FILE", str(token_file))
+    monkeypatch.setattr(repro_runner, "REPRO_LLM_BASE_URL", "")
+
+    import pytest
+    with pytest.raises(RuntimeError, match="REPRO_LLM_BASE_URL is required"):
+        repro_runner.validate_repro_runtime_config()
+
+
+def test_repro_runtime_rejects_image_with_baked_auth(monkeypatch, tmp_path: Path) -> None:
+    token_file = tmp_path / "token"
+    token_file.write_text("secret", encoding="utf-8")
+    token_file.chmod(0o600)
+    monkeypatch.setattr(repro_runner, "REPRO_MODEL_TOKEN_FILE", str(token_file))
+    monkeypatch.setattr(repro_runner, "REPRO_LLM_BASE_URL", "https://gateway.internal/v1")
+
+    class Result:
+        returncode = 1
+
+    monkeypatch.setattr(repro_runner, "_safe_run", lambda *_args, **_kwargs: Result())
+
+    import pytest
+    with pytest.raises(RuntimeError, match="contains a baked OpenCode auth file"):
+        repro_runner.validate_repro_runtime_config(check_image=True)
+
+
+def test_opencode_config_references_secret_file_and_not_image_auth(monkeypatch, tmp_path: Path) -> None:
+    token_file = tmp_path / "token"
+    token_file.write_text("managed-task-token", encoding="utf-8")
+    token_file.chmod(0o600)
+    monkeypatch.setattr(repro_runner, "REPRO_MODEL_TOKEN_FILE", str(token_file))
+    monkeypatch.setattr(repro_runner, "REPRO_LLM_BASE_URL", "https://gateway.internal/v1")
+
+    command = ReproRunner(4, "https://github.com/example/repo").build_exec_command()
+    shell_command = command[-1]
+
+    assert "auth.json" not in shell_command
+    assert "managed-task-token" not in shell_command
+    assert repro_runner.CONTAINER_MODEL_TOKEN_FILE in shell_command
+    encoded = shell_command.split("echo '", 1)[1].split("' | base64 -d", 1)[0]
+    config = json.loads(base64.b64decode(encoded).decode())
+    options = config["provider"]["ai4sec-managed"]["options"]
+    assert options["apiKey"] == f"{{file:{repro_runner.CONTAINER_MODEL_TOKEN_FILE}}}"
 
 
 def test_repro_rejects_overly_permissive_token_file(monkeypatch, tmp_path: Path) -> None:
@@ -306,8 +365,11 @@ def test_repro_rejects_overly_permissive_token_file(monkeypatch, tmp_path: Path)
         runner.build_run_command()
 
 
-def test_repro_container_command_has_resource_and_privilege_limits(monkeypatch) -> None:
-    monkeypatch.setattr(repro_runner, "REPRO_MODEL_TOKEN_FILE", "")
+def test_repro_container_command_has_resource_and_privilege_limits(monkeypatch, tmp_path: Path) -> None:
+    token_file = tmp_path / "token"
+    token_file.write_text("secret", encoding="utf-8")
+    token_file.chmod(0o600)
+    monkeypatch.setattr(repro_runner, "REPRO_MODEL_TOKEN_FILE", str(token_file))
     runner = ReproRunner(4, "https://github.com/example/repo")
 
     command = runner.build_run_command()
@@ -362,7 +424,11 @@ def test_web_proxy_binds_only_loopback(monkeypatch) -> None:
 def test_silent_repro_process_still_times_out(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr(repro_runner, "WORKSPACE_ROOT", tmp_path)
     monkeypatch.setattr(repro_runner, "CONTAINER_TIMEOUT", 0.1)
-    monkeypatch.setattr(repro_runner, "REPRO_MODEL_TOKEN_FILE", "")
+    token_file = tmp_path / "token"
+    token_file.write_text("secret", encoding="utf-8")
+    token_file.chmod(0o600)
+    monkeypatch.setattr(repro_runner, "REPRO_MODEL_TOKEN_FILE", str(token_file))
+    monkeypatch.setattr(repro_runner, "REPRO_LLM_BASE_URL", "https://gateway.internal/v1")
     statuses: list[str] = []
     runner = ReproRunner(8, "https://github.com/example/repo", on_status=lambda status, **_kw: statuses.append(status))
     repo_dir = runner.workspace / "repo"

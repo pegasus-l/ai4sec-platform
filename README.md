@@ -173,7 +173,27 @@ PYTHONPATH=src python3 -m ai4sec_platform.cli.run_pipeline --pipeline news.legac
 
 该 pipeline 会创建总控 PipelineRun，读取本地原始 JSON，执行标准化、去重、资讯对象构建、日报生成和质量审计，写入 TaskRun、Artifact 和 manifest，仍保持 `production_writes=false`。
 
-能力复现如需向项目注入受管模型凭据，只允许配置 `REPRO_MODEL_TOKEN_FILE` 指向权限为 `0600` 的普通文件。Runner 将其只读挂载到容器，不会把 token 放入 Prompt、Docker 命令行或宿主机子进程环境。符号链接、目录、缺失文件和 group/other 可读文件会被拒绝。
+能力复现强制使用受管模型 Secret，必须配置 `REPRO_MODEL_TOKEN_FILE` 指向权限为 `0600` 的普通文件，并配置 `REPRO_LLM_BASE_URL`。Runner 将 Secret 只读挂载到容器，OpenCode 配置通过 `{file:...}` 引用，不会把 token 放入 Prompt、Docker 命令行、`opencode.json` 或宿主机子进程环境。符号链接、目录、缺失文件和 group/other 可读文件会被拒绝。
+
+```bash
+install -d -m 700 /var/lib/ai4sec/secrets
+install -m 600 /dev/null /var/lib/ai4sec/secrets/repro_model_token
+# 通过受控方式写入 token，不要把值写入 shell 历史或 .env
+cp .env.example .env
+PYTHONPATH=src python -m ai4sec_platform.cli repro-worker --check-config
+```
+
+`REPRO_MODEL_TOKEN_FILE` 必须是宿主机 Docker daemon 可见的绝对路径。若 Repro Worker 后续运行在 Compose 容器中，该文件需要以相同绝对路径只读挂载到 Worker，不能只使用容器内部 `/run/secrets` 路径，否则宿主机 Docker daemon 无法作为 bind source 使用。
+
+能力复现默认镜像为不包含认证文件的 `repro-runner:v4`，构建定义位于 `configs/repro-runner/Dockerfile`：
+
+```bash
+docker build --tag repro-runner:v4 configs/repro-runner
+# 当前网络无法稳定访问 npm 官方仓时，可显式使用镜像仓
+docker build --build-arg NPM_REGISTRY=https://registry.npmmirror.com --tag repro-runner:v4 configs/repro-runner
+```
+
+Worker 启动前会运行镜像审计；镜像不存在，或镜像中存在 `/root/.local/share/opencode/auth.json`、`/home/repro/.local/share/opencode/auth.json` 时拒绝领取任务。旧 `repro-runner:v3` 已确认含认证文件，禁止继续创建新任务；其中的凭据必须轮换，旧容器完成迁移后再删除容器和镜像。
 
 能力复现默认限制为 `REPRO_CPUS=2.0`、`REPRO_MEMORY=4g`、`REPRO_MEMORY_SWAP=4g`、`REPRO_PIDS_LIMIT=1024`、workspace 10 GiB 软上限和数据库日志 5 MiB 上限。Web 端口代理只监听 `127.0.0.1`。workspace 上限通过周期扫描实现，不是文件系统硬 quota；生产部署仍建议为复现目录使用独立受限文件系统或项目配额。
 

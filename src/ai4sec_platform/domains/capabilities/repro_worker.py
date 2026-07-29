@@ -14,7 +14,7 @@ from ai4sec_platform.db import repositories as repo
 from ai4sec_platform.db.models import init_db
 from ai4sec_platform.db.session import connect
 from ai4sec_platform.domains.capabilities.adapters.repro_results import update_capability_from_report
-from ai4sec_platform.domains.capabilities.adapters.repro_runner import ReproRunner, _safe_run
+from ai4sec_platform.domains.capabilities.adapters.repro_runner import ReproRunner, _safe_run, validate_repro_runtime_config
 from ai4sec_platform.domains.capabilities.repro_jobs import (
     claim_cleanup_request,
     claim_next_repro_task,
@@ -46,6 +46,7 @@ class CapabilityReproWorker:
         return [int(task["id"]) for task in interrupted]
 
     def run_once(self, *, task_id: int | None = None) -> dict[str, Any] | None:
+        validate_repro_runtime_config(check_image=True)
         with self._worker_lock():
             return self._run_once(task_id=task_id)
 
@@ -71,6 +72,7 @@ class CapabilityReproWorker:
             return repo.get_repro_task(conn, int(task["id"]))
 
     def serve_forever(self, *, poll_interval: float = 1.0) -> None:
+        validate_repro_runtime_config(check_image=True)
         with self._worker_lock():
             self._recover()
             while True:
