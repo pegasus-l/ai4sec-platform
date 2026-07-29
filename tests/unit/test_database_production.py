@@ -9,7 +9,7 @@ from fastapi.testclient import TestClient
 from ai4sec_platform.app.dependencies import get_db
 from ai4sec_platform.app.main import app
 from ai4sec_platform.core.config import load_settings
-from ai4sec_platform.db.maintenance import backup_database, checkpoint_wal, database_metrics, restore_database, verify_database
+from ai4sec_platform.db.maintenance import backup_database, checkpoint_wal, database_metrics, database_write_probe, restore_database, verify_database
 from ai4sec_platform.db.migrations import MIGRATIONS, Migration, apply_migrations, current_schema_version
 from ai4sec_platform.db.models import init_db
 from ai4sec_platform.db.session import connect
@@ -200,6 +200,20 @@ def test_database_metrics_expose_wal_and_schema_state() -> None:
     assert metrics["allocated_bytes"] >= metrics["database_bytes"]
 
 
+def test_database_write_probe_rolls_back_without_residue() -> None:
+    with connect() as conn:
+        init_db(conn)
+        previous_timeout = int(conn.execute("PRAGMA busy_timeout").fetchone()[0])
+        result = database_write_probe(conn, timeout_ms=100)
+        residue = conn.execute("SELECT COUNT(*) FROM schema_migrations WHERE version = -1").fetchone()[0]
+        restored_timeout = int(conn.execute("PRAGMA busy_timeout").fetchone()[0])
+
+    assert result["writable"] is True
+    assert result["timeout_ms"] == 100
+    assert residue == 0
+    assert restored_timeout == previous_timeout
+
+
 def test_wal_checkpoint_supports_controlled_modes() -> None:
     with connect() as conn:
         init_db(conn)
@@ -232,3 +246,29 @@ def test_readiness_reports_database_metrics() -> None:
     assert payload["status"] == "ok"
     assert payload["database"]["journal_mode"] == "wal"
     assert payload["database"]["schema_version"] == 4
+    assert payload["database"]["write_probe"]["writable"] is True
+
+
+def test_readiness_returns_503_when_database_write_lock_is_held(tmp_path: Path) -> None:
+    from ai4sec_platform.app.main import create_app
+    from ai4sec_platform.core.config import Settings
+
+    settings = Settings(
+        project_root=tmp_path,
+        output_dir=tmp_path / "output",
+        database_path=tmp_path / "locked.db",
+        readiness_write_timeout_ms=50,
+    )
+    with connect(settings) as setup:
+        init_db(setup)
+    lock = connect(settings)
+    try:
+        lock.execute("BEGIN IMMEDIATE")
+        response = TestClient(create_app(settings)).get("/api/health/ready")
+    finally:
+        lock.rollback()
+        lock.close()
+
+    assert response.status_code == 503
+    assert response.json()["status"] == "not_ready"
+    assert response.json()["database"] == {"writable": False, "error": "database_locked"}

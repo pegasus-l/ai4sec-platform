@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 import os
 from pathlib import Path
 import sqlite3
+import time
 from typing import Any
 
 from ai4sec_platform.core.config import Settings, load_settings
@@ -86,6 +87,41 @@ def database_metrics(conn: sqlite3.Connection, settings: Settings | None = None)
         "free_bytes": page_size * freelist_count,
         "schema_version": current_schema_version(conn),
     }
+
+
+def database_write_probe(conn: sqlite3.Connection, *, timeout_ms: int = 1_000) -> dict[str, Any]:
+    previous_timeout = int(conn.execute("PRAGMA busy_timeout").fetchone()[0])
+    started = time.perf_counter()
+    savepoint_started = False
+    try:
+        conn.execute(f"PRAGMA busy_timeout = {max(timeout_ms, 1)}")
+        conn.execute("SAVEPOINT readiness_write_probe")
+        savepoint_started = True
+        conn.execute(
+            "INSERT INTO schema_migrations(version, name, checksum, applied_at) VALUES (-1, ?, ?, ?)",
+            ("readiness_write_probe", "rolled_back", datetime.now(timezone.utc).isoformat()),
+        )
+        conn.execute("ROLLBACK TO readiness_write_probe")
+        conn.execute("RELEASE readiness_write_probe")
+        savepoint_started = False
+        residue = conn.execute("SELECT COUNT(*) FROM schema_migrations WHERE version = -1").fetchone()[0]
+        if residue:
+            raise sqlite3.DatabaseError("readiness write probe left a persistent row")
+        return {
+            "writable": True,
+            "latency_ms": int((time.perf_counter() - started) * 1000),
+            "timeout_ms": max(timeout_ms, 1),
+        }
+    except sqlite3.Error:
+        if savepoint_started:
+            try:
+                conn.execute("ROLLBACK TO readiness_write_probe")
+                conn.execute("RELEASE readiness_write_probe")
+            except sqlite3.Error:
+                conn.rollback()
+        raise
+    finally:
+        conn.execute(f"PRAGMA busy_timeout = {previous_timeout}")
 
 
 def checkpoint_wal(mode: str = "PASSIVE", settings: Settings | None = None) -> dict[str, Any]:

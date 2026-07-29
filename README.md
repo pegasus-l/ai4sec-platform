@@ -95,6 +95,8 @@ PYTHONPATH=src python3 -m ai4sec_platform.cli.database checkpoint --mode passive
 PYTHONPATH=src python3 -m ai4sec_platform.cli.database checkpoint --mode truncate
 ```
 
+`/api/health/ready` 除只读连通性和 WAL 指标外，还会在 `schema_migrations` 内执行一次 `SAVEPOINT` 隔离的真实写入并立即回滚，确认 SQLite 文件当前可写且不会留下探测记录。探测默认最多等待数据库写锁 1 秒，可通过 `AI4SEC_READINESS_WRITE_TIMEOUT_MS` 调整。锁占用、只读文件或迁移历史异常会返回 HTTP 503 和稳定错误码，不返回内部 SQLite 错误文本。
+
 日常检查使用 `passive`；`truncate` 用于备份或维护窗口，并应确认没有长事务和持续读连接。WAL checkpoint 只提供 CLI，不在当前未完成认证的 HTTP API 中暴露。
 
 恢复到指定文件：

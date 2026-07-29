@@ -17,6 +17,7 @@ FRONTEND_DIST = PROJECT_ROOT / "frontend" / "dist"
 def create_app(settings: Settings | None = None) -> FastAPI:
     config = settings or load_settings()
     app = FastAPI(title="AI4SEC Platform", version="0.1.0")
+    app.state.settings = config
     if config.cors_allowed_origins:
         app.add_middleware(
             CORSMiddleware,

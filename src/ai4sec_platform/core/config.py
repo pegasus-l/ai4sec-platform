@@ -19,6 +19,7 @@ class Settings(BaseModel):
     output_dir: Path
     database_path: Path
     sqlite_busy_timeout_ms: int = 30_000
+    readiness_write_timeout_ms: int = 1_000
     sqlite_synchronous: str = "NORMAL"
     cors_allowed_origins: list[str] = []
     production_writes: bool = False
@@ -42,6 +43,7 @@ def load_settings(project_root: Path | None = None) -> Settings:
     if not database_path.is_absolute():
         database_path = root / database_path
     sqlite_busy_timeout_ms = _positive_int(os.getenv("AI4SEC_SQLITE_BUSY_TIMEOUT_MS", "30000"), 30_000)
+    readiness_write_timeout_ms = _positive_int(os.getenv("AI4SEC_READINESS_WRITE_TIMEOUT_MS", "1000"), 1_000)
     sqlite_synchronous = os.getenv("AI4SEC_SQLITE_SYNCHRONOUS", "NORMAL").strip().upper()
     if sqlite_synchronous not in {"OFF", "NORMAL", "FULL", "EXTRA"}:
         sqlite_synchronous = "NORMAL"
@@ -54,6 +56,7 @@ def load_settings(project_root: Path | None = None) -> Settings:
         output_dir=output_dir,
         database_path=database_path,
         sqlite_busy_timeout_ms=sqlite_busy_timeout_ms,
+        readiness_write_timeout_ms=readiness_write_timeout_ms,
         sqlite_synchronous=sqlite_synchronous,
         cors_allowed_origins=cors_allowed_origins,
         production_writes=bool(app.get("production_writes", False)),

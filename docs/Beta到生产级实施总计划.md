@@ -814,7 +814,7 @@ D11 暂缓的是公网入口和完整公网暴露治理，不代表复现容器�
 - [ ] 为关键业务对象增加唯一约束和幂等键设计。
 - [ ] 建立最小备份、校验和恢复流程。
 - [x] CORS 默认同源关闭，确需跨域时使用 `AI4SEC_CORS_ALLOWED_ORIGINS` 显式白名单；禁止通配符、路径、查询、URL 凭据和非 HTTP(S) Origin。
-- [ ] 健康检查增加数据库写入隔离后的连通性检查。
+- [x] readiness 增加 `SAVEPOINT` 隔离的真实 SQLite 写入/回滚探测；锁占用、只读文件和迁移异常返回 503，不留下探测数据。
 
 #### 模块任务
 
@@ -1726,3 +1726,12 @@ Python full test suite: 199 passed
 - `load_settings()` 统一加载项目 `.env`，按文件绝对路径幂等，且不覆盖部署环境已注入的变量；移除此前依赖模型模块导入顺序的偶然行为。
 - 专项测试覆盖默认无 CORS、可信 Origin、非可信预检拒绝、非法配置和 `.env`/进程环境优先级。
 - 全仓 Python 测试：210 passed。
+
+### 2026-07-29：增加 SQLite 隔离写 readiness
+
+- `/api/health/ready` 不再只执行 `SELECT 1`，新增真实 SQLite 写入能力验证。
+- 探测使用 `SAVEPOINT readiness_write_probe` 向 `schema_migrations` 写入保留的负版本记录，随后 `ROLLBACK TO` 并校验不存在残留，不提交任何探测业务数据。
+- 使用独立数据库连接，并将锁等待临时缩短为 `AI4SEC_READINESS_WRITE_TIMEOUT_MS`（默认 1000 ms）；探测后恢复原连接 busy timeout。
+- 数据库写锁、只读文件、普通 SQLite 错误和迁移历史 RuntimeError 都返回 HTTP 503；响应只暴露 `database_locked`、`database_read_only`、`database_schema_error` 或 `database_error` 稳定错误码。
+- 专项测试覆盖成功写入回滚、零残留、busy timeout 恢复和持有 `BEGIN IMMEDIATE` 写锁时的 503 降级。
+- 全仓 Python 测试：212 passed。
