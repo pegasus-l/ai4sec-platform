@@ -13,10 +13,17 @@
 """
 from __future__ import annotations
 
+from pathlib import Path
+
+from ai4sec_platform.domains.capabilities.adapters import repro_runner
 from ai4sec_platform.domains.capabilities.adapters.from_news import capability_candidates_from_news
 from ai4sec_platform.domains.capabilities.adapters.repro_runner import (
+    ReproRunner,
+    _build_repro_prompt,
     classify_log_line,
     extract_report,
+    redact_sensitive_text,
+    sanitized_subprocess_env,
     strip_ansi,
 )
 from ai4sec_platform.domains.capabilities.adapters.repro_results import update_capability_from_report
@@ -235,6 +242,87 @@ def test_extract_report_loose_json() -> None:
 
 def test_extract_report_no_report_returns_none() -> None:
     assert extract_report("just some log output") is None
+
+
+def test_repro_prompt_never_contains_model_secret(monkeypatch) -> None:
+    secret = "sk-production-secret-123456789"
+    monkeypatch.setenv("REPRO_LLM_API_KEY", secret)
+    monkeypatch.setattr(repro_runner, "REPRO_LLM_BASE_URL", "https://gateway.internal/v1")
+    monkeypatch.setattr(repro_runner, "REPRO_MODEL_TOKEN_FILE", "/run/secrets/task-token")
+
+    prompt = _build_repro_prompt()
+
+    assert secret not in prompt
+    assert "API Key:" not in prompt
+    assert "OPENAI_API_KEY / LLM_API_KEY" in prompt
+
+
+def test_repro_log_callback_redacts_known_and_pattern_secrets(monkeypatch, tmp_path: Path) -> None:
+    secret = "sk-task-secret-123456789"
+    token_file = tmp_path / "token"
+    token_file.write_text(secret, encoding="utf-8")
+    token_file.chmod(0o600)
+    monkeypatch.setattr(repro_runner, "REPRO_MODEL_TOKEN_FILE", str(token_file))
+    lines: list[str] = []
+    runner = ReproRunner(1, "https://github.com/example/repo", on_log=lines.append)
+
+    runner.on_log(f"API_KEY={secret} Authorization: Bearer bearer-secret-123456")
+
+    assert lines
+    assert secret not in lines[0]
+    assert "bearer-secret-123456" not in lines[0]
+    assert "[REDACTED]" in lines[0]
+
+
+def test_repro_token_is_read_only_mounted_and_not_on_command_line(monkeypatch, tmp_path: Path) -> None:
+    secret = "task-token-not-on-command-line"
+    token_file = tmp_path / "token"
+    token_file.write_text(secret, encoding="utf-8")
+    token_file.chmod(0o600)
+    monkeypatch.setattr(repro_runner, "REPRO_MODEL_TOKEN_FILE", str(token_file))
+    runner = ReproRunner(2, "https://github.com/example/repo")
+
+    command = runner.build_run_command()
+
+    assert secret not in " ".join(command)
+    assert "--mount" in command
+    mount = command[command.index("--mount") + 1]
+    assert f"src={token_file.resolve()}" in mount
+    assert f"dst={repro_runner.CONTAINER_MODEL_TOKEN_FILE}" in mount
+    assert mount.endswith("readonly")
+
+
+def test_repro_rejects_overly_permissive_token_file(monkeypatch, tmp_path: Path) -> None:
+    token_file = tmp_path / "token"
+    token_file.write_text("secret", encoding="utf-8")
+    token_file.chmod(0o644)
+    monkeypatch.setattr(repro_runner, "REPRO_MODEL_TOKEN_FILE", str(token_file))
+
+    runner = ReproRunner(3, "https://github.com/example/repo")
+
+    import pytest
+    with pytest.raises(RuntimeError, match="permissions"):
+        runner.build_run_command()
+
+
+def test_subprocess_environment_removes_sensitive_variables(monkeypatch) -> None:
+    monkeypatch.setenv("DASHSCOPE_API_KEY", "secret")
+    monkeypatch.setenv("REPRO_MODEL_TOKEN", "secret")
+    monkeypatch.setenv("SAFE_SETTING", "visible")
+
+    environment = sanitized_subprocess_env()
+
+    assert "DASHSCOPE_API_KEY" not in environment
+    assert "REPRO_MODEL_TOKEN" not in environment
+    assert environment["SAFE_SETTING"] == "visible"
+
+
+def test_redaction_handles_common_secret_formats() -> None:
+    redacted = redact_sensitive_text("token=abc123456789 secret: xyz987654321 Bearer bearer-token-12345")
+
+    assert "abc123456789" not in redacted
+    assert "xyz987654321" not in redacted
+    assert "bearer-token-12345" not in redacted
 
 
 # ============================================================================

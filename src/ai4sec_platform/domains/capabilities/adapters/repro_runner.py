@@ -1,7 +1,7 @@
 """复现编排器 - 迁移自旧 v1 repro.py（829 行）。
 
 适配点（决策 1/5/8）：
-  1. 去硬编码 key: REPRO_PROMPT 里的 sk-c4199... → 从 .env 的 REPRO_LLM_API_KEY 读
+  1. Prompt 和日志不包含模型凭据，任务 token 通过只读文件挂载
   2. 去掉 ReproRunner 内部的 import db 调用（db.get_repro_task/db.update_item_web_class），
      改为通过 on_status 回调通知外部，由外部处理 DB 回写
   3. sysbox + 端口代理（socat+nsenter）+ classify_log_line 7 类 + extract_report 全保留
@@ -16,6 +16,7 @@ import os
 import re
 import shlex
 import shutil
+import stat
 import subprocess
 import threading
 import time
@@ -41,29 +42,98 @@ INTERNAL_CIDRS = ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"]
 # DashScope API 代理（sysbox 容器内直连会卡死，通过宿主机 nginx 反代转发）
 DASHSCOPE_PROXY_URL = os.environ.get("DASHSCOPE_PROXY_URL", "")
 
-# 复现任务内 LLM 配置（决策 8：从 .env 读，去硬编码）
-# 这些值会注入到 REPRO_PROMPT 里，供容器内 opencode 使用
-REPRO_LLM_API_KEY = os.environ.get("REPRO_LLM_API_KEY", "")
+# 复现任务内 LLM 配置。真实凭据不得进入 Prompt。
 REPRO_LLM_BASE_URL = os.environ.get("REPRO_LLM_BASE_URL", DASHSCOPE_PROXY_URL or "")
 REPRO_LLM_MODEL = os.environ.get("REPRO_LLM_MODEL", "glm-5.1")
+REPRO_MODEL_TOKEN_FILE = os.environ.get("REPRO_MODEL_TOKEN_FILE", "")
+CONTAINER_MODEL_TOKEN_FILE = "/run/secrets/repro_model_token"
 
 
 # ============================================================================
-# 复现任务 prompt（迁自旧 repro.py，去硬编码 key → 从 .env 读）
+# 复现任务凭据与日志安全
 # ============================================================================
-def _build_repro_prompt() -> str:
-    """构建普通项目复现 prompt，注入 .env 里的 LLM 配置"""
-    llm_section = ""
-    if REPRO_LLM_API_KEY and REPRO_LLM_BASE_URL:
-        llm_section = f"""
-# 可用的 LLM API（如果项目需要 LLM/AI 能力）
-如果项目需要配置 LLM API key 才能运行（比如调用 OpenAI、通义千问等），请使用以下配置：
-- API Key: {REPRO_LLM_API_KEY}
+_SENSITIVE_NAME_RE = re.compile(r"(?:API[_-]?KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL)", re.IGNORECASE)
+_SECRET_VALUE_PATTERNS = (
+    re.compile(r"\b(?:sk|rk|pk)-[A-Za-z0-9_-]{12,}\b"),
+    re.compile(r"(?i)(Bearer\s+)[A-Za-z0-9._~+/=-]{12,}"),
+    re.compile(r"(?i)((?:api[_ -]?key|token|secret|password)\s*[:=]\s*)[^\s,;]+"),
+)
+
+
+def _managed_llm_prompt_section() -> str:
+    if not REPRO_LLM_BASE_URL:
+        return ""
+    credential_guidance = (
+        "- 任务凭据已由执行器注入 OPENAI_API_KEY / LLM_API_KEY；不要读取、输出、记录或复制任何凭据。\n"
+        if REPRO_MODEL_TOKEN_FILE
+        else "- OpenCode 自身模型认证由执行环境管理；项目若需要独立 API Key，禁止读取 OpenCode auth 文件，应在报告中列为前置条件。\n"
+    )
+    return f"""
+# 受管模型服务（项目确实需要 LLM 时使用）
 - Base URL: {REPRO_LLM_BASE_URL}
 - 模型: {REPRO_LLM_MODEL}
-- 兼容 OpenAI 接口格式，项目里配 OPENAI_API_KEY / LLM_API_KEY 等都可以用这个 key
-- 对应的 base url 填上面的 Base URL（不是 OpenAI 官方地址）
+{credential_guidance}- 使用上面的 Base URL；禁止把凭据写入源码、报告或日志。
 """
+
+
+def redact_sensitive_text(text: str, secret_values: tuple[str, ...] = ()) -> str:
+    redacted = text
+    for secret in secret_values:
+        if len(secret) >= 4:
+            redacted = redacted.replace(secret, "[REDACTED]")
+    for pattern in _SECRET_VALUE_PATTERNS:
+        redacted = pattern.sub(lambda match: f"{match.group(1)}[REDACTED]" if match.lastindex else "[REDACTED]", redacted)
+    return redacted
+
+
+def sanitized_subprocess_env() -> dict[str, str]:
+    return {name: value for name, value in os.environ.items() if not _SENSITIVE_NAME_RE.search(name)}
+
+
+def _safe_run(command: list[str], **kwargs):
+    kwargs.setdefault("env", sanitized_subprocess_env())
+    return subprocess.run(command, **kwargs)
+
+
+def _safe_popen(command: list[str], **kwargs):
+    kwargs.setdefault("env", sanitized_subprocess_env())
+    return subprocess.Popen(command, **kwargs)
+
+
+def _task_secret_values() -> tuple[str, ...]:
+    values = [value for name, value in os.environ.items() if _SENSITIVE_NAME_RE.search(name) and value]
+    token_path = Path(REPRO_MODEL_TOKEN_FILE).expanduser() if REPRO_MODEL_TOKEN_FILE else None
+    if token_path and token_path.is_file():
+        try:
+            token = token_path.read_text(encoding="utf-8").strip()
+            if token:
+                values.append(token)
+        except OSError:
+            pass
+    return tuple(dict.fromkeys(values))
+
+
+def _validated_token_path() -> Path | None:
+    if not REPRO_MODEL_TOKEN_FILE:
+        return None
+    token_path = Path(REPRO_MODEL_TOKEN_FILE).expanduser()
+    try:
+        file_stat = token_path.lstat()
+    except FileNotFoundError as exc:
+        raise RuntimeError(f"Repro model token file does not exist: {token_path}") from exc
+    if stat.S_ISLNK(file_stat.st_mode) or not stat.S_ISREG(file_stat.st_mode):
+        raise RuntimeError("Repro model token path must be a regular non-symlink file")
+    if file_stat.st_mode & 0o077:
+        raise RuntimeError("Repro model token file permissions must not allow group or other access")
+    return token_path.resolve()
+
+
+# ============================================================================
+# 复现任务 prompt
+# ============================================================================
+def _build_repro_prompt() -> str:
+    """构建普通项目复现 prompt，不包含任何模型凭据。"""
+    llm_section = _managed_llm_prompt_section()
     return f"""你在一个隔离容器里(你是 root,可自由装包),目标是【把一个开源项目跑起来、确认环境可用、并尽量跑出真实运行效果】。
 仓库已 clone 到 /workspace/repo。全程用中文说明你在做什么。
 {llm_section}
@@ -136,18 +206,8 @@ JSON 必须合法(可被解析),字符串里不要有未转义的引号或换行
 
 
 def _build_web_repro_prompt() -> str:
-    """构建 Web 项目复现 prompt，注入 .env 里的 LLM 配置"""
-    llm_section = ""
-    if REPRO_LLM_API_KEY and REPRO_LLM_BASE_URL:
-        llm_section = f"""
-# 可用的 LLM API（如果项目需要 LLM/AI 能力）
-如果项目需要配置 LLM API key 才能运行（比如调用 OpenAI、通义千问等），请使用以下配置：
-- API Key: {REPRO_LLM_API_KEY}
-- Base URL: {REPRO_LLM_BASE_URL}
-- 模型: {REPRO_LLM_MODEL}
-- 兼容 OpenAI 接口格式，项目里配 OPENAI_API_KEY / LLM_API_KEY 等都可以用这个 key
-- 对应的 base url 填上面的 Base URL（不是 OpenAI 官方地址）
-"""
+    """构建 Web 项目复现 prompt，不包含任何模型凭据。"""
+    llm_section = _managed_llm_prompt_section()
     return f"""你在一个隔离容器里(你是 root,可自由装包),需要复现一个项目。仓库已 clone 到 /workspace/repo。全程用中文说明。
 {llm_section}
 # 第零步(最重要):先判断这个项目【本身】到底有没有 Web 界面
@@ -232,7 +292,9 @@ class ReproRunner:
     ):
         self.task_id = task_id
         self.repo_url = repo_url
-        self.on_log = on_log or (lambda line: None)
+        raw_on_log = on_log or (lambda line: None)
+        self._secret_values = _task_secret_values()
+        self.on_log = lambda line: raw_on_log(redact_sensitive_text(str(line), self._secret_values))
         self.on_status = on_status or (lambda status, **kw: None)
         _stamp = int(time.time())
         self.container_name = f"repro-{task_id}-{_stamp}"
@@ -252,8 +314,11 @@ class ReproRunner:
             "--name", self.container_name,
             "--pids-limit", os.environ.get("REPRO_PIDS_LIMIT", "4096"),
             "-v", f"{self.workspace}:/workspace",
-            REPRO_IMAGE,
         ]
+        token_path = _validated_token_path()
+        if token_path:
+            cmd.extend(["--mount", f"type=bind,src={token_path},dst={CONTAINER_MODEL_TOKEN_FILE},readonly"])
+        cmd.append(REPRO_IMAGE)
         return cmd
 
     def build_exec_command(self):
@@ -283,9 +348,10 @@ class ReproRunner:
                 "python3 -c \""
                 "import json,os; "
                 "cfg=json.load(open('/tmp/_oc_tpl.json')); "
+                f"tp='{CONTAINER_MODEL_TOKEN_FILE}'; "
                 "ap='/root/.local/share/opencode/auth.json'; "
                 "auth=json.load(open(ap)) if os.path.exists(ap) else {}; "
-                "key=(auth.get('alibaba-cn') or {}).get('key',''); "
+                "key=open(tp).read().strip() if os.path.exists(tp) else (auth.get('alibaba-cn') or {}).get('key',''); "
                 "cfg['provider']['dashscope-proxy']['options']['apiKey']=key; "
                 "json.dump(cfg,open('/root/.config/opencode/opencode.json','w'),indent=2); "
                 f"print('✓ opencode 已配置 DashScope 代理: {DASHSCOPE_PROXY_URL}')"
@@ -296,6 +362,8 @@ class ReproRunner:
 
         inner = (
             "export LANG=C.UTF-8 LC_ALL=C.UTF-8 PYTHONIOENCODING=utf-8; "
+            f"if [ -f {CONTAINER_MODEL_TOKEN_FILE} ]; then "
+            f"export OPENAI_API_KEY=\"$(cat {CONTAINER_MODEL_TOKEN_FILE})\" LLM_API_KEY=\"$(cat {CONTAINER_MODEL_TOKEN_FILE})\"; fi; "
             "export GIT_HTTP_LOW_SPEED_LIMIT=1000 GIT_HTTP_LOW_SPEED_TIME=30; "
             "set -e; "
             + inject_proxy +
@@ -357,11 +425,10 @@ class ReproRunner:
         self._full_output: list[str] = []
         try:
             # 1. 起 systemd 容器（后台）
-            subprocess.run(["docker", "rm", "-f", self.container_name],
-                           capture_output=True, text=True)
+            _safe_run(["docker", "rm", "-f", self.container_name], capture_output=True, text=True)
             run_cmd = self.build_run_command()
             self.on_log(f"$ {' '.join(shlex.quote(c) for c in run_cmd)}")
-            r = subprocess.run(run_cmd, capture_output=True, text=True)
+            r = _safe_run(run_cmd, capture_output=True, text=True)
             if r.returncode != 0:
                 self.on_log(f"✗ 起容器失败: {r.stderr.strip()}")
                 self._set_status("failed", error=r.stderr.strip())
@@ -382,7 +449,7 @@ class ReproRunner:
                 self.on_log("• 宿主机侧 clone 仓库…")
                 clone_ok = False
                 for attempt in range(2):
-                    cr = subprocess.run(
+                    cr = _safe_run(
                         ["timeout", "90", "git", "clone", "--depth", "1", self.repo_url, str(host_repo)],
                         capture_output=True, text=True,
                     )
@@ -397,14 +464,13 @@ class ReproRunner:
                 if not clone_ok:
                     self.on_log("• 尝试宿主机 zip 下载…")
                     zip_url = self.repo_url.rstrip('.git').rstrip('/') + '/archive/refs/heads/main.zip'
-                    zr = subprocess.run(
+                    zr = _safe_run(
                         ["curl", "-fsSL", "--http1.1", "--connect-timeout", "30", "--max-time", "600",
                          "-o", "/tmp/_repro_repo.zip", zip_url],
                         capture_output=True, text=True,
                     )
                     if zr.returncode == 0:
-                        subprocess.run(["unzip", "-q", "/tmp/_repro_repo.zip", "-d", "/tmp/_repro_unzip"],
-                                       capture_output=True)
+                        _safe_run(["unzip", "-q", "/tmp/_repro_repo.zip", "-d", "/tmp/_repro_unzip"], capture_output=True)
                         import glob
                         subdirs = glob.glob("/tmp/_repro_unzip/*/")
                         if subdirs:
@@ -433,9 +499,9 @@ class ReproRunner:
             self.on_log("└──────────────────────────────────────────────")
             self.on_log("")
             exec_cmd = self.build_exec_command()
-            _env = dict(os.environ)
+            _env = sanitized_subprocess_env()
             _env.update({"LANG": "C.UTF-8", "LC_ALL": "C.UTF-8", "PYTHONIOENCODING": "utf-8"})
-            self.proc = subprocess.Popen(
+            self.proc = _safe_popen(
                 exec_cmd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
@@ -478,7 +544,7 @@ class ReproRunner:
             #   原 v1 在这里通过 on_status 回调通知外部，由外部处理 DB 回写
             #   （is_web 修正逻辑移到 on_status 回调处理）
             if not self.web_port:
-                subprocess.run(["docker", "stop", self.container_name], capture_output=True)
+                _safe_run(["docker", "stop", self.container_name], capture_output=True)
             if report and isinstance(report, dict) and report.get("status"):
                 rep_status = report["status"]
                 final = "success" if rep_status in ("success", "partial") else "failed"
@@ -495,7 +561,7 @@ class ReproRunner:
         """等容器内 docker 守护进程就绪（最多 DOCKERD_WAIT 秒）。"""
         deadline = time.time() + DOCKERD_WAIT
         while time.time() < deadline:
-            chk = subprocess.run(
+            chk = _safe_run(
                 ["docker", "exec", self.container_name, "docker", "info"],
                 capture_output=True, text=True,
             )
@@ -513,7 +579,7 @@ class ReproRunner:
         if not self.web_port:
             return
         try:
-            r = subprocess.run(
+            r = _safe_run(
                 ["docker", "inspect", "--format", "{{.State.Pid}}", self.container_name],
                 capture_output=True, text=True,
             )
@@ -526,7 +592,7 @@ class ReproRunner:
                 f"TCP-LISTEN:{self.web_port},fork,reuseaddr",
                 f"EXEC:nsenter -t {cpid} -n socat - TCP\\:127.0.0.1\\:8080",
             ]
-            self._proxy_proc = subprocess.Popen(
+            self._proxy_proc = _safe_popen(
                 proxy_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             )
             self.on_log(f"✓ 端口代理已启动: 宿主机:{self.web_port} → 容器:8080 (nsenter PID={cpid})")
@@ -548,12 +614,12 @@ class ReproRunner:
 
     def stop(self):
         self._stop_port_proxy()
-        subprocess.run(["docker", "stop", self.container_name], capture_output=True)
+        _safe_run(["docker", "stop", self.container_name], capture_output=True)
         self._set_status("stopped")
 
     def cleanup(self):
         self._stop_port_proxy()
-        subprocess.run(["docker", "rm", "-f", self.container_name], capture_output=True)
+        _safe_run(["docker", "rm", "-f", self.container_name], capture_output=True)
         if self.workspace.exists():
             shutil.rmtree(self.workspace, ignore_errors=True)
         self._set_status("cleaned")
@@ -705,7 +771,7 @@ class ReproManager:
             self.runners.pop(task_id, None)
             return True
         if container_name:
-            subprocess.run(["docker", "rm", "-f", container_name], capture_output=True)
+            _safe_run(["docker", "rm", "-f", container_name], capture_output=True)
         if workspace_path:
             p = Path(workspace_path)
             if p.exists():

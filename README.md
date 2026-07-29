@@ -165,6 +165,8 @@ PYTHONPATH=src python3 -m ai4sec_platform.cli.run_pipeline --pipeline news.legac
 
 该 pipeline 会创建总控 PipelineRun，读取本地原始 JSON，执行标准化、去重、资讯对象构建、日报生成和质量审计，写入 TaskRun、Artifact 和 manifest，仍保持 `production_writes=false`。
 
+能力复现如需向项目注入受管模型凭据，只允许配置 `REPRO_MODEL_TOKEN_FILE` 指向权限为 `0600` 的普通文件。Runner 将其只读挂载到容器，不会把 token 放入 Prompt、Docker 命令行或宿主机子进程环境。符号链接、目录、缺失文件和 group/other 可读文件会被拒绝。
+
 如需获取最新资讯，可运行 shadow 采集：
 
 ```bash

@@ -820,7 +820,7 @@ D11 暂缓的是公网入口和完整公网暴露治理，不代表复现容器�
 
 - [x] 威胁连接器恢复系统默认 TLS 验证；特殊证书后续使用受控 CA，不允许全局跳过验证。
 - [ ] 能力复现增加 CPU、内存、磁盘、PIDs、超时和日志上限。
-- [ ] 能力复现停止将模型 Key 写入 Prompt、SQLite 日志、SSE 和前端响应。
+- [x] 能力复现停止将模型 Key 写入 Prompt，并在日志回调进入 SQLite/SSE 前统一脱敏；任务 token 改为只读 Secret 文件挂载。
 - [ ] 审计 `repro-runner:v3` 镜像，确认镜像层和 OpenCode auth 文件不包含长期密钥。
 - [ ] 能力复现 Web 端口默认只绑定回环地址，并通过受控反向代理访问。
 - [ ] 修复请求级 SQLite connection 被后台线程继续使用的问题。
@@ -1602,3 +1602,35 @@ TRUNCATE checkpoint：busy=0，wal_bytes=0
 - 普通周期维护使用 PASSIVE，不阻塞活跃读连接。
 - TRUNCATE 仅在备份或维护窗口使用，并确认不存在长事务。
 - 后续 Prometheus 指标应采集 WAL 增长、数据库容量和 busy/locked 错误累计次数；readiness 只反映当前状态，不替代趋势监控。
+
+### 2026-07-28：切断能力复现模型凭据泄漏链
+
+审计确认：
+
+- 旧实现读取 `REPRO_LLM_API_KEY` 后拼入普通/Web 复现 Prompt。
+- Runner 会把完整 Prompt 逐行写入 `capability_repro_tasks.log`，再通过 SSE 和前端返回，形成真实泄漏链。
+- OpenCode、Docker、Git、curl、socat 等宿主机子进程默认继承平台进程全部环境变量，可能携带其他 Provider Key。
+
+完成内容：
+
+- Prompt 只包含受管 Gateway Base URL、模型名称和安全使用说明，不包含任何 Key 或 token。
+- 新增 `REPRO_MODEL_TOKEN_FILE`，通过 Docker `--mount type=bind,...,readonly` 挂载到 `/run/secrets/repro_model_token`。
+- Secret 路径必须是存在的非符号链接普通文件，且权限不得允许 group/other 访问；推荐 `0600`。
+- token 内容不出现在 Docker 命令行；容器内只在执行期间读取文件并注入 `OPENAI_API_KEY`/`LLM_API_KEY`。
+- 所有 Runner 日志在进入数据库回调前统一脱敏，覆盖已知真实 Secret、`sk-*`、Bearer 和常见 key/token/password 赋值格式。
+- 所有宿主机 `subprocess.run/Popen` 通过安全封装执行，删除名称包含 API_KEY、TOKEN、SECRET、PASSWORD、CREDENTIAL 的环境变量。
+- 旧能力施工文档中“将 `.env` Key 注入 Prompt”的决策已明确废弃，防止后续恢复不安全实现。
+
+验证结果：
+
+```text
+能力专项：37 passed
+覆盖 Prompt、日志、Docker mount、命令行与子进程环境不泄漏 token
+全仓测试：183 passed
+```
+
+剩余风险：
+
+- 当前若未配置任务 token 文件，OpenCode 配置仍兼容读取镜像内 `/root/.local/share/opencode/auth.json`；必须审计并最终移除镜像长期凭据。
+- 当前 Secret 文件可能仍是长期 token；目标方案仍是 AI4SEC Model Gateway 签发任务级短期令牌。
+- 复现 API 和 ReproManager 仍在 API 进程内启动后台线程并持有请求级数据库连接，下一批必须拆为独立持久 Repro Worker。
