@@ -4,7 +4,8 @@ import argparse
 import json
 from pathlib import Path
 
-from ai4sec_platform.db.maintenance import backup_database, checkpoint_wal, restore_database, verify_database
+from ai4sec_platform.core.config import load_settings
+from ai4sec_platform.db.maintenance import BackupRetentionPolicy, backup_database, checkpoint_wal, prune_database_backups, restore_database, verify_database
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -27,8 +28,22 @@ def main(argv: list[str] | None = None) -> int:
 
     args = parser.parse_args(argv)
     if args.action == "backup":
-        path = backup_database(args.destination)
-        print(json.dumps(verify_database(path), ensure_ascii=False))
+        settings = load_settings()
+        path = backup_database(args.destination, settings)
+        retention = BackupRetentionPolicy(
+            daily_days=settings.backup_daily_retention_days,
+            weekly_weeks=settings.backup_weekly_retention_weeks,
+            monthly_months=settings.backup_monthly_retention_months,
+        )
+        removed = prune_database_backups(path.parent, retention)
+        result = verify_database(path)
+        result["retention"] = {
+            "daily_days": retention.daily_days,
+            "weekly_weeks": retention.weekly_weeks,
+            "monthly_months": retention.monthly_months,
+        }
+        result["removed_backups"] = [str(item) for item in removed]
+        print(json.dumps(result, ensure_ascii=False))
         return 0
     if args.action == "verify":
         print(json.dumps(verify_database(args.path), ensure_ascii=False))

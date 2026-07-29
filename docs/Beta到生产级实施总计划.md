@@ -1745,3 +1745,14 @@ Python full test suite: 199 passed
 - 事务模式写入每个 Step 的 Run summary，并纳入 Pipeline checkpoint 输入 checksum；事务模式改变后旧 checkpoint 不可恢复。
 - 新增回归测试覆盖 atomic 业务写回滚、违规 commit 阻断、失败 Artifact 清理，以及 checkpointed 已提交检查点保留/尾部回滚。
 - 全仓 Python 测试：216 passed。
+
+### 2026-07-29：增强 SQLite 备份、校验和恢复保护
+
+- 继续使用 SQLite Online Backup API，不复制活动 `.db`/WAL 文件，允许 API 和 Worker 在线运行时生成一致性数据库备份。
+- 每个备份原子生成 `.db.manifest.json`，记录 UTC 创建时间、源数据库文件名、文件大小、SHA-256 和 schema 版本；`verify` 与 `restore` 自动验证清单。
+- 备份文件默认禁止覆盖，并在文件与清单落盘后执行 `fsync`；不支持目录 `fsync` 的文件系统按兼容模式降级。
+- CLI 成功备份后执行 D10 已确认的分层保留：最近 7 天保留全部日备、之后 4 周每周一份、再之后 6 个月每月一份，且始终保留最新受管备份。
+- 新增 `AI4SEC_BACKUP_DAILY_RETENTION_DAYS`、`AI4SEC_BACKUP_WEEKLY_RETENTION_WEEKS`、`AI4SEC_BACKUP_MONTHLY_RETENTION_MONTHS`，非法非正值回退到安全默认值。
+- 恢复工具禁止直接覆盖当前 `AI4SEC_DATABASE_PATH`；只能先恢复到旁路文件并校验，停止所有服务后由运维执行离线切换。覆盖旁路文件时会清理其旧 WAL/SHM sidecar，防止旧日志帧污染恢复库。
+- 仍未完成：Compose/宿主机每日调度、独立备份磁盘位置、Artifact 备份、实际部署环境首次计时恢复演练；因此 D10 的 RPO/RTO 目标尚不能仅凭代码视为验收通过。
+- 数据库专项测试：21 passed；全仓 Python 测试：221 passed；CLI 实际备份、清单校验和旁路恢复通过。

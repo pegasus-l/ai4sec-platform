@@ -20,6 +20,9 @@ class Settings(BaseModel):
     database_path: Path
     sqlite_busy_timeout_ms: int = 30_000
     readiness_write_timeout_ms: int = 1_000
+    backup_daily_retention_days: int = 7
+    backup_weekly_retention_weeks: int = 4
+    backup_monthly_retention_months: int = 6
     sqlite_synchronous: str = "NORMAL"
     cors_allowed_origins: list[str] = []
     production_writes: bool = False
@@ -44,6 +47,9 @@ def load_settings(project_root: Path | None = None) -> Settings:
         database_path = root / database_path
     sqlite_busy_timeout_ms = _positive_int(os.getenv("AI4SEC_SQLITE_BUSY_TIMEOUT_MS", "30000"), 30_000)
     readiness_write_timeout_ms = _positive_int(os.getenv("AI4SEC_READINESS_WRITE_TIMEOUT_MS", "1000"), 1_000)
+    backup_daily_retention_days = _positive_int(os.getenv("AI4SEC_BACKUP_DAILY_RETENTION_DAYS", "7"), 7)
+    backup_weekly_retention_weeks = _positive_int(os.getenv("AI4SEC_BACKUP_WEEKLY_RETENTION_WEEKS", "4"), 4)
+    backup_monthly_retention_months = _positive_int(os.getenv("AI4SEC_BACKUP_MONTHLY_RETENTION_MONTHS", "6"), 6)
     sqlite_synchronous = os.getenv("AI4SEC_SQLITE_SYNCHRONOUS", "NORMAL").strip().upper()
     if sqlite_synchronous not in {"OFF", "NORMAL", "FULL", "EXTRA"}:
         sqlite_synchronous = "NORMAL"
@@ -57,6 +63,9 @@ def load_settings(project_root: Path | None = None) -> Settings:
         database_path=database_path,
         sqlite_busy_timeout_ms=sqlite_busy_timeout_ms,
         readiness_write_timeout_ms=readiness_write_timeout_ms,
+        backup_daily_retention_days=backup_daily_retention_days,
+        backup_weekly_retention_weeks=backup_weekly_retention_weeks,
+        backup_monthly_retention_months=backup_monthly_retention_months,
         sqlite_synchronous=sqlite_synchronous,
         cors_allowed_origins=cors_allowed_origins,
         production_writes=bool(app.get("production_writes", False)),

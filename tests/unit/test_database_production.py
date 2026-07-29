@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
+import json
+import os
 from pathlib import Path
 import sqlite3
 
@@ -9,7 +12,7 @@ from fastapi.testclient import TestClient
 from ai4sec_platform.app.dependencies import get_db
 from ai4sec_platform.app.main import app
 from ai4sec_platform.core.config import load_settings
-from ai4sec_platform.db.maintenance import backup_database, checkpoint_wal, database_metrics, database_write_probe, restore_database, verify_database
+from ai4sec_platform.db.maintenance import BackupRetentionPolicy, backup_database, checkpoint_wal, database_metrics, database_write_probe, prune_database_backups, restore_database, verify_database
 from ai4sec_platform.db.migrations import MIGRATIONS, Migration, apply_migrations, current_schema_version
 from ai4sec_platform.db.models import init_db
 from ai4sec_platform.db.session import connect
@@ -34,6 +37,9 @@ def test_invalid_sqlite_settings_fall_back_to_safe_defaults(monkeypatch) -> None
 
     assert settings.sqlite_busy_timeout_ms == 30_000
     assert settings.sqlite_synchronous == "NORMAL"
+    assert settings.backup_daily_retention_days == 7
+    assert settings.backup_weekly_retention_weeks == 4
+    assert settings.backup_monthly_retention_months == 6
 
 
 def test_request_database_dependency_rolls_back_on_error() -> None:
@@ -68,6 +74,9 @@ def test_online_backup_and_restore_include_committed_wal_data(tmp_path: Path) ->
 
     assert backup_result["integrity"] == "ok"
     assert backup_result["table_count"] > 0
+    assert backup_result["manifest"] == "verified"
+    assert backup_result["sha256"]
+    assert backup_path.with_name(f"{backup_path.name}.manifest.json").is_file()
     with sqlite3.connect(restored_path) as restored:
         count = restored.execute("SELECT COUNT(*) FROM data_sources WHERE name = ?", ("backup-source",)).fetchone()[0]
     assert count == 1
@@ -80,6 +89,90 @@ def test_restore_refuses_existing_destination_without_overwrite(tmp_path: Path) 
 
     with pytest.raises(FileExistsError):
         restore_database(backup_path, destination)
+
+
+def test_backup_refuses_to_replace_existing_file(tmp_path: Path) -> None:
+    destination = tmp_path / "backup.db"
+    destination.write_text("keep-me", encoding="utf-8")
+
+    with pytest.raises(FileExistsError):
+        backup_database(destination)
+
+    assert destination.read_text(encoding="utf-8") == "keep-me"
+
+
+def test_verify_rejects_mismatched_backup_manifest(tmp_path: Path) -> None:
+    with connect() as conn:
+        init_db(conn)
+    backup_path = backup_database(tmp_path / "backup.db")
+    manifest_path = backup_path.with_name(f"{backup_path.name}.manifest.json")
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["sha256"] = "0" * 64
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="sha256"):
+        verify_database(backup_path)
+
+
+def test_restore_refuses_active_database_destination(tmp_path: Path) -> None:
+    with connect() as conn:
+        init_db(conn)
+    backup_path = backup_database(tmp_path / "backup.db")
+    active_database = load_settings().database_path
+
+    with pytest.raises(ValueError, match="active database"):
+        restore_database(backup_path, active_database, overwrite=True)
+
+
+def test_backup_retention_removes_old_managed_sets_but_keeps_latest(tmp_path: Path) -> None:
+    now = datetime(2026, 7, 29, tzinfo=timezone.utc)
+    old_backup = tmp_path / "ai4sec-platform-20251201T000000000000Z.db"
+    latest_backup = tmp_path / "ai4sec-platform-20260729T000000000000Z.db"
+    unrelated = tmp_path / "manual-copy.db"
+    for path in (old_backup, latest_backup, unrelated):
+        path.write_text("placeholder", encoding="utf-8")
+    old_manifest = old_backup.with_name(f"{old_backup.name}.manifest.json")
+    old_manifest.write_text("{}", encoding="utf-8")
+    old_timestamp = (now - timedelta(days=240)).timestamp()
+    os.utime(old_backup, (old_timestamp, old_timestamp))
+
+    removed = prune_database_backups(tmp_path, BackupRetentionPolicy(), now=now)
+
+    assert removed == [old_backup]
+    assert not old_backup.exists()
+    assert not old_manifest.exists()
+    assert latest_backup.exists()
+    assert unrelated.exists()
+
+
+def test_backup_retention_keeps_one_weekly_and_monthly_backup(tmp_path: Path) -> None:
+    now = datetime(2026, 7, 29, tzinfo=timezone.utc)
+    ages = {
+        "ai4sec-platform-latest.db": 0,
+        "ai4sec-platform-daily.db": 1,
+        "ai4sec-platform-weekly-new.db": 10,
+        "ai4sec-platform-weekly-old.db": 11,
+        "ai4sec-platform-monthly-new.db": 50,
+        "ai4sec-platform-monthly-old.db": 55,
+    }
+    backups: dict[str, Path] = {}
+    for name, age_days in ages.items():
+        path = tmp_path / name
+        path.write_text("placeholder", encoding="utf-8")
+        timestamp = (now - timedelta(days=age_days)).timestamp()
+        os.utime(path, (timestamp, timestamp))
+        backups[name] = path
+
+    removed = prune_database_backups(tmp_path, BackupRetentionPolicy(), now=now)
+
+    assert set(removed) == {
+        backups["ai4sec-platform-weekly-old.db"],
+        backups["ai4sec-platform-monthly-old.db"],
+    }
+    assert backups["ai4sec-platform-latest.db"].exists()
+    assert backups["ai4sec-platform-daily.db"].exists()
+    assert backups["ai4sec-platform-weekly-new.db"].exists()
+    assert backups["ai4sec-platform-monthly-new.db"].exists()
 
 
 def test_verify_rejects_non_database_file(tmp_path: Path) -> None:

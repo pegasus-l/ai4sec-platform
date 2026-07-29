@@ -84,8 +84,11 @@ AI4SEC_CORS_ALLOWED_ORIGINS=https://console.internal.example,http://127.0.0.1:51
 
 ```bash
 PYTHONPATH=src python3 -m ai4sec_platform.cli.database backup
-PYTHONPATH=src python3 -m ai4sec_platform.cli.database verify output/backups/ai4sec-platform-*.db
+PYTHONPATH=src python3 -m ai4sec_platform.cli.database verify \
+  output/backups/ai4sec-platform-20260729T000000000000Z.db
 ```
+
+每个备份会同时生成 `.db.manifest.json` 清单，记录文件大小、SHA-256 和 schema 版本；`verify` 与 `restore` 会自动校验清单。备份文件默认禁止覆盖。CLI 每次成功备份后自动执行分层保留：最近 7 天保留全部日备，之后 4 周每周保留一份，再之后 6 个月每月保留一份；三个周期可通过 `AI4SEC_BACKUP_DAILY_RETENTION_DAYS`、`AI4SEC_BACKUP_WEEKLY_RETENTION_WEEKS` 和 `AI4SEC_BACKUP_MONTHLY_RETENTION_MONTHS` 调整。最新一份受管备份始终保留。
 
 查看 readiness 中的数据库/WAL/迁移指标，或执行受控 WAL checkpoint：
 
@@ -107,7 +110,7 @@ PYTHONPATH=src python3 -m ai4sec_platform.cli.database restore \
   --destination output/ai4sec-platform-restored.db
 ```
 
-覆盖已有数据库必须显式增加 `--overwrite`。替换正在使用的主数据库前必须停止 API、Pipeline Worker 和复现 Worker，并先保留当前数据库备份。
+覆盖已有旁路恢复文件必须显式增加 `--overwrite`。维护工具禁止直接把备份恢复到当前 `AI4SEC_DATABASE_PATH`，避免运行中的 API 或 Worker 与文件替换竞争。正式切换时先恢复到旁路文件并完成校验，再停止 API、Pipeline Worker、Scheduler 和复现 Worker，由运维人员保留故障库后执行离线文件切换，最后启动服务并检查 readiness。首次正式上线前仍须在实际部署磁盘完成一次计时恢复演练。
 
 
 ## 前端页面
