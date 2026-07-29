@@ -845,7 +845,7 @@ D11 暂缓的是公网入口和完整公网暴露治理，不代表复现容器�
 
 #### 数据库任务
 
-- [ ] 固定 SQLite 本机持久卷和文件权限。
+- [ ] SQLite 连接已强制数据库目录 `0750`、数据库文件 `0640`，无法收紧权限时拒绝启动；Compose 本机持久卷、统一非 root UID/GID 和宿主目录初始化仍待部署阶段落地。
 - [x] 配置并验证 WAL 和 busy timeout；WAL checkpoint 自动化策略仍待补充。
 - [x] 建立 `schema_migrations` 表、顺序迁移执行器、checksum 校验和单版本失败回滚。
 - [ ] 已为 PipelineRun 查询、TaskRun、Artifact、DataSource/SourceHealth、QualityAudit 查询和 HumanQueue 补齐首批约束与索引；Worker 注册表、QualityAudit 显式 `run_id` 及审计身份约束仍待补充。
@@ -1831,3 +1831,11 @@ Python full test suite: 199 passed
 - 首个生产恢复白名单仅开放 `SelectVulnerabilityKnowledgeCandidatesStep`；该步骤是原子事务内的确定性数据库选择，只恢复 `vulnerability_material_ids`。抓取、模型调用、事件聚合和复杂写入步骤暂不开放自动恢复。
 - 新增 Runner 与 API 两层陈旧检查点回归，确认更晚的不安全 Step 不会因旧检查点而被再次调用。
 - 恢复相关聚焦测试：38 passed；全仓 Python 测试：242 passed；`compileall` 通过。
+
+### 2026-07-29：固定 SQLite 文件权限契约
+
+- 每次数据库连接前创建并收紧数据库父目录为 `0750`；SQLite 建库并启用 WAL 后收紧数据库以及当时已存在的 WAL/SHM 文件为 `0640`。
+- 权限收紧失败不再带着不确定的共享权限继续运行，而是关闭连接并抛出明确启动错误。
+- `.env.example` 增加生产绝对路径示例，明确核心 Compose 服务必须共享同一非 root UID/GID，活动 WAL 数据库必须位于本机 Linux 文件系统，禁止放在 NFS。
+- 当前完成的是应用层权限契约；仓库尚无核心平台 Dockerfile/Compose 清单，因此宿主持久目录创建、卷挂载和容器 UID/GID 固定仍保留为部署阶段任务，不能提前标记整项完成。
+- 数据库专项测试：25 passed；全仓 Python 测试：244 passed；`compileall` 与 `git diff --check` 通过。

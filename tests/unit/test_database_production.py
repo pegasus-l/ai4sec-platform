@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import sqlite3
+import stat
 
 import pytest
 from fastapi.testclient import TestClient
@@ -28,6 +29,38 @@ def test_connection_enables_production_sqlite_pragmas(monkeypatch) -> None:
         assert conn.execute("PRAGMA foreign_keys").fetchone()[0] == 1
         assert conn.execute("PRAGMA busy_timeout").fetchone()[0] == 4321
         assert conn.execute("PRAGMA synchronous").fetchone()[0] == 2
+
+
+def test_connection_enforces_private_database_permissions(tmp_path: Path) -> None:
+    database_path = tmp_path / "sqlite" / "platform.db"
+    settings = load_settings().model_copy(
+        update={"project_root": tmp_path, "output_dir": tmp_path / "output", "database_path": database_path}
+    )
+
+    with connect(settings) as conn:
+        conn.execute("CREATE TABLE permission_probe(id INTEGER PRIMARY KEY)")
+        conn.commit()
+
+    assert stat.S_IMODE(database_path.parent.stat().st_mode) == 0o750
+    assert stat.S_IMODE(database_path.stat().st_mode) == 0o640
+
+
+def test_connection_fails_when_database_permissions_cannot_be_enforced(monkeypatch, tmp_path: Path) -> None:
+    database_path = tmp_path / "sqlite" / "platform.db"
+    settings = load_settings().model_copy(
+        update={"project_root": tmp_path, "output_dir": tmp_path / "output", "database_path": database_path}
+    )
+    original_chmod = os.chmod
+
+    def reject_database_chmod(path, mode):
+        if Path(path) == database_path:
+            raise PermissionError("operation not permitted")
+        return original_chmod(path, mode)
+
+    monkeypatch.setattr(os, "chmod", reject_database_chmod)
+
+    with pytest.raises(RuntimeError, match="Cannot enforce SQLite file permissions"):
+        connect(settings)
 
 
 def test_invalid_sqlite_settings_fall_back_to_safe_defaults(monkeypatch) -> None:
