@@ -10,6 +10,7 @@ from html import unescape
 from typing import Any, Callable
 
 from ai4sec_platform.core.concurrency import bounded_map
+from ai4sec_platform.core.url_security import ValidatingRedirectHandler
 from ai4sec_platform.domains.vulnerabilities.crawl_policies import VulnerabilityCrawlPolicy
 from ai4sec_platform.schemas.sources import SourceFetchRequest, SourceHealth
 from ai4sec_platform.sources.result import SourceFetchResult
@@ -103,7 +104,7 @@ def _crawl_candidate(candidate: dict[str, Any], *, policy: VulnerabilityCrawlPol
         return _success(candidate, markdown=markdown, mode="provided_content", attempt_count=0)
 
     url = str(candidate.get("url") or "").strip()
-    validation_error = policy.validate_url(url)
+    validation_error = policy.validate_url(url, resolve_dns=True)
     if validation_error:
         return _failed(candidate, validation_error, failure_reason=validation_error, attempt_count=0)
     strategy, effective_policy = policy.for_url(url)
@@ -178,6 +179,10 @@ def _crawl4ai_sync(candidate: dict[str, Any], *, policy: VulnerabilityCrawlPolic
             if not getattr(result, "success", False):
                 error = str(getattr(result, "error_message", "crawl4ai_failed"))
                 return _failed(candidate, error, failure_reason="crawl4ai_failed")
+            final_url = str(getattr(result, "url", "") or candidate.get("url") or "")
+            validation_error = policy.validate_url(final_url, resolve_dns=True)
+            if validation_error:
+                return _failed(candidate, validation_error, failure_reason=validation_error)
             markdown = _markdown_text(getattr(result, "markdown", ""))
             metadata = dict(getattr(result, "metadata", {}) or {})
             metadata.update(
@@ -220,7 +225,8 @@ def _urllib_crawl(candidate: dict[str, Any], *, policy: VulnerabilityCrawlPolicy
     )
     started = time.time()
     try:
-        with urllib.request.urlopen(request, timeout=policy.timeout_seconds) as response:  # noqa: S310 - validated public discovery URL
+        opener = urllib.request.build_opener(ValidatingRedirectHandler(policy.public_url_policy()))
+        with opener.open(request, timeout=policy.timeout_seconds) as response:  # noqa: S310 - validated public discovery URL
             raw = response.read(policy.max_response_bytes)
             content_type = response.headers.get("content-type", "")
             status_code = getattr(response, "status", 200)

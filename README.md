@@ -80,6 +80,8 @@ AI4SEC_CORS_ALLOWED_ORIGINS=https://console.internal.example,http://127.0.0.1:51
 
 威胁洞察在线连接器默认使用系统 CA 校验证书；如部署环境需要额外的 PEM CA，可通过 `AI4SEC_THREAT_CA_BUNDLE` 指定。未配置时不关闭证书校验，证书错误会使采集失败并进入失败记录。
 
+漏洞洞察抓取仅接受不含 URL 凭据的 HTTP(S) 公网地址，并在连接前校验 DNS 解析结果。localhost、私网、链路本地、保留地址、云 metadata 地址和指向这些地址的重定向均会被拒绝；生产部署仍需使用主机防火墙或容器网络策略阻断内部网段出口，作为 DNS 重绑定的最终防线。
+
 数据库初始化会创建 `schema_migrations` 并按版本顺序执行迁移。迁移名称和 checksum 已写入历史后不可静默修改；版本不匹配或迁移失败会阻止启动并回滚当前版本。生产升级前仍应先执行数据库备份，再启动新版本 API 和 Worker。
 
 在线创建一致性备份并校验：

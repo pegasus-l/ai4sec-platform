@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-import ipaddress
 from dataclasses import dataclass, replace
 from typing import Any
 from urllib.parse import urlparse
+
+from ai4sec_platform.core.url_security import PublicUrlPolicy, domain_matches
 
 
 @dataclass(frozen=True)
@@ -43,18 +44,15 @@ class VulnerabilityCrawlPolicy:
             max_response_bytes=_int_value(merged.get("max_response_bytes"), 2_000_000, minimum=10_000, maximum=20_000_000),
         )
 
-    def validate_url(self, url: str) -> str:
-        parsed = urlparse(url)
-        if parsed.scheme not in {"http", "https"} or not parsed.hostname:
-            return "unsupported_or_missing_url"
-        hostname = parsed.hostname.casefold().rstrip(".")
-        if self.domain_allowlist and not _matches_domain(hostname, self.domain_allowlist):
-            return "domain_not_allowed"
-        if _matches_domain(hostname, self.domain_blocklist):
-            return "domain_blocked"
-        if self.block_private_networks and _is_private_hostname(hostname):
-            return "private_network_blocked"
-        return ""
+    def validate_url(self, url: str, *, resolve_dns: bool = False) -> str:
+        return self.public_url_policy().validate(url, resolve_dns=resolve_dns)
+
+    def public_url_policy(self) -> PublicUrlPolicy:
+        return PublicUrlPolicy(
+            domain_allowlist=self.domain_allowlist,
+            domain_blocklist=self.domain_blocklist,
+            block_private_networks=self.block_private_networks,
+        )
 
     def for_url(self, url: str) -> tuple[str, VulnerabilityCrawlPolicy]:
         parsed = urlparse(url)
@@ -62,23 +60,9 @@ class VulnerabilityCrawlPolicy:
         hostname = (parsed.hostname or "").casefold().rstrip(".")
         if path.endswith(".pdf"):
             return "direct_download", replace(self, use_crawl4ai=False)
-        if _matches_domain(hostname, self.slow_site_domains):
+        if domain_matches(hostname, self.slow_site_domains):
             return "slow_site", replace(self, timeout_seconds=self.slow_site_timeout_seconds)
         return "standard_page", self
-
-
-def _matches_domain(hostname: str, domains: tuple[str, ...]) -> bool:
-    return any(hostname == domain or hostname.endswith(f".{domain}") for domain in domains)
-
-
-def _is_private_hostname(hostname: str) -> bool:
-    if hostname == "localhost" or hostname.endswith(".localhost"):
-        return True
-    try:
-        address = ipaddress.ip_address(hostname)
-    except ValueError:
-        return False
-    return not address.is_global
 
 
 def _string_tuple(value: Any) -> tuple[str, ...]:

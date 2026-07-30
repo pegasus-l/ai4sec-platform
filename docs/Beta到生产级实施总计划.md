@@ -824,7 +824,7 @@ D11 暂缓的是公网入口和完整公网暴露治理，不代表复现容器�
 - [ ] 已确认 `repro-runner:v3` 镜像含长期认证文件，并构建通过 Sysbox 验收的干净 `v4`；旧凭据轮换、两个运行中 `v3` 容器迁移及旧镜像删除仍需人工完成。
 - [x] 能力复现 Web 端口代理默认只绑定 `127.0.0.1`；受认证反向代理将在部署阶段接入。
 - [x] 能力 API/Pipeline 只写持久任务，独立 Repro Worker 使用短连接写日志与状态，不再复用请求级 SQLite connection。
-- [ ] 漏洞抓取 URL 增加统一安全策略接入点。
+- [x] 漏洞抓取 URL 已接入统一公网 URL 策略，阻断非法协议、URL 凭据、localhost、非公网 IP、解析到非公网地址的域名及 urllib 私网重定向；DNS 重绑定最终防线仍由部署出口策略提供。
 - [ ] 资讯明确 legacy raw 仅用于迁移，不进入正式运行菜单。
 
 #### 验收
@@ -1867,3 +1867,11 @@ Python full test suite: 199 passed
 - 威胁在线 JSON 和正文连接器显式创建默认 `SSLContext`，不依赖调用方或 urllib 的隐式行为，不允许通过连接器关闭证书校验。
 - 增加 `AI4SEC_THREAT_CA_BUNDLE` 受控 PEM CA 配置入口，仅用于部署环境的额外信任根；路径无效时明确失败，不降级为跳过验证。
 - 覆盖默认系统信任根和非法 CA 配置测试；威胁安全专项测试 17 passed。
+
+### 2026-07-30：漏洞抓取统一 URL 安全策略
+
+- 新增公共 `PublicUrlPolicy`，统一校验 HTTP(S) 协议、禁止 URL 用户名/密码、执行域名 allowlist/blocklist，并阻断 localhost 和全部非公网 IPv4/IPv6。
+- 漏洞抓取在发起请求前解析目标域名；任一 DNS 结果指向回环、私网、链路本地、保留地址或云 metadata 地址即拒绝，DNS 解析失败也不继续抓取。
+- urllib fallback 使用自定义 Redirect Handler，对每一跳重定向目标重新执行 DNS 与公网地址校验；crawl4ai 浏览器路径校验入口和最终 URL。
+- 应用层校验无法完全消除 DNS 查询与实际连接之间的重绑定竞态，生产 Compose 仍必须阻断平台管理网、Docker 网桥、宿主机和云 metadata 的网络出口。
+- SSRF 与漏洞抓取聚焦测试 26 passed。
