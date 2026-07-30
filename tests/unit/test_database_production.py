@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+import fcntl
 import json
 import os
 from pathlib import Path
@@ -12,9 +13,10 @@ from fastapi.testclient import TestClient
 
 from ai4sec_platform.app.dependencies import get_db
 from ai4sec_platform.app.main import app
+from ai4sec_platform.cli.database import main as database_cli_main
 from ai4sec_platform.core.config import load_settings
 from ai4sec_platform.db import repositories as repo
-from ai4sec_platform.db.maintenance import BackupRetentionPolicy, backup_database, checkpoint_wal, database_metrics, database_write_probe, prune_database_backups, restore_database, verify_database
+from ai4sec_platform.db.maintenance import BackupRetentionPolicy, backup_database, checkpoint_wal, database_metrics, database_write_probe, prune_database_backups, restore_database, run_database_maintenance, verify_database
 from ai4sec_platform.db.migrations import MIGRATIONS, Migration, apply_migrations, current_schema_version
 from ai4sec_platform.db.models import init_db
 from ai4sec_platform.db.session import connect
@@ -29,6 +31,7 @@ def test_connection_enables_production_sqlite_pragmas(monkeypatch) -> None:
         assert conn.execute("PRAGMA foreign_keys").fetchone()[0] == 1
         assert conn.execute("PRAGMA busy_timeout").fetchone()[0] == 4321
         assert conn.execute("PRAGMA synchronous").fetchone()[0] == 2
+        assert conn.execute("PRAGMA wal_autocheckpoint").fetchone()[0] == 1_000
 
 
 def test_connection_enforces_private_database_permissions(tmp_path: Path) -> None:
@@ -70,10 +73,12 @@ def test_invalid_sqlite_settings_fall_back_to_safe_defaults(monkeypatch) -> None
     settings = load_settings()
 
     assert settings.sqlite_busy_timeout_ms == 30_000
+    assert settings.sqlite_wal_autocheckpoint_pages == 1_000
     assert settings.sqlite_synchronous == "NORMAL"
     assert settings.backup_daily_retention_days == 7
     assert settings.backup_weekly_retention_weeks == 4
     assert settings.backup_monthly_retention_months == 6
+    assert settings.database_maintenance_report_retention_days == 30
     assert settings.pipeline_worker_heartbeat_seconds == 10
     assert settings.pipeline_job_lease_seconds == 45
 
@@ -376,6 +381,7 @@ def test_database_metrics_expose_wal_and_schema_state() -> None:
     assert metrics["path"] == str(settings.database_path.resolve())
     assert metrics["journal_mode"] == "wal"
     assert metrics["busy_timeout_ms"] == 30_000
+    assert metrics["wal_autocheckpoint_pages"] == 1_000
     assert metrics["schema_version"] == MIGRATIONS[-1].version
     assert metrics["database_bytes"] > 0
     assert metrics["allocated_bytes"] >= metrics["database_bytes"]
@@ -417,6 +423,123 @@ def test_wal_checkpoint_supports_controlled_modes() -> None:
 def test_wal_checkpoint_rejects_unknown_mode() -> None:
     with pytest.raises(ValueError, match="Unsupported WAL checkpoint mode"):
         checkpoint_wal("unsafe")
+
+
+def test_database_maintenance_records_history_and_reports(tmp_path: Path) -> None:
+    settings = load_settings().model_copy(
+        update={
+            "project_root": tmp_path,
+            "output_dir": tmp_path / "output",
+            "database_path": tmp_path / "output" / "platform.db",
+        }
+    )
+    with connect(settings) as conn:
+        init_db(conn)
+        conn.execute(
+            "INSERT INTO data_sources(domain, name, source_type, created_at) VALUES (?, ?, ?, ?)",
+            ("news", "maintenance-source", "test", "2026-07-29T00:00:00Z"),
+        )
+        conn.commit()
+
+    result = run_database_maintenance(
+        checkpoint_mode="truncate",
+        integrity_mode="quick",
+        lock_timeout_ms=100,
+        settings=settings,
+    )
+
+    assert result["status"] == "success"
+    assert result["integrity"] == "ok"
+    assert result["checkpoint"]["busy"] == 0
+    assert Path(result["report_path"]).is_file()
+    assert Path(result["latest_report_path"]).is_file()
+    assert stat.S_IMODE(Path(result["report_path"]).stat().st_mode) == 0o640
+    with connect(settings) as conn:
+        history = conn.execute("SELECT * FROM database_maintenance_runs").fetchall()
+        metrics = database_metrics(conn, settings)
+    assert len(history) == 1
+    assert history[0]["integrity_mode"] == "QUICK"
+    assert metrics["maintenance"]["run_count"] == 1
+    assert metrics["maintenance"]["failure_count"] == 0
+    assert metrics["maintenance"]["latest_status"] == "success"
+
+
+def test_database_maintenance_lock_failure_writes_report(tmp_path: Path) -> None:
+    settings = load_settings().model_copy(
+        update={
+            "project_root": tmp_path,
+            "output_dir": tmp_path / "output",
+            "database_path": tmp_path / "output" / "locked.db",
+        }
+    )
+    with connect(settings) as conn:
+        init_db(conn)
+    lock = connect(settings)
+    try:
+        lock.execute("BEGIN IMMEDIATE")
+        result = run_database_maintenance(lock_timeout_ms=25, settings=settings)
+    finally:
+        lock.rollback()
+        lock.close()
+
+    assert result["status"] == "failed"
+    assert result["error_type"] == "OperationalError"
+    assert "locked" in result["error"].lower()
+    assert result["duration_ms"] < 5_000
+    assert Path(result["report_path"]).is_file()
+    with connect(settings) as conn:
+        count = conn.execute("SELECT COUNT(*) FROM database_maintenance_runs").fetchone()[0]
+    assert count == 0
+
+
+def test_database_maintenance_rejects_overlapping_tasks(tmp_path: Path) -> None:
+    settings = load_settings().model_copy(
+        update={
+            "project_root": tmp_path,
+            "output_dir": tmp_path / "output",
+            "database_path": tmp_path / "output" / "platform.db",
+        }
+    )
+    with connect(settings) as conn:
+        init_db(conn)
+    lock_path = settings.output_dir / "locks" / "database-maintenance.lock"
+    lock_path.parent.mkdir(parents=True)
+    with lock_path.open("a+", encoding="utf-8") as lock:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        result = run_database_maintenance(settings=settings)
+
+    assert result["status"] == "failed"
+    assert result["error_type"] == "RuntimeError"
+    assert "already running" in result["error"]
+    with connect(settings) as conn:
+        metrics = database_metrics(conn, settings)
+    assert metrics["maintenance"]["run_count"] == 1
+    assert metrics["maintenance"]["failure_count"] == 1
+
+
+def test_database_maintenance_rejects_invalid_options() -> None:
+    with pytest.raises(ValueError, match="Unsupported integrity mode"):
+        run_database_maintenance(integrity_mode="unsafe")
+    with pytest.raises(ValueError, match="lock timeout"):
+        run_database_maintenance(lock_timeout_ms=0)
+
+
+def test_database_maintenance_cli_returns_machine_readable_result(monkeypatch, capsys, tmp_path: Path) -> None:
+    database_path = tmp_path / "output" / "platform.db"
+    monkeypatch.setenv("AI4SEC_OUTPUT_DIR", str(tmp_path / "output"))
+    monkeypatch.setenv("AI4SEC_DATABASE_PATH", str(database_path))
+    with connect(load_settings()) as conn:
+        init_db(conn)
+
+    exit_code = database_cli_main(
+        ["maintain", "--checkpoint-mode", "truncate", "--integrity-mode", "quick", "--lock-timeout-ms", "100"]
+    )
+    payload = json.loads(capsys.readouterr().out)
+
+    assert exit_code == 0
+    assert payload["status"] == "success"
+    assert payload["checkpoint_mode"] == "TRUNCATE"
+    assert Path(payload["latest_report_path"]).is_file()
 
 
 def test_readiness_reports_database_metrics() -> None:

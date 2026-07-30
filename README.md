@@ -76,7 +76,7 @@ AI4SEC_CORS_ALLOWED_ORIGINS=https://console.internal.example,http://127.0.0.1:51
 
 ## SQLite 运维
 
-单机部署默认启用 WAL、外键校验、30 秒 busy timeout 和 `synchronous=NORMAL`。可以通过 `AI4SEC_SQLITE_BUSY_TIMEOUT_MS` 与 `AI4SEC_SQLITE_SYNCHRONOUS` 调整；生产环境建议保持 `NORMAL` 或 `FULL`。
+单机部署默认启用 WAL、外键校验、30 秒 busy timeout、`synchronous=NORMAL` 和每 1000 WAL 页自动 passive checkpoint。可以通过 `AI4SEC_SQLITE_BUSY_TIMEOUT_MS`、`AI4SEC_SQLITE_SYNCHRONOUS` 与 `AI4SEC_SQLITE_WAL_AUTOCHECKPOINT_PAGES` 调整；生产环境建议保持 `NORMAL` 或 `FULL`，自动 checkpoint 页数必须为正数。
 
 数据库初始化会创建 `schema_migrations` 并按版本顺序执行迁移。迁移名称和 checksum 已写入历史后不可静默修改；版本不匹配或迁移失败会阻止启动并回滚当前版本。生产升级前仍应先执行数据库备份，再启动新版本 API 和 Worker。
 
@@ -101,6 +101,22 @@ PYTHONPATH=src python3 -m ai4sec_platform.cli.database checkpoint --mode truncat
 `/api/health/ready` 除只读连通性和 WAL 指标外，还会在 `schema_migrations` 内执行一次 `SAVEPOINT` 隔离的真实写入并立即回滚，确认 SQLite 文件当前可写且不会留下探测记录。探测默认最多等待数据库写锁 1 秒，可通过 `AI4SEC_READINESS_WRITE_TIMEOUT_MS` 调整。锁占用、只读文件或迁移历史异常会返回 HTTP 503 和稳定错误码，不返回内部 SQLite 错误文本。
 
 日常检查使用 `passive`；`truncate` 用于备份或维护窗口，并应确认没有长事务和持续读连接。WAL checkpoint 只提供 CLI，不在当前未完成认证的 HTTP API 中暴露。
+
+执行组合维护任务：采样写锁等待、运行完整性检查、执行 WAL checkpoint，并将结果写入 `database_maintenance_runs` 和 `output/operations/database-maintenance/`：
+
+```bash
+# 建议每小时执行；并发读写期间使用 quick + passive
+PYTHONPATH=src python3 -m ai4sec_platform.cli.database maintain \
+  --integrity-mode quick --checkpoint-mode passive --lock-timeout-ms 5000
+
+# 建议每周低峰维护窗口执行
+PYTHONPATH=src python3 -m ai4sec_platform.cli.database maintain \
+  --integrity-mode full --checkpoint-mode truncate --lock-timeout-ms 30000
+```
+
+维护命令自带单机文件锁，不会与另一维护任务重叠。退出码 `0` 表示成功，`2` 表示 checkpoint 因活跃连接只完成部分工作，`1` 表示完整性、锁或其他维护失败；均会尝试生成权限为 `0640` 的 JSON 报告。历史 JSON 默认保留 30 天，可通过 `AI4SEC_DATABASE_MAINTENANCE_REPORT_RETENTION_DAYS` 调整。`/api/health/ready` 的 `database.maintenance` 会展示维护历史表中的执行次数、失败次数、累计/最大锁等待和最近结果。
+
+在 Compose 落地前，可由宿主机 cron/systemd timer 调用上述 one-shot 命令；正式 Compose 将使用独立维护服务调用相同入口，不在 API 进程内启动定时线程。
 
 恢复到指定文件：
 

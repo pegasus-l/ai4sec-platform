@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 
 from ai4sec_platform.core.config import load_settings
-from ai4sec_platform.db.maintenance import BackupRetentionPolicy, backup_database, checkpoint_wal, prune_database_backups, restore_database, verify_database
+from ai4sec_platform.db.maintenance import BackupRetentionPolicy, backup_database, checkpoint_wal, prune_database_backups, restore_database, run_database_maintenance, verify_database
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -25,6 +25,18 @@ def main(argv: list[str] | None = None) -> int:
 
     checkpoint_parser = subparsers.add_parser("checkpoint", help="Run a controlled SQLite WAL checkpoint")
     checkpoint_parser.add_argument("--mode", choices=["passive", "full", "restart", "truncate"], default="passive")
+
+    maintain_parser = subparsers.add_parser(
+        "maintain",
+        help="Sample write-lock wait, verify integrity, checkpoint WAL, and persist a maintenance report",
+    )
+    maintain_parser.add_argument(
+        "--checkpoint-mode",
+        choices=["passive", "full", "restart", "truncate"],
+        default="passive",
+    )
+    maintain_parser.add_argument("--integrity-mode", choices=["quick", "full"], default="quick")
+    maintain_parser.add_argument("--lock-timeout-ms", type=int, default=5_000)
 
     args = parser.parse_args(argv)
     if args.action == "backup":
@@ -51,6 +63,14 @@ def main(argv: list[str] | None = None) -> int:
     if args.action == "checkpoint":
         print(json.dumps(checkpoint_wal(args.mode), ensure_ascii=False))
         return 0
+    if args.action == "maintain":
+        result = run_database_maintenance(
+            checkpoint_mode=args.checkpoint_mode,
+            integrity_mode=args.integrity_mode,
+            lock_timeout_ms=args.lock_timeout_ms,
+        )
+        print(json.dumps(result, ensure_ascii=False))
+        return {"success": 0, "partial": 2}.get(str(result["status"]), 1)
     path = restore_database(args.backup, args.destination, overwrite=args.overwrite)
     print(json.dumps(verify_database(path), ensure_ascii=False))
     return 0

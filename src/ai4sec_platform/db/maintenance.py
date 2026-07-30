@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import calendar
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 import errno
+import fcntl
 import hashlib
 import json
 import os
@@ -13,6 +15,7 @@ import time
 from typing import Any
 
 from ai4sec_platform.core.config import Settings, load_settings
+from ai4sec_platform.core.time import utc_now
 from ai4sec_platform.db.migrations import current_schema_version
 from ai4sec_platform.db.session import connect
 
@@ -186,7 +189,7 @@ def database_metrics(conn: sqlite3.Connection, settings: Settings | None = None)
     page_size = int(conn.execute("PRAGMA page_size").fetchone()[0])
     page_count = int(conn.execute("PRAGMA page_count").fetchone()[0])
     freelist_count = int(conn.execute("PRAGMA freelist_count").fetchone()[0])
-    return {
+    result = {
         "path": str(database_path),
         "database_bytes": _file_size(database_path),
         "wal_bytes": _file_size(Path(f"{database_path}-wal")),
@@ -194,6 +197,7 @@ def database_metrics(conn: sqlite3.Connection, settings: Settings | None = None)
         "journal_mode": str(conn.execute("PRAGMA journal_mode").fetchone()[0]),
         "synchronous": int(conn.execute("PRAGMA synchronous").fetchone()[0]),
         "busy_timeout_ms": int(conn.execute("PRAGMA busy_timeout").fetchone()[0]),
+        "wal_autocheckpoint_pages": int(conn.execute("PRAGMA wal_autocheckpoint").fetchone()[0]),
         "page_size": page_size,
         "page_count": page_count,
         "freelist_count": freelist_count,
@@ -201,6 +205,31 @@ def database_metrics(conn: sqlite3.Connection, settings: Settings | None = None)
         "free_bytes": page_size * freelist_count,
         "schema_version": current_schema_version(conn),
     }
+    maintenance_table = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'database_maintenance_runs'"
+    ).fetchone()
+    if maintenance_table:
+        maintenance = conn.execute(
+            """
+            SELECT COUNT(*) AS run_count,
+                   COALESCE(SUM(lock_wait_ms), 0) AS lock_wait_ms_total,
+                   COALESCE(MAX(lock_wait_ms), 0) AS lock_wait_ms_max,
+                   COALESCE(SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END), 0) AS failure_count
+            FROM database_maintenance_runs
+            """
+        ).fetchone()
+        latest = conn.execute(
+            "SELECT status, finished_at FROM database_maintenance_runs ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+        result["maintenance"] = {
+            "run_count": int(maintenance["run_count"]),
+            "failure_count": int(maintenance["failure_count"]),
+            "lock_wait_ms_total": int(maintenance["lock_wait_ms_total"]),
+            "lock_wait_ms_max": int(maintenance["lock_wait_ms_max"]),
+            "latest_status": str(latest["status"]) if latest else "never",
+            "latest_finished_at": str(latest["finished_at"]) if latest else "",
+        }
+    return result
 
 
 def database_write_probe(conn: sqlite3.Connection, *, timeout_ms: int = 1_000) -> dict[str, Any]:
@@ -244,15 +273,228 @@ def checkpoint_wal(mode: str = "PASSIVE", settings: Settings | None = None) -> d
         raise ValueError(f"Unsupported WAL checkpoint mode: {mode}")
     cfg = settings or load_settings()
     with connect(cfg) as conn:
+        wal_bytes_before = database_metrics(conn, cfg)["wal_bytes"]
+        started = time.perf_counter()
         row = conn.execute(f"PRAGMA wal_checkpoint({checkpoint_mode})").fetchone()
+        duration_ms = int((time.perf_counter() - started) * 1000)
         metrics = database_metrics(conn, cfg)
     return {
         "mode": checkpoint_mode,
         "busy": int(row[0]),
         "log_frames": int(row[1]),
         "checkpointed_frames": int(row[2]),
+        "duration_ms": duration_ms,
+        "wal_bytes_before": wal_bytes_before,
         "wal_bytes": metrics["wal_bytes"],
     }
+
+
+def run_database_maintenance(
+    *,
+    checkpoint_mode: str = "PASSIVE",
+    integrity_mode: str = "QUICK",
+    lock_timeout_ms: int = 5_000,
+    settings: Settings | None = None,
+) -> dict[str, Any]:
+    checkpoint_mode = checkpoint_mode.strip().upper()
+    integrity_mode = integrity_mode.strip().upper()
+    if checkpoint_mode not in {"PASSIVE", "FULL", "RESTART", "TRUNCATE"}:
+        raise ValueError(f"Unsupported WAL checkpoint mode: {checkpoint_mode}")
+    if integrity_mode not in {"QUICK", "FULL"}:
+        raise ValueError(f"Unsupported integrity mode: {integrity_mode}")
+    if lock_timeout_ms <= 0:
+        raise ValueError("Maintenance lock timeout must be positive")
+
+    cfg = settings or load_settings()
+    started_at = utc_now()
+    started = time.perf_counter()
+    report: dict[str, Any] = {
+        "status": "failed",
+        "checkpoint_mode": checkpoint_mode,
+        "integrity_mode": integrity_mode,
+        "lock_timeout_ms": lock_timeout_ms,
+        "lock_wait_ms": 0,
+        "started_at": started_at,
+    }
+    maintenance_cfg = cfg.model_copy(
+        update={"sqlite_busy_timeout_ms": min(cfg.sqlite_busy_timeout_ms, lock_timeout_ms)}
+    )
+    try:
+        with _database_maintenance_lock(cfg.output_dir / "locks" / "database-maintenance.lock"):
+            with connect(maintenance_cfg) as conn:
+                metrics_before = database_metrics(conn, cfg)
+                report["metrics_before"] = metrics_before
+                lock_wait_ms = _measure_write_lock_wait(conn, timeout_ms=lock_timeout_ms)
+                report["lock_wait_ms"] = lock_wait_ms
+
+                integrity_started = time.perf_counter()
+                pragma = "quick_check" if integrity_mode == "QUICK" else "integrity_check"
+                integrity_rows = [str(row[0]) for row in conn.execute(f"PRAGMA {pragma}").fetchall()]
+                integrity_duration_ms = int((time.perf_counter() - integrity_started) * 1000)
+                report["integrity_duration_ms"] = integrity_duration_ms
+                if integrity_rows != ["ok"]:
+                    raise sqlite3.DatabaseError(f"SQLite {pragma} failed: {integrity_rows}")
+
+                checkpoint_started = time.perf_counter()
+                checkpoint_row = conn.execute(f"PRAGMA wal_checkpoint({checkpoint_mode})").fetchone()
+                checkpoint_duration_ms = int((time.perf_counter() - checkpoint_started) * 1000)
+                metrics_after = database_metrics(conn, cfg)
+                checkpoint = {
+                    "busy": int(checkpoint_row[0]),
+                    "log_frames": int(checkpoint_row[1]),
+                    "checkpointed_frames": int(checkpoint_row[2]),
+                }
+                report.update(
+                    {
+                        "status": "success" if checkpoint["busy"] == 0 else "partial",
+                        "lock_wait_ms": lock_wait_ms,
+                        "integrity": "ok",
+                        "integrity_duration_ms": integrity_duration_ms,
+                        "checkpoint": checkpoint,
+                        "checkpoint_duration_ms": checkpoint_duration_ms,
+                        "metrics_before": metrics_before,
+                        "metrics_after": metrics_after,
+                    }
+                )
+                finished_at = utc_now()
+                conn.execute(
+                    """
+                    INSERT INTO database_maintenance_runs(
+                        status, checkpoint_mode, integrity_mode, lock_wait_ms,
+                        checkpoint_duration_ms, integrity_duration_ms,
+                        wal_bytes_before, wal_bytes_after, details_json, started_at, finished_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        report["status"],
+                        checkpoint_mode,
+                        integrity_mode,
+                        lock_wait_ms,
+                        checkpoint_duration_ms,
+                        integrity_duration_ms,
+                        int(metrics_before["wal_bytes"]),
+                        int(metrics_after["wal_bytes"]),
+                        json.dumps({"checkpoint": checkpoint}, ensure_ascii=False, sort_keys=True),
+                        started_at,
+                        finished_at,
+                    ),
+                )
+                conn.commit()
+    except Exception as exc:
+        report["error"] = str(exc)
+        report["error_type"] = type(exc).__name__
+        if "locked" not in str(exc).lower() and "busy" not in str(exc).lower():
+            _record_failed_maintenance(maintenance_cfg, report)
+    report["finished_at"] = utc_now()
+    report["duration_ms"] = int((time.perf_counter() - started) * 1000)
+    report_paths = _write_maintenance_report(cfg, report)
+    report["report_path"] = str(report_paths[0])
+    report["latest_report_path"] = str(report_paths[1])
+    return report
+
+
+def _measure_write_lock_wait(conn: sqlite3.Connection, *, timeout_ms: int) -> int:
+    previous_timeout = int(conn.execute("PRAGMA busy_timeout").fetchone()[0])
+    started = time.perf_counter()
+    transaction_started = False
+    try:
+        conn.execute(f"PRAGMA busy_timeout = {timeout_ms}")
+        conn.execute("BEGIN IMMEDIATE")
+        transaction_started = True
+        conn.rollback()
+        transaction_started = False
+        return int((time.perf_counter() - started) * 1000)
+    finally:
+        if transaction_started:
+            conn.rollback()
+        conn.execute(f"PRAGMA busy_timeout = {previous_timeout}")
+
+
+@contextmanager
+def _database_maintenance_lock(path: Path):
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o750)
+    handle = path.open("a+", encoding="utf-8")
+    try:
+        try:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise RuntimeError("another database maintenance task is already running") from exc
+        yield
+    finally:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        handle.close()
+
+
+def _record_failed_maintenance(settings: Settings, report: dict[str, Any]) -> None:
+    try:
+        with connect(settings) as conn:
+            table = conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'database_maintenance_runs'"
+            ).fetchone()
+            if not table:
+                return
+            metrics_before = report.get("metrics_before") or {}
+            conn.execute(
+                """
+                INSERT INTO database_maintenance_runs(
+                    status, checkpoint_mode, integrity_mode, lock_wait_ms,
+                    checkpoint_duration_ms, integrity_duration_ms,
+                    wal_bytes_before, wal_bytes_after, details_json, started_at, finished_at
+                ) VALUES ('failed', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    report["checkpoint_mode"],
+                    report["integrity_mode"],
+                    int(report.get("lock_wait_ms") or 0),
+                    int(report.get("checkpoint_duration_ms") or 0),
+                    int(report.get("integrity_duration_ms") or 0),
+                    int(metrics_before.get("wal_bytes") or 0),
+                    int((report.get("metrics_after") or {}).get("wal_bytes") or 0),
+                    json.dumps(
+                        {"error": report.get("error", ""), "error_type": report.get("error_type", "")},
+                        ensure_ascii=False,
+                        sort_keys=True,
+                    ),
+                    report["started_at"],
+                    utc_now(),
+                ),
+            )
+            conn.commit()
+    except (OSError, sqlite3.Error, RuntimeError):
+        return
+
+
+def _write_maintenance_report(settings: Settings, report: dict[str, Any]) -> tuple[Path, Path]:
+    directory = settings.output_dir / "operations" / "database-maintenance"
+    directory.mkdir(parents=True, exist_ok=True, mode=0o750)
+    directory.chmod(0o750)
+    _prune_maintenance_reports(directory, settings.database_maintenance_report_retention_days)
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+    history_path = directory / f"maintenance-{stamp}.json"
+    latest_path = directory / "latest.json"
+    payload = json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+    _write_json_atomic(history_path, payload)
+    _write_json_atomic(latest_path, payload)
+    return history_path, latest_path
+
+
+def _prune_maintenance_reports(directory: Path, retention_days: int) -> None:
+    cutoff = time.time() - retention_days * 24 * 60 * 60
+    for path in directory.glob("maintenance-*.json"):
+        try:
+            if path.stat().st_mtime < cutoff:
+                path.unlink()
+        except FileNotFoundError:
+            continue
+
+
+def _write_json_atomic(path: Path, payload: str) -> None:
+    temporary = path.with_name(f".{path.name}.tmp-{os.getpid()}")
+    temporary.write_text(payload, encoding="utf-8")
+    os.chmod(temporary, 0o640)
+    _sync_file(temporary)
+    os.replace(temporary, path)
+    _sync_directory(path.parent)
 
 
 def _default_backup_path(settings: Settings) -> Path:

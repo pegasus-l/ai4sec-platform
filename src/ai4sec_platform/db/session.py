@@ -18,6 +18,7 @@ def connect(settings: Settings | None = None) -> sqlite3.Connection:
         conn.execute("PRAGMA foreign_keys = ON")
         conn.execute(f"PRAGMA synchronous = {cfg.sqlite_synchronous}")
         conn.execute(f"PRAGMA busy_timeout = {cfg.sqlite_busy_timeout_ms}")
+        conn.execute(f"PRAGMA wal_autocheckpoint = {cfg.sqlite_wal_autocheckpoint_pages}")
         _restrict_database_files(cfg.database_path)
         return conn
     except Exception:

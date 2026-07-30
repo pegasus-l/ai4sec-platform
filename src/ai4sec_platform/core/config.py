@@ -19,10 +19,12 @@ class Settings(BaseModel):
     output_dir: Path
     database_path: Path
     sqlite_busy_timeout_ms: int = 30_000
+    sqlite_wal_autocheckpoint_pages: int = 1_000
     readiness_write_timeout_ms: int = 1_000
     backup_daily_retention_days: int = 7
     backup_weekly_retention_weeks: int = 4
     backup_monthly_retention_months: int = 6
+    database_maintenance_report_retention_days: int = 30
     pipeline_worker_heartbeat_seconds: int = 10
     pipeline_job_lease_seconds: int = 45
     sqlite_synchronous: str = "NORMAL"
@@ -48,10 +50,18 @@ def load_settings(project_root: Path | None = None) -> Settings:
     if not database_path.is_absolute():
         database_path = root / database_path
     sqlite_busy_timeout_ms = _positive_int(os.getenv("AI4SEC_SQLITE_BUSY_TIMEOUT_MS", "30000"), 30_000)
+    sqlite_wal_autocheckpoint_pages = _positive_int(
+        os.getenv("AI4SEC_SQLITE_WAL_AUTOCHECKPOINT_PAGES", "1000"),
+        1_000,
+    )
     readiness_write_timeout_ms = _positive_int(os.getenv("AI4SEC_READINESS_WRITE_TIMEOUT_MS", "1000"), 1_000)
     backup_daily_retention_days = _positive_int(os.getenv("AI4SEC_BACKUP_DAILY_RETENTION_DAYS", "7"), 7)
     backup_weekly_retention_weeks = _positive_int(os.getenv("AI4SEC_BACKUP_WEEKLY_RETENTION_WEEKS", "4"), 4)
     backup_monthly_retention_months = _positive_int(os.getenv("AI4SEC_BACKUP_MONTHLY_RETENTION_MONTHS", "6"), 6)
+    database_maintenance_report_retention_days = _positive_int(
+        os.getenv("AI4SEC_DATABASE_MAINTENANCE_REPORT_RETENTION_DAYS", "30"),
+        30,
+    )
     pipeline_worker_heartbeat_seconds = _positive_int(os.getenv("AI4SEC_PIPELINE_WORKER_HEARTBEAT_SECONDS", "10"), 10)
     pipeline_job_lease_seconds = _positive_int(os.getenv("AI4SEC_PIPELINE_JOB_LEASE_SECONDS", "45"), 45)
     if pipeline_job_lease_seconds < pipeline_worker_heartbeat_seconds * 3:
@@ -68,10 +78,12 @@ def load_settings(project_root: Path | None = None) -> Settings:
         output_dir=output_dir,
         database_path=database_path,
         sqlite_busy_timeout_ms=sqlite_busy_timeout_ms,
+        sqlite_wal_autocheckpoint_pages=sqlite_wal_autocheckpoint_pages,
         readiness_write_timeout_ms=readiness_write_timeout_ms,
         backup_daily_retention_days=backup_daily_retention_days,
         backup_weekly_retention_weeks=backup_weekly_retention_weeks,
         backup_monthly_retention_months=backup_monthly_retention_months,
+        database_maintenance_report_retention_days=database_maintenance_report_retention_days,
         pipeline_worker_heartbeat_seconds=pipeline_worker_heartbeat_seconds,
         pipeline_job_lease_seconds=pipeline_job_lease_seconds,
         sqlite_synchronous=sqlite_synchronous,

@@ -77,6 +77,16 @@ MIGRATIONS: tuple[Migration, ...] = (
         apply=lambda conn: _add_platform_execution_controls(conn),
         checksum_source="platform_controls(control_key primary key,enabled,reason,updated_at);pipeline_execution_kill_switch",
     ),
+    Migration(
+        version=8,
+        name="add_database_maintenance_history",
+        apply=lambda conn: _add_database_maintenance_history(conn),
+        checksum_source=(
+            "database_maintenance_runs(status,checkpoint_mode,integrity_mode,lock_wait_ms,"
+            "checkpoint_duration_ms,integrity_duration_ms,wal_bytes_before,wal_bytes_after,"
+            "details_json,started_at,finished_at);indexes recent,status"
+        ),
+    ),
 )
 
 
@@ -226,4 +236,29 @@ def _add_platform_execution_controls(conn: sqlite3.Connection) -> None:
             updated_at TEXT NOT NULL
         )
         """
+    )
+
+
+def _add_database_maintenance_history(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS database_maintenance_runs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            status TEXT NOT NULL,
+            checkpoint_mode TEXT NOT NULL,
+            integrity_mode TEXT NOT NULL,
+            lock_wait_ms INTEGER NOT NULL DEFAULT 0,
+            checkpoint_duration_ms INTEGER NOT NULL DEFAULT 0,
+            integrity_duration_ms INTEGER NOT NULL DEFAULT 0,
+            wal_bytes_before INTEGER NOT NULL DEFAULT 0,
+            wal_bytes_after INTEGER NOT NULL DEFAULT 0,
+            details_json TEXT NOT NULL DEFAULT '{}',
+            started_at TEXT NOT NULL,
+            finished_at TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_database_maintenance_recent ON database_maintenance_runs(id DESC)")
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_database_maintenance_status ON database_maintenance_runs(status, id DESC)"
     )

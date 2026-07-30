@@ -138,6 +138,23 @@ CREATE TABLE IF NOT EXISTS platform_controls (
     updated_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS database_maintenance_runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    status TEXT NOT NULL,
+    checkpoint_mode TEXT NOT NULL,
+    integrity_mode TEXT NOT NULL,
+    lock_wait_ms INTEGER NOT NULL DEFAULT 0,
+    checkpoint_duration_ms INTEGER NOT NULL DEFAULT 0,
+    integrity_duration_ms INTEGER NOT NULL DEFAULT 0,
+    wal_bytes_before INTEGER NOT NULL DEFAULT 0,
+    wal_bytes_after INTEGER NOT NULL DEFAULT 0,
+    details_json TEXT NOT NULL DEFAULT '{}',
+    started_at TEXT NOT NULL,
+    finished_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_database_maintenance_recent ON database_maintenance_runs(id DESC);
+CREATE INDEX IF NOT EXISTS idx_database_maintenance_status ON database_maintenance_runs(status, id DESC);
+
 CREATE TABLE IF NOT EXISTS task_runs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     run_id TEXT NOT NULL,

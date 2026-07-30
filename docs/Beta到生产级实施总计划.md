@@ -846,11 +846,11 @@ D11 暂缓的是公网入口和完整公网暴露治理，不代表复现容器�
 #### 数据库任务
 
 - [ ] SQLite 连接已强制数据库目录 `0750`、数据库文件 `0640`，无法收紧权限时拒绝启动；Compose 本机持久卷、统一非 root UID/GID 和宿主目录初始化仍待部署阶段落地。
-- [x] 配置并验证 WAL 和 busy timeout；WAL checkpoint 自动化策略仍待补充。
+- [x] 配置并验证 WAL、busy timeout 和显式 `wal_autocheckpoint` 页阈值，并提供受控手动/周期维护 checkpoint。
 - [x] 建立 `schema_migrations` 表、顺序迁移执行器、checksum 校验和单版本失败回滚。
 - [ ] 已为 PipelineRun 查询、TaskRun、Artifact、DataSource/SourceHealth、QualityAudit 查询和 HumanQueue 补齐首批约束与索引；Worker 注册表、QualityAudit 显式 `run_id` 及审计身份约束仍待补充。
 - [ ] 为四域关键业务对象补齐幂等键和唯一约束。
-- [ ] 已增加 busy timeout、数据库大小、WAL/SHM 大小、页使用量和迁移版本 readiness 指标；锁等待累计指标与定期完整性任务仍待补充。
+- [x] readiness 已包含数据库/WAL/页/迁移指标及维护次数、失败数、累计/最大锁等待；组合维护任务支持 quick/full integrity、checkpoint、历史表和受控 JSON 报告。
 - [x] 建立 SQLite Backup API、一致性校验和恢复到指定文件流程。
 
 #### 任务系统任务
@@ -1851,3 +1851,13 @@ Python full test suite: 199 passed
 - 新增 10 分钟可配置报告收尾窗口、GitHub codeload archive fallback、非法模型评分降级和 `partial` 可重试但不可进入能力转化的语义。
 - 能力最终分支的报告验收测试与生产分支的 Worker/Secret/资源/取消测试合并；能力/API 聚焦测试 76 passed，前端生产构建通过，全仓 Python 测试 255 passed。
 - 前端将 Vite 从 `5.4.11` 补丁升级到 `5.4.21` 并重新构建；`npm audit` 仍报告开发服务器相关的 1 个 moderate 和 1 个 high 风险，自动修复会跨到 Vite 8。生产只发布静态构建产物，当前不使用 `--force` 跨主版本，后续以独立依赖升级批次处理。
+
+### 2026-07-30：自动化 SQLite WAL 与完整性维护
+
+- 新增 migration v8 和 `database_maintenance_runs`，记录维护状态、checkpoint/integrity 模式、锁等待、阶段耗时、WAL 前后大小和执行时间。
+- SQLite 连接显式配置 `wal_autocheckpoint`，默认每 1000 WAL 页触发 passive checkpoint，可通过环境变量调整，不再依赖 SQLite 隐式默认值。
+- `database maintain` one-shot CLI 依次执行单机互斥、写锁等待采样、quick/full integrity 和 passive/full/restart/truncate checkpoint；success/partial/failed 分别返回退出码 0/2/1。
+- 维护任务不执行迁移，避免在持锁期间绕过维护超时；迁移仍由正常服务启动和 `init_db` 流程负责。
+- 成功和可记录失败进入历史表；数据库被锁或不可写时仍生成本地 JSON 报告。报告目录权限为 `0750`、文件为 `0640`，历史默认保留 30 天。
+- readiness 增加维护次数、失败数、锁等待累计值/峰值和最近状态，后续监控系统可直接采集；维护 CLI 不暴露到当前未认证 HTTP API。
+- 数据库专项测试 30 passed；CLI 临时数据库实测成功；全仓 Python 测试 260 passed；`compileall` 与 `git diff --check` 通过。
