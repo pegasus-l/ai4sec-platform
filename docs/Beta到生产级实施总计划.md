@@ -1861,3 +1861,9 @@ Python full test suite: 199 passed
 - 成功和可记录失败进入历史表；数据库被锁或不可写时仍生成本地 JSON 报告。报告目录权限为 `0750`、文件为 `0640`，历史默认保留 30 天。
 - readiness 增加维护次数、失败数、锁等待累计值/峰值和最近状态，后续监控系统可直接采集；维护 CLI 不暴露到当前未认证 HTTP API。
 - 数据库专项测试 30 passed；CLI 临时数据库实测成功；全仓 Python 测试 260 passed；`compileall` 与 `git diff --check` 通过。
+
+### 2026-07-30：威胁连接器 TLS 策略显式化
+
+- 威胁在线 JSON 和正文连接器显式创建默认 `SSLContext`，不依赖调用方或 urllib 的隐式行为，不允许通过连接器关闭证书校验。
+- 增加 `AI4SEC_THREAT_CA_BUNDLE` 受控 PEM CA 配置入口，仅用于部署环境的额外信任根；路径无效时明确失败，不降级为跳过验证。
+- 覆盖默认系统信任根和非法 CA 配置测试；威胁安全专项测试 17 passed。

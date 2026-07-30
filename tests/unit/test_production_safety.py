@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+import ssl
 
 import pytest
 
@@ -84,4 +85,12 @@ def test_threat_text_fetch_uses_default_tls_verification(monkeypatch) -> None:
     monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
 
     assert LiveJsonConnector().get_text("https://example.test") == "verified"
-    assert calls == [{"timeout": 30}]
+    assert calls[0]["timeout"] == 30
+    assert isinstance(calls[0]["context"], ssl.SSLContext)
+
+
+def test_threat_text_fetch_rejects_invalid_ca_bundle(monkeypatch) -> None:
+    monkeypatch.setenv("AI4SEC_THREAT_CA_BUNDLE", "/missing/ai4sec-ca.pem")
+
+    with pytest.raises(RuntimeError, match="Invalid AI4SEC_THREAT_CA_BUNDLE"):
+        LiveJsonConnector().tls_context()

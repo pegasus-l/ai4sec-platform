@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import base64
+import os
+import ssl
 import urllib.parse
 import urllib.request
 from typing import Any
@@ -34,7 +36,7 @@ class LiveJsonConnector(JsonFileConnector):
 
     def get_json(self, url: str, *, timeout: int = 30) -> Any:
         req = urllib.request.Request(url, headers=self.request_headers())
-        with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310 - explicit configured source
+        with urllib.request.urlopen(req, timeout=timeout, context=self.tls_context()) as resp:  # noqa: S310 - explicit configured source
             return json.loads(resp.read().decode("utf-8"))
 
     def get_text(self, url: str, *, timeout: int = 30, retries: int = 3) -> str:
@@ -43,13 +45,20 @@ class LiveJsonConnector(JsonFileConnector):
         for attempt in range(retries):
             try:
                 req = urllib.request.Request(url, headers={"Accept": "text/html,*/*"})
-                with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310 - explicit configured source
+                with urllib.request.urlopen(req, timeout=timeout, context=self.tls_context()) as resp:  # noqa: S310 - explicit configured source
                     return resp.read().decode("utf-8", errors="replace")
             except Exception as exc:
                 last_exc = exc
                 if attempt < retries - 1:
                     time.sleep(2)
         raise RuntimeError(f"get_text failed after {retries} retries: {last_exc}")
+
+    def tls_context(self) -> ssl.SSLContext:
+        ca_bundle = os.getenv("AI4SEC_THREAT_CA_BUNDLE", "").strip() or None
+        try:
+            return ssl.create_default_context(cafile=ca_bundle)
+        except (OSError, ssl.SSLError) as exc:
+            raise RuntimeError(f"Invalid AI4SEC_THREAT_CA_BUNDLE: {ca_bundle}") from exc
 
     def request_headers(self) -> dict[str, str]:
         return {"User-Agent": "ai4sec-platform/0.1", "Accept": "application/json"}

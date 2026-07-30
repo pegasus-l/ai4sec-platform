@@ -78,6 +78,8 @@ AI4SEC_CORS_ALLOWED_ORIGINS=https://console.internal.example,http://127.0.0.1:51
 
 单机部署默认启用 WAL、外键校验、30 秒 busy timeout、`synchronous=NORMAL` 和每 1000 WAL 页自动 passive checkpoint。可以通过 `AI4SEC_SQLITE_BUSY_TIMEOUT_MS`、`AI4SEC_SQLITE_SYNCHRONOUS` 与 `AI4SEC_SQLITE_WAL_AUTOCHECKPOINT_PAGES` 调整；生产环境建议保持 `NORMAL` 或 `FULL`，自动 checkpoint 页数必须为正数。
 
+威胁洞察在线连接器默认使用系统 CA 校验证书；如部署环境需要额外的 PEM CA，可通过 `AI4SEC_THREAT_CA_BUNDLE` 指定。未配置时不关闭证书校验，证书错误会使采集失败并进入失败记录。
+
 数据库初始化会创建 `schema_migrations` 并按版本顺序执行迁移。迁移名称和 checksum 已写入历史后不可静默修改；版本不匹配或迁移失败会阻止启动并回滚当前版本。生产升级前仍应先执行数据库备份，再启动新版本 API 和 Worker。
 
 在线创建一致性备份并校验：
