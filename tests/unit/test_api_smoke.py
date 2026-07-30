@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import json
+
 from fastapi.testclient import TestClient
 
 from ai4sec_platform.app.main import app
+from ai4sec_platform.cli.import_news_legacy_raw import import_news_legacy_raw
 from ai4sec_platform.pipelines.worker import PipelineWorker
 
 
@@ -14,6 +17,27 @@ def _run_pipeline(client: TestClient, payload: dict):
     result = PipelineWorker().run_once(run_id=run_id)
     assert result is not None
     return client.get(f"/api/runs/{run_id}")
+
+
+def _import_news_fixture(tmp_path):
+    raw_dir = tmp_path / "legacy-news"
+    raw_dir.mkdir()
+    items = [
+        {
+            "id": index,
+            "full_name": f"security/research-{index}",
+            "html_url": f"https://github.com/security/research-{index}",
+            "description": "AI agent evaluation benchmark with automated testing, planning, reasoning and security validation",
+            "topics": ["agent", "evaluation", "benchmark", "security"],
+            "stargazers_count": 500 + index,
+            "forks_count": 20 + index,
+            "language": "Python",
+            "updated_at": "2026-07-10T00:00:00Z",
+        }
+        for index in range(12)
+    ]
+    (raw_dir / "github_20260710.json").write_text(json.dumps({"items": items}), encoding="utf-8")
+    return import_news_legacy_raw(raw_dir, "2026-07-10", allow_missing_sources=True)
 
 
 def _patch_threat_connector_records(monkeypatch) -> None:
@@ -94,33 +118,22 @@ def test_frontend_index() -> None:
     assert "顶部任务栏" in response.text
 
 
-def test_run_pipeline_endpoint_triggers_import() -> None:
+def test_legacy_news_import_is_not_public_pipeline() -> None:
     client = TestClient(app)
     pipelines = client.get("/api/runs/pipelines")
     assert pipelines.status_code == 200
-    assert any(item["name"] == "news.legacy_raw_pipeline" for item in pipelines.json()["items"])
+    assert not any(item["name"] == "news.legacy_raw_pipeline" for item in pipelines.json()["items"])
     assert not any(item["name"] == "legacy.sample_import" for item in pipelines.json()["items"])
 
-    response = _run_pipeline(client, {"pipeline_name": "news.legacy_raw_pipeline", "reset": True, "params": {"date": "2026-07-10"}})
-    assert response.status_code == 200
-    data = response.json()
-    assert data["status"] == "success"
-    assert data["pipeline_name"] == "news.legacy_raw_pipeline"
-
-    detail = client.get(f"/api/runs/{data['run_id']}")
-    assert detail.status_code == 200
-    detail_data = detail.json()
-    assert detail_data["tasks"]
-    assert any(item["artifact_type"] == "manifest" for item in detail_data["artifacts"])
+    response = client.post("/api/runs", json={"pipeline_name": "news.legacy_raw_pipeline", "params": {}})
+    assert response.status_code == 404
 
 
-def test_raw_pipeline_builds_from_source_raw_files() -> None:
+def test_one_time_news_import_builds_from_source_raw_files(tmp_path) -> None:
     client = TestClient(app)
-    response = _run_pipeline(client, {"pipeline_name": "news.legacy_raw_pipeline", "reset": True, "params": {"date": "2026-07-10"}})
-    assert response.status_code == 200
-    data = response.json()
+    data = _import_news_fixture(tmp_path)
     assert data["status"] == "success"
-    assert data["pipeline_name"] == "news.legacy_raw_pipeline"
+    assert data["pipeline_name"] == "migration.news_legacy_raw_import"
     step_names = [step["name"] for step in data["summary"]["steps"]]
     assert step_names == ["collect_news_sources", "extract_news_references", "normalize_news_items", "deduplicate_news_candidates", "resolve_news_candidate_links", "gate_news_candidates_with_tech_map", "enrich_news_candidates_with_model", "build_news_items", "build_news_daily_report", "audit_news_quality"]
 
@@ -186,10 +199,10 @@ def test_threat_and_vulnerability_raw_pipelines_run(monkeypatch) -> None:
         assert domain_data["items"]
 
 
-def test_capability_pipeline_assesses_news_candidates() -> None:
+def test_capability_pipeline_assesses_news_candidates(tmp_path) -> None:
     client = TestClient(app)
-    news_run = _run_pipeline(client, {"pipeline_name": "news.legacy_raw_pipeline", "reset": True, "params": {"date": "2026-07-10"}})
-    assert news_run.status_code == 200
+    news_run = _import_news_fixture(tmp_path)
+    assert news_run["status"] == "success"
     response = _run_pipeline(client, {"pipeline_name": "capabilities.from_news_pipeline", "params": {"limit": 10}})
     assert response.status_code == 200
     data = response.json()

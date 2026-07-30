@@ -20,8 +20,6 @@ class AsisConnector(NewsLiveConnector):
         return SourceHealth(status="ok" if configured else "missing", message="ASIS_BASE_URL/ASIS_USERNAME/ASIS_PASSWORD")
 
     def fetch(self, request: SourceFetchRequest) -> SourceFetchResult:
-        if self.has_local_path(request):
-            return super().fetch(request)
         base_url = str(request.config.get("base_url") or os.getenv("ASIS_BASE_URL") or "").rstrip("/")
         username = os.getenv("ASIS_USERNAME", "")
         password = os.getenv("ASIS_PASSWORD", "")

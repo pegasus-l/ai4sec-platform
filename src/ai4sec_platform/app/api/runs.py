@@ -24,7 +24,7 @@ router = APIRouter(prefix="/runs", tags=["runs"])
 class RunPipelineRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    pipeline_name: str = Field(default="news.legacy_raw_pipeline")
+    pipeline_name: str = Field(min_length=1)
     reset: bool = False
     params: dict[str, Any] = Field(default_factory=dict)
 

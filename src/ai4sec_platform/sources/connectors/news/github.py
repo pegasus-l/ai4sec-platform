@@ -19,8 +19,6 @@ class GithubConnector(NewsLiveConnector):
         return SourceHealth(status="ok", message=self.api_url)
 
     def fetch(self, request: SourceFetchRequest) -> SourceFetchResult:
-        if self.has_local_path(request):
-            return super().fetch(request)
         query = str(request.params.get("query") or request.config.get("query") or "AI security")
         per_page = min(100, int(request.params.get("max_results") or request.config.get("max_results") or 30))
         max_pages = max(1, min(10, int(request.params.get("max_pages") or 1)))

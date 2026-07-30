@@ -1,7 +1,4 @@
 pipelines:
-  news.legacy_raw_pipeline:
-    domain: news
-    description: AI-for-Sec 本地 raw 导入、规范化、去重、资讯构建和日报生成
   news.shadow_collect_pipeline:
     domain: news
     description: arXiv/GitHub/RSS shadow 采集、规范化、去重、资讯构建和日报生成

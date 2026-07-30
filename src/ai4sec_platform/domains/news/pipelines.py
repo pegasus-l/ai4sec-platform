@@ -4,7 +4,7 @@ from ai4sec_platform.pipelines.base import PipelineDefinition
 from ai4sec_platform.pipelines.steps.news import AuditNewsStep, BuildNewsDailyReportStep, BuildNewsItemsStep, CollectNewsSourcesStep, DeduplicateNewsStep, EnrichNewsCandidatesStep, ExtractNewsReferencesStep, GateNewsCandidatesStep, NormalizeNewsStep, ResolveNewsLinksStep
 
 
-def news_pipeline(name: str, mode: str) -> PipelineDefinition:
+def news_pipeline(name: str) -> PipelineDefinition:
     return PipelineDefinition(
         name=name,
         domain="news",
@@ -24,12 +24,8 @@ def news_pipeline(name: str, mode: str) -> PipelineDefinition:
 
 
 def news_shadow_collect_pipeline() -> PipelineDefinition:
-    return news_pipeline("news.shadow_collect_pipeline", "shadow")
-
-
-def news_legacy_raw_pipeline() -> PipelineDefinition:
-    return news_pipeline("news.legacy_raw_pipeline", "legacy_raw")
+    return news_pipeline("news.shadow_collect_pipeline")
 
 
 def news_daily_pipeline() -> PipelineDefinition:
-    return news_pipeline("news.daily_pipeline", "shadow")
+    return news_pipeline("news.daily_pipeline")

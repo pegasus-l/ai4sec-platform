@@ -8,7 +8,7 @@ from ai4sec_platform.pipelines.runner import PipelineRunner
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run an AI4SEC platform pipeline")
-    parser.add_argument("--pipeline", default="news.legacy_raw_pipeline")
+    parser.add_argument("--pipeline", required=True)
     parser.add_argument("--reset", action="store_true")
     parser.add_argument("--params", default="{}", help="JSON object merged into pipeline params")
     args = parser.parse_args()

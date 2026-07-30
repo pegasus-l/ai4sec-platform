@@ -9,7 +9,6 @@ from ai4sec_platform.domains.capabilities.pipelines import (
 )
 from ai4sec_platform.domains.news.pipelines import (
     news_daily_pipeline,
-    news_legacy_raw_pipeline,
     news_shadow_collect_pipeline,
 )
 from ai4sec_platform.domains.threats.pipelines import huawei_asset_pipeline, huawei_attack_surface_pipeline, huawei_collect_sources_pipeline, huawei_cve_scout_pipeline, huawei_full_migration_pipeline, huawei_raw_pipeline, threat_risk_pipeline
@@ -38,7 +37,6 @@ class PipelineRegistry:
 
 def default_registry() -> PipelineRegistry:
     registry = PipelineRegistry()
-    registry.register(news_legacy_raw_pipeline())
     registry.register(news_shadow_collect_pipeline())
     registry.register(news_daily_pipeline())
     registry.register(capability_from_news_pipeline())

@@ -19,8 +19,6 @@ class AwesomeConnector(NewsLiveConnector):
         return SourceHealth(status="ok" if config.get("repositories") else "missing", message=f"{len(config.get('repositories') or [])} repositories")
 
     def fetch(self, request: SourceFetchRequest) -> SourceFetchResult:
-        if self.has_local_path(request):
-            return super().fetch(request)
         token = os.getenv("GITHUB_TOKEN", "")
         headers = {"Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28"}
         if token:

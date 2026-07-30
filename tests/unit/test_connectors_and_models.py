@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from pathlib import Path
 import urllib.error
 
 from ai4sec_platform.core.env import load_env_file
@@ -8,30 +7,14 @@ from ai4sec_platform.agents.capability_assess import CapabilityAssessAgent
 from ai4sec_platform.agents.knowledge_extract import KnowledgeExtractAgent
 from ai4sec_platform.agents.risk_reasoning import RiskReasoningAgent
 from ai4sec_platform.models.router import LLMRouter
-from ai4sec_platform.schemas.sources import SourceFetchRequest
 from ai4sec_platform.sources.registry import SourceRegistry
 from ai4sec_platform.sources.connectors.news import base_live
+from ai4sec_platform.sources.connectors.base_file import JsonFileConnector
 
 
-def test_json_source_connector_reads_ai_for_sec_raw() -> None:
-    path = Path("/home/liuqi777/ai-for-sec-report/output/raw/arxiv_20260710.json")
-    connector = SourceRegistry().get("arxiv")
-    result = connector.fetch(SourceFetchRequest(source_name="arxiv", config={"path": str(path)}))
-    assert result.errors == []
-    assert result.items
-    assert result.metadata["path"] == str(path)
-
-
-def test_json_source_connector_rejects_live_http_fetch_by_default() -> None:
-    connector = SourceRegistry().get("arxiv")
-    result = connector.fetch(
-        SourceFetchRequest(
-            source_name="arxiv_live",
-            config={"path": "https://export.arxiv.org/api/query?search_query=cat:cs.CR"},
-        )
-    )
-    assert result.items == []
-    assert result.errors == ["http_path_not_supported_by_json_file_connector"]
+def test_news_online_connectors_do_not_inherit_json_file_connector() -> None:
+    for connector_name in ["arxiv", "github", "rss", "x", "asis", "awesome"]:
+        assert not isinstance(SourceRegistry().get(connector_name), JsonFileConnector)
 
 
 def test_source_retry_uses_exponential_backoff_for_transient_errors(monkeypatch) -> None:

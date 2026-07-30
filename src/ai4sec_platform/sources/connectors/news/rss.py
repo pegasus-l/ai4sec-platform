@@ -19,16 +19,13 @@ class RssConnector(NewsLiveConnector):
         return SourceHealth(status="ok" if feeds else "missing", message=f"{len(feeds)} feeds")
 
     def fetch(self, request: SourceFetchRequest) -> SourceFetchResult:
-        if self.has_local_path(request):
-            return super().fetch(request)
         feeds = request.config.get("feeds") or []
         items: list[dict] = []
         errors: list[str] = []
         feed_metrics: list[dict] = []
         timeout = int(request.params.get("timeout_seconds") or 30)
         state_path = Path(str(request.params.get("state_path") or "")) if request.params.get("state_path") else None
-        legacy_state_path = Path(str(request.params.get("legacy_state_path") or "")) if request.params.get("legacy_state_path") else None
-        scanned_ids = _load_scanned_ids(state_path, legacy_state_path)
+        scanned_ids = _load_scanned_ids(state_path)
         initial_scanned_count = len(scanned_ids)
         for feed in feeds:
             feed_config = feed if isinstance(feed, dict) else {"name": str(feed), "url": str(feed)}
@@ -90,7 +87,7 @@ def _parse_feed(raw: bytes, feed_url: str, feed_config: dict, scanned_ids: set[s
     if channel_items:
         for item in channel_items:
             link = _child_text(item, "link") or _child_text(item, "guid")
-            state_id = _legacy_state_id(link, str(feed_config.get("source_type") or "rss"))
+            state_id = _state_id(link, str(feed_config.get("source_type") or "rss"))
             page_ids.append(state_id)
             if state_id in seen:
                 continue
@@ -116,7 +113,7 @@ def _parse_feed(raw: bytes, feed_url: str, feed_config: dict, scanned_ids: set[s
     for entry in root.findall("atom:entry", namespace):
         link = entry.find("atom:link", namespace)
         link_url = link.attrib.get("href", "") if link is not None else ""
-        state_id = _legacy_state_id(link_url, str(feed_config.get("source_type") or "rss"))
+        state_id = _state_id(link_url, str(feed_config.get("source_type") or "rss"))
         page_ids.append(state_id)
         if state_id in seen:
             continue
@@ -141,18 +138,17 @@ def _page_url(url: str, offset: int) -> str:
     return urllib.parse.urlunsplit((parsed.scheme, parsed.netloc, parsed.path, urllib.parse.urlencode(query), parsed.fragment))
 
 
-def _legacy_state_id(link: str, source_type: str) -> str:
+def _state_id(link: str, source_type: str) -> str:
     return f"rss:{source_type}:{urllib.parse.quote(link, safe='')[:120]}"
 
 
-def _load_scanned_ids(state_path: Path | None, legacy_state_path: Path | None) -> set[str]:
-    for path in [state_path, legacy_state_path]:
-        if path and path.exists():
-            try:
-                data = json.loads(path.read_text(encoding="utf-8"))
-                return {str(value) for value in data.get("scanned_rss_ids") or []}
-            except Exception:
-                continue
+def _load_scanned_ids(state_path: Path | None) -> set[str]:
+    if state_path and state_path.exists():
+        try:
+            data = json.loads(state_path.read_text(encoding="utf-8"))
+            return {str(value) for value in data.get("scanned_rss_ids") or []}
+        except Exception:
+            return set()
     return set()
 
 

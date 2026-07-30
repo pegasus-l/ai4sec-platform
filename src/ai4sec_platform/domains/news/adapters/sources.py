@@ -9,19 +9,14 @@ from typing import Any
 import yaml
 
 from ai4sec_platform.core.config import Settings
-from ai4sec_platform.domains.news.adapters.ai_for_sec_raw import load_raw_sources
 from ai4sec_platform.schemas.sources import SourceFetchRequest
 from ai4sec_platform.sources.registry import SourceRegistry
 
 
 def collect_news_sources(settings: Settings, params: dict[str, Any]) -> list[dict[str, Any]]:
     mode = str(params.get("mode") or "shadow")
-    if mode in {"legacy_raw", "fixture"}:
-        date = str(params.get("date") or "")
-        if not date:
-            raise ValueError(f"{mode} mode requires date")
-        raw_dir = Path(params.get("fixture_dir") or settings.legacy_sources.get("ai_for_sec_raw_dir", ""))
-        return [{**record, "mode": mode, "errors": []} for record in load_raw_sources(raw_dir, date)]
+    if mode != "shadow":
+        raise ValueError(f"Unsupported news source mode: {mode}")
     config = _load_config(settings.project_root)
     source_names = ["arxiv", "github", "rss", "x", "asis", "awesome"]
     requested = set(params["sources"]) if "sources" in params else set(source_names)
@@ -58,10 +53,7 @@ def _collect_live_source(settings: Settings, source: str, source_config: dict[st
         return {"source": source, "path": f"connector:{source}", "exists": True, "mode": mode, "items": items, "errors": errors, "metadata": metadata}
     source_params: dict[str, Any] = {"timeout_seconds": params.get("timeout_seconds", 30)}
     if source == "rss":
-        raw_dir = Path(settings.legacy_sources.get("ai_for_sec_raw_dir", ""))
         source_params["state_path"] = str(settings.output_dir / "source_state" / "rss.json")
-        if raw_dir:
-            source_params["legacy_state_path"] = str(raw_dir.parent.parent / "state_rss.json")
     result = connector.fetch(SourceFetchRequest(source_name=source, config=source_config, params=source_params))
     return {"source": source, "path": f"connector:{source}", "exists": True, "mode": mode, "items": result.items, "errors": result.errors, "metadata": result.metadata}
 

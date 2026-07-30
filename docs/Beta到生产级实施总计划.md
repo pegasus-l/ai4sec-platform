@@ -62,7 +62,7 @@ production_writes=false
 
 | 模块 | 当前核心能力 | 主要生产差距 |
 |---|---|---|
-| 资讯洞察 | 六源采集、本地 raw 导入、分类评分、两阶段评审、日报、专题 | 在线链路收口、增量幂等、X 数据源、真实健康检查、连续日更验收 |
+| 资讯洞察 | 六源采集、受控历史迁移、分类评分、两阶段评审、日报、专题 | 在线链路收口、增量幂等、X 数据源、真实健康检查、连续日更验收 |
 | 能力洞察 | 候选评估、复现任务、Docker 执行、报告与转化 | 正式前端、持久恢复、容器隔离、配额、SSE/API 测试、批量样本验收 |
 | 威胁洞察 | Huawei repo/CVE/固件/镜像采集、攻击面、风险研判、图谱 | TLS、CVE/资产/AI 覆盖、攻击面空值、API 性能、前端关联和专项测试 |
 | 漏洞洞察 | 检索、抓取、素材审核、事件聚合、知识抽取、字段审核 | 事件人工治理、证据定位、字段版本、增量更新、大规模质量校准 |
@@ -825,7 +825,7 @@ D11 暂缓的是公网入口和完整公网暴露治理，不代表复现容器�
 - [x] 能力复现 Web 端口代理默认只绑定 `127.0.0.1`；受认证反向代理将在部署阶段接入。
 - [x] 能力 API/Pipeline 只写持久任务，独立 Repro Worker 使用短连接写日志与状态，不再复用请求级 SQLite connection。
 - [x] 漏洞抓取 URL 已接入统一公网 URL 策略，阻断非法协议、URL 凭据、localhost、非公网 IP、解析到非公网地址的域名及 urllib 私网重定向；DNS 重绑定最终防线仍由部署出口策略提供。
-- [ ] 资讯明确 legacy raw 仅用于迁移，不进入正式运行菜单。
+- [x] 资讯 legacy raw 已从正式 Registry、API、普通 Pipeline CLI、在线 adapter 和默认配置移除，仅保留受控一次性迁移 CLI。
 
 #### 验收
 
@@ -882,9 +882,9 @@ D11 暂缓的是公网入口和完整公网暴露治理，不代表复现容器�
 
 #### 3A. 资讯洞察
 
-- [ ] 从正式菜单移除 `news.legacy_raw_pipeline`。
-- [ ] 将历史导入改为受控一次性迁移命令。
-- [ ] 在线连接器与本地 JSON 基类解耦。
+- [x] 从正式菜单移除 `news.legacy_raw_pipeline`。
+- [x] 将历史导入改为受控一次性迁移命令。
+- [x] 在线连接器与本地 JSON 基类解耦。
 - [ ] 明确 X 修复、更换或禁用方案。
 - [ ] 完成六源分页、超时、重试、增量和真实健康检查。
 - [ ] 建立 RSS/X/ASIS 等正式水位线。
@@ -1875,3 +1875,12 @@ Python full test suite: 199 passed
 - urllib fallback 使用自定义 Redirect Handler，对每一跳重定向目标重新执行 DNS 与公网地址校验；crawl4ai 浏览器路径校验入口和最终 URL。
 - 应用层校验无法完全消除 DNS 查询与实际连接之间的重绑定竞态，生产 Compose 仍必须阻断平台管理网、Docker 网桥、宿主机和云 metadata 的网络出口。
 - SSRF 与漏洞抓取聚焦测试 26 passed。
+
+### 2026-07-30：资讯 legacy raw 正式退场
+
+- 删除 `news.legacy_raw_pipeline` 定义及 Registry、API 默认值、普通 Pipeline CLI 默认值和 `configs/pipelines.yaml` 注册，旧名称经 HTTP 提交返回 404。
+- 新增 `import_news_legacy_raw` 一次性迁移 CLI，必须显式提供源目录、日期和确认参数；不允许重置资讯域，通过单机文件锁防止并发导入，同一日期与文件内容 checksum 成功后禁止重复导入。
+- 历史文件读取物理隔离到 `domains/news/migrations.py`，删除旧 `adapters/ai_for_sec_raw.py`；迁移源绝对路径不写入可查询 Run 参数。
+- arXiv、GitHub、RSS、X、ASIS 和 Awesome 在线连接器不再继承 `JsonFileConnector`，正式 source adapter 不再接受 `legacy_raw`/`fixture` 模式。
+- RSS 增量状态只读取平台 `output/source_state/rss.json`，不再回退旧系统 `state_rss.json`。
+- 资讯迁移、API、架构、在线连接器和资讯模块聚焦测试 39 passed；全仓 Python 测试 267 passed，`compileall` 与 `git diff --check` 通过。

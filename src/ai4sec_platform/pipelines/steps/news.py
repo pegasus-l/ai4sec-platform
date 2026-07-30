@@ -24,41 +24,45 @@ class CollectNewsSourcesStep:
 
     def run(self, context: PipelineContext) -> StepResult:
         if "mode" not in context.params:
-            context.params["mode"] = "legacy_raw" if context.pipeline_name == "news.legacy_raw_pipeline" else "shadow"
+            context.params["mode"] = "shadow"
         records = collect_news_sources(context.settings, context.params)
-        artifacts = []
-        raw_records = []
-        for record in records:
-            artifact = context.artifact_store.write_json(
-                context.conn,
-                run_id=context.run_id,
-                artifact_type=f"raw_news_{record['source']}",
-                name=f"raw/news/{record['source']}.json",
-                data={key: record.get(key) for key in ["source", "path", "exists", "mode", "items", "errors", "metadata"]},
-            )
-            artifacts.append(artifact)
-            raw_id = repo.create_raw_artifact(
-                context.conn,
-                run_id=context.run_id,
-                domain="news",
-                source=record["source"],
-                source_type=record.get("mode", "shadow"),
-                source_path=record.get("path", ""),
-                item_count=len(record.get("items") or []),
-                payload={"exists": record.get("exists", True), "errors": record.get("errors", []), "artifact": artifact},
-            )
-            repo.create_data_source(
-                context.conn,
-                domain="news",
-                name=record["source"],
-                source_type=record.get("mode", "shadow"),
-                status="ok" if not record.get("errors") else "degraded",
-                health="ok" if not record.get("errors") else "degraded",
-                summary={"items": len(record.get("items") or []), "errors": record.get("errors", []), "run_id": context.run_id},
-            )
-            raw_records.append({"id": raw_id, **record})
-        context.outputs["news_raw_sources"] = raw_records
-        return StepResult(metrics={"sources": len(records), "items": sum(len(record.get("items") or []) for record in records), "errors": sum(len(record.get("errors") or []) for record in records)}, artifacts=artifacts)
+        return persist_news_source_records(context, records)
+
+
+def persist_news_source_records(context: PipelineContext, records: list[dict[str, Any]]) -> StepResult:
+    artifacts = []
+    raw_records = []
+    for record in records:
+        artifact = context.artifact_store.write_json(
+            context.conn,
+            run_id=context.run_id,
+            artifact_type=f"raw_news_{record['source']}",
+            name=f"raw/news/{record['source']}.json",
+            data={key: record.get(key) for key in ["source", "path", "exists", "mode", "items", "errors", "metadata"]},
+        )
+        artifacts.append(artifact)
+        raw_id = repo.create_raw_artifact(
+            context.conn,
+            run_id=context.run_id,
+            domain="news",
+            source=record["source"],
+            source_type=record.get("mode", "shadow"),
+            source_path=record.get("path", ""),
+            item_count=len(record.get("items") or []),
+            payload={"exists": record.get("exists", True), "errors": record.get("errors", []), "artifact": artifact},
+        )
+        repo.create_data_source(
+            context.conn,
+            domain="news",
+            name=record["source"],
+            source_type=record.get("mode", "shadow"),
+            status="ok" if not record.get("errors") else "degraded",
+            health="ok" if not record.get("errors") else "degraded",
+            summary={"items": len(record.get("items") or []), "errors": record.get("errors", []), "run_id": context.run_id},
+        )
+        raw_records.append({"id": raw_id, **record})
+    context.outputs["news_raw_sources"] = raw_records
+    return StepResult(metrics={"sources": len(records), "items": sum(len(record.get("items") or []) for record in records), "errors": sum(len(record.get("errors") or []) for record in records)}, artifacts=artifacts)
 
 
 @dataclass

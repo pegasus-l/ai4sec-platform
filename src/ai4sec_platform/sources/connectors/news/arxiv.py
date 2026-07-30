@@ -17,8 +17,6 @@ class ArxivConnector(NewsLiveConnector):
         return SourceHealth(status="ok", message=self.api_url)
 
     def fetch(self, request: SourceFetchRequest) -> SourceFetchResult:
-        if self.has_local_path(request):
-            return super().fetch(request)
         category = str(request.params.get("category") or "")
         if category:
             url = f"https://rss.arxiv.org/rss/{category}"

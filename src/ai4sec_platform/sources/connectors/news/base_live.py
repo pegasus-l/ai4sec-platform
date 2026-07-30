@@ -8,9 +8,6 @@ from typing import TypeVar
 import urllib.error
 import urllib.request
 
-from ai4sec_platform.schemas.sources import SourceFetchRequest
-from ai4sec_platform.sources.connectors.base_file import JsonFileConnector
-
 ResultType = TypeVar("ResultType")
 
 
@@ -37,10 +34,7 @@ def is_retryable_source_error(exc: Exception) -> bool:
     return any(marker in message for marker in ["timed out", "timeout", "connection reset", "connection aborted", "temporarily unavailable", "service unavailable", "rate limit"])
 
 
-class NewsLiveConnector(JsonFileConnector):
-    def has_local_path(self, request: SourceFetchRequest) -> bool:
-        return bool(request.config.get("path") or request.params.get("path"))
-
+class NewsLiveConnector:
     def get_bytes(self, url: str, *, timeout: int = 30, headers: dict[str, str] | None = None, attempts: int = 3) -> bytes:
         def request_once() -> bytes:
             request = urllib.request.Request(

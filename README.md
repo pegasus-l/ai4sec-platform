@@ -2,13 +2,12 @@
 
 AI4SEC 统一洞察平台新工程目录。
 
-当前阶段目标：在 shadow-only 约束下走新平台自己的采集、标准化、去重、证据、评估和展示链路；资讯洞察支持本地 raw 回归导入和 arXiv/GitHub/RSS shadow 采集，不写生产库、不覆盖旧报告。
+当前阶段目标：在 shadow-only 约束下走新平台自己的采集、标准化、去重、证据、评估和展示链路；资讯洞察正式运行使用在线连接器，本地历史 raw 仅保留受控一次性迁移入口，不写生产库、不覆盖旧报告。
 
 ## 快速开始
 
 ```bash
 cd /mnt/d/漏洞挖掘/洞察工具/dashboard/ai4sec-platform
-PYTHONPATH=src python3 -m ai4sec_platform.cli.run_pipeline --pipeline news.legacy_raw_pipeline --reset
 PYTHONPATH=src uvicorn ai4sec_platform.app.main:app --reload --host 127.0.0.1 --port 8000
 ```
 
@@ -59,7 +58,7 @@ AGENTS.md
 - `.env` 被 Git 忽略。
 - 输出数据库位于 `output/ai4sec_platform.db`，也被 Git 忽略。
 - 当前实现 `production_writes=false`，不写生产路径。
-- 资讯洞察支持 arXiv/GitHub/RSS shadow 采集，也支持本地 raw 回归导入；漏洞当前仍按既定范围读取本地 raw 输入。
+- 资讯洞察正式入口只提供在线 shadow/daily Pipeline；历史 raw 只能通过一次性迁移 CLI 导入，不能从 HTTP API 或普通 Pipeline CLI 触发。
 - 模型配置从 `.env` 自动读取，优先使用 DeepSeek / DashScope / Local LLM 这类 OpenAI-compatible 配置；测试环境默认回退到 `local_rules`，避免单测触发真实模型费用。
 
 ### CORS
@@ -193,7 +192,7 @@ API 提交的任务只写入 SQLite `pipeline_jobs`，立即返回可轮询的 `
 
 ```text
 POST /api/runs
-{"pipeline_name": "news.legacy_raw_pipeline", "reset": true, "params": {"date": "2026-07-10"}}
+{"pipeline_name": "news.daily_pipeline", "reset": false, "params": {}}
 ```
 
 API 不接受 `wait` 或其他未声明字段，也不会在 Uvicorn 请求进程内创建 Worker。需要同步调试时使用 Pipeline CLI，集成测试则显式提交任务后调用测试 Worker 领取。
@@ -228,10 +227,10 @@ Checkpoint 绑定 Pipeline、业务参数、Step 顺序、Step 类实现源码�
 也可以绕过队列直接通过 CLI 执行调试 pipeline：
 
 ```bash
-PYTHONPATH=src python3 -m ai4sec_platform.cli.run_pipeline --pipeline news.legacy_raw_pipeline --reset
+PYTHONPATH=src python3 -m ai4sec_platform.cli.run_pipeline --pipeline news.daily_pipeline
 ```
 
-该 pipeline 会创建总控 PipelineRun，读取本地原始 JSON，执行标准化、去重、资讯对象构建、日报生成和质量审计，写入 TaskRun、Artifact 和 manifest，仍保持 `production_writes=false`。
+该 pipeline 会创建总控 PipelineRun，通过在线连接器采集数据，执行标准化、去重、资讯对象构建、日报生成和质量审计，写入 TaskRun、Artifact 和 manifest，仍保持 `production_writes=false`。
 
 能力复现强制使用受管模型 Secret，必须配置 `REPRO_MODEL_TOKEN_FILE` 指向权限为 `0600` 的普通文件，并配置 `REPRO_LLM_BASE_URL`。Runner 将 Secret 只读挂载到容器，OpenCode 配置通过 `{file:...}` 引用，不会把 token 放入 Prompt、Docker 命令行、`opencode.json` 或宿主机子进程环境。符号链接、目录、缺失文件和 group/other 可读文件会被拒绝。
 
@@ -265,25 +264,20 @@ PYTHONPATH=src python3 -m ai4sec_platform.cli.run_pipeline \
   --reset
 ```
 
-## 本地原始数据导入说明
+## 资讯历史数据一次性迁移
 
-当前正式主线已经迁移到 local raw import。这里的 `raw` 指“旧系统已经保存到磁盘的原始 JSON 文件”，不是联网采集；旧的 `importers/` 兼容导入目录已经删除，避免继续依赖旧处理结果。
+资讯正式主线使用在线连接器。旧系统保存的六源原始 JSON 仅在首次迁移历史数据时使用，不属于日常采集、调度或运营菜单。
 
-新闻洞察本地原始数据导入：
+迁移必须显式提供源目录、日期和确认参数：
 
 ```bash
-PYTHONPATH=src python3 -m ai4sec_platform.cli.run_pipeline \
-  --pipeline news.legacy_raw_pipeline \
-  --reset
+ PYTHONPATH=src python3 -m ai4sec_platform.cli.import_news_legacy_raw \
+  --source-dir /path/to/ai-for-sec-report/output/raw \
+  --date 2026-07-10 \
+  --confirm-one-time-import
 ```
 
-该 pipeline 从 AI-for-Sec 本地 raw 六源文件读取数据，写入 `raw_artifacts`、`normalized_items`，再构造 `news` 的 `domain_items`、证据、日报和质量审计。它不联网，也不以旧 `selected_entries.json` 作为正式主输入；能力候选只在用户操作或能力域 pipeline 中生成。
-
-对应 API：
-
-```text
-POST /api/runs {"pipeline_name": "news.legacy_raw_pipeline", "reset": true, "params": {"date": "2026-07-10"}}
-```
+该命令默认要求六源文件齐全；确知历史批次本来就缺源时才增加 `--allow-missing-sources`，缺失源会记录为 degraded。命令不联网、不重置资讯域，将输入文件名、内容和日期计算为迁移 checksum；同一批成功数据禁止重复导入。迁移定义不注册到 `/api/runs/pipelines`，`news.legacy_raw_pipeline` 已删除，HTTP API 会返回 404。
 
 ## 工程骨架状态
 
@@ -293,15 +287,15 @@ POST /api/runs {"pipeline_name": "news.legacy_raw_pipeline", "reset": true, "par
 app / core / db / schemas / sources / artifacts / pipelines / domains / agents / models / ops / cli
 ```
 
-其中资讯本地 raw 导入、漏洞素材本地 raw 导入、漏洞外部素材发现与威胁 connector pipeline 已可运行；其他业务域继续在标准目录、service/pipeline/adapter/builder/audit 文件边界内填实逻辑，不再新增散乱脚本。
+其中资讯在线采集、资讯历史一次性迁移、漏洞素材导入、漏洞外部素材发现与威胁 connector pipeline 已可运行；其他业务域继续在标准目录、service/pipeline/adapter/builder/audit 文件边界内填实逻辑，不再新增散乱脚本。
 
 ## 已实现核心 Pipelines
 
 当前已实现资讯、威胁、漏洞核心输入处理 pipeline：
 
 ```bash
-PYTHONPATH=src python3 -m ai4sec_platform.cli.run_pipeline --pipeline news.legacy_raw_pipeline --reset
 PYTHONPATH=src python3 -m ai4sec_platform.cli.run_pipeline --pipeline news.shadow_collect_pipeline --reset
+PYTHONPATH=src python3 -m ai4sec_platform.cli.run_pipeline --pipeline news.daily_pipeline
 PYTHONPATH=src python3 -m ai4sec_platform.cli.run_pipeline --pipeline threats.huawei_raw_pipeline --reset
 PYTHONPATH=src python3 -m ai4sec_platform.cli.run_pipeline --pipeline vulnerabilities.material_local_raw_import --reset
 PYTHONPATH=src python3 -m ai4sec_platform.cli.run_pipeline --pipeline vulnerabilities.external_material_discovery_pipeline --params '{"queries":["CVE-2024 exploit root cause analysis"],"max_results":5,"crawl_limit":5}'
@@ -310,8 +304,8 @@ PYTHONPATH=src python3 -m ai4sec_platform.cli.run_pipeline --pipeline vulnerabil
 
 说明：
 
-- `news.legacy_raw_pipeline` 从 AI-for-Sec 六类本地 raw 文件导入。
 - `news.shadow_collect_pipeline` 从 arXiv/GitHub/RSS 获取最新资讯并走同一套处理链路。
+- `news.daily_pipeline` 是资讯正式日更入口；历史 raw 迁移不属于 Pipeline Registry。
 - `threats.huawei_raw_pipeline` 通过威胁 connector 获取华为 repo、issue/security 文件、固件和镜像数据并生成威胁目标。
 - `vulnerabilities.material_local_raw_import` 从漏洞素材 report 本地 JSON 导入。
 - `vulnerabilities.external_material_discovery_pipeline` 通过 AnySearch 获取候选 URL，经 crawl4ai/urllib 抓取、规则审核后构建优质漏洞素材；未配置 `ANYSEARCH_API_KEY` 时可通过 `seed_candidates` 参数做 shadow/测试运行。
@@ -407,7 +401,7 @@ PYTHONPATH=src python3 -m ai4sec_platform.cli.run_pipeline \
 
 ## 能力洞察 Pipeline
 
-在 `news.legacy_raw_pipeline` 运行后，可以继续运行：
+在 `news.daily_pipeline` 或 `news.shadow_collect_pipeline` 产生资讯后，可以继续运行：
 
 ```bash
 PYTHONPATH=src python3 -m ai4sec_platform.cli.run_pipeline --pipeline capabilities.from_news_pipeline

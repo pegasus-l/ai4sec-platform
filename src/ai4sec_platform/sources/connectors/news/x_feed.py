@@ -17,8 +17,6 @@ class XFeedConnector(NewsLiveConnector):
         return SourceHealth(status="ok" if os.getenv("GETXAPI_KEY") else "missing", message="GETXAPI_KEY")
 
     def fetch(self, request: SourceFetchRequest) -> SourceFetchResult:
-        if self.has_local_path(request):
-            return super().fetch(request)
         api_key = os.getenv("GETXAPI_KEY", "")
         accounts = request.config.get("accounts") or []
         if not api_key:
