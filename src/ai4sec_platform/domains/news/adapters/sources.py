@@ -20,7 +20,13 @@ def collect_news_sources(settings: Settings, params: dict[str, Any]) -> list[dic
     config = _load_config(settings.project_root)
     source_names = ["arxiv", "github", "rss", "x", "asis", "awesome"]
     requested = set(params["sources"]) if "sources" in params else set(source_names)
-    enabled_sources = [source for source in source_names if source in requested and config.get("sources", {}).get(source, {}).get("enabled", True)]
+    source_configs = config.get("sources", {})
+    enabled_sources = [source for source in source_names if source in requested and source_configs.get(source, {}).get("enabled", True)]
+    disabled_records = {
+        source: _disabled_source_record(source, source_configs.get(source, {}), mode)
+        for source in source_names
+        if source in requested and not source_configs.get(source, {}).get("enabled", True)
+    }
     max_workers = max(1, min(len(enabled_sources), int(params.get("source_workers") or config.get("collection", {}).get("max_workers", 4))))
     records_by_source: dict[str, dict[str, Any]] = {}
     with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="news-source") as pool:
@@ -31,7 +37,22 @@ def collect_news_sources(settings: Settings, params: dict[str, Any]) -> list[dic
                 records_by_source[source] = future.result()
             except Exception as exc:
                 records_by_source[source] = {"source": source, "path": f"connector:{source}", "exists": True, "mode": mode, "items": [], "errors": [str(exc)], "metadata": {"worker_failure": True}}
-    return [records_by_source[source] for source in enabled_sources]
+    return [records_by_source.get(source) or disabled_records[source] for source in source_names if source in enabled_sources or source in disabled_records]
+
+
+def _disabled_source_record(source: str, source_config: dict[str, Any], mode: str) -> dict[str, Any]:
+    reason = str(source_config.get("disabled_reason") or f"{source} source is disabled")
+    return {
+        "source": source,
+        "path": f"connector:{source}",
+        "exists": True,
+        "mode": mode,
+        "status": "disabled",
+        "health": "disabled",
+        "items": [],
+        "errors": [],
+        "metadata": {"disabled": True, "disabled_reason": reason},
+    }
 
 
 def _collect_live_source(settings: Settings, source: str, source_config: dict[str, Any], params: dict[str, Any], mode: str) -> dict[str, Any]:
@@ -61,6 +82,10 @@ def _collect_live_source(settings: Settings, source: str, source_config: dict[st
 def _load_config(project_root: Path) -> dict[str, Any]:
     path = project_root / "configs" / "news.yaml"
     return yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+
+
+def load_news_source_configs(project_root: Path) -> dict[str, dict[str, Any]]:
+    return _load_config(project_root).get("sources", {})
 
 
 def _arxiv_requests(config: dict[str, Any], params: dict[str, Any]) -> list[dict[str, Any]]:

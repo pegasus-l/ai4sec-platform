@@ -10,11 +10,19 @@ from ai4sec_platform.models.router import LLMRouter
 from ai4sec_platform.sources.registry import SourceRegistry
 from ai4sec_platform.sources.connectors.news import base_live
 from ai4sec_platform.sources.connectors.base_file import JsonFileConnector
+from ai4sec_platform.sources.connectors.news.x_feed import XFeedConnector
 
 
 def test_news_online_connectors_do_not_inherit_json_file_connector() -> None:
     for connector_name in ["arxiv", "github", "rss", "x", "asis", "awesome"]:
         assert not isinstance(SourceRegistry().get(connector_name), JsonFileConnector)
+
+
+def test_x_source_health_reports_disabled_reason() -> None:
+    health = XFeedConnector().health_check({"enabled": False, "disabled_reason": "provider unavailable"})
+
+    assert health.status == "disabled"
+    assert health.message == "provider unavailable"
 
 
 def test_source_retry_uses_exponential_backoff_for_transient_errors(monkeypatch) -> None:

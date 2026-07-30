@@ -52,7 +52,8 @@ def test_live_source_config_matches_legacy_six_source_baseline() -> None:
         "article_api_base": "http://localhost:8001/api/v1/wx/articles",
     }]
     assert [account["username"] for account in config["x"]["accounts"]] == ["__suto", "moyix", "halaboratory", "AnthropicAI", "GoogleVRP"]
-    assert config["x"]["enabled"] is True
+    assert config["x"]["enabled"] is False
+    assert config["x"]["disabled_reason"]
     assert config["asis"]["enabled"] is True
     assert config["awesome"]["repositories"] == ["tmgthb/Autonomous-Agents"]
 
@@ -80,6 +81,30 @@ def test_live_sources_run_with_bounded_concurrency(monkeypatch, tmp_path) -> Non
     records = source_adapter.collect_news_sources(settings, {"sources": ["rss", "x", "asis"], "source_workers": 3})
     assert [record["source"] for record in records] == ["rss", "x", "asis"]
     assert max_active == 3
+
+
+def test_disabled_news_source_is_reported_without_network(monkeypatch, tmp_path) -> None:
+    config = {
+        "collection": {"max_workers": 1},
+        "sources": {"x": {"enabled": False, "disabled_reason": "provider unavailable"}},
+    }
+    monkeypatch.setattr(source_adapter, "_load_config", lambda _root: config)
+    monkeypatch.setattr(source_adapter.SourceRegistry, "get", lambda *_args: (_ for _ in ()).throw(AssertionError("disabled source must not fetch")))
+    settings = Settings(project_root=PROJECT_ROOT, output_dir=tmp_path, database_path=tmp_path / "test.db", legacy_sources={})
+
+    records = source_adapter.collect_news_sources(settings, {"sources": ["x"]})
+
+    assert records == [{
+        "source": "x",
+        "path": "connector:x",
+        "exists": True,
+        "mode": "shadow",
+        "status": "disabled",
+        "health": "disabled",
+        "items": [],
+        "errors": [],
+        "metadata": {"disabled": True, "disabled_reason": "provider unavailable"},
+    }]
 
 
 def test_legacy_arxiv_and_github_channels_are_expanded() -> None:
@@ -285,6 +310,10 @@ def test_news_operations_exposes_domain_scoped_pipeline_metrics() -> None:
     assert len(overview["sources"]) == 6
     assert overview["sources"][0]["health"] == "healthy"
     assert overview["sources"][0]["collected_count"] == 20
+    x_source = next(source for source in overview["sources"] if source["id"] == "x")
+    assert x_source["status"] == "disabled"
+    assert x_source["disabled"] is True
+    assert x_source["disabled_reason"]
     assert overview["processing"]["collected"] == 20
     assert overview["processing"]["gate_passed"] == 12
 

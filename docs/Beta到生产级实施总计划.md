@@ -885,7 +885,7 @@ D11 暂缓的是公网入口和完整公网暴露治理，不代表复现容器�
 - [x] 从正式菜单移除 `news.legacy_raw_pipeline`。
 - [x] 将历史导入改为受控一次性迁移命令。
 - [x] 在线连接器与本地 JSON 基类解耦。
-- [ ] 明确 X 修复、更换或禁用方案。
+- [x] X 当前正式禁用：仓库未配置可用凭据，原 GetXAPI 方案不可用；替换服务完成连通性、认证、额度和样本质量验收前不得重新启用。
 - [ ] 完成六源分页、超时、重试、增量和真实健康检查。
 - [ ] 建立 RSS/X/ASIS 等正式水位线。
 - [ ] 完成资讯、日报、ModelCall 幂等。
@@ -1884,3 +1884,12 @@ Python full test suite: 199 passed
 - arXiv、GitHub、RSS、X、ASIS 和 Awesome 在线连接器不再继承 `JsonFileConnector`，正式 source adapter 不再接受 `legacy_raw`/`fixture` 模式。
 - RSS 增量状态只读取平台 `output/source_state/rss.json`，不再回退旧系统 `state_rss.json`。
 - 资讯迁移、API、架构、在线连接器和资讯模块聚焦测试 39 passed；全仓 Python 测试 267 passed，`compileall` 与 `git diff --check` 通过。
+
+### 2026-07-30：X 数据源正式禁用
+
+- 当前环境不存在 `GETXAPI_KEY`，原 GetXAPI 方案此前存在不可用/额度类失败风险；继续启用会让每次资讯日更产生确定性失败，因此 `configs/news.yaml` 将 X 显式设为 disabled 并记录中文原因。
+- 禁用源仍作为六源之一写入数据源状态，但不发起网络请求、不计入来源失败；在全新数据库尚无运行记录时，运营 API 也会从配置返回 disabled 状态和原因。
+- 资讯运营页显示“已禁用”和具体原因，禁用重跑按钮；按单源重跑 X 也只刷新 disabled 状态，不会绕过配置访问网络。
+- X 连接器健康检查区分 disabled、missing 和 configured；configured 仅表示凭据存在，重新启用前仍需补充真实连通性、认证、额度和最近成功时间探测。
+- 重新启用门槛：确定替换 Provider，完成真实健康探测、分页/限流/402 类错误分类、增量 ID 状态和至少一个完整日更样本验收。
+- X/资讯聚焦测试通过；全仓 Python 测试 269 passed，前端生产构建、`compileall` 与 `git diff --check` 通过。前端构建仍有既有的动态/静态 import 和大 chunk 警告，本次未扩大依赖升级范围。

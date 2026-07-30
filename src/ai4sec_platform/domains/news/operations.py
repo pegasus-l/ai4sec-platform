@@ -3,7 +3,9 @@ from __future__ import annotations
 import sqlite3
 from typing import Any
 
+from ai4sec_platform.core.config import load_settings
 from ai4sec_platform.db import repositories as repo
+from ai4sec_platform.domains.news.adapters.sources import load_news_source_configs
 
 NEWS_SOURCES = ("arxiv", "github", "rss", "asis", "awesome", "x")
 
@@ -42,6 +44,7 @@ def run_detail(conn: sqlite3.Connection, run_id: str) -> dict[str, Any] | None:
 
 
 def source_status(conn: sqlite3.Connection) -> list[dict[str, Any]]:
+    source_configs = load_news_source_configs(load_settings().project_root)
     item_counts = {row["source"]: int(row["count"]) for row in conn.execute("SELECT source, COUNT(*) AS count FROM domain_items WHERE domain = 'news' GROUP BY source")}
     rows = conn.execute("SELECT * FROM data_sources WHERE domain = 'news' ORDER BY id DESC").fetchall()
     latest = {}
@@ -50,18 +53,23 @@ def source_status(conn: sqlite3.Connection) -> list[dict[str, Any]]:
     result = []
     for source in NEWS_SOURCES:
         row = latest.get(source)
+        source_config = source_configs.get(source, {})
+        configured_disabled = not source_config.get("enabled", True)
         summary = repo.loads(row["summary_json"], {}) if row else {}
         errors = [str(error) for error in summary.get("errors", []) if error]
+        disabled = configured_disabled or bool(summary.get("disabled")) or bool(row and (row["status"] == "disabled" or row["health"] == "disabled"))
         result.append({
             "id": source,
             "name": source,
-            "status": row["status"] if row else "unknown",
-            "health": row["health"] if row else "unknown",
+            "status": row["status"] if row else "disabled" if disabled else "unknown",
+            "health": row["health"] if row else "disabled" if disabled else "unknown",
             "latest_at": (row["latest_at"] or row["created_at"]) if row else "",
             "item_count": item_counts.get(source, 0),
             "collected_count": int(summary.get("items") or 0),
             "error_count": len(errors),
             "errors": errors,
+            "disabled": disabled,
+            "disabled_reason": str(summary.get("disabled_reason") or source_config.get("disabled_reason") or ""),
             "summary": summary,
         })
     return result

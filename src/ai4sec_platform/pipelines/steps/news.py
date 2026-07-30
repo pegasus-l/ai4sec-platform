@@ -56,9 +56,14 @@ def persist_news_source_records(context: PipelineContext, records: list[dict[str
             domain="news",
             name=record["source"],
             source_type=record.get("mode", "shadow"),
-            status="ok" if not record.get("errors") else "degraded",
-            health="ok" if not record.get("errors") else "degraded",
-            summary={"items": len(record.get("items") or []), "errors": record.get("errors", []), "run_id": context.run_id},
+            status=record.get("status") or ("ok" if not record.get("errors") else "degraded"),
+            health=record.get("health") or ("ok" if not record.get("errors") else "degraded"),
+            summary={
+                "items": len(record.get("items") or []),
+                "errors": record.get("errors", []),
+                "run_id": context.run_id,
+                **(record.get("metadata") or {}),
+            },
         )
         raw_records.append({"id": raw_id, **record})
     context.outputs["news_raw_sources"] = raw_records

@@ -137,7 +137,8 @@ sources:
         page_size: 30
         article_api_base: http://localhost:8001/api/v1/wx/articles
   x:
-    enabled: true
+    enabled: false
+    disabled_reason: 当前未配置可用的 X 数据服务凭据；原 GetXAPI 方案不可用，正式禁用直至完成替换与验收。
     api_base: https://api.getxapi.com
     tweets_per_account: 20
     min_likes: 5

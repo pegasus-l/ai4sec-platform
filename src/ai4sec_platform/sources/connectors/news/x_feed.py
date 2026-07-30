@@ -14,7 +14,9 @@ class XFeedConnector(NewsLiveConnector):
     source_type = "discovery"
 
     def health_check(self, config: dict) -> SourceHealth:
-        return SourceHealth(status="ok" if os.getenv("GETXAPI_KEY") else "missing", message="GETXAPI_KEY")
+        if not config.get("enabled", True):
+            return SourceHealth(status="disabled", message=str(config.get("disabled_reason") or "X source is disabled"))
+        return SourceHealth(status="configured" if os.getenv("GETXAPI_KEY") else "missing", message="GETXAPI_KEY")
 
     def fetch(self, request: SourceFetchRequest) -> SourceFetchResult:
         api_key = os.getenv("GETXAPI_KEY", "")
