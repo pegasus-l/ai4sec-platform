@@ -476,9 +476,9 @@ def append_repro_log(conn: sqlite3.Connection, *, task_id: int, line: str) -> No
 
 
 def get_succeeded_repro_item_ids(conn: sqlite3.Connection) -> set[int]:
-    """已成功复现的 item_id 集合（含 status=success 或 partial）"""
+    """已完整成功复现的 item_id 集合；partial 仍允许后续自动重试。"""
     rows = conn.execute(
-        "SELECT DISTINCT item_id FROM capability_repro_tasks WHERE status IN ('success', 'partial')"
+        "SELECT DISTINCT item_id FROM capability_repro_tasks WHERE status = 'success'"
     ).fetchall()
     return {row["item_id"] for row in rows}
 

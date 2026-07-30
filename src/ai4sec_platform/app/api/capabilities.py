@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import socket
 import sqlite3
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -30,9 +31,12 @@ from ai4sec_platform.app.dependencies import get_db
 from ai4sec_platform.db import repositories as repo
 from ai4sec_platform.domains.capabilities.adapters.repro_runner import classify_log_line
 from ai4sec_platform.domains.capabilities.assessments import classify_batch
+from ai4sec_platform.domains.capabilities.audits import audit_missing_fields, audit_repro_failures
 from ai4sec_platform.domains.capabilities.repro_jobs import request_repro_cleanup, request_repro_stop
 from ai4sec_platform.domains.capabilities.schemas import ReproTaskResponse
 from ai4sec_platform.domains.capabilities.selectors import pick_top_repro_candidates, _resolve_repo_url
+from ai4sec_platform.domains.capabilities.service import classify_stats as capability_classify_stats
+from ai4sec_platform.domains.capabilities.service import stats as capability_stats
 from ai4sec_platform.services import domain_items, operations
 
 router = APIRouter(prefix="/capabilities", tags=["capabilities"])
@@ -336,6 +340,31 @@ def classify_stats(conn: sqlite3.Connection = Depends(get_db)) -> dict:
     }
 
 
+@router.get("/stats")
+def stats(conn: sqlite3.Connection = Depends(get_db)) -> dict:
+    return capability_stats(conn)
+
+
+@router.get("/ops/overview")
+def ops_overview(conn: sqlite3.Connection = Depends(get_db)) -> dict:
+    return {
+        "stats": capability_stats(conn),
+        "classify_stats": capability_classify_stats(conn),
+        "repro_failures": audit_repro_failures(conn),
+        "missing_fields": audit_missing_fields(conn),
+    }
+
+
+@router.get("/ops/repro-failures")
+def ops_repro_failures(conn: sqlite3.Connection = Depends(get_db)) -> dict:
+    return audit_repro_failures(conn)
+
+
+@router.get("/ops/missing-fields")
+def ops_missing_fields(conn: sqlite3.Connection = Depends(get_db)) -> dict:
+    return audit_missing_fields(conn)
+
+
 # ============================================================================
 # 辅助函数
 # ============================================================================
@@ -349,6 +378,16 @@ def _alloc_web_port(conn) -> int | None:
     ).fetchall()
     used = {row["web_port"] for row in rows}
     for port in range(base, max_port + 1):
-        if port not in used:
+        if port not in used and _port_is_available(port):
             return port
     return None
+
+
+def _port_is_available(port: int) -> bool:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+        probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            probe.bind(("127.0.0.1", port))
+        except OSError:
+            return False
+    return True

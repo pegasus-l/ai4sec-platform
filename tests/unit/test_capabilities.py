@@ -16,18 +16,24 @@ from __future__ import annotations
 import base64
 import json
 from pathlib import Path
+import sqlite3
 import time
 
+from ai4sec_platform.db.repositories import get_succeeded_repro_item_ids
 from ai4sec_platform.domains.capabilities.adapters import repro_runner
 from ai4sec_platform.domains.capabilities.adapters.from_news import capability_candidates_from_news
 from ai4sec_platform.domains.capabilities.adapters.repro_runner import (
     ReproRunner,
     _build_repro_prompt,
+    _build_web_repro_prompt,
+    _repo_archive_url,
     classify_log_line,
+    enforce_report_acceptance,
     extract_report,
     redact_sensitive_text,
     sanitized_subprocess_env,
     strip_ansi,
+    task_status_from_report,
 )
 from ai4sec_platform.domains.capabilities.adapters.repro_results import update_capability_from_report
 from ai4sec_platform.domains.capabilities.assessments import (
@@ -40,6 +46,7 @@ from ai4sec_platform.domains.capabilities.dedupe import dedupe_candidates, ident
 from ai4sec_platform.domains.capabilities.normalizers import normalize_capability_candidate
 from ai4sec_platform.domains.capabilities.scorers import score_capability_candidate
 from ai4sec_platform.domains.capabilities.selectors import _resolve_repo_url
+from ai4sec_platform.pipelines.steps.capability import _validated_capability_score
 
 
 # ============================================================================
@@ -208,6 +215,12 @@ def test_score_capability_candidate_security_topic_boost() -> None:
     assert result.breakdown["security_value"] == 1.0  # 安全主题命中
 
 
+def test_model_capability_score_is_bounded_and_falls_back() -> None:
+    assert _validated_capability_score("invalid", 3.2) == 3.2
+    assert _validated_capability_score(9, 3.2) == 5.0
+    assert _validated_capability_score(-1, 3.2) == 1.0
+
+
 # ============================================================================
 # repro_runner: classify_log_line 7 类 + strip_ansi + extract_report
 # ============================================================================
@@ -245,6 +258,90 @@ def test_extract_report_loose_json() -> None:
 
 def test_extract_report_no_report_returns_none() -> None:
     assert extract_report("just some log output") is None
+
+
+def test_task_status_preserves_partial_report() -> None:
+    assert task_status_from_report({"status": "partial"}) == "partial"
+
+
+def test_task_status_uses_fallback_without_report() -> None:
+    assert task_status_from_report(None, fallback="partial") == "partial"
+
+
+def test_web_success_without_core_validation_is_downgraded() -> None:
+    report = enforce_report_acceptance({"status": "success", "is_web": True, "web_started": True})
+    assert report is not None
+    assert report["status"] == "partial"
+    assert "未完成核心业务闭环验证" in report["acceptance_issues"]
+
+
+def test_web_mock_validation_is_downgraded() -> None:
+    report = enforce_report_acceptance({
+        "status": "success",
+        "is_web": True,
+        "web_started": True,
+        "core_workflow": {
+            "mode": "mock",
+            "verified": True,
+            "steps": [{"action": "generate", "ok": True}],
+            "evidence": ["mock output"],
+            "result": "generated",
+        },
+    })
+    assert report is not None
+    assert report["status"] == "partial"
+    assert "核心功能未使用真实模式验证" in report["acceptance_issues"]
+
+
+def test_real_web_core_workflow_remains_success() -> None:
+    report = enforce_report_acceptance({
+        "status": "success",
+        "is_web": True,
+        "web_started": True,
+        "core_workflow": {
+            "mode": "real",
+            "verified": True,
+            "steps": [{"action": "scan target", "ok": True}],
+            "evidence": ["scan report with 3 findings"],
+            "result": "report generated",
+        },
+    })
+    assert report is not None
+    assert report["status"] == "success"
+    assert not report.get("acceptance_issues")
+
+
+def test_web_without_started_service_cannot_succeed() -> None:
+    report = enforce_report_acceptance({"status": "success", "is_web": True, "web_started": False})
+    assert report is not None
+    assert report["status"] == "failed"
+
+
+def test_web_prompt_requires_real_core_evidence() -> None:
+    prompt = _build_web_repro_prompt()
+    assert "首页 200 = 复现成功" in prompt
+    assert '"mode": "real|mock"' in prompt
+    assert "真实证据" in prompt
+    assert "无需用户额外配置" in prompt
+    assert "schema 校验失败" in prompt
+    assert "至少重试 2 次" in prompt
+
+
+def test_partial_repro_is_not_considered_succeeded() -> None:
+    connection = sqlite3.connect(":memory:")
+    connection.row_factory = sqlite3.Row
+    connection.execute("CREATE TABLE capability_repro_tasks (item_id INTEGER, status TEXT)")
+    connection.executemany(
+        "INSERT INTO capability_repro_tasks (item_id, status) VALUES (?, ?)",
+        [(1, "success"), (2, "partial"), (3, "failed")],
+    )
+    assert get_succeeded_repro_item_ids(connection) == {1}
+
+
+def test_github_archive_uses_codeload_fallback() -> None:
+    assert _repo_archive_url("https://github.com/example/tool.git") == (
+        "https://codeload.github.com/example/tool/zip/refs/heads/main"
+    )
 
 
 def test_repro_prompt_never_contains_model_secret(monkeypatch) -> None:
@@ -424,6 +521,7 @@ def test_web_proxy_binds_only_loopback(monkeypatch) -> None:
 def test_silent_repro_process_still_times_out(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr(repro_runner, "WORKSPACE_ROOT", tmp_path)
     monkeypatch.setattr(repro_runner, "CONTAINER_TIMEOUT", 0.1)
+    monkeypatch.setattr(repro_runner, "REPORT_GRACE_TIMEOUT", 0)
     token_file = tmp_path / "token"
     token_file.write_text("secret", encoding="utf-8")
     token_file.chmod(0o600)

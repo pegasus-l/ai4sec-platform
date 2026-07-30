@@ -61,29 +61,24 @@ def audit_missing_fields(conn: sqlite3.Connection, *, limit: int = 100) -> dict:
 
     missing: dict[str, list[dict[str, Any]]] = {
         "capability_type": [],
-        "sub_type": [],
         "application_scenarios": [],
-        "implementation_depth": [],
         "repro_status": [],
         "conversion_status": [],
+        "overview": [],
+        "security_value": [],
+        "reproducibility_assessment": [],
+        "code_quality": [],
+        "application_advice": [],
+        "score_reason": [],
     }
 
     for cap in caps:
         payload = cap.get("payload") or {}
         item_info = {"id": cap["id"], "title": cap.get("title", "")[:50]}
 
-        if not payload.get("capability_type"):
-            missing["capability_type"].append(item_info)
-        if not payload.get("sub_type"):
-            missing["sub_type"].append(item_info)
-        if not payload.get("application_scenarios"):
-            missing["application_scenarios"].append(item_info)
-        if not payload.get("implementation_depth"):
-            missing["implementation_depth"].append(item_info)
-        if not payload.get("repro_status"):
-            missing["repro_status"].append(item_info)
-        if not payload.get("conversion_status"):
-            missing["conversion_status"].append(item_info)
+        for field in missing:
+            if not payload.get(field):
+                missing[field].append(item_info)
 
     return {
         "total_audited": len(caps),

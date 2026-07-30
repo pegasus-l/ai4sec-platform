@@ -1839,3 +1839,15 @@ Python full test suite: 199 passed
 - `.env.example` 增加生产绝对路径示例，明确核心 Compose 服务必须共享同一非 root UID/GID，活动 WAL 数据库必须位于本机 Linux 文件系统，禁止放在 NFS。
 - 当前完成的是应用层权限契约；仓库尚无核心平台 Dockerfile/Compose 清单，因此宿主持久目录创建、卷挂载和容器 UID/GID 固定仍保留为部署阶段任务，不能提前标记整项完成。
 - 数据库专项测试：25 passed；全仓 Python 测试：244 passed；`compileall` 与 `git diff --check` 通过。
+
+### 2026-07-29：同步能力洞察最终业务实现
+
+- 发现能力洞察最终提交此前未进入 master；新 master 合并提交 `e4ebd95` 包含完整能力前端、运营页、评估字段、复现报告验收和 Runner 业务增强。
+- 未直接 merge 或覆盖生产分支。同步策略是接收最终业务实现，同时保留现有持久 Repro Worker、任务对账、kill switch、Secret 文件、镜像认证检查、日志脱敏、资源上限和 `127.0.0.1` 端口边界。
+- 接入能力首页、能力库、复现工作台、能力转化和运营页面；保持平台原默认首页与全局状态文案，不接收旧分支生成的 dist，而是在当前生产分支重新构建前端。
+- 能力 API 新增 stats、运营概览、复现失败和缺失字段端点；start、stop、cleanup 仍只操作持久任务状态，不允许 API 请求线程直接创建、停止或删除容器。
+- 能力评估补齐 overview、安全价值、复现评估、代码质量、应用建议和评分理由；仍保留单批默认 100 条上限，拒绝最终分支中默认 100000 条的不受控执行规模。
+- Web 复现 success 必须具备真实核心业务闭环、实测步骤、证据和结果；首页 200、mock 或缺少证据会降级为 partial/failed。退出码 0 但没有结构化报告不再判 success。
+- 新增 10 分钟可配置报告收尾窗口、GitHub codeload archive fallback、非法模型评分降级和 `partial` 可重试但不可进入能力转化的语义。
+- 能力最终分支的报告验收测试与生产分支的 Worker/Secret/资源/取消测试合并；能力/API 聚焦测试 76 passed，前端生产构建通过，全仓 Python 测试 255 passed。
+- 前端将 Vite 从 `5.4.11` 补丁升级到 `5.4.21` 并重新构建；`npm audit` 仍报告开发服务器相关的 1 个 moderate 和 1 个 high 风险，自动修复会跨到 Vite 8。生产只发布静态构建产物，当前不使用 `--force` 跨主版本，后续以独立依赖升级批次处理。

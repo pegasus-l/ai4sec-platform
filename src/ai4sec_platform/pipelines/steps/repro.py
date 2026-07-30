@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import socket
 from typing import Any
 
 from ai4sec_platform.db import repositories as repo
@@ -155,6 +156,16 @@ def _alloc_web_port(conn) -> int | None:
     used = {row["web_port"] for row in rows}
 
     for port in range(base, max_port + 1):
-        if port not in used:
+        if port not in used and _port_is_available(port):
             return port
     return None
+
+
+def _port_is_available(port: int) -> bool:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+        probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            probe.bind(("127.0.0.1", port))
+        except OSError:
+            return False
+    return True

@@ -216,3 +216,37 @@ def test_start_api_only_queues_task(tmp_path: Path) -> None:
 
     duplicate = TestClient(app).post(f"/api/capabilities/items/{item_id}/start-repro", json={"web": False})
     assert duplicate.status_code == 409
+
+
+def test_capability_ops_endpoints_read_persisted_state(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    with connect(settings) as conn:
+        init_db(conn)
+        repo.create_domain_item(
+            conn,
+            domain="capabilities",
+            item_type="capability",
+            title="Audited capability",
+            payload={"capability_type": "验证与评估"},
+        )
+        conn.commit()
+
+    app = create_app()
+
+    def override_db():
+        with connect(settings) as conn:
+            init_db(conn)
+            yield conn
+
+    app.dependency_overrides[get_db] = override_db
+    client = TestClient(app)
+
+    overview = client.get("/api/capabilities/ops/overview")
+    failures = client.get("/api/capabilities/ops/repro-failures")
+    missing_fields = client.get("/api/capabilities/ops/missing-fields")
+
+    assert overview.status_code == 200
+    assert overview.json()["stats"]["total"] == 1
+    assert failures.status_code == 200
+    assert missing_fields.status_code == 200
+    assert missing_fields.json()["total_audited"] == 1

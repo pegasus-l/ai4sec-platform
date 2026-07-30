@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import base64
+import copy
 import json
 import os
 import re
@@ -37,6 +38,7 @@ REPRO_RUNTIME = os.environ.get("REPRO_RUNTIME", "sysbox-runc")
 WORKSPACE_ROOT = Path(os.environ.get("REPRO_WORKSPACE_ROOT", str(Path.home() / "repro_workspaces")))
 CONTAINER_TIMEOUT = int(os.environ.get("REPRO_CONTAINER_TIMEOUT", str(30 * 60)))  # 30 分钟
 WEB_CONTAINER_TIMEOUT = int(os.environ.get("REPRO_WEB_CONTAINER_TIMEOUT", str(50 * 60)))  # 50 分钟
+REPORT_GRACE_TIMEOUT = int(os.environ.get("REPRO_REPORT_GRACE_TIMEOUT", str(10 * 60)))
 DOCKERD_WAIT = int(os.environ.get("REPRO_DOCKERD_WAIT", "30"))
 INTERNAL_CIDRS = ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"]
 REPRO_CPUS = os.environ.get("REPRO_CPUS", "2.0")
@@ -54,6 +56,14 @@ REPRO_LLM_BASE_URL = os.environ.get("REPRO_LLM_BASE_URL", DASHSCOPE_PROXY_URL or
 REPRO_LLM_MODEL = os.environ.get("REPRO_LLM_MODEL", "glm-5.1")
 REPRO_MODEL_TOKEN_FILE = os.environ.get("REPRO_MODEL_TOKEN_FILE", "")
 CONTAINER_MODEL_TOKEN_FILE = "/run/secrets/repro_model_token"
+
+
+def _repo_archive_url(repo_url: str) -> str:
+    match = re.match(r"https?://github\.com/([^/]+)/([^/#?]+)", repo_url)
+    if match:
+        owner, name = match.groups()
+        return f"https://codeload.github.com/{owner}/{name.removesuffix('.git')}/zip/refs/heads/main"
+    return repo_url.removesuffix(".git").rstrip("/") + "/archive/refs/heads/main.zip"
 
 
 # ============================================================================
@@ -234,6 +244,10 @@ def _build_web_repro_prompt() -> str:
     llm_section = _managed_llm_prompt_section()
     return f"""你在一个隔离容器里(你是 root,可自由装包),需要复现一个项目。仓库已 clone 到 /workspace/repo。全程用中文说明。
 {llm_section}
+# 时间纪律
+- Web 复现总预算约 50 分钟。必须在第 45 分钟前停止继续探索，把已经验证的事实立即整理成结构化报告。
+- 核心闭环已经验证后，不要继续枚举非必要 API 或追求覆盖所有功能；优先输出报告，未覆盖部分写入 limitations。
+
 # 第零步(最重要):先判断这个项目【本身】到底有没有 Web 界面
 读 README、看项目结构,判断它是否【自带】一个真正的 Web 应用/界面:
 - 有真 Web 界面的标志:项目里有前端代码(React/Vue/HTML 应用)、或用 streamlit/gradio/flask/fastapi 写的、
@@ -250,9 +264,22 @@ def _build_web_repro_prompt() -> str:
   · Flask/FastAPI: `uvicorn main:app --host 0.0.0.0 --port 8080`
   · Node/Vite/React: `--host 0.0.0.0 --port 8080` 或 PORT=8080;前端项目先 npm install
 - 在【后台】启动(nohup/setsid &)。启动后【sleep 10 秒等服务起来】,再 `curl -s http://localhost:8080`。
-  ⚠️ 时间宝贵:服务一旦 curl 能返回 HTML/响应,就【立刻输出报告结束】,不要反复测试、不要再做多余的事。
   如果 curl 暂时没响应,最多等 30 秒重试 2-3 次,仍不行就如实报告 web_started=false 并结束。
 - 用项目【原有】的前端,不要自己另写页面。服务起成功后保持运行,不要停。
+
+# 启动命令纪律（避免“项目能跑但命令写错”导致假失败）
+- 启动前先定位真正的应用根目录；容器复现一律不要使用 `--reload` 或 hot reload。
+- 后台启动后记录 PID，需要停止重试时精确 kill 该 PID，禁止使用可能误杀当前 shell 的 `pkill -f`。
+- 首次启动失败不能直接结束：读取服务日志，检查工作目录、模块路径、端口和依赖，至少修正重试一次。
+- 前后端分离项目必须确认前端 `/api` 代理指向已启动的后端，并验证配置由实际运行进程读取。
+- `curl http://localhost:8080` 只证明页面服务启动，不能单独作为项目复现成功的依据。
+
+# 核心可用性验收（必须执行，禁止“首页 200 = 复现成功”）
+- 先定义项目最核心的用户价值与最短操作闭环，至少完成一条超越登录和普通 CRUD 的真实业务链。
+- 核心链依赖 LLM、API 或数据库时，必须检查真实 provider/model、响应内容和错误信息，不能只检查 HTTP 状态码。
+- 若核心 LLM 阶段出现超时、JSON 解析失败或 schema 校验失败，先读取错误详情，降低 temperature、启用结构化输出，并至少重试 2 次。
+- `status=success` 只用于核心业务链完整跑通；使用 mock、超时或关键阶段失败只能标记 partial/failed。
+- 报告必须写出 `core_workflow`、实测步骤、真实证据、最终产物或失败阶段；未执行核心业务链不得报告 success。
 
 # 步骤
 1. 读 README/项目结构,先做第零步判断。
@@ -271,6 +298,7 @@ def _build_web_repro_prompt() -> str:
   "web_framework": "如 Streamlit / Gradio / React+Vite;无则填空",
   "start_command": "你启动服务的命令;没启动填空",
   "verify": "curl 验证结果;没验证填空",
+  "core_workflow": {{"goal": "核心用户价值", "mode": "real|mock", "steps": [{{"action": "实际操作", "ok": true/false}}], "evidence": ["真实响应/产物摘要"], "result": "产物或失败阶段", "verified": true/false}},
   "environment": {{"language": "如 Python 3.10", "key_deps": ["关键依赖"]}},
   "steps": [{{"cmd": "关键命令", "ok": true/false, "note": "可选"}}],
   "blockers": ["卡点;若项目本身无Web界面,在此说明"],
@@ -287,6 +315,7 @@ def _build_web_repro_prompt() -> str:
 usage 字段是给用户看的"使用说明",不要写安装部署步骤,重点写怎么用:
 - what: 项目是干什么的; how_to_use: 打开页面后怎么操作; prerequisites: 必须先配好什么; limitations: 有什么限制
 - 用中文,站在"用户已经能访问这个服务了,告诉他怎么用"的角度写
+- 若本次复现已经配置并验证 LLM/API/数据库，必须明确写“当前复现环境已配置并验证，无需用户额外配置”；只有缺失或未验证的配置才列为前置条件。
 - 复现失败的话 usage 只填 what 和 limitations。
 
 诚实第一:项目没有 Web 界面就如实说,绝不自己编造页面充数。JSON 必须合法。
@@ -522,7 +551,7 @@ class ReproRunner:
                         host_repo.mkdir(parents=True, exist_ok=True)
                 if not clone_ok:
                     self.on_log("• 尝试宿主机 zip 下载…")
-                    zip_url = self.repo_url.rstrip('.git').rstrip('/') + '/archive/refs/heads/main.zip'
+                    zip_url = _repo_archive_url(self.repo_url)
                     zr = _safe_run(
                         ["curl", "-fsSL", "--http1.1", "--connect-timeout", "30", "--max-time", "600",
                          "-o", "/tmp/_repro_repo.zip", zip_url],
@@ -571,6 +600,7 @@ class ReproRunner:
                 env=_env,
             )
             start_ts = time.time()
+            grace_started = False
             output_queue: queue.Queue[str | None] = queue.Queue()
 
             def read_output() -> None:
@@ -606,14 +636,32 @@ class ReproRunner:
                     self._set_status("stopped")
                     return
                 timeout_limit = WEB_CONTAINER_TIMEOUT if self.web_port else CONTAINER_TIMEOUT
-                if time.time() - start_ts > timeout_limit:
-                    report = extract_report("\n".join(self._full_output))
-                    if self.web_port:
-                        self.on_log("⏱ Agent 流程超时,但容器保活(Web 服务可能已就绪,可尝试访问)")
+                elapsed = time.time() - start_ts
+                if elapsed > timeout_limit:
+                    report = enforce_report_acceptance(extract_report("\n".join(self._full_output)))
+                    if report:
+                        final_status = task_status_from_report(report)
+                        self.on_log("✓ 已在报告宽限阶段取得结构化报告")
                         if self.proc.poll() is None:
                             self.proc.terminate()
-                        self._set_status("success", report=report,
-                                         result="agent 流程超时,容器保活,请尝试在线访问验证")
+                        self._set_status(final_status, report=report, result="复现报告已完成")
+                        return
+                    if elapsed <= timeout_limit + REPORT_GRACE_TIMEOUT:
+                        if not grace_started:
+                            grace_started = True
+                            self.on_log(
+                                f"⏱ 已达到基础执行时限，额外保留 {REPORT_GRACE_TIMEOUT // 60} 分钟用于输出结构化报告"
+                            )
+                        continue
+                    if self.web_port:
+                        self.on_log("⏱ Agent 流程超时,容器保活;未完成核心验收时只能标记部分复现")
+                        if self.proc.poll() is None:
+                            self.proc.terminate()
+                        self._set_status(
+                            "partial",
+                            report=report,
+                            result="agent 流程超时,容器保活;核心可用性需要继续验证",
+                        )
                     else:
                         self.on_log("⏱ 超时,停止容器")
                         _safe_run(["docker", "stop", self.container_name], capture_output=True)
@@ -633,18 +681,17 @@ class ReproRunner:
             rc = self.proc.wait()
             full = "\n".join(self._full_output)
             result_summary = "\n".join(self._tail[-20:])
-            report = extract_report(full)
+            report = enforce_report_acceptance(extract_report(full))
             # ★ 适配点:去掉旧 v1 的 import db + db.update_item_web_class 调用
             #   原 v1 在这里通过 on_status 回调通知外部，由外部处理 DB 回写
             #   （is_web 修正逻辑移到 on_status 回调处理）
             if not self.web_port:
                 _safe_run(["docker", "stop", self.container_name], capture_output=True)
             if report and isinstance(report, dict) and report.get("status"):
-                rep_status = report["status"]
-                final = rep_status if rep_status in ("success", "partial") else "failed"
+                final = task_status_from_report(report)
                 self._set_status(final, result=result_summary, report=report)
             elif rc == 0:
-                self._set_status("success", result=result_summary, report=report)
+                self._set_status("failed", result="Agent 未输出结构化复现报告\n" + result_summary, report=report)
             else:
                 self._set_status("failed", returncode=rc, result=result_summary, report=report)
         except Exception as e:
@@ -718,6 +765,56 @@ def strip_ansi(line: str) -> str:
     line = _ANSI_RE.sub('', line)
     line = _BARE_ANSI_RE.sub('', line)
     return line
+
+
+def enforce_report_acceptance(report: dict | None) -> dict | None:
+    if not isinstance(report, dict):
+        return report
+
+    normalized = copy.deepcopy(report)
+    status = normalized.get("status")
+    if status not in {"success", "partial", "failed"}:
+        normalized["status"] = "failed"
+        status = "failed"
+    if not normalized.get("is_web"):
+        return normalized
+
+    issues: list[str] = []
+    if not normalized.get("web_started"):
+        issues.append("Web 服务未成功启动或未验证")
+    workflow = normalized.get("core_workflow")
+    if not isinstance(workflow, dict):
+        workflow = {}
+    if workflow.get("verified") is not True:
+        issues.append("未完成核心业务闭环验证")
+    if str(workflow.get("mode") or "").strip().lower() != "real":
+        issues.append("核心功能未使用真实模式验证")
+    if not workflow.get("steps"):
+        issues.append("核心业务闭环缺少实测步骤")
+    if not workflow.get("evidence"):
+        issues.append("核心业务闭环缺少真实结果证据")
+    if not str(workflow.get("result") or "").strip():
+        issues.append("核心业务闭环缺少结果说明")
+
+    if issues and status == "success":
+        normalized["status"] = "failed" if not normalized.get("web_started") else "partial"
+    if issues:
+        existing_issues = normalized.get("acceptance_issues")
+        if not isinstance(existing_issues, list):
+            existing_issues = []
+        normalized["acceptance_issues"] = list(dict.fromkeys([*existing_issues, *issues]))
+        blockers = normalized.get("blockers")
+        if not isinstance(blockers, list):
+            blockers = []
+        normalized["blockers"] = list(dict.fromkeys([*blockers, *[f"自动验收: {issue}" for issue in issues]]))
+    return normalized
+
+
+def task_status_from_report(report: dict | None, fallback: str = "failed") -> str:
+    normalized = enforce_report_acceptance(report)
+    if isinstance(normalized, dict) and normalized.get("status") in {"success", "partial", "failed"}:
+        return str(normalized["status"])
+    return fallback
 
 
 def extract_report(full_output: str) -> dict | None:
