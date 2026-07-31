@@ -60,3 +60,11 @@ export function fetchNewsRun<T>(runId: string): Promise<T> {
 export function startNewsPipeline(sources?: string[]): Promise<Record<string, unknown>> {
   return postJson('/api/runs', { pipeline_name: 'news.daily_pipeline', reset: false, params: sources?.length ? { sources } : {} });
 }
+
+export function retryNewsRun(runId: string): Promise<Record<string, unknown>> {
+  return postJson(`/api/runs/${encodeURIComponent(runId)}/retry`, {});
+}
+
+export function retryNewsSource(source: string): Promise<Record<string, unknown>> {
+  return postJson(`/api/news/ops/sources/${encodeURIComponent(source)}/retry`, {});
+}

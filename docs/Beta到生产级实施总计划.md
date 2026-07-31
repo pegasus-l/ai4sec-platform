@@ -889,7 +889,7 @@ D11 暂缓的是公网入口和完整公网暴露治理，不代表复现容器�
 - [ ] 六源真实健康检查、超时错误分类已完成；分页和业务重试仍待逐源验收。
 - [x] RSS、ASIS 已建立 SQLite 正式水位线；X 当前禁用，替换 Provider 必须按同一契约实现来源 ID 水位线后才能启用。
 - [x] 完成资讯 canonical key upsert、同日日报合并和成功 ModelCall 稳定请求键幂等；失败调用保留审计并允许后续重跑。
-- [ ] 定义采集、门控、评审、日报失败重跑语义。
+- [x] 定义并实现采集单源补跑、门控/深评失败项缓存恢复、日报 checkpoint 恢复语义及运营入口。
 - [ ] 建立模型 Schema 失败降级和人工队列。
 - [ ] 连续运行至少三个真实日更周期。
 
@@ -1925,3 +1925,14 @@ Python full test suite: 199 passed
 - 门控和深度评审缓存改为按稳定请求键查询，不再依赖未绑定 prompt 版本的原始 `input_json` 字符串比较；prompt 版本或模型身份变化会自然失效旧缓存。
 - 删除仅被单元测试调用的旧 `_call_model` 串行入口，重试与模型调用审计测试改为覆盖正式 `_call_model_api + _record_attempts` 路径，避免继续维护历史兼容实现。
 - 聚焦测试覆盖请求键字段顺序稳定性、prompt 版本隔离、成功调用唯一约束、资讯跨运行 upsert 和同日日报空重跑保留；资讯/数据库聚焦测试 51 passed，全仓 Python 测试 279 passed，`compileall` 与 `git diff --check` 通过。
+
+### 2026-07-30：资讯分阶段失败重跑
+
+- 不为资讯模块另造任务队列，复用平台持久 `pipeline_jobs`、checkpoint 校验、恢复参数 checksum 和单机 Worker；资讯模块只声明各步骤恢复所需的业务输出。
+- 在线来源返回错误时采集步骤标记为 `partial`，成功来源仍进入后续流程；失败来源不推进 SQLite 水位线。历史一次性迁移的允许缺源提示不改变为在线采集失败语义。
+- 新增单源重跑 API。它从最近来源记录关联原 PipelineRun，继承原 `date`、模型 profile、评审限额等参数，移除 reset/resume 控制参数后只设置目标 `sources`，避免补跑进入错误日报日期。
+- 技术地图门控或深度评审在内置瞬时错误重试耗尽后，不再把失败候选静默当作 reject 并继续发布，而是让当前 checkpointed 步骤失败。步骤已提交的成功模型调用保留，恢复时按稳定 `request_key` 命中缓存，仅失败候选重新调用。
+- Extract、Normalize、Dedupe、Resolve、Gate、Deep Review、Build、Daily Report 和 Audit 均声明 `resume_safe` 与最小 `resume_input_keys`。日报恢复同时携带 `news_item_ids` 和 `news_items`，保证恢复后质量审计仍使用原业务输入。
+- 日报及后续原子步骤抛出异常时由 Runner 回滚未完成写入，并从前一步校验过的 checkpoint 恢复；成功运行不允许任意阶段重跑，禁用来源也拒绝单源重跑。
+- 资讯运行详情返回 `retry.allowed/stage/mode`；前端只在存在可恢复 checkpoint 时展示“从失败阶段重跑”，来源页继续提供独立的来源补跑入口。
+- 专项测试使用真实 `PipelineRunner` 验证两个候选中一个成功、一个连续失败后，恢复运行只再次调用失败候选；同时覆盖恢复契约、来源 partial、来源参数继承和资讯运行详情 API。聚焦测试 44 passed，全仓 Python 测试 284 passed，前端生产构建、`compileall` 与 `git diff --check` 通过。前端仍有既有动态/静态 import 和大 chunk 警告，本批次未扩大依赖或拆包范围。

@@ -74,13 +74,22 @@ def persist_news_source_records(context: PipelineContext, records: list[dict[str
         )
         raw_records.append({"id": raw_id, **record})
     context.outputs["news_raw_sources"] = raw_records
-    return StepResult(metrics={"sources": len(records), "items": sum(len(record.get("items") or []) for record in records), "errors": sum(len(record.get("errors") or []) for record in records)}, artifacts=artifacts)
+    error_count = sum(len(record.get("errors") or []) for record in records)
+    operational_error_count = sum(len(record.get("errors") or []) for record in records if record.get("mode") != "legacy_migration")
+    return StepResult(
+        metrics={"sources": len(records), "items": sum(len(record.get("items") or []) for record in records), "errors": error_count},
+        artifacts=artifacts,
+        status="partial" if operational_error_count else "success",
+        message=f"{operational_error_count} source collection errors; retry failed sources separately" if operational_error_count else "",
+    )
 
 
 @dataclass
 class NormalizeNewsStep:
     name: str = "normalize_news_items"
     step_type: str = "normalize"
+    resume_safe: bool = True
+    resume_input_keys: tuple[str, ...] = ("news_raw_sources",)
 
     def run(self, context: PipelineContext) -> StepResult:
         records = context.outputs.get("news_raw_sources") or []
@@ -115,6 +124,8 @@ class NormalizeNewsStep:
 class ExtractNewsReferencesStep:
     name: str = "extract_news_references"
     step_type: str = "extract_references"
+    resume_safe: bool = True
+    resume_input_keys: tuple[str, ...] = ("news_raw_sources",)
 
     def run(self, context: PipelineContext) -> StepResult:
         records = context.outputs.get("news_raw_sources") or []
@@ -128,6 +139,8 @@ class ExtractNewsReferencesStep:
 class BuildNewsItemsStep:
     name: str = "build_news_items"
     step_type: str = "build_domain_item"
+    resume_safe: bool = True
+    resume_input_keys: tuple[str, ...] = ("reviewed_news_items",)
 
     def run(self, context: PipelineContext) -> StepResult:
         reviewed = context.outputs.get("reviewed_news_items") or []
@@ -142,6 +155,8 @@ class BuildNewsItemsStep:
 class DeduplicateNewsStep:
     name: str = "deduplicate_news_candidates"
     step_type: str = "deduplicate"
+    resume_safe: bool = True
+    resume_input_keys: tuple[str, ...] = ("normalized_news_items",)
 
     def run(self, context: PipelineContext) -> StepResult:
         normalized = context.outputs.get("normalized_news_items") or []
@@ -156,6 +171,8 @@ class GateNewsCandidatesStep:
     name: str = "gate_news_candidates_with_tech_map"
     step_type: str = "llm_gate"
     transaction_mode: str = "checkpointed"
+    resume_safe: bool = True
+    resume_input_keys: tuple[str, ...] = ("deduped_news_items",)
 
     def run(self, context: PipelineContext) -> StepResult:
         candidates = context.outputs.get("deduped_news_items") or []
@@ -178,6 +195,8 @@ class GateNewsCandidatesStep:
             project_root=context.settings.project_root,
             model_profile=str(context.params.get("gate_model_profile") or context.params.get("model_profile") or "configured_model"),
         )
+        if metrics["failed"]:
+            raise RuntimeError(f"news gate model failed for {metrics['failed']} candidates; retry resumes this stage and reuses successful calls")
         context.outputs["gated_news_items"] = gated
         artifact = context.artifact_store.write_json(context.conn, run_id=context.run_id, artifact_type="gated_news_candidates", name="gated/news_candidates.json", data=gated)
         return StepResult(metrics=metrics, artifacts=[artifact])
@@ -188,6 +207,8 @@ class EnrichNewsCandidatesStep:
     name: str = "enrich_news_candidates_with_model"
     step_type: str = "llm_enrich"
     transaction_mode: str = "checkpointed"
+    resume_safe: bool = True
+    resume_input_keys: tuple[str, ...] = ("gated_news_items",)
 
     def run(self, context: PipelineContext) -> StepResult:
         candidates = context.outputs.get("gated_news_items") or []
@@ -198,6 +219,8 @@ class EnrichNewsCandidatesStep:
             project_root=context.settings.project_root,
             model_profile=str(context.params.get("review_model_profile") or context.params.get("model_profile") or "configured_model"),
         )
+        if metrics["failed"]:
+            raise RuntimeError(f"news deep review model failed for {metrics['failed']} candidates; retry resumes this stage and reuses successful calls")
         context.outputs["reviewed_news_items"] = reviewed
         artifact = context.artifact_store.write_json(context.conn, run_id=context.run_id, artifact_type="reviewed_news_candidates", name="reviewed/news_candidates.json", data=reviewed)
         return StepResult(metrics=metrics, artifacts=[artifact])
@@ -207,6 +230,8 @@ class EnrichNewsCandidatesStep:
 class ResolveNewsLinksStep:
     name: str = "resolve_news_candidate_links"
     step_type: str = "resolve_links"
+    resume_safe: bool = True
+    resume_input_keys: tuple[str, ...] = ("deduped_news_items",)
 
     def run(self, context: PipelineContext) -> StepResult:
         candidates = context.outputs.get("deduped_news_items") or []
@@ -220,6 +245,8 @@ class ResolveNewsLinksStep:
 class BuildNewsDailyReportStep:
     name: str = "build_news_daily_report"
     step_type: str = "build_report"
+    resume_safe: bool = True
+    resume_input_keys: tuple[str, ...] = ("news_item_ids", "news_items")
 
     def run(self, context: PipelineContext) -> StepResult:
         report_date = str(context.params.get("date") or datetime.now(timezone.utc).date().isoformat())
@@ -252,6 +279,8 @@ class BuildNewsDailyReportStep:
 class AuditNewsStep:
     name: str = "audit_news_quality"
     step_type: str = "audit"
+    resume_safe: bool = True
+    resume_input_keys: tuple[str, ...] = ("news_items",)
 
     def run(self, context: PipelineContext) -> StepResult:
         items = context.outputs.get("news_items") or []

@@ -5,6 +5,8 @@ import sqlite3
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from ai4sec_platform.app.dependencies import get_db
+from ai4sec_platform.app.api.runs import RunPipelineRequest, start_run
+from ai4sec_platform.db import repositories as repo
 from ai4sec_platform.domains.news import operations as news_operations, service
 from ai4sec_platform.domains.news.schemas import NewsActionRequest
 from ai4sec_platform.domains.news.tech_map import AgentTechMap
@@ -35,6 +37,25 @@ def ops_run_detail(run_id: str, conn: sqlite3.Connection = Depends(get_db)) -> d
 @router.get("/ops/sources")
 def ops_sources(conn: sqlite3.Connection = Depends(get_db)) -> dict:
     return {"items": news_operations.source_status(conn)}
+
+
+@router.post("/ops/sources/{source}/retry")
+def retry_source(source: str, conn: sqlite3.Connection = Depends(get_db)) -> dict:
+    source = source.lower()
+    source_state = next((item for item in news_operations.source_status(conn) if item["id"] == source), None)
+    if not source_state:
+        raise HTTPException(status_code=404, detail="news source not found")
+    if source_state["disabled"]:
+        raise HTTPException(status_code=409, detail=source_state["disabled_reason"] or "news source is disabled")
+    origin_run_id = str(source_state.get("summary", {}).get("run_id") or "")
+    origin = conn.execute("SELECT summary_json FROM pipeline_runs WHERE domain = 'news' AND run_id = ?", (origin_run_id,)).fetchone() if origin_run_id else None
+    origin_summary = repo.loads(origin["summary_json"], {}) if origin else {}
+    params = dict(origin_summary.get("params") or {})
+    params.pop("reset", None)
+    params.pop("_resume_from_run_id", None)
+    params["sources"] = [source]
+    result = start_run(RunPipelineRequest(pipeline_name="news.daily_pipeline", reset=False, params=params))
+    return {**result, "retry_scope": "source", "source": source, "retry_of_run_id": origin_run_id}
 
 
 @router.get("/ops/quality")

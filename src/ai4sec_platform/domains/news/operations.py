@@ -40,6 +40,13 @@ def run_detail(conn: sqlite3.Connection, run_id: str) -> dict[str, Any] | None:
     result["tasks"] = [{**repo.row_to_dict(task), "metrics": repo.loads(task["metrics_json"], {})} for task in conn.execute("SELECT * FROM task_runs WHERE run_id = ? ORDER BY id", (run_id,)).fetchall()]
     result["artifacts"] = [{**repo.row_to_dict(artifact), "payload_summary": repo.loads(artifact["payload_summary_json"], {})} for artifact in conn.execute("SELECT * FROM artifacts WHERE run_id = ? ORDER BY id", (run_id,)).fetchall()]
     result["models"] = _model_metrics(conn, run_id)
+    failed_task = next((task for task in reversed(result["tasks"]) if task["status"] in {"failed", "timeout"}), None)
+    has_checkpoint = any(artifact["artifact_type"] == "pipeline_checkpoint" for artifact in result["artifacts"])
+    result["retry"] = {
+        "allowed": result["status"] in {"failed", "timeout", "cancelled"} and has_checkpoint,
+        "stage": failed_task["step_name"] if failed_task else "",
+        "mode": "checkpoint_resume" if has_checkpoint else "manual_source_rerun",
+    }
     return result
 
 
