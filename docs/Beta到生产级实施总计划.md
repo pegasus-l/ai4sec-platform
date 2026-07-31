@@ -888,7 +888,7 @@ D11 暂缓的是公网入口和完整公网暴露治理，不代表复现容器�
 - [x] X 当前正式禁用：仓库未配置可用凭据，原 GetXAPI 方案不可用；替换服务完成连通性、认证、额度和样本质量验收前不得重新启用。
 - [ ] 六源真实健康检查、超时错误分类已完成；分页和业务重试仍待逐源验收。
 - [x] RSS、ASIS 已建立 SQLite 正式水位线；X 当前禁用，替换 Provider 必须按同一契约实现来源 ID 水位线后才能启用。
-- [ ] 完成资讯、日报、ModelCall 幂等。
+- [x] 完成资讯 canonical key upsert、同日日报合并和成功 ModelCall 稳定请求键幂等；失败调用保留审计并允许后续重跑。
 - [ ] 定义采集、门控、评审、日报失败重跑语义。
 - [ ] 建立模型 Schema 失败降级和人工队列。
 - [ ] 连续运行至少三个真实日更周期。
@@ -1915,3 +1915,13 @@ Python full test suite: 199 passed
 - 普通 `reset_domain(news)` 有意保留增量水位线，避免运维重置导致历史数据和模型调用大规模回放；确需全量重采时必须先备份，再显式删除目标来源状态，不能把该行为混入日常 reset。
 - X 继续保持 disabled；未来替换 Provider 除真实健康、认证和额度验收外，还必须返回同一 `next_incremental_state` 契约。
 - RSS/ASIS/数据库增量专项测试 50 passed；全仓 Python 测试 276 passed，`compileall` 与 `git diff --check` 通过。
+
+### 2026-07-30：资讯、日报与模型调用幂等
+
+- 复核确认资讯条目已有 `news_item_index.canonical_key` 主键和跨运行 update 语义；同一论文或项目再次出现时更新原 `domain_items`，不创建重复资讯。
+- 同日日报继续使用 `report_date` 主键，并在 metrics 中保存当日完整条目 ID 快照；生成前先合并既有日报条目和本次增量条目，水位线导致重跑无新数据时不会再把已有日报覆盖为空或丢失未进入 Top N 的低排名条目。
+- 新增 migration v11，为 `model_calls` 增加 `request_key`、`prompt_version` 和 `attempt_no`；请求键由 agent、model profile、prompt 版本和规范化业务输入共同生成。
+- 对非空 `request_key` 建立成功记录部分唯一索引。同一成功请求跨 PipelineRun 只保存和复用一份结果；失败及 retryable failure 仍按 attempt 保留，且不阻止人工或自动重跑。
+- 门控和深度评审缓存改为按稳定请求键查询，不再依赖未绑定 prompt 版本的原始 `input_json` 字符串比较；prompt 版本或模型身份变化会自然失效旧缓存。
+- 删除仅被单元测试调用的旧 `_call_model` 串行入口，重试与模型调用审计测试改为覆盖正式 `_call_model_api + _record_attempts` 路径，避免继续维护历史兼容实现。
+- 聚焦测试覆盖请求键字段顺序稳定性、prompt 版本隔离、成功调用唯一约束、资讯跨运行 upsert 和同日日报空重跑保留；资讯/数据库聚焦测试 51 passed，全仓 Python 测试 279 passed，`compileall` 与 `git diff --check` 通过。

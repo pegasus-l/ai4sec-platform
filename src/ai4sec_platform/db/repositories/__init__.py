@@ -268,15 +268,46 @@ def create_model_call(
     latency_ms: int = 0,
     error_message: str = "",
     task_run_id: str = "",
+    request_key: str = "",
+    prompt_version: str = "",
+    attempt_no: int = 1,
 ) -> int:
-    cur = conn.execute(
-        """
-        INSERT INTO model_calls (run_id, task_run_id, agent_name, model_profile, provider, status, input_json, output_json, latency_ms, error_message, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-        (run_id, task_run_id, agent_name, model_profile, provider, status, dumps(input_payload or {}), dumps(output_payload or {}), latency_ms, error_message, utc_now()),
-    )
-    return int(cur.lastrowid)
+    try:
+        cur = conn.execute(
+            """
+            INSERT INTO model_calls (
+                run_id, task_run_id, agent_name, model_profile, provider,
+                request_key, prompt_version, attempt_no, status, input_json,
+                output_json, latency_ms, error_message, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                run_id,
+                task_run_id,
+                agent_name,
+                model_profile,
+                provider,
+                request_key,
+                prompt_version,
+                max(1, int(attempt_no)),
+                status,
+                dumps(input_payload or {}),
+                dumps(output_payload or {}),
+                latency_ms,
+                error_message,
+                utc_now(),
+            ),
+        )
+        return int(cur.lastrowid)
+    except sqlite3.IntegrityError:
+        if request_key and status == "success":
+            row = conn.execute(
+                "SELECT id FROM model_calls WHERE request_key = ? AND status = 'success'",
+                (request_key,),
+            ).fetchone()
+            if row:
+                return int(row["id"] if isinstance(row, sqlite3.Row) else row[0])
+        raise
 
 
 def update_domain_item(

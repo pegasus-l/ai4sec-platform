@@ -6,6 +6,7 @@ import time
 
 import yaml
 
+from ai4sec_platform.artifacts.store import ArtifactStore
 from ai4sec_platform.core.time import utc_now
 from ai4sec_platform.db import repositories as repo
 from ai4sec_platform.db.models import init_db
@@ -18,7 +19,10 @@ from ai4sec_platform.domains.news.tech_map import AgentTechMap
 from ai4sec_platform.domains.news.links import resolve_candidate_links
 from ai4sec_platform.domains.news import reviewer
 from ai4sec_platform.domains.news import operations as news_operations
+from ai4sec_platform.domains.news import repository as news_repo
 from ai4sec_platform.domains.news.reviewer import _input_hash, _normalize_breakdown, _normalize_deep_review, _normalize_gate, _percentage
+from ai4sec_platform.pipelines.context import PipelineContext
+from ai4sec_platform.pipelines.steps.news import BuildNewsDailyReportStep
 from ai4sec_platform.domains.news import service
 from ai4sec_platform.domains.news.adapters import sources as source_adapter
 from ai4sec_platform.domains.news.adapters.sources import _arxiv_requests, _github_requests
@@ -272,7 +276,8 @@ def test_model_call_retries_transient_errors_only(monkeypatch) -> None:
     monkeypatch.setattr(reviewer.random, "uniform", lambda *_: 0.0)
     monkeypatch.setattr(reviewer.time, "sleep", pauses.append)
     transient_router = FakeRouter([TimeoutError("read timed out"), TimeoutError("read timed out"), {"provider": "dashscope", "result": {"decision": "pass"}}])
-    result, failed = reviewer._call_model(conn, transient_router, run_id="retry-run", agent_name="news_tech_map_gate", model_profile="DASHSCOPE", prompt="gate", input_payload={"candidate": "a"})
+    result, _output, failed, provider, _latency, attempts = reviewer._call_model_api(transient_router, model_profile="DASHSCOPE", prompt="gate", input_payload={"candidate": "a"})
+    reviewer._record_attempts(conn, run_id="retry-run", agent_name="news_tech_map_gate", model_profile="DASHSCOPE", prompt_version=reviewer.GATE_PROMPT_VERSION, provider=provider, input_payload={"candidate": "a"}, attempts=attempts)
     assert not failed
     assert result == {"decision": "pass"}
     assert transient_router.calls == 3
@@ -281,7 +286,8 @@ def test_model_call_retries_transient_errors_only(monkeypatch) -> None:
     assert statuses == ["retryable_failure", "retryable_failure", "success"]
 
     permanent_router = FakeRouter([RuntimeError("HTTP Error 401: Unauthorized")])
-    result, failed = reviewer._call_model(conn, permanent_router, run_id="retry-run", agent_name="news_deep_review", model_profile="DASHSCOPE", prompt="review", input_payload={"candidate": "b"})
+    result, _output, failed, provider, _latency, attempts = reviewer._call_model_api(permanent_router, model_profile="DASHSCOPE", prompt="review", input_payload={"candidate": "b"})
+    reviewer._record_attempts(conn, run_id="retry-run", agent_name="news_deep_review", model_profile="DASHSCOPE", prompt_version=reviewer.REVIEW_PROMPT_VERSION, provider=provider, input_payload={"candidate": "b"}, attempts=attempts)
     assert failed
     assert result["attempts"] == 1
     assert permanent_router.calls == 1
@@ -324,6 +330,27 @@ def test_gate_cache_skips_model_and_preserves_input_order(monkeypatch) -> None:
     assert [item["title"] for item in gated] == ["first", "second", "third"]
     assert metrics["cache_hits"] == 3
     assert metrics["model_calls"] == 0
+
+
+def test_model_request_key_is_stable_and_prompt_versioned() -> None:
+    first = reviewer._model_request_key("news_deep_review", "DASHSCOPE", "v1", {"candidate": {"title": "A", "score": 80}})
+    reordered = reviewer._model_request_key("news_deep_review", "DASHSCOPE", "v1", {"candidate": {"score": 80, "title": "A"}})
+    upgraded = reviewer._model_request_key("news_deep_review", "DASHSCOPE", "v2", {"candidate": {"title": "A", "score": 80}})
+
+    assert first == reordered
+    assert upgraded != first
+
+
+def test_successful_model_request_is_stored_once_across_runs() -> None:
+    conn = connection()
+    for run_id in ["model-run-1", "model-run-2"]:
+        repo.create_pipeline_run(conn, run_id=run_id, domain="news", pipeline_name="news.daily_pipeline")
+    request_key = reviewer._model_request_key("news_tech_map_gate", "DASHSCOPE", reviewer.GATE_PROMPT_VERSION, {"candidate": "same"})
+    first_id = repo.create_model_call(conn, run_id="model-run-1", agent_name="news_tech_map_gate", model_profile="DASHSCOPE", request_key=request_key, prompt_version=reviewer.GATE_PROMPT_VERSION, status="success")
+    second_id = repo.create_model_call(conn, run_id="model-run-2", agent_name="news_tech_map_gate", model_profile="DASHSCOPE", request_key=request_key, prompt_version=reviewer.GATE_PROMPT_VERSION, status="success")
+
+    assert second_id == first_id
+    assert conn.execute("SELECT COUNT(*) FROM model_calls WHERE request_key = ?", (request_key,)).fetchone()[0] == 1
 
 
 def test_news_operations_exposes_domain_scoped_pipeline_metrics() -> None:
@@ -386,6 +413,30 @@ def test_builder_is_idempotent_across_runs() -> None:
     assert second["updated"] == 1
     assert conn.execute("SELECT COUNT(*) FROM domain_items WHERE domain = 'news'").fetchone()[0] == 1
     assert service.list_news(conn)["items"][0]["project"]["stars"] == 200
+
+
+def test_daily_report_empty_rerun_preserves_existing_items(tmp_path) -> None:
+    conn = connection()
+    settings = Settings(project_root=PROJECT_ROOT, output_dir=tmp_path, database_path=tmp_path / "test.db", legacy_sources={})
+    item = normalize_raw_item("github", {"html_url": "https://github.com/acme/report", "full_name": "acme/report", "description": "agent security", "stargazers_count": 100})
+    item["review"] = {"score": 82, "topic": "工具集成总线"}
+    low_score_item = normalize_raw_item("github", {"html_url": "https://github.com/acme/watch", "full_name": "acme/watch", "description": "agent watch", "stargazers_count": 10})
+    low_score_item["review"] = {"score": 40, "topic": "待观察"}
+    item_id, low_score_item_id = build_news_items(conn, [item, low_score_item], run_id="report-run-1")["item_ids"]
+    for run_id in ["report-run-1", "report-run-2"]:
+        repo.create_pipeline_run(conn, run_id=run_id, domain="news", pipeline_name="news.daily_pipeline")
+
+    first_context = PipelineContext(run_id="report-run-1", pipeline_name="news.daily_pipeline", domain="news", settings=settings, conn=conn, artifact_store=ArtifactStore(tmp_path), params={"date": "2026-07-30"}, outputs={"news_item_ids": [item_id, low_score_item_id]})
+    BuildNewsDailyReportStep().run(first_context)
+    second_context = PipelineContext(run_id="report-run-2", pipeline_name="news.daily_pipeline", domain="news", settings=settings, conn=conn, artifact_store=ArtifactStore(tmp_path), params={"date": "2026-07-30"}, outputs={"news_item_ids": []})
+    BuildNewsDailyReportStep().run(second_context)
+
+    report = news_repo.report_to_dict(conn.execute("SELECT * FROM news_daily_reports WHERE report_date = '2026-07-30'").fetchone())
+    assert report["highlights"] == [item_id]
+    assert report["metrics"]["item_count"] == 2
+    assert report["metrics"]["item_ids"] == [item_id, low_score_item_id]
+    assert report["run_id"] == "report-run-2"
+    assert conn.execute("SELECT COUNT(*) FROM news_daily_reports").fetchone()[0] == 1
 
 
 def test_news_filters_actions_reports_and_promotion() -> None:

@@ -52,9 +52,10 @@ def gate_candidates(
     for index, item in enumerate(items):
         input_payload = {**_gate_payload(item, tech_map), "model_identity": model_identity}
         input_hash = _input_hash(input_payload)
+        request_key = _model_request_key("news_tech_map_gate", model_profile, GATE_PROMPT_VERSION, input_payload)
         gate = _cached_stage(conn, str(item.get("item_key") or ""), "gate_review", input_hash, GATE_PROMPT_VERSION)
         if not gate:
-            cached_result = _cached_model_result(conn, "news_tech_map_gate", model_profile, input_payload)
+            cached_result = _cached_model_result(conn, request_key)
             gate = _normalize_gate(cached_result, item, tech_map) if cached_result is not None else None
         if gate:
             metrics["cache_hits"] += 1
@@ -65,7 +66,7 @@ def gate_candidates(
         futures = [pool.submit(_process_gate, *entry) for entry in pending]
         for idx, future in enumerate(as_completed(futures), 1):
             r = future.result()
-            _record_attempts(conn, run_id=run_id, agent_name="news_tech_map_gate", model_profile=model_profile, provider=r["provider"], input_payload=r["input_payload"], attempts=r["attempts"])
+            _record_attempts(conn, run_id=run_id, agent_name="news_tech_map_gate", model_profile=model_profile, prompt_version=GATE_PROMPT_VERSION, provider=r["provider"], input_payload=r["input_payload"], attempts=r["attempts"])
             conn.commit()
             metrics["model_calls"] += 1
             metrics["failed"] += int(r["failed"])
@@ -114,9 +115,10 @@ def enrich_candidates(
     for index, item in enumerate(items):
         input_payload = {**_review_payload(item, tech_map), "model_identity": model_identity}
         input_hash = _input_hash(input_payload)
+        request_key = _model_request_key("news_deep_review", model_profile, REVIEW_PROMPT_VERSION, input_payload)
         review = _cached_stage(conn, str(item.get("item_key") or ""), "review", input_hash, REVIEW_PROMPT_VERSION)
         if not review:
-            cached_result = _cached_model_result(conn, "news_deep_review", model_profile, input_payload)
+            cached_result = _cached_model_result(conn, request_key)
             review = _normalize_deep_review(cached_result, item, tech_map) if cached_result is not None else None
         if review:
             metrics["cache_hits"] += 1
@@ -127,7 +129,7 @@ def enrich_candidates(
         futures = [pool.submit(_process_enrich, *entry) for entry in pending]
         for idx, future in enumerate(as_completed(futures), 1):
             r = future.result()
-            _record_attempts(conn, run_id=run_id, agent_name="news_deep_review", model_profile=model_profile, provider=r["provider"], input_payload=r["input_payload"], attempts=r["attempts"])
+            _record_attempts(conn, run_id=run_id, agent_name="news_deep_review", model_profile=model_profile, prompt_version=REVIEW_PROMPT_VERSION, provider=r["provider"], input_payload=r["input_payload"], attempts=r["attempts"])
             conn.commit()
             metrics["model_calls"] += 1
             if r["failed"]:
@@ -424,45 +426,15 @@ def _call_model_api(router: LLMRouter, *, model_profile: str, prompt: str, input
     return {"error": "model retry loop exhausted"}, {"error": "exhausted"}, True, provider, 0, attempts
 
 
-def _call_model(
-    conn: sqlite3.Connection,
-    router: LLMRouter,
-    *,
-    run_id: str,
-    agent_name: str,
-    model_profile: str,
-    prompt: str,
-    input_payload: dict[str, Any],
-) -> tuple[dict[str, Any], bool]:
-    provider = str(router.active_config(model_profile).get("provider") or "unknown")
-    overall_started = time.monotonic()
-    for attempt in range(1, MODEL_MAX_ATTEMPTS + 1):
-        attempt_started = time.monotonic()
-        try:
-            output = router.complete_json(profile=model_profile, prompt=prompt, payload=input_payload)
-            output = {**output, "retry_count": attempt - 1, "total_latency_ms": int((time.monotonic() - overall_started) * 1000)}
-            repo.create_model_call(conn, run_id=run_id, agent_name=agent_name, model_profile=model_profile, provider=str(output.get("provider") or provider), status="success", input_payload=input_payload, output_payload=output, latency_ms=int((time.monotonic() - attempt_started) * 1000))
-            return output.get("result") or output.get("parsed") or {}, False
-        except Exception as exc:
-            error = str(exc)
-            retryable = _is_retryable_model_error(exc)
-            has_next_attempt = retryable and attempt < MODEL_MAX_ATTEMPTS
-            repo.create_model_call(conn, run_id=run_id, agent_name=agent_name, model_profile=model_profile, provider=provider, status="retryable_failure" if has_next_attempt else "failed", input_payload=input_payload, output_payload={"attempt": attempt, "retryable": retryable}, latency_ms=int((time.monotonic() - attempt_started) * 1000), error_message=error)
-            if not has_next_attempt:
-                return {"error": error, "attempts": attempt}, True
-            delay = MODEL_RETRY_BASE_SECONDS * (2 ** (attempt - 1)) + random.uniform(0, MODEL_RETRY_JITTER_SECONDS)
-            time.sleep(delay)
-    return {"error": "model retry loop exhausted"}, True
-
-
-def _record_model_call(conn: sqlite3.Connection, *, run_id: str, agent_name: str, model_profile: str, provider: str, input_payload: dict[str, Any], output: dict[str, Any], status: str, latency_ms: int, error_message: str = "") -> None:
+def _record_model_call(conn: sqlite3.Connection, *, run_id: str, agent_name: str, model_profile: str, prompt_version: str, provider: str, input_payload: dict[str, Any], output: dict[str, Any], status: str, latency_ms: int, attempt_no: int, error_message: str = "") -> None:
     """DB write only. Called from main thread — serialized."""
-    repo.create_model_call(conn, run_id=run_id, agent_name=agent_name, model_profile=model_profile, provider=provider, status=status, input_payload=input_payload, output_payload=output, latency_ms=latency_ms, error_message=error_message)
+    request_key = _model_request_key(agent_name, model_profile, prompt_version, input_payload)
+    repo.create_model_call(conn, run_id=run_id, agent_name=agent_name, model_profile=model_profile, provider=provider, request_key=request_key, prompt_version=prompt_version, attempt_no=attempt_no, status=status, input_payload=input_payload, output_payload=output, latency_ms=latency_ms, error_message=error_message)
 
 
-def _record_attempts(conn: sqlite3.Connection, *, run_id: str, agent_name: str, model_profile: str, provider: str, input_payload: dict[str, Any], attempts: list[dict[str, Any]]) -> None:
-    for attempt in attempts:
-        _record_model_call(conn, run_id=run_id, agent_name=agent_name, model_profile=model_profile, provider=provider, input_payload=input_payload, output=attempt["output"], status=attempt["status"], latency_ms=int(attempt["latency_ms"]), error_message=str(attempt["error_message"]))
+def _record_attempts(conn: sqlite3.Connection, *, run_id: str, agent_name: str, model_profile: str, prompt_version: str, provider: str, input_payload: dict[str, Any], attempts: list[dict[str, Any]]) -> None:
+    for attempt_no, attempt in enumerate(attempts, 1):
+        _record_model_call(conn, run_id=run_id, agent_name=agent_name, model_profile=model_profile, prompt_version=prompt_version, provider=provider, input_payload=input_payload, output=attempt["output"], status=attempt["status"], latency_ms=int(attempt["latency_ms"]), attempt_no=attempt_no, error_message=str(attempt["error_message"]))
 
 
 def _is_retryable_model_error(exc: Exception) -> bool:
@@ -484,16 +456,16 @@ def _cached_stage(conn: sqlite3.Connection, item_key: str, field: str, input_has
     return value if value and value.get("input_hash") == input_hash and value.get("prompt_version") == prompt_version else None
 
 
-def _cached_model_result(conn: sqlite3.Connection, agent_name: str, model_profile: str, input_payload: dict[str, Any]) -> dict[str, Any] | None:
+def _cached_model_result(conn: sqlite3.Connection, request_key: str) -> dict[str, Any] | None:
     row = conn.execute(
         """
         SELECT output_json
         FROM model_calls
-        WHERE agent_name = ? AND model_profile = ? AND status = 'success' AND input_json = ?
+        WHERE request_key = ? AND status = 'success'
         ORDER BY id DESC
         LIMIT 1
         """,
-        (agent_name, model_profile, repo.dumps(input_payload)),
+        (request_key,),
     ).fetchone()
     output = repo.loads(row["output_json"], {}) if row else {}
     if not isinstance(output, dict):
@@ -546,3 +518,12 @@ def _string_list(value: Any) -> list[str]:
 
 def _input_hash(value: dict[str, Any]) -> str:
     return hashlib.sha256(json.dumps(value, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
+
+
+def _model_request_key(agent_name: str, model_profile: str, prompt_version: str, input_payload: dict[str, Any]) -> str:
+    return _input_hash({
+        "agent_name": agent_name,
+        "model_profile": model_profile,
+        "prompt_version": prompt_version,
+        "input": input_payload,
+    })

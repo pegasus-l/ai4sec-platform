@@ -105,6 +105,16 @@ MIGRATIONS: tuple[Migration, ...] = (
             "unique domain/source/state_key;index domain/source"
         ),
     ),
+    Migration(
+        version=11,
+        name="add_model_call_idempotency",
+        apply=lambda conn: _add_model_call_idempotency(conn),
+        checksum_source=(
+            "model_calls.request_key TEXT NOT NULL DEFAULT '';"
+            "prompt_version TEXT NOT NULL DEFAULT '';attempt_no INTEGER NOT NULL DEFAULT 1;"
+            "unique successful request_key;index request_key,status"
+        ),
+    ),
 )
 
 
@@ -318,3 +328,14 @@ def _add_source_incremental_state(conn: sqlite3.Connection) -> None:
         """
     )
     conn.execute("CREATE INDEX IF NOT EXISTS idx_source_incremental_domain_source ON source_incremental_states(domain, source)")
+
+
+def _add_model_call_idempotency(conn: sqlite3.Connection) -> None:
+    _add_column_if_missing(conn, "model_calls", "request_key", "TEXT NOT NULL DEFAULT ''")
+    _add_column_if_missing(conn, "model_calls", "prompt_version", "TEXT NOT NULL DEFAULT ''")
+    _add_column_if_missing(conn, "model_calls", "attempt_no", "INTEGER NOT NULL DEFAULT 1")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_model_calls_request_status ON model_calls(request_key, status)")
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_model_calls_success_request "
+        "ON model_calls(request_key) WHERE request_key <> '' AND status = 'success'"
+    )

@@ -142,6 +142,23 @@ def upsert_daily_report(
     )
 
 
+def get_daily_report_item_ids(conn: sqlite3.Connection, report_date: str) -> list[int]:
+    row = conn.execute(
+        "SELECT highlights_json, topic_sections_json, metrics_json FROM news_daily_reports WHERE report_date = ?",
+        (report_date,),
+    ).fetchone()
+    if not row:
+        return []
+    metrics = repo.loads(row["metrics_json"], {})
+    item_ids = [int(value) for value in metrics.get("item_ids") or [] if str(value).isdigit()] if isinstance(metrics, dict) else []
+    item_ids.extend(int(value) for value in repo.loads(row["highlights_json"], []) if str(value).isdigit())
+    for section in repo.loads(row["topic_sections_json"], []):
+        if not isinstance(section, dict):
+            continue
+        item_ids.extend(int(value) for value in section.get("item_ids") or [] if str(value).isdigit())
+    return list(dict.fromkeys(item_ids))
+
+
 def report_to_dict(row: sqlite3.Row) -> dict[str, Any]:
     item = dict(row)
     item["highlights"] = repo.loads(item.pop("highlights_json"), [])

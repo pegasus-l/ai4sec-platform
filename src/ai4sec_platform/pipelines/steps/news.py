@@ -223,7 +223,8 @@ class BuildNewsDailyReportStep:
 
     def run(self, context: PipelineContext) -> StepResult:
         report_date = str(context.params.get("date") or datetime.now(timezone.utc).date().isoformat())
-        item_ids = context.outputs.get("news_item_ids") or []
+        current_item_ids = [int(item_id) for item_id in context.outputs.get("news_item_ids") or []]
+        item_ids = list(dict.fromkeys([*news_repo.get_daily_report_item_ids(context.conn, report_date), *current_item_ids]))
         selected = []
         for item_id in item_ids:
             item = repo.get_domain_item(context.conn, "news", int(item_id))
@@ -239,8 +240,8 @@ class BuildNewsDailyReportStep:
             for topic in topics[:3]:
                 topic_items.setdefault(str(topic), []).append(int(item["id"]))
         topic_sections = [{"topic": topic, "item_ids": ids[:10], "summary": f"{topic} 相关资讯 {len(ids)} 条。"} for topic, ids in sorted(topic_items.items(), key=lambda pair: len(pair[1]), reverse=True)[:10]]
-        summary = f"本次采集发现 {len(item_ids)} 条资讯，其中 {len(highlights)} 条进入精选。"
-        metrics = {"item_count": len(item_ids), "highlight_count": len(highlights), "topic_count": len(topic_sections)}
+        summary = f"本日累计收录 {len(item_ids)} 条资讯，其中 {len(highlights)} 条进入精选。"
+        metrics = {"item_count": len(item_ids), "highlight_count": len(highlights), "topic_count": len(topic_sections), "item_ids": item_ids}
         news_repo.upsert_daily_report(conn=context.conn, report_date=report_date, title=f"AI4SEC 资讯日报 · {report_date}", summary=summary, highlights=highlights, topic_sections=topic_sections, metrics=metrics, run_id=context.run_id)
         artifact = context.artifact_store.write_json(context.conn, run_id=context.run_id, artifact_type="news_daily_report", name=f"reports/news_{report_date}.json", data={"report_date": report_date, "summary": summary, "highlights": highlights, "topic_sections": topic_sections, "metrics": metrics})
         context.outputs["news_daily_report"] = {"report_date": report_date, "highlights": highlights, "topic_sections": topic_sections}
