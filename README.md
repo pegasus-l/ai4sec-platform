@@ -88,7 +88,17 @@ AI4SEC_CORS_ALLOWED_ORIGINS=https://console.internal.example,http://127.0.0.1:51
 ```bash
 PYTHONPATH=src python3 -m ai4sec_platform.cli.news_health
 PYTHONPATH=src python3 -m ai4sec_platform.cli.news_health --source arxiv --source github --timeout-seconds 10
+PYTHONPATH=src python3 -m ai4sec_platform.cli.main news-health --timeout-seconds 10
 ```
+
+连续日更验收使用统一报告 CLI。默认读取最近最多九个 `news.daily_pipeline` Run，避免同日失败重跑挤掉更早的有效日期，并在 `output/acceptance/news/` 写入最新 JSON 与 Markdown 报告：
+
+```bash
+PYTHONPATH=src python3 -m ai4sec_platform.cli.main news-acceptance
+PYTHONPATH=src python3 -m ai4sec_platform.cli.main news-acceptance --run-id RUN_1 --run-id RUN_2 --run-id RUN_3
+```
+
+单个周期只有同时满足以下条件才计入生产验收：Run 为 `success`；所有启用源均产生来源记录且没有错误；日报步骤成功并具有业务日期；门控与深评实际执行且没有模型/Schema 失败；模型调用 Provider 不是 `local_rules`。同一业务日期的补跑只计一个周期。当前健康探针或真实模型未配置时，报告的 `ready_to_start_cycle` 为 `false`，不会把离线规则运行冒充真实日更。
 
 RSS 和 ASIS 的已扫描来源 ID 保存在 SQLite `source_incremental_states` 表，不再使用本地 JSON 状态文件。水位线与采集步骤的 Artifact 在同一事务中提交；连接器返回错误时不推进水位线，健康探测也不会修改水位线。状态默认每个来源最多保留 20,000 个 ID。普通资讯域 reset 会保留水位线，防止运维重置后回放全部历史数据；确需全量重采时应先备份数据库，再由管理员显式清理对应来源状态。X 当前禁用，未来替换 Provider 必须接入同一状态契约后才能启用。
 

@@ -16,8 +16,14 @@ class AsisConnector(NewsLiveConnector):
     source_type = "discovery"
 
     def health_check(self, config: dict) -> SourceHealth:
-        configured = bool(config.get("base_url") and os.getenv("ASIS_USERNAME") and os.getenv("ASIS_PASSWORD"))
-        return SourceHealth(status="ok" if configured else "missing", message="ASIS_BASE_URL/ASIS_USERNAME/ASIS_PASSWORD")
+        missing = []
+        if not (config.get("base_url") or os.getenv("ASIS_BASE_URL")):
+            missing.append("ASIS_BASE_URL")
+        if not os.getenv("ASIS_USERNAME"):
+            missing.append("ASIS_USERNAME")
+        if not os.getenv("ASIS_PASSWORD"):
+            missing.append("ASIS_PASSWORD")
+        return SourceHealth(status="missing" if missing else "ok", message="/".join(missing) if missing else "ASIS credentials configured")
 
     def fetch(self, request: SourceFetchRequest) -> SourceFetchResult:
         base_url = str(request.config.get("base_url") or os.getenv("ASIS_BASE_URL") or "").rstrip("/")

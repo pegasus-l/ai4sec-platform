@@ -891,6 +891,7 @@ D11 暂缓的是公网入口和完整公网暴露治理，不代表复现容器�
 - [x] 完成资讯 canonical key upsert、同日日报合并和成功 ModelCall 稳定请求键幂等；失败调用保留审计并允许后续重跑。
 - [x] 定义并实现采集单源补跑、门控/深评失败项缓存恢复、日报 checkpoint 恢复语义及运营入口。
 - [x] 建立门控/深评严格 Schema 校验、阻断发布、去重人工队列、人工忽略与恢复后自动解决机制。
+- [x] 建立三周期验收 CLI，自动汇总各源采集量、失败、去重率、入选率、Schema 通过率、模型 Provider、人工队列和日报状态；本地规则、缺源、同日重复 Run 不计为合格周期。
 - [ ] 连续运行至少三个真实日更周期。
 
 验收指标至少包含：各源采集量、筛选率、重复率、失败率、最终入选率、Schema 通过率、人工纠错率和日报准时率。
@@ -1959,3 +1960,13 @@ Python full test suite: 199 passed
 - X 没有恢复历史 GetXAPI 兼容代码，继续以明确原因显示禁用；未来替换 Provider 必须重新完成认证、额度、分页、来源 ID 水位线和真实样本质量验收。
 - 新增专项测试覆盖瞬时超时恢复、`Retry-After` 上限、认证失败不重试、显式关闭抖动、arXiv/GitHub/ASIS 分页、arXiv/ASIS 部分页失败；与既有 WeRSS、Awesome、增量状态和禁用 X 测试合并运行共 36 passed。
 - 本批次完成的是连接器代码契约和离线回归，不替代真实来源验收；资讯聚焦测试 36 passed，全仓 Python 测试 296 passed，`compileall` 与 `git diff --check` 通过。3A 仍需在凭据和依赖服务齐备后连续运行三个真实日更周期，并记录各源采集量、重复率、失败率和最终入选质量。
+
+### 2026-07-31：资讯连续三周期验收工具与首次前置检查
+
+- 新增 `news-acceptance` CLI 和资讯域验收聚合器，可默认读取最近最多九个日更 Run，也可显式传入 Run ID；报告同时输出 JSON 和 Markdown 到 `output/acceptance/news/`。
+- 合格周期严格要求：`news.daily_pipeline` 最终成功、所有启用源记录齐全且无错误、日报成功、门控和深评实际执行、Schema/模型无失败、ModelCall 使用真实 Provider。`local_rules` 运行仅可用于开发回归，不能计入生产验收。
+- 合格周期按 `summary.params.date` 的业务日期去重；同日失败重跑不会虚增周期数量，默认扩大历史 Run 查询窗口以保留更早的不同日期。
+- 报告聚合来源采集量、来源失败、标准化数量、重复率、最终入选率、Schema 通过率、模型 Provider、模型调用状态和人工队列处置数量。人工内容纠错率仍需运营人员抽样并形成业务记录，当前不以队列状态冒充纠错率。
+- 已执行首次真实健康探针：arXiv、GitHub、WeRSS、Awesome 健康，X 按既定决策禁用；ASIS 缺少 `ASIS_USERNAME` 和 `ASIS_PASSWORD`。健康检查提示已与实际采集规则统一，配置文件已有 Base URL 时不再错误提示缺少 `ASIS_BASE_URL`。
+- 当前仓库和进程环境没有配置真实模型 Provider，因此 `news-acceptance` 正确返回 `ready_to_start_cycle=false`、`remaining_cycles=3`。在 ASIS 凭据和 GLM OpenAI-compatible 环境变量配置完成前，不启动完整日更，避免生成不能计入验收的本地规则数据。
+- 回归覆盖三个不同日期通过、同日补跑去重、较旧有效日期保留、显式 Run 缺失、来源失败和 `local_rules` 拒绝；资讯聚焦测试 42 passed，全仓 Python 测试 302 passed，`compileall`、`git diff --check` 和本次变更文件敏感信息扫描通过。

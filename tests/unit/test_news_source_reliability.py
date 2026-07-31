@@ -194,6 +194,17 @@ def test_asis_partial_page_failure_is_reported_without_hiding_items(monkeypatch)
     assert result.metadata["pages_fetched"] == 1
 
 
+def test_asis_health_reports_only_missing_credentials(monkeypatch) -> None:
+    monkeypatch.delenv("ASIS_BASE_URL", raising=False)
+    monkeypatch.delenv("ASIS_USERNAME", raising=False)
+    monkeypatch.delenv("ASIS_PASSWORD", raising=False)
+
+    health = AsisConnector().health_check({"base_url": "https://asis.example"})
+
+    assert health.status == "missing"
+    assert health.message == "ASIS_USERNAME/ASIS_PASSWORD"
+
+
 class _Response:
     def __init__(self, content: bytes) -> None:
         self.content = content
