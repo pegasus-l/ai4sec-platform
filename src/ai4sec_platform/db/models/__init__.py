@@ -155,6 +155,21 @@ CREATE TABLE IF NOT EXISTS database_maintenance_runs (
 CREATE INDEX IF NOT EXISTS idx_database_maintenance_recent ON database_maintenance_runs(id DESC);
 CREATE INDEX IF NOT EXISTS idx_database_maintenance_status ON database_maintenance_runs(status, id DESC);
 
+CREATE TABLE IF NOT EXISTS source_health_checks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    domain TEXT NOT NULL,
+    source TEXT NOT NULL,
+    status TEXT NOT NULL,
+    message TEXT NOT NULL DEFAULT '',
+    latency_ms INTEGER NOT NULL DEFAULT 0,
+    consecutive_failures INTEGER NOT NULL DEFAULT 0,
+    last_success_at TEXT NOT NULL DEFAULT '',
+    details_json TEXT NOT NULL DEFAULT '{}',
+    checked_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_source_health_source_recent ON source_health_checks(domain, source, id DESC);
+CREATE INDEX IF NOT EXISTS idx_source_health_status_recent ON source_health_checks(status, id DESC);
+
 CREATE TABLE IF NOT EXISTS task_runs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     run_id TEXT NOT NULL,

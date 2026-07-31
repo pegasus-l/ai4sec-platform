@@ -23,11 +23,12 @@ def probe_news_sources(conn, settings: Settings, sources: list[str] | None = Non
         if source not in requested:
             continue
         result = _probe_source(source, configured.get(source, {}), timeout_seconds)
+        result.update(_record_health_check(conn, result))
         repo.create_data_source(
             conn,
             domain="news",
             name=source,
-            source_type="health_probe",
+            source_type=result["source_type"],
             status=result["status"],
             latest_at=result["checked_at"],
             health=result["health"],
@@ -38,26 +39,64 @@ def probe_news_sources(conn, settings: Settings, sources: list[str] | None = Non
     return results
 
 
+def _record_health_check(conn, result: dict[str, Any]) -> dict[str, Any]:
+    previous = conn.execute(
+        "SELECT consecutive_failures, last_success_at FROM source_health_checks WHERE domain = 'news' AND source = ? ORDER BY id DESC LIMIT 1",
+        (result["source"],),
+    ).fetchone()
+    previous_failures = int(previous["consecutive_failures"]) if previous else 0
+    previous_success = str(previous["last_success_at"] or "") if previous else ""
+    if result["status"] == "healthy":
+        consecutive_failures = 0
+        last_success_at = result["checked_at"]
+    elif result["status"] == "disabled":
+        consecutive_failures = 0
+        last_success_at = previous_success
+    else:
+        consecutive_failures = previous_failures + 1
+        last_success_at = previous_success
+    conn.execute(
+        """
+        INSERT INTO source_health_checks(
+            domain, source, status, message, latency_ms, consecutive_failures,
+            last_success_at, details_json, checked_at
+        ) VALUES ('news', ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            result["source"],
+            result["status"],
+            result["message"],
+            result["latency_ms"],
+            consecutive_failures,
+            last_success_at,
+            repo.dumps(result),
+            result["checked_at"],
+        ),
+    )
+    return {"consecutive_failures": consecutive_failures, "last_success_at": last_success_at}
+
+
 def _probe_source(source: str, config: dict[str, Any], timeout_seconds: int) -> dict[str, Any]:
     checked_at = datetime.now(timezone.utc).isoformat()
-    if not config.get("enabled", True):
-        return _result(source, "disabled", "disabled", str(config.get("disabled_reason") or "source is disabled"), checked_at, 0)
     connector = SourceRegistry().get(source)
+    source_type = str(getattr(connector, "source_type", "unknown"))
+    if not config.get("enabled", True):
+        return _result(source, source_type, "disabled", "disabled", str(config.get("disabled_reason") or "source is disabled"), checked_at, 0)
     configured_health = connector.health_check(config)
     if configured_health.status in {"missing", "disabled"}:
-        return _result(source, configured_health.status, configured_health.status, configured_health.message, checked_at, 0)
+        return _result(source, source_type, configured_health.status, configured_health.status, configured_health.message, checked_at, 0)
     started = time.monotonic()
     try:
         fetch_result = connector.fetch(SourceFetchRequest(source_name=source, config=_probe_config(source, config), params=_probe_params(source, timeout_seconds)))
         if fetch_result.errors:
             error = str(fetch_result.errors[0])
             status = classify_health_error(error)
-            return _result(source, status, status, error, checked_at, _elapsed_ms(started), errors=fetch_result.errors)
-        return _result(source, "healthy", "healthy", f"probe succeeded; {len(fetch_result.items)} item(s)", checked_at, _elapsed_ms(started), items=len(fetch_result.items), metadata=fetch_result.metadata)
+            return _result(source, source_type, status, status, error, checked_at, _elapsed_ms(started), errors=fetch_result.errors)
+        return _result(source, source_type, "healthy", "healthy", f"probe succeeded; {len(fetch_result.items)} item(s)", checked_at, _elapsed_ms(started), items=len(fetch_result.items), metadata=fetch_result.metadata)
     except Exception as exc:
         error = f"{type(exc).__name__}: {exc}"
         status = classify_health_error(error)
-        return _result(source, status, status, error, checked_at, _elapsed_ms(started), errors=[error])
+        return _result(source, source_type, status, status, error, checked_at, _elapsed_ms(started), errors=[error])
 
 
 def classify_health_error(error: str) -> str:
@@ -100,8 +139,8 @@ def _probe_params(source: str, timeout_seconds: int) -> dict[str, Any]:
     return {"timeout_seconds": timeout_seconds}
 
 
-def _result(source: str, status: str, health: str, message: str, checked_at: str, latency_ms: int, **extra: Any) -> dict[str, Any]:
-    return {"source": source, "status": status, "health": health, "message": message, "checked_at": checked_at, "latency_ms": latency_ms, **extra}
+def _result(source: str, source_type: str, status: str, health: str, message: str, checked_at: str, latency_ms: int, **extra: Any) -> dict[str, Any]:
+    return {"source": source, "source_type": source_type, "status": status, "health": health, "message": message, "checked_at": checked_at, "latency_ms": latency_ms, **extra}
 
 
 def _elapsed_ms(started: float) -> int:

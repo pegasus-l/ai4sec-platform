@@ -47,30 +47,50 @@ def source_status(conn: sqlite3.Connection) -> list[dict[str, Any]]:
     source_configs = load_news_source_configs(load_settings().project_root)
     item_counts = {row["source"]: int(row["count"]) for row in conn.execute("SELECT source, COUNT(*) AS count FROM domain_items WHERE domain = 'news' GROUP BY source")}
     rows = conn.execute("SELECT * FROM data_sources WHERE domain = 'news' ORDER BY id DESC").fetchall()
+    health_rows = conn.execute("SELECT * FROM source_health_checks WHERE domain = 'news' ORDER BY id DESC").fetchall()
     latest = {}
     for row in rows:
         latest.setdefault(str(row["name"]).lower(), row)
+    latest_health = {}
+    for health_row in health_rows:
+        latest_health.setdefault(str(health_row["source"]).lower(), health_row)
     result = []
     for source in NEWS_SOURCES:
         row = latest.get(source)
+        health_row = latest_health.get(source)
         source_config = source_configs.get(source, {})
         configured_disabled = not source_config.get("enabled", True)
         summary = repo.loads(row["summary_json"], {}) if row else {}
         errors = [str(error) for error in summary.get("errors", []) if error]
         disabled = configured_disabled or bool(summary.get("disabled")) or bool(row and (row["status"] == "disabled" or row["health"] == "disabled"))
+        source_latest_at = str((row["latest_at"] or row["created_at"]) if row else "")
+        health_is_latest = bool(health_row and str(health_row["checked_at"]) >= source_latest_at)
+        if health_is_latest and health_row["status"] not in {"healthy", "disabled"} and health_row["message"]:
+            errors = [str(health_row["message"]), *errors]
+        health_summary = {
+            "status": health_row["status"],
+            "message": health_row["message"],
+            "checked_at": health_row["checked_at"],
+            "latency_ms": health_row["latency_ms"],
+            "consecutive_failures": health_row["consecutive_failures"],
+            "last_success_at": health_row["last_success_at"],
+        } if health_row else {}
         result.append({
             "id": source,
             "name": source,
-            "status": row["status"] if row else "disabled" if disabled else "unknown",
-            "health": row["health"] if row else "disabled" if disabled else "unknown",
-            "latest_at": (row["latest_at"] or row["created_at"]) if row else "",
+            "status": health_row["status"] if health_is_latest else row["status"] if row else "disabled" if disabled else "unknown",
+            "health": health_row["status"] if health_is_latest else row["health"] if row else "disabled" if disabled else "unknown",
+            "latest_at": health_row["checked_at"] if health_is_latest else source_latest_at,
             "item_count": item_counts.get(source, 0),
             "collected_count": int(summary.get("items") or 0),
             "error_count": len(errors),
             "errors": errors,
             "disabled": disabled,
             "disabled_reason": str(summary.get("disabled_reason") or source_config.get("disabled_reason") or ""),
-            "summary": summary,
+            "last_health_check": health_summary,
+            "consecutive_failures": int(health_row["consecutive_failures"]) if health_row else 0,
+            "last_success_at": str(health_row["last_success_at"] or "") if health_row else "",
+            "summary": {**summary, "last_health_check": health_summary} if health_summary else summary,
         })
     return result
 

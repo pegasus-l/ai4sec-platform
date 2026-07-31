@@ -87,6 +87,15 @@ MIGRATIONS: tuple[Migration, ...] = (
             "details_json,started_at,finished_at);indexes recent,status"
         ),
     ),
+    Migration(
+        version=9,
+        name="add_source_health_history",
+        apply=lambda conn: _add_source_health_history(conn),
+        checksum_source=(
+            "source_health_checks(domain,source,status,message,latency_ms,consecutive_failures,"
+            "last_success_at,details_json,checked_at);indexes source_recent,status_recent"
+        ),
+    ),
 )
 
 
@@ -262,3 +271,24 @@ def _add_database_maintenance_history(conn: sqlite3.Connection) -> None:
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_database_maintenance_status ON database_maintenance_runs(status, id DESC)"
     )
+
+
+def _add_source_health_history(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS source_health_checks (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            domain TEXT NOT NULL,
+            source TEXT NOT NULL,
+            status TEXT NOT NULL,
+            message TEXT NOT NULL DEFAULT '',
+            latency_ms INTEGER NOT NULL DEFAULT 0,
+            consecutive_failures INTEGER NOT NULL DEFAULT 0,
+            last_success_at TEXT NOT NULL DEFAULT '',
+            details_json TEXT NOT NULL DEFAULT '{}',
+            checked_at TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_source_health_source_recent ON source_health_checks(domain, source, id DESC)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_source_health_status_recent ON source_health_checks(status, id DESC)")
