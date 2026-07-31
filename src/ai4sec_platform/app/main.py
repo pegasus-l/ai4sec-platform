@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
@@ -8,6 +9,10 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from ai4sec_platform.app.api.router import api_router
+from ai4sec_platform.app.middleware import ASISSessionMiddleware
+from ai4sec_platform.core.env import load_env_file
+
+load_env_file()
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 FRONTEND_DIST = PROJECT_ROOT / "frontend" / "dist"
@@ -21,6 +26,10 @@ def create_app() -> FastAPI:
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
+    )
+    app.add_middleware(
+        ASISSessionMiddleware,
+        secret=os.environ.get("SEC_AI_SESSION_SECRET", ""),
     )
     app.include_router(api_router)
     if (FRONTEND_DIST / "assets").exists():
