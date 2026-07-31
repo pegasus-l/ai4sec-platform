@@ -23,16 +23,17 @@ class AsisConnector(NewsLiveConnector):
         base_url = str(request.config.get("base_url") or os.getenv("ASIS_BASE_URL") or "").rstrip("/")
         username = os.getenv("ASIS_USERNAME", "")
         password = os.getenv("ASIS_PASSWORD", "")
+        timeout = int(request.params.get("timeout_seconds") or 30)
         if not base_url or not username or not password:
             return SourceFetchResult(source_name=request.source_name, connector_name=self.connector_name, errors=["ASIS credentials are not configured"])
         jar = http.cookiejar.CookieJar()
         opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
         try:
             login = urllib.request.Request(f"{base_url}/api/auth/login", data=urllib.parse.urlencode({"username": username, "password": password, "next": "/"}).encode(), headers={"Content-Type": "application/x-www-form-urlencoded"}, method="POST")
-            retry_call(lambda: opener.open(login, timeout=30).read())
+            retry_call(lambda: opener.open(login, timeout=timeout).read())
             limit = min(500, int(request.config.get("fetch_limit") or 500))
             items_request = urllib.request.Request(f"{base_url}/api/items?limit={limit}&offset=0", headers={"Accept": "application/json"})
-            raw_text = retry_call(lambda: opener.open(items_request, timeout=60).read().decode("utf-8"))
+            raw_text = retry_call(lambda: opener.open(items_request, timeout=min(timeout, 60)).read().decode("utf-8"))
             raw = json.loads(raw_text)
             raw_items = raw if isinstance(raw, list) else raw.get("items") or []
             min_score = int(request.config.get("min_score") or 0)

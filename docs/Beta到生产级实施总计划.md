@@ -1892,4 +1892,12 @@ Python full test suite: 199 passed
 - 资讯运营页显示“已禁用”和具体原因，禁用重跑按钮；按单源重跑 X 也只刷新 disabled 状态，不会绕过配置访问网络。
 - X 连接器健康检查区分 disabled、missing 和 configured；configured 仅表示凭据存在，重新启用前仍需补充真实连通性、认证、额度和最近成功时间探测。
 - 重新启用门槛：确定替换 Provider，完成真实健康探测、分页/限流/402 类错误分类、增量 ID 状态和至少一个完整日更样本验收。
-- X/资讯聚焦测试通过；全仓 Python 测试 269 passed，前端生产构建、`compileall` 与 `git diff --check` 通过。前端构建仍有既有的动态/静态 import 和大 chunk 警告，本次未扩大依赖升级范围。
+- X/资讯聚焦测试通过；全仓 Python 测试 272 passed，前端生产构建、`compileall` 与 `git diff --check` 通过。前端构建仍有既有的动态/静态 import 和大 chunk 警告，本次未扩大依赖升级范围。
+
+### 2026-07-30：资讯真实数据源健康探测
+
+- 新增 `news_health` 独立 CLI，默认对六源执行最小真实请求；禁用源只返回 disabled，不发起网络请求。
+- 探测结果写入 `data_sources`，记录健康状态、消息、检查时间、延迟、返回条数和原始错误；不把探测入口暴露到未认证 HTTP API。
+- 统一分类 `auth_failed`、`quota_exhausted`、`rate_limited`、`upstream_failed`、`timeout` 和 `unhealthy`，避免 HTTP 402/401 等错误被显示为健康。
+- arXiv/GitHub/RSS/Awesome 使用最小探测请求；ASIS 探测沿用登录与最小数据请求并遵守 CLI timeout；X 维持 disabled 语义。
+- 健康探测专项测试已覆盖禁用持久化、成功探测和错误分类；后续仍需在真实环境连续记录最近成功时间、连续失败次数和额度信息。

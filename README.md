@@ -83,6 +83,13 @@ AI4SEC_CORS_ALLOWED_ORIGINS=https://console.internal.example,http://127.0.0.1:51
 
 资讯 X 数据源当前在 `configs/news.yaml` 中正式禁用。原因是当前没有完成可用 Provider、凭据、额度和真实采集验收；运营页会持续展示禁用原因，但不会把它计为采集失败或允许单源重跑。重新启用前必须先完成真实健康检查、错误分类、增量状态和完整日更验收，不能只把 `enabled` 改为 `true`。
 
+需要主动探测资讯数据源时使用独立 CLI；它会执行最小真实请求并将连通性、认证、额度、限流、上游错误和延迟写入 `data_sources`，不通过未认证 HTTP 触发：
+
+```bash
+PYTHONPATH=src python3 -m ai4sec_platform.cli.news_health
+PYTHONPATH=src python3 -m ai4sec_platform.cli.news_health --source arxiv --source github --timeout-seconds 10
+```
+
 数据库初始化会创建 `schema_migrations` 并按版本顺序执行迁移。迁移名称和 checksum 已写入历史后不可静默修改；版本不匹配或迁移失败会阻止启动并回滚当前版本。生产升级前仍应先执行数据库备份，再启动新版本 API 和 Worker。
 
 在线创建一致性备份并校验：
