@@ -4,13 +4,12 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
 
 COOKIE_NAME = "sec_ai_hot_session"
-PUBLIC_PATHS = {"/api/health", "/health", "/insights/api/health"}
 
 
 class ASISSessionMiddleware(BaseHTTPMiddleware):
     """验证 ASIS 签名的 sec_ai_hot_session cookie。
-    复现 ASIS apps/web/lib/auth.ts: 格式 v1.<base64url(payload)>.<base64url(HMAC-SHA256)>
-    方案 B: 自验 cookie(必透传), 不依赖 ASIS middleware 注入的 x-user header。
+    只对 /api/* 验证(API 鉴权), 前端页面/静态资源(非 /api/*)放行。
+    格式 v1.<base64url(payload)>.<base64url(HMAC-SHA256)>
     """
 
     def __init__(self, app, secret: str):
@@ -19,9 +18,15 @@ class ASISSessionMiddleware(BaseHTTPMiddleware):
 
     async def dispatch(self, request, call_next):
         path = request.url.path
-        # 放行 CORS 预检 + 健康检查
-        if request.method == "OPTIONS" or any(path.endswith(p) for p in PUBLIC_PATHS):
+        if request.method == "OPTIONS":
             return await call_next(request)
+        # 前端页面/静态资源(非 /api/*)放行
+        if not path.startswith("/api/"):
+            return await call_next(request)
+        # /api/health 放行(健康检查)
+        if path.endswith("/health"):
+            return await call_next(request)
+        # 其他 /api/* 验 cookie
         cookie_val = request.cookies.get(COOKIE_NAME)
         user = self._verify(cookie_val) if cookie_val else None
         if not user:
