@@ -892,7 +892,7 @@ D11 暂缓的是公网入口和完整公网暴露治理，不代表复现容器�
 - [x] 定义并实现采集单源补跑、门控/深评失败项缓存恢复、日报 checkpoint 恢复语义及运营入口。
 - [x] 建立门控/深评严格 Schema 校验、阻断发布、去重人工队列、人工忽略与恢复后自动解决机制。
 - [x] 建立三周期验收 CLI，自动汇总各源采集量、失败、去重率、入选率、Schema 通过率、模型 Provider、人工队列和日报状态；本地规则、缺源、同日重复 Run 不计为合格周期。
-- [ ] 连续运行至少三个真实日更周期。
+- [ ] 连续运行至少三个真实日更周期；已完成 `2026-07-31` 第 1 个合格周期，剩余 2 个不同业务日期。
 
 验收指标至少包含：各源采集量、筛选率、重复率、失败率、最终入选率、Schema 通过率、人工纠错率和日报准时率。
 
@@ -1970,3 +1970,19 @@ Python full test suite: 199 passed
 - 已执行首次真实健康探针：arXiv、GitHub、WeRSS、Awesome 健康，X 按既定决策禁用；ASIS 缺少 `ASIS_USERNAME` 和 `ASIS_PASSWORD`。健康检查提示已与实际采集规则统一，配置文件已有 Base URL 时不再错误提示缺少 `ASIS_BASE_URL`。
 - 当前仓库和进程环境没有配置真实模型 Provider，因此 `news-acceptance` 正确返回 `ready_to_start_cycle=false`、`remaining_cycles=3`。在 ASIS 凭据和 GLM OpenAI-compatible 环境变量配置完成前，不启动完整日更，避免生成不能计入验收的本地规则数据。
 - 回归覆盖三个不同日期通过、同日补跑去重、较旧有效日期保留、显式 Run 缺失、来源失败和 `local_rules` 拒绝；资讯聚焦测试 42 passed，全仓 Python 测试 302 passed，`compileall`、`git diff --check` 和本次变更文件敏感信息扫描通过。
+
+### 2026-07-31：资讯第一个真实日更周期与生产缺陷修复
+
+- 本地密钥没有复制到 Windows 挂载盘的普通文件，而是迁移到 WSL `0600` 受限文件并由仓库中被 Git 忽略的 `.env` 符号链接加载；真实 DashScope `glm-5.2` 最小 JSON 请求和 ASIS 登录探针均成功，六源状态为五个启用源健康、X 按决策禁用。
+- 首次全量尝试暴露 WeRSS 无界分页：`max_pages=0` 会遍历全部历史并逐篇加载完整正文，进程增长到约 13GB 后被 OOM Killer 终止。正式配置改为最多 10 页、每篇正文最多 100,000 字符；连接器遇到整页来源 ID 均已扫描时立即停止。
+- WeRSS 修复后真实单源验证采集 10 页、300 条、正文约 2465 万字符，峰值 RSS 约 145MB。完整日更后续实测峰值约 4GB，主要来自 3200 条规范化数据及多个 checkpoint 上下文副本，后续仍可继续优化 Artifact/上下文体积，但已不再无界增长。
+- 长采集 Step 原先在网络请求前打开 SQLite SAVEPOINT，Worker heartbeat 写入后导致读事务升级失败并报 `database is locked`。采集现声明为 `checkpointed`，网络期间不持有原子事务；来源记录、水位线和 Artifact 在采集完成后统一提交。
+- 资讯规范化原子事务实测约 53 秒，会临时阻塞 SQLite heartbeat。默认 Job 租约从 45 秒提高到 300 秒，heartbeat 遇到临时 `database is locked` 时继续下一轮，不再永久退出线程。
+- arXiv/GitHub 多请求采集元数据原先返回 list，持久化层按 mapping 展开而失败。Adapter 现统一返回 `request_count/requests` 对象，持久化层同时防御历史 list 元数据。
+- GitHub 旧配置每天执行约 120 个搜索请求，单页模式仍耗时约 25 分钟。新增确定性 `daily` 轮换 Profile：每天轮换 18 个基础查询、3 个 creation 查询和 2 个 high-star 查询，共约 41 次请求，连续三天覆盖完整基础查询集合；`full_legacy` 保留全量深扫能力。
+- `news.daily_pipeline` 默认应用 `daily` Profile、每查询 1 页/30 条、论文和项目各评审 20 条，避免普通 CLI 或调度任务意外触发全量深分页和全部候选模型调用。
+- 首次深评在 45 秒超时下失败；真实返回还包含 reasoning/代码块包裹 JSON 和空 final content。模型超时调整为 180 秒、输出上限调整为 8192，并补充从 reasoning/Markdown 包裹中提取最大合法 JSON 对象的确定性解析。
+- 最终恢复链 `run_20260731073453_fa194cb9d9 → run_20260731075643_e6773c7d12 → run_20260731080354_ac04d4bc9c` 成功完成。验收工具现沿 checkpoint 父链聚合来源 Artifact、模型调用和人工队列，失败尝试不会冒充额外周期。
+- 第 1 个合格周期指标：arXiv 1678、GitHub 843、WeRSS 300、ASIS 100、Awesome 5，共采集 2926 条；引用/规范化 3200 条，去重后 2807 条，重复率 12.28%；门控 40 条，通过 4、待观察 1；深评 5 条，selected 4、watch 1；Schema 通过率 100%，最终 4 条入库并生成日报，质量审计得分 1.0。
+- 当前验收状态为 `in_progress`，合格业务日期 `1/3`，`ready_to_start_cycle=true`。前面因 OOM、租约、元数据和模型输出失败的 Run 保留审计，但不计入合格周期。
+- 新增回归覆盖 WeRSS 已扫描整页早停、正文上限、日更查询轮换、日更默认边界、多请求元数据、采集事务模式、heartbeat 锁恢复、恢复链验收聚合和 reasoning 包裹 JSON；全仓 Python 测试 310 passed，`compileall` 与 `git diff --check` 通过。

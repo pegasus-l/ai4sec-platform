@@ -32,6 +32,8 @@ def build_news_daily_acceptance(
     model_ready = bool(current_model.get("configured")) and str(current_model.get("provider") or "") not in LOCAL_MODEL_PROVIDERS
     if len(qualified_dates) >= required_cycles and not missing_run_ids:
         status = "pass"
+    elif qualified_dates and not missing_run_ids:
+        status = "in_progress"
     elif missing_run_ids or (cycles and any(not cycle["qualified"] for cycle in cycles)):
         status = "fail"
     else:
@@ -122,11 +124,12 @@ def _select_runs(conn: sqlite3.Connection, *, run_ids: list[str] | None, limit: 
 def _build_cycle(conn: sqlite3.Connection, run: sqlite3.Row, required_sources: list[str]) -> dict[str, Any]:
     run_id = str(run["run_id"])
     summary = repo.loads(run["summary_json"], {})
+    lineage_run_ids = _run_lineage(conn, run_id, summary)
     tasks = {
         row["step_name"]: {"status": row["status"], "metrics": repo.loads(row["metrics_json"], {})}
         for row in conn.execute("SELECT step_name, status, metrics_json FROM task_runs WHERE run_id = ?", (run_id,)).fetchall()
     }
-    sources = _source_results(conn, run_id, required_sources)
+    sources = _source_results(conn, lineage_run_ids, required_sources)
     report_date = str((summary.get("params") or {}).get("date") or "")
     report_task = tasks.get("build_news_daily_report") or {}
     if not report_date and report_task.get("status") in {"success", "restored"}:
@@ -136,8 +139,8 @@ def _build_cycle(conn: sqlite3.Connection, run: sqlite3.Row, required_sources: l
     review = (tasks.get("enrich_news_candidates_with_model") or {}).get("metrics") or {}
     dedupe = (tasks.get("deduplicate_news_candidates") or {}).get("metrics") or {}
     built = (tasks.get("build_news_items") or {}).get("metrics") or {}
-    model_calls = _model_call_metrics(conn, run_id)
-    human_queue = _human_queue_metrics(conn, run_id)
+    model_calls = _model_call_metrics(conn, lineage_run_ids)
+    human_queue = _human_queue_metrics(conn, lineage_run_ids)
     schema_total = int(gate.get("candidates") or 0) + int(review.get("candidates") or 0)
     schema_invalid = int(gate.get("schema_invalid") or 0) + int(review.get("schema_invalid") or 0)
     dedupe_input = int(dedupe.get("input_items") or 0)
@@ -163,6 +166,7 @@ def _build_cycle(conn: sqlite3.Connection, run: sqlite3.Row, required_sources: l
         failure_reasons.append("real_model_not_used")
     return {
         "run_id": run_id,
+        "lineage_run_ids": lineage_run_ids,
         "run_status": str(run["status"]),
         "started_at": str(run["started_at"]),
         "finished_at": str(run["finished_at"]),
@@ -187,21 +191,23 @@ def _build_cycle(conn: sqlite3.Connection, run: sqlite3.Row, required_sources: l
     }
 
 
-def _source_results(conn: sqlite3.Connection, run_id: str, required_sources: list[str]) -> dict[str, dict[str, Any]]:
+def _source_results(conn: sqlite3.Connection, run_ids: list[str], required_sources: list[str]) -> dict[str, dict[str, Any]]:
     results = {source: {"present": False, "items": 0, "errors": []} for source in required_sources}
-    for row in conn.execute("SELECT source, item_count, payload_json FROM raw_artifacts WHERE run_id = ? AND domain = 'news'", (run_id,)).fetchall():
-        source = str(row["source"])
-        if source not in results:
-            continue
-        payload = repo.loads(row["payload_json"], {})
-        results[source] = {"present": True, "items": int(row["item_count"] or 0), "errors": list(payload.get("errors") or [])}
+    for run_id in run_ids:
+        for row in conn.execute("SELECT source, item_count, payload_json FROM raw_artifacts WHERE run_id = ? AND domain = 'news'", (run_id,)).fetchall():
+            source = str(row["source"])
+            if source not in results or results[source]["present"]:
+                continue
+            payload = repo.loads(row["payload_json"], {})
+            results[source] = {"present": True, "items": int(row["item_count"] or 0), "errors": list(payload.get("errors") or []), "run_id": run_id}
     return results
 
 
-def _model_call_metrics(conn: sqlite3.Connection, run_id: str) -> dict[str, Any]:
+def _model_call_metrics(conn: sqlite3.Connection, run_ids: list[str]) -> dict[str, Any]:
+    placeholders = ",".join("?" for _ in run_ids)
     rows = conn.execute(
-        "SELECT status, provider, COUNT(*) AS count FROM model_calls WHERE run_id = ? GROUP BY status, provider",
-        (run_id,),
+        f"SELECT status, provider, COUNT(*) AS count FROM model_calls WHERE run_id IN ({placeholders}) GROUP BY status, provider",
+        run_ids,
     ).fetchall()
     metrics: dict[str, Any] = {"success": 0, "schema_invalid": 0, "failed": 0, "retryable_failure": 0, "providers": set()}
     for row in rows:
@@ -211,15 +217,30 @@ def _model_call_metrics(conn: sqlite3.Connection, run_id: str) -> dict[str, Any]
     return metrics
 
 
-def _human_queue_metrics(conn: sqlite3.Connection, run_id: str) -> dict[str, int]:
+def _human_queue_metrics(conn: sqlite3.Connection, run_ids: list[str]) -> dict[str, int]:
     metrics = {"pending": 0, "resolved": 0, "rejected": 0}
     for row in conn.execute("SELECT status, payload_json FROM human_queue_items WHERE domain = 'news'").fetchall():
         payload = repo.loads(row["payload_json"], {})
-        if str(payload.get("run_id") or "") != run_id:
+        if str(payload.get("run_id") or "") not in run_ids:
             continue
         status = str(row["status"])
         metrics[status] = metrics.get(status, 0) + 1
     return metrics
+
+
+def _run_lineage(conn: sqlite3.Connection, run_id: str, summary: dict[str, Any]) -> list[str]:
+    lineage = [run_id]
+    current_summary = summary
+    while len(lineage) < 20:
+        parent_run_id = str(current_summary.get("resumed_from_run_id") or (current_summary.get("params") or {}).get("_resume_from_run_id") or "")
+        if not parent_run_id or parent_run_id in lineage:
+            break
+        lineage.append(parent_run_id)
+        row = conn.execute("SELECT summary_json FROM pipeline_runs WHERE run_id = ?", (parent_run_id,)).fetchone()
+        if not row:
+            break
+        current_summary = repo.loads(row["summary_json"], {})
+    return lineage
 
 
 def _latest_health(conn: sqlite3.Connection, sources: list[str]) -> dict[str, dict[str, Any]]:

@@ -3,6 +3,7 @@ from __future__ import annotations
 import fcntl
 import os
 from pathlib import Path
+import sqlite3
 import socket
 import threading
 import time
@@ -222,5 +223,8 @@ class _JobHeartbeat:
 
     def _run(self) -> None:
         while not self.stop_event.wait(self.worker.heartbeat_interval):
-            if not self.worker._heartbeat(self.run_id):
-                return
+            try:
+                if not self.worker._heartbeat(self.run_id):
+                    return
+            except sqlite3.OperationalError:
+                continue

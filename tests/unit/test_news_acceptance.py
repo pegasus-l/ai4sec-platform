@@ -110,6 +110,44 @@ def test_explicit_missing_run_is_reported() -> None:
     assert report["missing_run_ids"] == ["run-missing"]
 
 
+def test_successful_resume_uses_source_artifacts_from_parent_run() -> None:
+    conn = connection()
+    _seed_cycle(conn, run_id="run-parent", report_date="2026-07-31")
+    conn.execute("UPDATE pipeline_runs SET status = 'failed' WHERE run_id = 'run-parent'")
+    repo.create_pipeline_run(
+        conn,
+        run_id="run-resume",
+        domain="news",
+        pipeline_name="news.daily_pipeline",
+        status="success",
+        started_at="2026-07-31T01:00:00+00:00",
+        finished_at="2026-07-31T01:05:00+00:00",
+        summary={"params": {"date": "2026-07-31", "_resume_from_run_id": "run-parent"}, "resumed_from_run_id": "run-parent"},
+    )
+    for step_name, metrics in {
+        "gate_news_candidates_with_tech_map": {"candidates": 8, "passed": 4, "schema_invalid": 0, "failed": 0},
+        "enrich_news_candidates_with_model": {"candidates": 4, "selected": 2, "schema_invalid": 0, "failed": 0},
+        "deduplicate_news_candidates": {"input_items": 10, "deduped_items": 8},
+        "build_news_items": {"items": 2},
+        "build_news_daily_report": {"item_count": 2},
+    }.items():
+        repo.create_task_run(conn, run_id="run-resume", step_name=step_name, status="success", metrics=metrics)
+    repo.create_model_call(conn, run_id="run-resume", agent_name="news_deep_review", model_profile="configured_model", provider="dashscope", request_key="resume-model", status="success")
+    conn.commit()
+
+    report = build_news_daily_acceptance(
+        conn,
+        required_sources=["arxiv", "github"],
+        run_ids=["run-resume"],
+        required_cycles=1,
+    )
+
+    assert report["status"] == "pass"
+    assert report["cycles"][0]["qualified"] is True
+    assert report["cycles"][0]["lineage_run_ids"] == ["run-resume", "run-parent"]
+    assert report["cycles"][0]["sources"]["arxiv"]["run_id"] == "run-parent"
+
+
 def _seed_cycle(
     conn: sqlite3.Connection,
     *,

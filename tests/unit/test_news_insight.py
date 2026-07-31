@@ -54,6 +54,8 @@ def test_live_source_config_matches_legacy_six_source_baseline() -> None:
         "source_type": "wechat",
         "paginate": True,
         "page_size": 30,
+        "max_pages": 10,
+        "article_text_max_chars": 100000,
         "article_api_base": "http://localhost:8001/api/v1/wx/articles",
     }]
     assert [account["username"] for account in config["x"]["accounts"]] == ["__suto", "moyix", "halaboratory", "AnthropicAI", "GoogleVRP"]
@@ -125,6 +127,19 @@ def test_legacy_arxiv_and_github_channels_are_expanded() -> None:
     assert any(request["channel"] == "high_star" and "stars:>5000" in request["query"] for request in github_requests)
 
 
+def test_github_daily_profile_rotates_full_query_breadth() -> None:
+    config = yaml.safe_load((PROJECT_ROOT / "configs" / "news.yaml").read_text(encoding="utf-8"))["sources"]["github"]
+    first = _github_requests(config, {"collection_profile": "daily", "date": "2026-07-30", "max_pages": 1, "max_results": 30})
+    second = _github_requests(config, {"collection_profile": "daily", "date": "2026-07-31", "max_pages": 1, "max_results": 30})
+
+    expected_count = config["daily_base_query_limit"] * 2 + config["daily_creation_query_limit"] + config["daily_high_star_query_limit"]
+    assert len(first) == expected_count
+    assert len(second) == expected_count
+    assert {request["query"] for request in first} != {request["query"] for request in second}
+    assert all(request["max_pages"] <= 2 for request in first)
+    assert all(request["max_results"] == 30 for request in first)
+
+
 def test_werss_pagination_and_article_content_fallback(monkeypatch) -> None:
     first_page = b"""<rss xmlns:content='http://purl.org/rss/1.0/modules/content/'><channel>
       <item><title>Paper</title><link>https://example.com/1</link><description>short</description><content:encoded>See https://arxiv.org/abs/2501.01234</content:encoded></item>
@@ -163,6 +178,53 @@ def test_werss_incremental_state_filters_seen_articles(monkeypatch) -> None:
     state_ids = result.metadata["next_incremental_state"]["scanned_ids"]
     assert "rss:wechat:https%3A%2F%2Fexample.com%2Fseen" in state_ids
     assert "rss:wechat:https%3A%2F%2Fexample.com%2Fnew" in state_ids
+
+
+def test_werss_stops_when_a_page_is_fully_scanned(monkeypatch) -> None:
+    feed = b"""<rss><channel>
+      <item><title>Seen 1</title><link>https://example.com/seen-1</link></item>
+      <item><title>Seen 2</title><link>https://example.com/seen-2</link></item>
+    </channel></rss>"""
+    connector = RssConnector()
+    requested_urls: list[str] = []
+
+    def fake_get_bytes(url: str, **_kwargs) -> bytes:
+        requested_urls.append(url)
+        return feed
+
+    monkeypatch.setattr(connector, "get_bytes", fake_get_bytes)
+    result = connector.fetch(SourceFetchRequest(
+        source_name="rss",
+        config={"feeds": [{"url": "http://localhost/feed", "source_type": "wechat", "paginate": True, "page_size": 2}]},
+        params={"incremental_state": {"scanned_ids": [
+            "rss:wechat:https%3A%2F%2Fexample.com%2Fseen-1",
+            "rss:wechat:https%3A%2F%2Fexample.com%2Fseen-2",
+        ]}},
+    ))
+
+    assert result.items == []
+    assert len(requested_urls) == 1
+    assert result.metadata["feeds"][0]["pages"] == 1
+
+
+def test_werss_caps_article_detail_text(monkeypatch) -> None:
+    feed = b"""<rss><channel>
+      <item><title>Long</title><link>https://example.com/long</link><id>long-id</id></item>
+    </channel></rss>"""
+    connector = RssConnector()
+
+    def fake_get_bytes(url: str, **_kwargs) -> bytes:
+        if "/long-id" in url:
+            return ('{"data":{"content":"' + ("x" * 2000) + '"}}').encode()
+        return feed
+
+    monkeypatch.setattr(connector, "get_bytes", fake_get_bytes)
+    result = connector.fetch(SourceFetchRequest(
+        source_name="rss",
+        config={"feeds": [{"url": "http://localhost/feed", "source_type": "wechat", "article_api_base": "http://localhost/articles", "article_text_max_chars": 1000}]},
+    ))
+
+    assert len(result.items[0]["text"]) == 1000
 
 
 def test_asis_incremental_state_filters_seen_items(monkeypatch) -> None:

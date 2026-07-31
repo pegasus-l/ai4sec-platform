@@ -60,6 +60,9 @@ sources:
     max_pages_per_query: 5
     per_page: 100
     request_delay_seconds: 3
+    daily_base_query_limit: 18
+    daily_creation_query_limit: 3
+    daily_high_star_query_limit: 2
     topics:
       - fuzzing
       - vulnerability-discovery
@@ -139,6 +142,8 @@ sources:
         source_type: wechat
         paginate: true
         page_size: 30
+        max_pages: 10
+        article_text_max_chars: 100000
         article_api_base: http://localhost:8001/api/v1/wx/articles
   x:
     enabled: false

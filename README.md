@@ -192,7 +192,7 @@ npm run build
 PYTHONPATH=src python3 -m ai4sec_platform.cli.pipeline_worker --poll-interval 1
 ```
 
-Worker 启动后写入 `pipeline_workers` 注册记录，空闲和执行任务期间持续 heartbeat；领取任务时写入 `lease_expires_at`。默认 heartbeat 为 10 秒、Job 租约为 45 秒，可通过 `AI4SEC_PIPELINE_WORKER_HEARTBEAT_SECONDS` 和 `AI4SEC_PIPELINE_JOB_LEASE_SECONDS` 调整，租约会自动收紧为不少于三个 heartbeat 周期。Worker 崩溃后任务不会在刚启动新进程时被立即误杀，只有租约到期后才标记为 `failed` 并要求通过受控重试恢复。
+Worker 启动后写入 `pipeline_workers` 注册记录，空闲和执行任务期间持续 heartbeat；领取任务时写入 `lease_expires_at`。默认 heartbeat 为 10 秒、Job 租约为 300 秒，可通过 `AI4SEC_PIPELINE_WORKER_HEARTBEAT_SECONDS` 和 `AI4SEC_PIPELINE_JOB_LEASE_SECONDS` 调整，租约会自动收紧为不少于三个 heartbeat 周期。单机 SQLite 的原子 Step 可能短暂阻塞 heartbeat 写入，heartbeat 遇到临时数据库锁会继续下一轮而不是退出；300 秒默认租约覆盖当前实测约 53 秒的资讯规范化事务。Worker 崩溃后任务不会在刚启动新进程时被立即误杀，只有租约到期后才标记为 `failed` 并要求通过受控重试恢复。
 
 统一调度器与 Worker 分开运行，只负责把到期任务写入同一持久队列：
 
@@ -332,7 +332,7 @@ PYTHONPATH=src python3 -m ai4sec_platform.cli.run_pipeline --pipeline vulnerabil
 说明：
 
 - `news.shadow_collect_pipeline` 从 arXiv/GitHub/RSS 获取最新资讯并走同一套处理链路。
-- `news.daily_pipeline` 是资讯正式日更入口；历史 raw 迁移不属于 Pipeline Registry。
+- `news.daily_pipeline` 是资讯正式日更入口；默认使用 `daily` 轮换 Profile、每查询 1 页/30 条、论文和项目各评审 20 条。GitHub 基础查询按业务日期分块轮换，连续三天覆盖完整查询集合；需要旧规模深扫时显式传 `collection_profile=full_legacy`、`max_pages`、`max_results` 和评审限额。历史 raw 迁移不属于 Pipeline Registry。
 - `threats.huawei_raw_pipeline` 通过威胁 connector 获取华为 repo、issue/security 文件、固件和镜像数据并生成威胁目标。
 - `vulnerabilities.material_local_raw_import` 从漏洞素材 report 本地 JSON 导入。
 - `vulnerabilities.external_material_discovery_pipeline` 通过 AnySearch 获取候选 URL，经 crawl4ai/urllib 抓取、规则审核后构建优质漏洞素材；未配置 `ANYSEARCH_API_KEY` 时可通过 `seed_candidates` 参数做 shadow/测试运行。

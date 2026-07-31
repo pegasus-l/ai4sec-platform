@@ -22,8 +22,10 @@ from ai4sec_platform.pipelines.results import StepResult
 class CollectNewsSourcesStep:
     name: str = "collect_news_sources"
     step_type: str = "collect"
+    transaction_mode: str = "checkpointed"
 
     def run(self, context: PipelineContext) -> StepResult:
+        apply_news_daily_defaults(context.pipeline_name, context.params)
         if "mode" not in context.params:
             context.params["mode"] = "shadow"
         collection_params = {**context.params, "_incremental_states": load_news_incremental_states(context.conn)}
@@ -36,16 +38,33 @@ class CollectNewsSourcesStep:
         return persist_news_source_records(context, records)
 
 
+def apply_news_daily_defaults(pipeline_name: str, params: dict[str, Any]) -> None:
+    if pipeline_name != "news.daily_pipeline":
+        return
+    params.setdefault("collection_profile", "daily")
+    params.setdefault("review_limit_per_type", 20)
+    if params["collection_profile"] == "daily":
+        params.setdefault("max_pages", 1)
+        params.setdefault("max_results", 30)
+
+
 def persist_news_source_records(context: PipelineContext, records: list[dict[str, Any]]) -> StepResult:
     artifacts = []
     raw_records = []
     for record in records:
+        raw_metadata = record.get("metadata") or {}
+        if isinstance(raw_metadata, dict):
+            metadata = raw_metadata
+        elif isinstance(raw_metadata, list):
+            metadata = {"requests": raw_metadata}
+        else:
+            metadata = {"raw_metadata": str(raw_metadata)}
         artifact = context.artifact_store.write_json(
             context.conn,
             run_id=context.run_id,
             artifact_type=f"raw_news_{record['source']}",
             name=f"raw/news/{record['source']}.json",
-            data={key: record.get(key) for key in ["source", "path", "exists", "mode", "items", "errors", "metadata"]},
+            data={**{key: record.get(key) for key in ["source", "path", "exists", "mode", "items", "errors"]}, "metadata": metadata},
         )
         artifacts.append(artifact)
         raw_id = repo.create_raw_artifact(
@@ -69,10 +88,10 @@ def persist_news_source_records(context: PipelineContext, records: list[dict[str
                 "items": len(record.get("items") or []),
                 "errors": record.get("errors", []),
                 "run_id": context.run_id,
-                **(record.get("metadata") or {}),
+                **metadata,
             },
         )
-        raw_records.append({"id": raw_id, **record})
+        raw_records.append({"id": raw_id, **record, "metadata": metadata})
     context.outputs["news_raw_sources"] = raw_records
     error_count = sum(len(record.get("errors") or []) for record in records)
     operational_error_count = sum(len(record.get("errors") or []) for record in records if record.get("mode") != "legacy_migration")

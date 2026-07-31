@@ -26,7 +26,7 @@ class Settings(BaseModel):
     backup_monthly_retention_months: int = 6
     database_maintenance_report_retention_days: int = 30
     pipeline_worker_heartbeat_seconds: int = 10
-    pipeline_job_lease_seconds: int = 45
+    pipeline_job_lease_seconds: int = 300
     sqlite_synchronous: str = "NORMAL"
     cors_allowed_origins: list[str] = []
     production_writes: bool = False
@@ -63,7 +63,7 @@ def load_settings(project_root: Path | None = None) -> Settings:
         30,
     )
     pipeline_worker_heartbeat_seconds = _positive_int(os.getenv("AI4SEC_PIPELINE_WORKER_HEARTBEAT_SECONDS", "10"), 10)
-    pipeline_job_lease_seconds = _positive_int(os.getenv("AI4SEC_PIPELINE_JOB_LEASE_SECONDS", "45"), 45)
+    pipeline_job_lease_seconds = _positive_int(os.getenv("AI4SEC_PIPELINE_JOB_LEASE_SECONDS", "300"), 300)
     if pipeline_job_lease_seconds < pipeline_worker_heartbeat_seconds * 3:
         pipeline_job_lease_seconds = pipeline_worker_heartbeat_seconds * 3
     sqlite_synchronous = os.getenv("AI4SEC_SQLITE_SYNCHRONOUS", "NORMAL").strip().upper()

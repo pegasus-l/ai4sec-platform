@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import socket
 import time
 import urllib.error
@@ -39,14 +40,9 @@ class OpenAICompatibleProvider:
             data = self._post(retry_body)
             content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
         content = str(content).strip()
-        if content.startswith("```"):
-            content = content.removeprefix("```json").removeprefix("```").removesuffix("```").strip()
         if not content:
             raise RuntimeError("model returned empty content")
-        try:
-            parsed = json.loads(content)
-        except json.JSONDecodeError as exc:
-            raise RuntimeError("model returned invalid JSON") from exc
+        parsed = _parse_json_object(content)
         if not isinstance(parsed, dict):
             raise RuntimeError("model returned non-object JSON")
         return {"provider": self.provider_name, "status": "success", "model": self.model, "parsed": parsed, "result": parsed}
@@ -93,3 +89,33 @@ def _set_response_socket_timeout(response: Any, timeout_seconds: float) -> None:
         response.fp.raw._sock.settimeout(timeout_seconds)
     except AttributeError:
         return
+
+
+def _parse_json_object(content: str) -> dict[str, Any]:
+    try:
+        parsed = json.loads(content)
+        if isinstance(parsed, dict):
+            return parsed
+    except json.JSONDecodeError:
+        pass
+    candidates: list[tuple[int, int, dict[str, Any]]] = []
+    decoder = json.JSONDecoder()
+    for block in re.findall(r"```(?:json)?\s*([\s\S]*?)```", content, flags=re.IGNORECASE):
+        try:
+            parsed = json.loads(block.strip())
+        except json.JSONDecodeError:
+            continue
+        if isinstance(parsed, dict):
+            candidates.append((len(block), len(content), parsed))
+    for start, character in enumerate(content):
+        if character != "{":
+            continue
+        try:
+            parsed, consumed = decoder.raw_decode(content[start:])
+        except json.JSONDecodeError:
+            continue
+        if isinstance(parsed, dict):
+            candidates.append((consumed, start + consumed, parsed))
+    if not candidates:
+        raise RuntimeError("model returned invalid JSON")
+    return max(candidates, key=lambda candidate: (candidate[0], candidate[1]))[2]

@@ -22,7 +22,7 @@ from ai4sec_platform.pipelines.base import PipelineDefinition
 from ai4sec_platform.pipelines.registry import PipelineRegistry
 from ai4sec_platform.pipelines.results import StepResult
 from ai4sec_platform.pipelines.runner import PipelineRunner
-from ai4sec_platform.pipelines.steps.news import GateNewsCandidatesStep, persist_news_source_records
+from ai4sec_platform.pipelines.steps.news import GateNewsCandidatesStep, apply_news_daily_defaults, persist_news_source_records
 
 
 @dataclass
@@ -46,6 +46,7 @@ def test_news_steps_declare_checkpoint_resume_inputs() -> None:
     steps = news_daily_pipeline().steps
     contracts = {step.name: tuple(getattr(step, "resume_input_keys", ())) for step in steps if getattr(step, "resume_safe", False)}
 
+    assert steps[0].transaction_mode == "checkpointed"
     assert contracts == {
         "extract_news_references": ("news_raw_sources",),
         "normalize_news_items": ("news_raw_sources",),
@@ -57,6 +58,16 @@ def test_news_steps_declare_checkpoint_resume_inputs() -> None:
         "build_news_daily_report": ("news_item_ids", "news_items"),
         "audit_news_quality": ("news_items",),
     }
+
+
+def test_news_daily_defaults_are_bounded_but_full_legacy_is_explicit() -> None:
+    daily_params: dict = {}
+    apply_news_daily_defaults("news.daily_pipeline", daily_params)
+    assert daily_params == {"collection_profile": "daily", "review_limit_per_type": 20, "max_pages": 1, "max_results": 30}
+
+    full_params = {"collection_profile": "full_legacy", "max_pages": 5, "max_results": 100, "review_limit_per_type": 50}
+    apply_news_daily_defaults("news.daily_pipeline", full_params)
+    assert full_params == {"collection_profile": "full_legacy", "max_pages": 5, "max_results": 100, "review_limit_per_type": 50}
 
 
 def test_gate_and_deep_review_schema_validation_is_strict() -> None:
@@ -103,6 +114,21 @@ def test_source_errors_mark_live_collection_partial(tmp_path) -> None:
     assert result.status == "partial"
     assert result.metrics["errors"] == 1
     assert "retry failed sources separately" in result.message
+
+
+def test_source_persistence_normalizes_multi_request_metadata(tmp_path) -> None:
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    init_db(conn)
+    repo.create_pipeline_run(conn, run_id="source-metadata", domain="news", pipeline_name="news.daily_pipeline")
+    context = PipelineContext(run_id="source-metadata", pipeline_name="news.daily_pipeline", domain="news", settings=settings(tmp_path), conn=conn, artifact_store=ArtifactStore(tmp_path / "output"))
+
+    result = persist_news_source_records(context, [{"source": "github", "path": "connector:github", "mode": "shadow", "items": [], "errors": [], "metadata": [{"query": "topic:security"}]}])
+
+    summary = repo.loads(conn.execute("SELECT summary_json FROM data_sources WHERE domain = 'news' AND name = 'github'").fetchone()["summary_json"], {})
+    assert result.status == "success"
+    assert summary["requests"] == [{"query": "topic:security"}]
+    assert context.outputs["news_raw_sources"][0]["metadata"] == {"requests": [{"query": "topic:security"}]}
 
 
 def test_gate_retry_reuses_success_and_calls_only_failed_candidate(monkeypatch, tmp_path) -> None:

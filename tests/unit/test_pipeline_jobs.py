@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+import sqlite3
 import threading
 import time
 
@@ -15,7 +16,7 @@ from ai4sec_platform.pipelines.jobs import ExecutionDisabledError, JobConflictEr
 from ai4sec_platform.pipelines.registry import PipelineRegistry
 from ai4sec_platform.pipelines.results import StepResult
 from ai4sec_platform.pipelines.runner import PipelineRunner
-from ai4sec_platform.pipelines.worker import PipelineWorker, WorkerAlreadyRunningError
+from ai4sec_platform.pipelines.worker import PipelineWorker, WorkerAlreadyRunningError, _JobHeartbeat
 
 
 @dataclass
@@ -43,6 +44,28 @@ class TimeoutStep:
 
     def run(self, context) -> StepResult:
         raise TimeoutError("step deadline exceeded")
+
+
+def test_job_heartbeat_retries_temporary_sqlite_lock() -> None:
+    class FakeWorker:
+        heartbeat_interval = 0.001
+
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def _heartbeat(self, _run_id: str) -> bool:
+            self.calls += 1
+            if self.calls == 1:
+                raise sqlite3.OperationalError("database is locked")
+            return False
+
+    worker = FakeWorker()
+    heartbeat = _JobHeartbeat(worker, "run-lock")
+    heartbeat.thread.start()
+    heartbeat.thread.join(timeout=1)
+
+    assert heartbeat.thread.is_alive() is False
+    assert worker.calls == 2
 
 
 @dataclass

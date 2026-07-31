@@ -80,7 +80,7 @@ def test_invalid_sqlite_settings_fall_back_to_safe_defaults(monkeypatch) -> None
     assert settings.backup_monthly_retention_months == 6
     assert settings.database_maintenance_report_retention_days == 30
     assert settings.pipeline_worker_heartbeat_seconds == 10
-    assert settings.pipeline_job_lease_seconds == 45
+    assert settings.pipeline_job_lease_seconds == 300
 
 
 def test_request_database_dependency_rolls_back_on_error() -> None:

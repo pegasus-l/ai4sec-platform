@@ -82,7 +82,15 @@ def _collect_live_source(settings: Settings, source: str, source_config: dict[st
             if delay > 0 and index < len(requests) - 1:
                 time.sleep(delay)
         items = _dedupe_collected_items(source, items)
-        return {"source": source, "path": f"connector:{source}", "exists": True, "mode": mode, "items": items, "errors": errors, "metadata": metadata}
+        return {
+            "source": source,
+            "path": f"connector:{source}",
+            "exists": True,
+            "mode": mode,
+            "items": items,
+            "errors": errors,
+            "metadata": {"request_count": len(requests), "requests": metadata},
+        }
     source_params: dict[str, Any] = {
         **runtime_params,
         "incremental_state": (params.get("_incremental_states") or {}).get(source, {}),
@@ -136,11 +144,30 @@ def _github_requests(config: dict[str, Any], params: dict[str, Any]) -> list[dic
     per_page = int(params.get("max_results") or config.get("per_page", 100))
     requests: list[dict[str, Any]] = []
     base_queries = [f"topic:{topic}" for topic in config.get("topics") or []] + [str(query) for query in config.get("keyword_queries") or []]
+    creation_queries = [str(query) for query in config.get("creation_queries") or []]
+    high_star_queries = [str(query) for query in config.get("high_star_queries") or []]
+    if params.get("collection_profile") == "daily":
+        rotation_key = str(params.get("date") or datetime.now(timezone.utc).date().isoformat())
+        base_queries = _rotated_queries(base_queries, int(config.get("daily_base_query_limit") or 18), rotation_key)
+        creation_queries = _rotated_queries(creation_queries, int(config.get("daily_creation_query_limit") or 3), rotation_key)
+        high_star_queries = _rotated_queries(high_star_queries, int(config.get("daily_high_star_query_limit") or 2), rotation_key)
     for query in base_queries:
         requests.append({"query": f"{query} created:>{cutoff}", "channel": "new", "max_pages": max_pages, "max_results": per_page})
         requests.append({"query": f"{query} pushed:>{cutoff} stars:>={int(config.get('min_stars', 3))}", "channel": "updated", "max_pages": max_pages, "max_results": per_page})
-    for query in config.get("creation_queries") or []:
+    for query in creation_queries:
         requests.append({"query": f"{query} created:>{cutoff} stars:>=0", "channel": "new", "max_pages": 1, "max_results": per_page})
-    for query in config.get("high_star_queries") or []:
+    for query in high_star_queries:
         requests.append({"query": f"{query} pushed:>{cutoff}", "channel": "high_star", "max_pages": 2, "max_results": per_page})
     return requests
+
+
+def _rotated_queries(queries: list[str], limit: int, rotation_key: str) -> list[str]:
+    if not queries or limit <= 0 or limit >= len(queries):
+        return queries
+    try:
+        day_number = datetime.fromisoformat(rotation_key).date().toordinal()
+    except ValueError:
+        day_number = sum(ord(character) for character in rotation_key)
+    offset = (day_number * limit) % len(queries)
+    rotated = queries[offset:] + queries[:offset]
+    return rotated[:limit]

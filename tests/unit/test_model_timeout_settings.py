@@ -6,6 +6,9 @@ def test_configured_model_timeout_defaults_and_is_bounded(monkeypatch) -> None:
     monkeypatch.setenv("DASHSCOPE_API_KEY", "test-key")
     monkeypatch.setenv("DASHSCOPE_MODEL", "test-model")
     monkeypatch.delenv("AI4SEC_MODEL_TIMEOUT_SECONDS", raising=False)
+    monkeypatch.delenv("AI4SEC_MODEL_MAX_OUTPUT_TOKENS", raising=False)
+    monkeypatch.delenv("AI4SEC_CONFIGURED_MODEL_TIMEOUT_SECONDS", raising=False)
+    monkeypatch.delenv("AI4SEC_CONFIGURED_MODEL_MAX_OUTPUT_TOKENS", raising=False)
 
     assert _config_from_prefix("DASHSCOPE").timeout_seconds == 45.0
     assert _config_from_prefix("DASHSCOPE").max_output_tokens == 4096

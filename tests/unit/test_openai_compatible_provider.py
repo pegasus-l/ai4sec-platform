@@ -27,3 +27,12 @@ def test_provider_rejects_invalid_json(monkeypatch) -> None:
 
     with pytest.raises(RuntimeError, match="invalid JSON"):
         provider.complete_json(prompt="return JSON", payload={})
+
+
+def test_provider_extracts_json_object_from_reasoning_wrapper(monkeypatch) -> None:
+    provider = OpenAICompatibleProvider(base_url="https://example.test/v1", api_key="key", model="model")
+    monkeypatch.setattr(provider, "_post", lambda body: {"choices": [{"message": {"content": 'analysis text\n```json\n{"ok": true, "details": {"count": 2}}\n```\nfinished'}}]})
+
+    response = provider.complete_json(prompt="return JSON", payload={})
+
+    assert response["result"] == {"ok": True, "details": {"count": 2}}

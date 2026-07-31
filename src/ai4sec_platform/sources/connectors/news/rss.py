@@ -37,8 +37,9 @@ class RssConnector(NewsLiveConnector):
             pages = 0
             feed_items: list[dict] = []
             seen_page_keys: set[tuple[str, ...]] = set()
-            max_pages = int(feed_config.get("max_pages") or 0)
-            page_size = int(feed_config.get("page_size") or 30)
+            max_pages = max(1, min(100, int(feed_config.get("max_pages") or request.config.get("max_pages") or 10)))
+            page_size = max(1, min(500, int(feed_config.get("page_size") or 30)))
+            article_text_max_chars = max(1_000, min(500_000, int(feed_config.get("article_text_max_chars") or 100_000)))
             page = 0
             while True:
                 if not feed_config.get("paginate") and page > 0:
@@ -57,13 +58,15 @@ class RssConnector(NewsLiveConnector):
                 if page_key in seen_page_keys:
                     break
                 seen_page_keys.add(page_key)
+                if page_ids and all(page_id in scanned_ids for page_id in page_ids):
+                    break
                 for page_id in page_ids:
                     if page_id not in scanned_ids:
                         scanned_ids.add(page_id)
                         state_ids.append(page_id)
                 for item in page_items:
                     if not item.get("text") and item.get("feed_item_id") and feed_config.get("article_api_base"):
-                        item["text"] = self._fetch_article_text(str(feed_config["article_api_base"]), str(item["feed_item_id"]), timeout=min(timeout, 15), retry_options=retry_options)
+                        item["text"] = self._fetch_article_text(str(feed_config["article_api_base"]), str(item["feed_item_id"]), timeout=min(timeout, 15), retry_options=retry_options, max_chars=article_text_max_chars)
                 feed_items.extend(page_items)
                 if parsed_count < page_size:
                     break
@@ -78,11 +81,11 @@ class RssConnector(NewsLiveConnector):
             errors=errors,
         )
 
-    def _fetch_article_text(self, api_base: str, feed_item_id: str, *, timeout: int, retry_options: dict[str, int | float]) -> str:
+    def _fetch_article_text(self, api_base: str, feed_item_id: str, *, timeout: int, retry_options: dict[str, int | float], max_chars: int) -> str:
         try:
             raw = json.loads(self.get_bytes(f"{api_base.rstrip('/')}/{urllib.parse.quote(feed_item_id)}", timeout=timeout, **retry_options).decode("utf-8"))
             article = raw.get("data") if isinstance(raw.get("data"), dict) else {}
-            return "\n".join(value for value in [str(article.get("description") or ""), str(article.get("content") or "")] if value)
+            return "\n".join(value for value in [str(article.get("description") or ""), str(article.get("content") or "")] if value)[:max_chars]
         except Exception:
             return ""
 
