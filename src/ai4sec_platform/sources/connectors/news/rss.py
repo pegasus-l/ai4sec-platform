@@ -5,7 +5,7 @@ import xml.etree.ElementTree as ET
 import urllib.parse
 
 from ai4sec_platform.schemas.sources import SourceFetchRequest, SourceHealth
-from ai4sec_platform.sources.connectors.news.base_live import NewsLiveConnector
+from ai4sec_platform.sources.connectors.news.base_live import NewsLiveConnector, retry_kwargs
 from ai4sec_platform.sources.result import SourceFetchResult
 
 
@@ -23,6 +23,7 @@ class RssConnector(NewsLiveConnector):
         errors: list[str] = []
         feed_metrics: list[dict] = []
         timeout = int(request.params.get("timeout_seconds") or 30)
+        retry_options = retry_kwargs(request)
         incremental_state = request.params.get("incremental_state") or {}
         state_ids = [str(value) for value in incremental_state.get("scanned_ids") or []]
         scanned_ids = set(state_ids)
@@ -46,7 +47,7 @@ class RssConnector(NewsLiveConnector):
                     break
                 page_url = _page_url(url, page * page_size) if feed_config.get("paginate") else url
                 try:
-                    raw = self.get_bytes(page_url, timeout=timeout)
+                    raw = self.get_bytes(page_url, timeout=timeout, **retry_options)
                     page_items, page_ids, parsed_count = _parse_feed(raw, page_url, feed_config, scanned_ids)
                 except Exception as exc:
                     errors.append(f"{page_url}: {exc}")
@@ -62,7 +63,7 @@ class RssConnector(NewsLiveConnector):
                         state_ids.append(page_id)
                 for item in page_items:
                     if not item.get("text") and item.get("feed_item_id") and feed_config.get("article_api_base"):
-                        item["text"] = self._fetch_article_text(str(feed_config["article_api_base"]), str(item["feed_item_id"]), timeout=min(timeout, 15))
+                        item["text"] = self._fetch_article_text(str(feed_config["article_api_base"]), str(item["feed_item_id"]), timeout=min(timeout, 15), retry_options=retry_options)
                 feed_items.extend(page_items)
                 if parsed_count < page_size:
                     break
@@ -77,9 +78,9 @@ class RssConnector(NewsLiveConnector):
             errors=errors,
         )
 
-    def _fetch_article_text(self, api_base: str, feed_item_id: str, *, timeout: int) -> str:
+    def _fetch_article_text(self, api_base: str, feed_item_id: str, *, timeout: int, retry_options: dict[str, int | float]) -> str:
         try:
-            raw = json.loads(self.get_bytes(f"{api_base.rstrip('/')}/{urllib.parse.quote(feed_item_id)}", timeout=timeout).decode("utf-8"))
+            raw = json.loads(self.get_bytes(f"{api_base.rstrip('/')}/{urllib.parse.quote(feed_item_id)}", timeout=timeout, **retry_options).decode("utf-8"))
             article = raw.get("data") if isinstance(raw.get("data"), dict) else {}
             return "\n".join(value for value in [str(article.get("description") or ""), str(article.get("content") or "")] if value)
         except Exception:

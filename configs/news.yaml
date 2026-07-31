@@ -1,5 +1,9 @@
 collection:
   max_workers: 4
+  retry_attempts: 3
+  retry_base_delay_seconds: 1
+  retry_jitter_seconds: 0.5
+  retry_max_delay_seconds: 30
 sources:
   arxiv:
     enabled: true

@@ -11,7 +11,7 @@ import urllib.request
 ResultType = TypeVar("ResultType")
 
 
-def retry_call(operation: Callable[[], ResultType], *, attempts: int = 3, base_delay_seconds: float = 1.0, jitter_seconds: float = 0.5) -> ResultType:
+def retry_call(operation: Callable[[], ResultType], *, attempts: int = 3, base_delay_seconds: float = 1.0, jitter_seconds: float = 0.5, max_delay_seconds: float = 30.0) -> ResultType:
     last_error: Exception | None = None
     for attempt in range(1, max(1, attempts) + 1):
         try:
@@ -20,7 +20,9 @@ def retry_call(operation: Callable[[], ResultType], *, attempts: int = 3, base_d
             last_error = exc
             if attempt >= attempts or not is_retryable_source_error(exc):
                 raise
-            delay = base_delay_seconds * (2 ** (attempt - 1)) + random.uniform(0, jitter_seconds)
+            retry_after = _retry_after_seconds(exc)
+            delay = retry_after if retry_after is not None else base_delay_seconds * (2 ** (attempt - 1)) + random.uniform(0, jitter_seconds)
+            delay = min(max_delay_seconds, max(0.0, delay))
             time.sleep(delay)
     raise RuntimeError(str(last_error))
 
@@ -35,7 +37,7 @@ def is_retryable_source_error(exc: Exception) -> bool:
 
 
 class NewsLiveConnector:
-    def get_bytes(self, url: str, *, timeout: int = 30, headers: dict[str, str] | None = None, attempts: int = 3) -> bytes:
+    def get_bytes(self, url: str, *, timeout: int = 30, headers: dict[str, str] | None = None, attempts: int = 3, base_delay_seconds: float = 1.0, jitter_seconds: float = 0.5, max_delay_seconds: float = 30.0) -> bytes:
         def request_once() -> bytes:
             request = urllib.request.Request(
                 url,
@@ -44,4 +46,35 @@ class NewsLiveConnector:
             with urllib.request.urlopen(request, timeout=timeout) as response:  # noqa: S310 - configured trusted sources
                 return response.read()
 
-        return retry_call(request_once, attempts=attempts)
+        return retry_call(request_once, attempts=attempts, base_delay_seconds=base_delay_seconds, jitter_seconds=jitter_seconds, max_delay_seconds=max_delay_seconds)
+
+
+def retry_kwargs(request) -> dict[str, int | float]:
+    params = request.params or {}
+    config = request.config or {}
+    return {
+        "attempts": max(1, min(5, int(_configured_value(params, config, "retry_attempts", 3)))),
+        "base_delay_seconds": max(0.1, min(30.0, float(_configured_value(params, config, "retry_base_delay_seconds", 1.0)))),
+        "jitter_seconds": max(0.0, min(10.0, float(_configured_value(params, config, "retry_jitter_seconds", 0.5)))),
+        "max_delay_seconds": max(1.0, min(120.0, float(_configured_value(params, config, "retry_max_delay_seconds", 30.0)))),
+    }
+
+
+def _configured_value(params: dict, config: dict, key: str, default: int | float) -> object:
+    if key in params and params[key] is not None:
+        return params[key]
+    if key in config and config[key] is not None:
+        return config[key]
+    return default
+
+
+def _retry_after_seconds(exc: Exception) -> float | None:
+    if not isinstance(exc, urllib.error.HTTPError) or exc.code not in {429, 503}:
+        return None
+    value = exc.headers.get("Retry-After") if exc.headers else None
+    if not value:
+        return None
+    try:
+        return max(0.0, float(value))
+    except ValueError:
+        return None

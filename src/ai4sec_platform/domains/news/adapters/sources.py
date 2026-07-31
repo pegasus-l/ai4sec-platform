@@ -18,6 +18,11 @@ def collect_news_sources(settings: Settings, params: dict[str, Any]) -> list[dic
     if mode != "shadow":
         raise ValueError(f"Unsupported news source mode: {mode}")
     config = _load_config(settings.project_root)
+    collection_config = config.get("collection", {})
+    params = {
+        **{key: collection_config[key] for key in ["retry_attempts", "retry_base_delay_seconds", "retry_jitter_seconds", "retry_max_delay_seconds"] if key in collection_config},
+        **params,
+    }
     source_names = ["arxiv", "github", "rss", "x", "asis", "awesome"]
     requested = set(params["sources"]) if "sources" in params else set(source_names)
     source_configs = config.get("sources", {})
@@ -57,6 +62,12 @@ def _disabled_source_record(source: str, source_config: dict[str, Any], mode: st
 
 def _collect_live_source(settings: Settings, source: str, source_config: dict[str, Any], params: dict[str, Any], mode: str) -> dict[str, Any]:
     connector = SourceRegistry().get(source)
+    runtime_params = {
+        key: params[key]
+        for key in ["timeout_seconds", "retry_attempts", "retry_base_delay_seconds", "retry_jitter_seconds", "retry_max_delay_seconds"]
+        if key in params
+    }
+    runtime_params.setdefault("timeout_seconds", 30)
     if source in {"arxiv", "github"}:
         items: list[dict[str, Any]] = []
         errors: list[str] = []
@@ -64,7 +75,7 @@ def _collect_live_source(settings: Settings, source: str, source_config: dict[st
         requests = _arxiv_requests(source_config, params) if source == "arxiv" else _github_requests(source_config, params)
         for index, request_params in enumerate(requests):
             delay = float(request_params.pop("_delay_seconds", params.get("source_request_delay_seconds", source_config.get("request_delay_seconds", 0))))
-            result = connector.fetch(SourceFetchRequest(source_name=source, config=source_config, params={**request_params, "timeout_seconds": params.get("timeout_seconds", 30)}))
+            result = connector.fetch(SourceFetchRequest(source_name=source, config=source_config, params={**request_params, **runtime_params}))
             items.extend(result.items)
             errors.extend(result.errors)
             metadata.append(result.metadata)
@@ -73,7 +84,7 @@ def _collect_live_source(settings: Settings, source: str, source_config: dict[st
         items = _dedupe_collected_items(source, items)
         return {"source": source, "path": f"connector:{source}", "exists": True, "mode": mode, "items": items, "errors": errors, "metadata": metadata}
     source_params: dict[str, Any] = {
-        "timeout_seconds": params.get("timeout_seconds", 30),
+        **runtime_params,
         "incremental_state": (params.get("_incremental_states") or {}).get(source, {}),
     }
     result = connector.fetch(SourceFetchRequest(source_name=source, config=source_config, params=source_params))

@@ -4,7 +4,7 @@ import urllib.parse
 import xml.etree.ElementTree as ET
 
 from ai4sec_platform.schemas.sources import SourceFetchRequest, SourceHealth
-from ai4sec_platform.sources.connectors.news.base_live import NewsLiveConnector
+from ai4sec_platform.sources.connectors.news.base_live import NewsLiveConnector, retry_kwargs
 from ai4sec_platform.sources.result import SourceFetchResult
 
 
@@ -21,22 +21,36 @@ class ArxivConnector(NewsLiveConnector):
         if category:
             url = f"https://rss.arxiv.org/rss/{category}"
             try:
-                raw = self.get_bytes(url, timeout=int(request.params.get("timeout_seconds") or 30))
+                raw = self.get_bytes(url, timeout=int(request.params.get("timeout_seconds") or 30), **retry_kwargs(request))
                 return SourceFetchResult(source_name=request.source_name, connector_name=self.connector_name, items=_parse_rss_feed(raw, category), raw_text=raw.decode("utf-8", errors="replace"), metadata={"url": url, "category": category, "channel": "category_rss"})
             except Exception as exc:
                 return SourceFetchResult(source_name=request.source_name, connector_name=self.connector_name, metadata={"url": url, "category": category, "channel": "category_rss"}, errors=[str(exc)])
         query = str(request.params.get("query") or request.config.get("query") or 'all:"AI security"')
-        max_results = min(500, int(request.params.get("max_results") or request.config.get("max_results") or 30))
-        url = f"{self.api_url}?{urllib.parse.urlencode({'search_query': query, 'start': 0, 'max_results': max_results, 'sortBy': 'submittedDate', 'sortOrder': 'descending'})}"
+        max_results = max(1, min(500, int(request.params.get("max_results") or request.config.get("max_results") or 30)))
+        page_size = max(1, min(100, int(request.params.get("page_size") or request.config.get("page_size") or 100)))
+        max_pages = max(1, min(10, int(request.params.get("max_pages") or request.config.get("max_pages") or 10)))
+        url = ""
+        items = []
+        raw_pages = []
         try:
-            raw = self.get_bytes(url, timeout=int(request.params.get("timeout_seconds") or 30))
-            items = _parse_feed(raw)
+            for page in range(max_pages):
+                remaining = max_results - len(items)
+                if remaining <= 0:
+                    break
+                page_limit = min(page_size, remaining)
+                url = f"{self.api_url}?{urllib.parse.urlencode({'search_query': query, 'start': page * page_size, 'max_results': page_limit, 'sortBy': 'submittedDate', 'sortOrder': 'descending'})}"
+                raw = self.get_bytes(url, timeout=int(request.params.get("timeout_seconds") or 30), **retry_kwargs(request))
+                raw_pages.append(raw.decode("utf-8", errors="replace"))
+                page_items = _parse_feed(raw)
+                items.extend(page_items)
+                if len(page_items) < page_limit:
+                    break
             published_after = str(request.params.get("published_after") or "")
             if published_after:
                 items = [item for item in items if str(item.get("published") or "")[:10] >= published_after]
-            return SourceFetchResult(source_name=request.source_name, connector_name=self.connector_name, items=items, raw_text=raw.decode("utf-8", errors="replace"), metadata={"url": url, "query": query, "channel": "category_backfill" if request.params.get("category_backfill") else "keyword"})
+            return SourceFetchResult(source_name=request.source_name, connector_name=self.connector_name, items=items, raw_text="\n".join(raw_pages), metadata={"url": url, "query": query, "channel": "category_backfill" if request.params.get("category_backfill") else "keyword", "pages_fetched": len(raw_pages), "page_size": page_size})
         except Exception as exc:
-            return SourceFetchResult(source_name=request.source_name, connector_name=self.connector_name, metadata={"url": url, "query": query}, errors=[str(exc)])
+            return SourceFetchResult(source_name=request.source_name, connector_name=self.connector_name, items=items, raw_text="\n".join(raw_pages), metadata={"url": url, "query": query, "pages_fetched": len(raw_pages)}, errors=[str(exc)])
 
 
 def _parse_feed(raw: bytes) -> list[dict]:

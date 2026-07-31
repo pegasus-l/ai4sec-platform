@@ -7,7 +7,7 @@ import re
 import urllib.parse
 
 from ai4sec_platform.schemas.sources import SourceFetchRequest, SourceHealth
-from ai4sec_platform.sources.connectors.news.base_live import NewsLiveConnector
+from ai4sec_platform.sources.connectors.news.base_live import NewsLiveConnector, retry_kwargs
 from ai4sec_platform.sources.result import SourceFetchResult
 
 
@@ -26,10 +26,11 @@ class AwesomeConnector(NewsLiveConnector):
         items: list[dict] = []
         errors: list[str] = []
         metadata: list[dict] = []
+        timeout = int(request.params.get("timeout_seconds") or 30)
         for repository in request.config.get("repositories") or []:
             url = f"https://api.github.com/repos/{repository}/readme"
             try:
-                raw = json.loads(self.get_bytes(url, headers=headers).decode("utf-8"))
+                raw = json.loads(self.get_bytes(url, timeout=timeout, headers=headers, **retry_kwargs(request)).decode("utf-8"))
                 content = base64.b64decode(raw.get("content") or "").decode("utf-8", errors="replace")
                 items.append({"id": f"awesome:{repository}", "title": str(repository), "url": f"https://github.com/{repository}", "text": content, "source": "awesome"})
                 subpages = _recent_subpages(content, str(repository), request.config)
@@ -37,7 +38,7 @@ class AwesomeConnector(NewsLiveConnector):
                 for path in subpages:
                     try:
                         page_url = f"https://api.github.com/repos/{repository}/contents/{urllib.parse.quote(path, safe='/')}"
-                        page_raw = json.loads(self.get_bytes(page_url, headers=headers).decode("utf-8"))
+                        page_raw = json.loads(self.get_bytes(page_url, timeout=timeout, headers=headers, **retry_kwargs(request)).decode("utf-8"))
                         page_content = base64.b64decode(page_raw.get("content") or "").decode("utf-8", errors="replace")
                         items.append({"id": f"awesome:{repository}:{path}", "title": f"{repository} / {path}", "url": f"https://github.com/{repository}/blob/main/{path}", "text": page_content, "source": "awesome"})
                         loaded_subpages += 1
