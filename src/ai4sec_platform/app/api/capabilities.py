@@ -29,10 +29,15 @@ from pydantic import BaseModel
 
 from ai4sec_platform.app.dependencies import get_db
 from ai4sec_platform.db import repositories as repo
-from ai4sec_platform.domains.capabilities.adapters.repro_runner import classify_log_line
+from ai4sec_platform.domains.capabilities.adapters.repro_runner import classify_log_line, repro_resource_limits_payload
 from ai4sec_platform.domains.capabilities.assessments import classify_batch
 from ai4sec_platform.domains.capabilities.audits import audit_missing_fields, audit_repro_failures
 from ai4sec_platform.domains.capabilities.repro_jobs import request_repro_cleanup, request_repro_stop
+from ai4sec_platform.domains.capabilities.repro_policy import (
+    ReproQuotaExceededError,
+    enqueue_repro_task,
+    repro_limits_payload,
+)
 from ai4sec_platform.domains.capabilities.schemas import ReproTaskResponse
 from ai4sec_platform.domains.capabilities.selectors import pick_top_repro_candidates, _resolve_repo_url
 from ai4sec_platform.domains.capabilities.service import classify_stats as capability_classify_stats
@@ -132,17 +137,16 @@ def start_repro(item_id: int, body: StartReproRequest = StartReproRequest(), con
     if not repo_url:
         raise HTTPException(status_code=400, detail="no repo URL found in item")
 
-    active_tasks = repo.list_repro_tasks(conn, item_id=item_id, limit=1)
-    if active_tasks and active_tasks[0]["status"] in ("queued", "running"):
-        raise HTTPException(status_code=409, detail="an active repro task already exists for this item")
+    try:
+        task_id = enqueue_repro_task(conn, item_id=item_id, repo_url=repo_url, trigger="manual")
+    except ReproQuotaExceededError as exc:
+        status_code = 409 if exc.code == "item_active" else 429
+        raise HTTPException(status_code=status_code, detail={"code": exc.code, "message": str(exc)}) from exc
 
     # 旧失败任务交给 Worker 异步清理，API 不直接操作 Docker 或工作目录。
     for old_task in repo.list_repro_tasks(conn, item_id=item_id, include_cleaned=True):
         if old_task["status"] in ("failed", "timeout", "stopped"):
             request_repro_cleanup(conn, int(old_task["id"]))
-
-    # 创建 task
-    task_id = repo.create_repro_task(conn, item_id=item_id, repo_url=repo_url, trigger="manual")
 
     # Web 端口分配
     web_port = None
@@ -152,6 +156,13 @@ def start_repro(item_id: int, body: StartReproRequest = StartReproRequest(), con
             repo.update_repro_task(conn, task_id=task_id, web_port=web_port)
 
     return {"ok": True, "task_id": task_id, "repo_url": repo_url, "web_port": web_port, "status": "queued"}
+
+
+@router.get("/repro-limits")
+def repro_limits(conn: sqlite3.Connection = Depends(get_db)) -> dict:
+    payload = repro_limits_payload(conn)
+    payload["resources"] = repro_resource_limits_payload()
+    return payload
 
 
 @router.get("/repro/{task_id}")

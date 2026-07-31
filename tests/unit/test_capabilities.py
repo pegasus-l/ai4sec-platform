@@ -478,6 +478,22 @@ def test_repro_container_command_has_resource_and_privilege_limits(monkeypatch, 
     assert "no-new-privileges=true" in command
 
 
+def test_repro_resource_validation_rejects_unbounded_cpu(monkeypatch) -> None:
+    monkeypatch.setattr(repro_runner, "REPRO_CPUS", "0")
+
+    import pytest
+    with pytest.raises(RuntimeError, match="REPRO_CPUS must be between"):
+        repro_runner.validate_repro_resource_limits()
+
+
+def test_repro_resource_validation_rejects_invalid_memory(monkeypatch) -> None:
+    monkeypatch.setattr(repro_runner, "REPRO_MEMORY", "unlimited")
+
+    import pytest
+    with pytest.raises(RuntimeError, match="REPRO_MEMORY must be a positive Docker size"):
+        repro_runner.validate_repro_resource_limits()
+
+
 def test_repro_log_output_is_bounded(monkeypatch) -> None:
     monkeypatch.setattr(repro_runner, "REPRO_LOG_MAX_BYTES", 20)
     lines: list[str] = []
@@ -522,6 +538,7 @@ def test_silent_repro_process_still_times_out(monkeypatch, tmp_path: Path) -> No
     monkeypatch.setattr(repro_runner, "WORKSPACE_ROOT", tmp_path)
     monkeypatch.setattr(repro_runner, "CONTAINER_TIMEOUT", 0.1)
     monkeypatch.setattr(repro_runner, "REPORT_GRACE_TIMEOUT", 0)
+    monkeypatch.setattr(repro_runner, "validate_repro_resource_limits", lambda: None)
     token_file = tmp_path / "token"
     token_file.write_text("secret", encoding="utf-8")
     token_file.chmod(0o600)

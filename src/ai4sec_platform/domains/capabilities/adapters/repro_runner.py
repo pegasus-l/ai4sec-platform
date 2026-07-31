@@ -27,6 +27,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from ai4sec_platform.core.env import load_env_file
+from ai4sec_platform.domains.capabilities.repro_policy import validate_repro_queue_limits
 
 load_env_file()
 
@@ -47,6 +48,7 @@ REPRO_MEMORY_SWAP = os.environ.get("REPRO_MEMORY_SWAP", REPRO_MEMORY)
 REPRO_PIDS_LIMIT = os.environ.get("REPRO_PIDS_LIMIT", "1024")
 REPRO_WORKSPACE_MAX_BYTES = int(os.environ.get("REPRO_WORKSPACE_MAX_BYTES", str(10 * 1024 * 1024 * 1024)))
 REPRO_LOG_MAX_BYTES = int(os.environ.get("REPRO_LOG_MAX_BYTES", str(5 * 1024 * 1024)))
+_DOCKER_SIZE_RE = re.compile(r"^[1-9][0-9]*(?:[bkmg])?$", re.IGNORECASE)
 
 # DashScope API 代理（sysbox 容器内直连会卡死，通过宿主机 nginx 反代转发）
 DASHSCOPE_PROXY_URL = os.environ.get("DASHSCOPE_PROXY_URL", "")
@@ -142,6 +144,8 @@ def _validated_token_path() -> Path:
 
 
 def validate_repro_runtime_config(*, check_image: bool = False) -> Path:
+    validate_repro_resource_limits()
+    validate_repro_queue_limits()
     token_path = _validated_token_path()
     if not REPRO_LLM_BASE_URL:
         raise RuntimeError("REPRO_LLM_BASE_URL is required for capability reproduction")
@@ -160,6 +164,48 @@ def validate_repro_runtime_config(*, check_image: bool = False) -> Path:
                 f"Repro image is unavailable or contains a baked OpenCode auth file: {REPRO_IMAGE}"
             )
     return token_path
+
+
+def validate_repro_resource_limits() -> None:
+    try:
+        cpus = float(REPRO_CPUS)
+    except ValueError as exc:
+        raise RuntimeError("REPRO_CPUS must be a number") from exc
+    if not 0.1 <= cpus <= 64:
+        raise RuntimeError("REPRO_CPUS must be between 0.1 and 64")
+    for name, value in (("REPRO_MEMORY", REPRO_MEMORY), ("REPRO_MEMORY_SWAP", REPRO_MEMORY_SWAP)):
+        if not _DOCKER_SIZE_RE.fullmatch(value):
+            raise RuntimeError(f"{name} must be a positive Docker size such as 512m or 4g")
+    try:
+        pids_limit = int(REPRO_PIDS_LIMIT)
+    except ValueError as exc:
+        raise RuntimeError("REPRO_PIDS_LIMIT must be an integer") from exc
+    numeric_limits = (
+        ("REPRO_PIDS_LIMIT", pids_limit, 16, 65536),
+        ("REPRO_CONTAINER_TIMEOUT", CONTAINER_TIMEOUT, 60, 86400),
+        ("REPRO_WEB_CONTAINER_TIMEOUT", WEB_CONTAINER_TIMEOUT, 60, 86400),
+        ("REPRO_REPORT_GRACE_TIMEOUT", REPORT_GRACE_TIMEOUT, 0, 7200),
+        ("REPRO_WORKSPACE_MAX_BYTES", REPRO_WORKSPACE_MAX_BYTES, 100 * 1024 * 1024, 100 * 1024 * 1024 * 1024),
+        ("REPRO_LOG_MAX_BYTES", REPRO_LOG_MAX_BYTES, 64 * 1024, 50 * 1024 * 1024),
+    )
+    for name, value, minimum, maximum in numeric_limits:
+        if not minimum <= value <= maximum:
+            raise RuntimeError(f"{name} must be between {minimum} and {maximum}")
+
+
+def repro_resource_limits_payload() -> dict[str, Any]:
+    validate_repro_resource_limits()
+    return {
+        "cpus": float(REPRO_CPUS),
+        "memory": REPRO_MEMORY,
+        "memory_swap": REPRO_MEMORY_SWAP,
+        "pids": int(REPRO_PIDS_LIMIT),
+        "container_timeout_seconds": CONTAINER_TIMEOUT,
+        "web_container_timeout_seconds": WEB_CONTAINER_TIMEOUT,
+        "report_grace_timeout_seconds": REPORT_GRACE_TIMEOUT,
+        "workspace_max_bytes": REPRO_WORKSPACE_MAX_BYTES,
+        "log_max_bytes": REPRO_LOG_MAX_BYTES,
+    }
 
 
 # ============================================================================

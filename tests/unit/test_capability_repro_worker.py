@@ -11,6 +11,7 @@ from ai4sec_platform.db import repositories as repo
 from ai4sec_platform.db.models import init_db
 from ai4sec_platform.db.session import connect
 from ai4sec_platform.domains.capabilities import repro_worker as worker_module
+from ai4sec_platform.domains.capabilities import repro_policy
 from ai4sec_platform.domains.capabilities.repro_jobs import (
     ReproStateTransitionError,
     claim_next_repro_task,
@@ -317,6 +318,84 @@ def test_repro_sse_stream_uses_request_database_and_closes_on_terminal_task(tmp_
     assert response.text.count("event: log") == 2
     assert '"status": "failed", "report": null' in response.text
     assert response.text.endswith("event: end\ndata: {}\n\n")
+
+
+def test_repro_limits_api_reports_configured_limits_and_usage(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    _create_task(settings)
+    app = create_app()
+
+    def override_db():
+        with connect(settings) as conn:
+            init_db(conn)
+            yield conn
+
+    app.dependency_overrides[get_db] = override_db
+    response = TestClient(app).get("/api/capabilities/repro-limits")
+
+    assert response.status_code == 200
+    assert response.json()["limits"] == {
+        "max_concurrent_tasks": 1,
+        "max_queued_tasks": 20,
+        "max_attempts_per_item_24h": 3,
+        "max_automatic_retries": 0,
+    }
+    assert response.json()["usage"]["queued"] == 1
+    assert response.json()["resources"]["cpus"] == 2.0
+    assert response.json()["resources"]["log_max_bytes"] == 5 * 1024 * 1024
+
+
+def test_start_repro_rejects_when_global_queue_is_full(monkeypatch, tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    _create_task(settings)
+    monkeypatch.setattr(repro_policy, "REPRO_MAX_QUEUED_TASKS", 1)
+    with connect(settings) as conn:
+        item_id = repo.create_domain_item(
+            conn,
+            domain="capabilities",
+            item_type="capability",
+            title="Second",
+            source_url="https://github.com/example/second",
+            payload={"code_url": "https://github.com/example/second"},
+        )
+        conn.commit()
+    app = create_app()
+
+    def override_db():
+        with connect(settings) as conn:
+            init_db(conn)
+            yield conn
+            conn.commit()
+
+    app.dependency_overrides[get_db] = override_db
+    response = TestClient(app).post(f"/api/capabilities/items/{item_id}/start-repro", json={"web": False})
+
+    assert response.status_code == 429
+    assert response.json()["detail"]["code"] == "queue_full"
+
+
+def test_start_repro_rejects_item_attempt_limit(monkeypatch, tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    monkeypatch.setattr(repro_policy, "REPRO_MAX_ATTEMPTS_PER_ITEM_24H", 2)
+    first_task = _create_task(settings, status="failed")
+    with connect(settings) as conn:
+        item_id = int(repo.get_repro_task(conn, first_task)["item_id"])
+        second_task = repo.create_repro_task(conn, item_id=item_id, repo_url="https://github.com/example/repo")
+        repo.update_repro_task(conn, task_id=second_task, status="failed")
+        conn.commit()
+    app = create_app()
+
+    def override_db():
+        with connect(settings) as conn:
+            init_db(conn)
+            yield conn
+            conn.commit()
+
+    app.dependency_overrides[get_db] = override_db
+    response = TestClient(app).post(f"/api/capabilities/items/{item_id}/start-repro", json={"web": False})
+
+    assert response.status_code == 429
+    assert response.json()["detail"]["code"] == "item_attempt_limit"
 
 
 def test_capability_ops_endpoints_read_persisted_state(tmp_path: Path) -> None:

@@ -16,6 +16,7 @@ from typing import Any
 from ai4sec_platform.db import repositories as repo
 from ai4sec_platform.domains.capabilities.adapters.repro_results import update_capability_from_report
 from ai4sec_platform.domains.capabilities.repro_jobs import request_repro_cleanup
+from ai4sec_platform.domains.capabilities.repro_policy import ReproQuotaExceededError, enqueue_repro_task
 from ai4sec_platform.domains.capabilities.selectors import pick_top_repro_candidates
 from ai4sec_platform.pipelines.context import PipelineContext
 from ai4sec_platform.pipelines.results import StepResult
@@ -54,28 +55,27 @@ class StartReproTasksStep:
     def run(self, context: PipelineContext) -> StepResult:
         candidates: list[dict[str, Any]] = context.outputs.get("repro_candidates") or []
         started: list[int] = []
+        rejected: list[dict[str, Any]] = []
 
         for candidate in candidates:
             item_id = candidate["id"]
             repo_url = candidate.get("_repo_url", "")
 
-            # 检查是否已有活跃 task
-            existing = repo.list_repro_tasks(context.conn, item_id=item_id, limit=1)
-            if existing and existing[0]["status"] in ("queued", "running"):
-                continue  # 已有活跃 task，跳过
+            try:
+                task_id = enqueue_repro_task(
+                    context.conn,
+                    item_id=item_id,
+                    repo_url=repo_url,
+                    trigger=context.params.get("trigger", "auto"),
+                )
+            except ReproQuotaExceededError as exc:
+                rejected.append({"item_id": item_id, "code": exc.code, "message": str(exc)})
+                continue
 
             # 旧失败任务由 Worker 清理，Pipeline 不直接操作 Docker。
             for old_task in repo.list_repro_tasks(context.conn, item_id=item_id, include_cleaned=True):
                 if old_task["status"] in ("failed", "timeout", "stopped"):
                     request_repro_cleanup(context.conn, int(old_task["id"]))
-
-            # 创建新 task
-            task_id = repo.create_repro_task(
-                context.conn,
-                item_id=item_id,
-                repo_url=repo_url,
-                trigger=context.params.get("trigger", "auto"),
-            )
 
             # 决定是否 Web 复现
             payload = candidate.get("payload") or {}
@@ -93,10 +93,10 @@ class StartReproTasksStep:
             run_id=context.run_id,
             artifact_type="repro_tasks",
             name="capabilities/repro_tasks.json",
-            data={"task_ids": started, "count": len(started)},
+            data={"task_ids": started, "count": len(started), "rejected": rejected},
         )
         return StepResult(
-            metrics={"started": len(started), "task_ids": started},
+            metrics={"started": len(started), "rejected": len(rejected), "task_ids": started},
             artifacts=[artifact],
         )
 
