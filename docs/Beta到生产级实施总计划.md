@@ -890,7 +890,7 @@ D11 暂缓的是公网入口和完整公网暴露治理，不代表复现容器�
 - [x] RSS、ASIS 已建立 SQLite 正式水位线；X 当前禁用，替换 Provider 必须按同一契约实现来源 ID 水位线后才能启用。
 - [x] 完成资讯 canonical key upsert、同日日报合并和成功 ModelCall 稳定请求键幂等；失败调用保留审计并允许后续重跑。
 - [x] 定义并实现采集单源补跑、门控/深评失败项缓存恢复、日报 checkpoint 恢复语义及运营入口。
-- [ ] 建立模型 Schema 失败降级和人工队列。
+- [x] 建立门控/深评严格 Schema 校验、阻断发布、去重人工队列、人工忽略与恢复后自动解决机制。
 - [ ] 连续运行至少三个真实日更周期。
 
 验收指标至少包含：各源采集量、筛选率、重复率、失败率、最终入选率、Schema 通过率、人工纠错率和日报准时率。
@@ -1936,3 +1936,16 @@ Python full test suite: 199 passed
 - 日报及后续原子步骤抛出异常时由 Runner 回滚未完成写入，并从前一步校验过的 checkpoint 恢复；成功运行不允许任意阶段重跑，禁用来源也拒绝单源重跑。
 - 资讯运行详情返回 `retry.allowed/stage/mode`；前端只在存在可恢复 checkpoint 时展示“从失败阶段重跑”，来源页继续提供独立的来源补跑入口。
 - 专项测试使用真实 `PipelineRunner` 验证两个候选中一个成功、一个连续失败后，恢复运行只再次调用失败候选；同时覆盖恢复契约、来源 partial、来源参数继承和资讯运行详情 API。聚焦测试 44 passed，全仓 Python 测试 284 passed，前端生产构建、`compileall` 与 `git diff --check` 通过。前端仍有既有动态/静态 import 和大 chunk 警告，本批次未扩大依赖或拆包范围。
+
+### 2026-07-30：模型 Schema 降级与人工复核
+
+- 门控严格校验完整字段、decision 枚举、0–100 分值、0–1 置信度、证据列表和技术地图路径；深评严格校验七个固定评分字段、合法非空路径、内容字段和置信度。
+- 模型 HTTP 调用成功但 Schema 不合格时，将最后一次调用改记为 `schema_invalid`，不进入成功唯一缓存。候选生成明确规则降级结果用于人工理解，但当前模型步骤失败，因此降级内容不会直接进入正式资讯和日报。
+- gate prompt 升级为 v2，deep review prompt 升级为 v4；缓存读取也再次执行 Schema 校验，历史宽松“成功”结果不能绕过新规则。
+- 新增 migration v12，为公共 `human_queue_items` 增加 `dedupe_key` 和 pending 部分唯一索引。同一模型请求反复结构失败只更新一条待办，不持续制造重复队列。
+- 队列记录阶段、item key、标题、URL、原 Run、prompt 版本、Schema 错误和降级结果。模型恢复后返回合格结果时自动将 pending 项标记为 resolved。
+- 人工可以选择重试失败 Run，或将候选标记 rejected。checkpoint 恢复时 rejected 请求不再调用模型并按业务拒绝处理，使坏样本不会永久阻塞整个日更；队列支持 reopen API 以便重新评估。
+- 修复平台重复恢复缺口：从 checkpoint 创建的新 Run 会立即复制一份经过校验的恢复点；如果同一阶段再次失败，仍可以从新 Run 继续恢复，而不是丢失重跑入口。
+- 补充资讯专用本地规则门控和深评实现，离线/测试模式输出与真实 Provider 相同的正式 Schema，不再依赖宽松 fallback 掩盖缺字段。
+- 运营质量接口和运行详情展示 `schema_invalid` 数量及待处理队列，前端提供“重试模型阶段”和“忽略该候选”操作。
+- 聚焦测试覆盖严格校验、Schema 异常调用状态、队列去重、重复 checkpoint 恢复、人工忽略后零模型调用完成恢复，以及队列查询/操作 API；聚焦测试 89 passed，全仓 Python 测试 287 passed，前端生产构建、`compileall` 与 `git diff --check` 通过。前端仍有既有动态/静态 import 和大 chunk 警告，本批次未扩大拆包范围。

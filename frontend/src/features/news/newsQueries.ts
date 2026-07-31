@@ -68,3 +68,7 @@ export function retryNewsRun(runId: string): Promise<Record<string, unknown>> {
 export function retryNewsSource(source: string): Promise<Record<string, unknown>> {
   return postJson(`/api/news/ops/sources/${encodeURIComponent(source)}/retry`, {});
 }
+
+export function updateNewsReviewQueue(itemId: number, action: 'reject' | 'reopen'): Promise<Record<string, unknown>> {
+  return postJson(`/api/news/ops/review-queue/${itemId}`, { action });
+}

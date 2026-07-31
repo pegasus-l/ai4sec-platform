@@ -6,6 +6,7 @@ from typing import Any
 from ai4sec_platform.core.config import load_settings
 from ai4sec_platform.db import repositories as repo
 from ai4sec_platform.domains.news.adapters.sources import load_news_source_configs
+from ai4sec_platform.domains.news import review_queue
 
 NEWS_SOURCES = ("arxiv", "github", "rss", "asis", "awesome", "x")
 
@@ -108,7 +109,7 @@ def quality(conn: sqlite3.Connection) -> dict[str, Any]:
     tasks = _run_tasks(conn, run_id)
     audits = [{**repo.row_to_dict(row), "details": repo.loads(row["details_json"], {})} for row in conn.execute("SELECT * FROM quality_audits WHERE domain = 'news' ORDER BY id DESC LIMIT 20").fetchall()]
     sources = source_status(conn)
-    return {"run_id": run_id, "tasks": tasks, "models": _model_metrics(conn, run_id), "audits": audits, "processing": _processing_summary(tasks, sources)}
+    return {"run_id": run_id, "tasks": tasks, "models": _model_metrics(conn, run_id), "audits": audits, "processing": _processing_summary(tasks, sources), "review_queue": review_queue.list_items(conn)}
 
 
 def _run_tasks(conn: sqlite3.Connection, run_id: str) -> list[dict[str, Any]]:
@@ -149,10 +150,10 @@ def _run_payload(conn: sqlite3.Connection, row: sqlite3.Row) -> dict[str, Any]:
 
 def _model_metrics(conn: sqlite3.Connection, run_id: str) -> dict[str, Any]:
     if not run_id:
-        return {"total": 0, "success": 0, "failed": 0, "retryable_failure": 0, "cache_hits": 0, "avg_latency_ms": 0, "agents": []}
+        return {"total": 0, "success": 0, "failed": 0, "retryable_failure": 0, "schema_invalid": 0, "cache_hits": 0, "avg_latency_ms": 0, "agents": []}
     rows = conn.execute("SELECT agent_name, provider, model_profile, status, COUNT(*) AS count, AVG(latency_ms) AS avg_latency FROM model_calls WHERE run_id = ? GROUP BY agent_name, provider, model_profile, status", (run_id,)).fetchall()
     agents: dict[tuple[str, str, str], dict[str, Any]] = {}
-    totals = {"total": 0, "success": 0, "failed": 0, "retryable_failure": 0}
+    totals = {"total": 0, "success": 0, "failed": 0, "retryable_failure": 0, "schema_invalid": 0}
     latency_sum = 0.0
     for row in rows:
         count = int(row["count"])

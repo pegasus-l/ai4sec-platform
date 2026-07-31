@@ -265,6 +265,7 @@ CREATE TABLE IF NOT EXISTS human_queue_items (
     reason TEXT NOT NULL DEFAULT '',
     assignee TEXT NOT NULL DEFAULT '',
     queue_source TEXT NOT NULL DEFAULT 'pipeline',
+    dedupe_key TEXT NOT NULL DEFAULT '',
     payload_json TEXT NOT NULL DEFAULT '{}',
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL

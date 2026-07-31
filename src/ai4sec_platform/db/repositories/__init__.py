@@ -243,15 +243,28 @@ def create_quality_audit(conn: sqlite3.Connection, *, domain: str, audit_type: s
     )
 
 
-def create_human_queue_item(conn: sqlite3.Connection, *, domain: str, item_id: int | None, queue_type: str, status: str = "pending", priority: int = 3, reason: str = "", assignee: str = "", payload: dict[str, Any] | None = None) -> None:
+def create_human_queue_item(conn: sqlite3.Connection, *, domain: str, item_id: int | None, queue_type: str, status: str = "pending", priority: int = 3, reason: str = "", assignee: str = "", payload: dict[str, Any] | None = None, dedupe_key: str = "") -> int:
     now = utc_now()
-    conn.execute(
+    if status == "pending" and dedupe_key:
+        existing = conn.execute(
+            "SELECT id FROM human_queue_items WHERE domain = ? AND queue_type = ? AND dedupe_key = ? AND status = 'pending'",
+            (domain, queue_type, dedupe_key),
+        ).fetchone()
+        if existing:
+            item_id_value = int(existing["id"] if isinstance(existing, sqlite3.Row) else existing[0])
+            conn.execute(
+                "UPDATE human_queue_items SET item_id = ?, priority = ?, reason = ?, assignee = ?, payload_json = ?, updated_at = ? WHERE id = ?",
+                (item_id, priority, reason, assignee, dumps(payload or {}), now, item_id_value),
+            )
+            return item_id_value
+    cursor = conn.execute(
         """
-        INSERT INTO human_queue_items (domain, item_id, queue_type, status, priority, reason, assignee, payload_json, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO human_queue_items (domain, item_id, queue_type, status, priority, reason, assignee, dedupe_key, payload_json, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
-        (domain, item_id, queue_type, status, priority, reason, assignee, dumps(payload or {}), now, now),
+        (domain, item_id, queue_type, status, priority, reason, assignee, dedupe_key, dumps(payload or {}), now, now),
     )
+    return int(cursor.lastrowid)
 
 
 

@@ -16,6 +16,7 @@ from ai4sec_platform.db.models import init_db
 from ai4sec_platform.db.session import connect
 from ai4sec_platform.domains.news.pipelines import news_daily_pipeline
 from ai4sec_platform.domains.news import reviewer
+from ai4sec_platform.domains.news import review_queue
 from ai4sec_platform.pipelines.context import PipelineContext
 from ai4sec_platform.pipelines.base import PipelineDefinition
 from ai4sec_platform.pipelines.registry import PipelineRegistry
@@ -58,6 +59,38 @@ def test_news_steps_declare_checkpoint_resume_inputs() -> None:
     }
 
 
+def test_gate_and_deep_review_schema_validation_is_strict() -> None:
+    tech_map = reviewer.AgentTechMap.load(PROJECT_ROOT)
+    valid_path = tech_map.catalog()[0]
+    valid_gate = {
+        "decision": "pass",
+        "map_relevance_score": 90,
+        "potential_value_score": 80,
+        "information_sufficiency": 0.9,
+        "provisional_tech_paths": [valid_path],
+        "match_evidence": ["input evidence"],
+        "reason": "valid gate",
+        "confidence": 0.9,
+    }
+    valid_review = {
+        "score_breakdown": {field: 80 for field in ["map_relevance", "novelty", "technical_depth", "engineering_value", "reproducibility", "influence", "freshness"]},
+        "tech_paths": [valid_path],
+        "topic": valid_path["category"],
+        "work_name": "SchemaGuard",
+        "theme_descriptor": "用于验证模型结构的安全评审器",
+        "summary_zh": "结构完整的模型评审输出。",
+        "promo_line": "它用于验证模型输出结构。",
+        "highlight_line": "避免不完整结果进入正式资讯。",
+        "review_reason": "字段和技术路径均符合约束。",
+        "confidence": 0.9,
+    }
+
+    assert reviewer._gate_schema_errors(valid_gate, tech_map) == []
+    assert reviewer._review_schema_errors(valid_review, tech_map) == []
+    assert reviewer._gate_schema_errors({"decision": "pass"}, tech_map)
+    assert reviewer._review_schema_errors({"score_breakdown": {"map_relevance": 80}}, tech_map)
+
+
 def test_source_errors_mark_live_collection_partial(tmp_path) -> None:
     conn = sqlite3.connect(":memory:")
     conn.row_factory = sqlite3.Row
@@ -91,12 +124,16 @@ def test_gate_retry_reuses_success_and_calls_only_failed_candidate(monkeypatch, 
             return {
                 "provider": "test",
                 "result": {
-                    "decision": "pass",
-                    "map_relevance_score": 90,
-                    "potential_value_score": 80,
-                    "provisional_tech_paths": [valid_path],
-                },
-            }
+                        "decision": "pass",
+                        "map_relevance_score": 90,
+                        "potential_value_score": 80,
+                        "information_sufficiency": 0.9,
+                        "provisional_tech_paths": [valid_path],
+                        "match_evidence": ["agent security"],
+                        "reason": "relevant to the mapped security topic",
+                        "confidence": 0.9,
+                    },
+                }
 
     monkeypatch.setattr(reviewer, "LLMRouter", FakeRouter)
     monkeypatch.setattr(reviewer.time, "sleep", lambda *_args: None)
@@ -117,6 +154,65 @@ def test_gate_retry_reuses_success_and_calls_only_failed_candidate(monkeypatch, 
         metrics = repo.loads(gate_task["metrics_json"], {})
         assert metrics["cache_hits"] == 1
         assert metrics["model_calls"] == 1
+
+
+def test_schema_invalid_outputs_are_deduplicated_and_human_reject_unblocks_resume(monkeypatch, tmp_path) -> None:
+    calls = 0
+
+    class InvalidSchemaRouter:
+        def active_config(self, _profile: str) -> dict:
+            return {"provider": "test", "model": "invalid-schema-model"}
+
+        def complete_json(self, **_kwargs):
+            nonlocal calls
+            calls += 1
+            return {"provider": "test", "result": {"decision": "pass"}}
+
+    monkeypatch.setattr(reviewer, "LLMRouter", InvalidSchemaRouter)
+    registry = PipelineRegistry()
+    registry.register(PipelineDefinition(name="test.news_schema", domain="news", steps=[NewsCandidatesStep(), GateNewsCandidatesStep()]))
+    runner = PipelineRunner(settings=settings(tmp_path), registry=registry)
+
+    first = runner.run("test.news_schema", run_id="schema-first")
+    second = runner.run("test.news_schema", {"_resume_from_run_id": "schema-first"}, run_id="schema-second")
+
+    assert first["status"] == "failed"
+    assert second["status"] == "failed"
+    with connect(settings(tmp_path)) as conn:
+        rows = review_queue.list_items(conn)
+        assert len(rows) == 2
+        assert {row["payload"]["run_id"] for row in rows} == {"schema-second"}
+        assert conn.execute("SELECT COUNT(*) FROM model_calls WHERE status = 'schema_invalid'").fetchone()[0] == 4
+        for row in rows:
+            review_queue.set_item_status(conn, int(row["id"]), "reject")
+        conn.commit()
+
+    resumed = runner.run("test.news_schema", {"_resume_from_run_id": "schema-second"}, run_id="schema-rejected")
+
+    assert resumed["status"] == "success"
+    assert calls == 4
+    gate_metrics = resumed["summary"]["steps"][-1]["metrics"]
+    assert gate_metrics["human_rejected"] == 2
+    assert gate_metrics["model_calls"] == 0
+
+
+def test_news_review_queue_api_rejects_schema_candidate() -> None:
+    conn = sqlite3.connect(":memory:", check_same_thread=False)
+    conn.row_factory = sqlite3.Row
+    init_db(conn)
+    item_id = review_queue.queue_schema_failure(conn, stage="gate", item={"item_key": "paper:1", "title": "Invalid"}, request_key="request-1", run_id="run-1", prompt_version=reviewer.GATE_PROMPT_VERSION, errors=["missing fields"], fallback={"decision": "reject"})
+    conn.commit()
+    app.dependency_overrides[get_db] = lambda: conn
+    try:
+        listed = TestClient(app).get("/api/news/ops/review-queue")
+        rejected = TestClient(app).post(f"/api/news/ops/review-queue/{item_id}", json={"action": "reject"})
+    finally:
+        app.dependency_overrides.pop(get_db, None)
+
+    assert listed.status_code == 200
+    assert listed.json()["items"][0]["payload"]["item_key"] == "paper:1"
+    assert rejected.status_code == 200
+    assert rejected.json()["status"] == "rejected"
 
 
 def test_news_run_detail_exposes_checkpoint_retry_state() -> None:

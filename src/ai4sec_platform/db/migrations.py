@@ -115,6 +115,15 @@ MIGRATIONS: tuple[Migration, ...] = (
             "unique successful request_key;index request_key,status"
         ),
     ),
+    Migration(
+        version=12,
+        name="add_human_queue_deduplication",
+        apply=lambda conn: _add_human_queue_deduplication(conn),
+        checksum_source=(
+            "human_queue_items.dedupe_key TEXT NOT NULL DEFAULT '';"
+            "unique pending domain/queue_type/dedupe_key;index domain/status/type"
+        ),
+    ),
 )
 
 
@@ -338,4 +347,13 @@ def _add_model_call_idempotency(conn: sqlite3.Connection) -> None:
     conn.execute(
         "CREATE UNIQUE INDEX IF NOT EXISTS uq_model_calls_success_request "
         "ON model_calls(request_key) WHERE request_key <> '' AND status = 'success'"
+    )
+
+
+def _add_human_queue_deduplication(conn: sqlite3.Connection) -> None:
+    _add_column_if_missing(conn, "human_queue_items", "dedupe_key", "TEXT NOT NULL DEFAULT ''")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_human_queue_domain_status_type ON human_queue_items(domain, status, queue_type, id)")
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_human_queue_pending_dedupe "
+        "ON human_queue_items(domain, queue_type, dedupe_key) WHERE dedupe_key <> '' AND status = 'pending'"
     )

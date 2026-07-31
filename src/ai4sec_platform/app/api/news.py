@@ -3,17 +3,25 @@ from __future__ import annotations
 import sqlite3
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel, ConfigDict
 
 from ai4sec_platform.app.dependencies import get_db
 from ai4sec_platform.app.api.runs import RunPipelineRequest, start_run
 from ai4sec_platform.db import repositories as repo
 from ai4sec_platform.domains.news import operations as news_operations, service
+from ai4sec_platform.domains.news import review_queue
 from ai4sec_platform.domains.news.schemas import NewsActionRequest
 from ai4sec_platform.domains.news.tech_map import AgentTechMap
 from ai4sec_platform.core.config import PROJECT_ROOT
 from ai4sec_platform.services import operations
 
 router = APIRouter(prefix="/news", tags=["news"])
+
+
+class NewsReviewQueueAction(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    action: str
 
 
 @router.get("/ops/overview")
@@ -61,6 +69,23 @@ def retry_source(source: str, conn: sqlite3.Connection = Depends(get_db)) -> dic
 @router.get("/ops/quality")
 def ops_quality(conn: sqlite3.Connection = Depends(get_db)) -> dict:
     return news_operations.quality(conn)
+
+
+@router.get("/ops/review-queue")
+def ops_review_queue(status: str = Query("pending", pattern="^(pending|resolved|rejected)$"), conn: sqlite3.Connection = Depends(get_db)) -> dict:
+    return {"items": review_queue.list_items(conn, status=status)}
+
+
+@router.post("/ops/review-queue/{item_id}")
+def update_review_queue_item(item_id: int, request: NewsReviewQueueAction, conn: sqlite3.Connection = Depends(get_db)) -> dict:
+    try:
+        item = review_queue.set_item_status(conn, item_id, request.action)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if not item:
+        raise HTTPException(status_code=404, detail="news review queue item not found")
+    conn.commit()
+    return item
 
 
 @router.get("/today")

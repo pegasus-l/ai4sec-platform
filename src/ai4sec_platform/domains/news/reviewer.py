@@ -14,11 +14,12 @@ from typing import Any
 
 from ai4sec_platform.db import repositories as repo
 from ai4sec_platform.domains.news import repository as news_repo
+from ai4sec_platform.domains.news import review_queue
 from ai4sec_platform.domains.news.tech_map import AgentTechMap
 from ai4sec_platform.models.router import LLMRouter
 
-GATE_PROMPT_VERSION = "news-tech-map-gate-v1"
-REVIEW_PROMPT_VERSION = "news-deep-review-v3"
+GATE_PROMPT_VERSION = "news-tech-map-gate-v2"
+REVIEW_PROMPT_VERSION = "news-deep-review-v4"
 MODEL_MAX_ATTEMPTS = 3
 MODEL_RETRY_BASE_SECONDS = 1.0
 MODEL_RETRY_JITTER_SECONDS = 0.5
@@ -39,12 +40,15 @@ def gate_candidates(
     model_identity = router.active_config(model_profile)
     gate_prompt = _gate_prompt()
     resolved: dict[int, tuple[dict[str, Any], str]] = {}
-    metrics = {"candidates": len(items), "model_calls": 0, "cache_hits": 0, "passed": 0, "needs_review": 0, "rejected": 0, "failed": 0}
+    metrics = {"candidates": len(items), "model_calls": 0, "cache_hits": 0, "passed": 0, "needs_review": 0, "rejected": 0, "failed": 0, "schema_invalid": 0, "queued_for_review": 0, "human_rejected": 0}
 
     def _process_gate(index: int, item: dict[str, Any], input_payload: dict[str, Any], input_hash: str) -> dict[str, Any]:
         result, output_full, failed, provider, latency_ms, attempts = _call_model_api(router, model_profile=model_profile, prompt=gate_prompt, input_payload=input_payload)
-        gate = _normalize_gate(result, item, tech_map) if not failed else _fallback_gate(item, tech_map, result.get("error", "model call failed"))
-        return {"index": index, "item": item, "gate": gate, "input_hash": input_hash, "input_payload": input_payload, "output": output_full, "failed": failed, "provider": provider, "latency_ms": latency_ms, "attempts": attempts}
+        schema_errors = [] if failed else _gate_schema_errors(result, tech_map)
+        if schema_errors and attempts:
+            attempts[-1] = {**attempts[-1], "status": "schema_invalid", "error_message": "; ".join(schema_errors)}
+        gate = _normalize_gate(result, item, tech_map) if not failed and not schema_errors else _fallback_gate(item, tech_map, result.get("error", "; ".join(schema_errors) or "model call failed"))
+        return {"index": index, "item": item, "gate": gate, "input_hash": input_hash, "input_payload": input_payload, "output": output_full, "failed": failed or bool(schema_errors), "call_failed": failed, "schema_errors": schema_errors, "provider": provider, "latency_ms": latency_ms, "attempts": attempts}
 
     if not items:
         return [], metrics
@@ -53,10 +57,14 @@ def gate_candidates(
         input_payload = {**_gate_payload(item, tech_map), "model_identity": model_identity}
         input_hash = _input_hash(input_payload)
         request_key = _model_request_key("news_tech_map_gate", model_profile, GATE_PROMPT_VERSION, input_payload)
+        if review_queue.is_rejected(conn, request_key):
+            metrics["human_rejected"] += 1
+            resolved[index] = ({**item, "gate_review": {**_fallback_gate(item, tech_map, "人工已忽略 Schema 异常候选"), "decision": "reject", "input_hash": input_hash, "prompt_version": GATE_PROMPT_VERSION, "tech_map_version": tech_map.version, "model_identity": model_identity}}, "")
+            continue
         gate = _cached_stage(conn, str(item.get("item_key") or ""), "gate_review", input_hash, GATE_PROMPT_VERSION)
         if not gate:
             cached_result = _cached_model_result(conn, request_key)
-            gate = _normalize_gate(cached_result, item, tech_map) if cached_result is not None else None
+            gate = _normalize_gate(cached_result, item, tech_map) if cached_result is not None and not _gate_schema_errors(cached_result, tech_map) else None
         if gate:
             metrics["cache_hits"] += 1
             resolved[index] = ({**item, "gate_review": {**gate, "input_hash": input_hash, "prompt_version": GATE_PROMPT_VERSION, "tech_map_version": tech_map.version, "model_identity": model_identity}}, "")
@@ -67,6 +75,13 @@ def gate_candidates(
         for idx, future in enumerate(as_completed(futures), 1):
             r = future.result()
             _record_attempts(conn, run_id=run_id, agent_name="news_tech_map_gate", model_profile=model_profile, prompt_version=GATE_PROMPT_VERSION, provider=r["provider"], input_payload=r["input_payload"], attempts=r["attempts"])
+            request_key = _model_request_key("news_tech_map_gate", model_profile, GATE_PROMPT_VERSION, r["input_payload"])
+            if r["schema_errors"]:
+                review_queue.queue_schema_failure(conn, stage="gate", item=r["item"], request_key=request_key, run_id=run_id, prompt_version=GATE_PROMPT_VERSION, errors=r["schema_errors"], fallback=r["gate"])
+                metrics["schema_invalid"] += 1
+                metrics["queued_for_review"] += 1
+            elif not r["call_failed"]:
+                review_queue.resolve_schema_failure(conn, request_key)
             conn.commit()
             metrics["model_calls"] += 1
             metrics["failed"] += int(r["failed"])
@@ -100,14 +115,18 @@ def enrich_candidates(
     model_identity = router.active_config(model_profile)
     review_prompt = _review_prompt()
     resolved: dict[int, dict[str, Any] | None] = {}
-    metrics = {"candidates": len(items), "model_calls": 0, "cache_hits": 0, "selected": 0, "watch": 0, "rejected": 0, "failed": 0}
+    metrics = {"candidates": len(items), "model_calls": 0, "cache_hits": 0, "selected": 0, "watch": 0, "rejected": 0, "failed": 0, "schema_invalid": 0, "queued_for_review": 0, "human_rejected": 0}
 
     def _process_enrich(index: int, item: dict[str, Any], input_payload: dict[str, Any], input_hash: str) -> dict[str, Any]:
         result, output_full, failed, provider, latency_ms, attempts = _call_model_api(router, model_profile=model_profile, prompt=review_prompt, input_payload=input_payload)
-        if failed:
-            return {"index": index, "item": item, "review": None, "input_hash": input_hash, "input_payload": input_payload, "output": output_full, "failed": True, "provider": provider, "latency_ms": latency_ms, "attempts": attempts}
+        schema_errors = [] if failed else _review_schema_errors(result, tech_map)
+        if schema_errors and attempts:
+            attempts[-1] = {**attempts[-1], "status": "schema_invalid", "error_message": "; ".join(schema_errors)}
+        if failed or schema_errors:
+            fallback = _fallback_review(item, tech_map, result.get("error", "; ".join(schema_errors) or "model call failed"))
+            return {"index": index, "item": item, "review": fallback, "input_hash": input_hash, "input_payload": input_payload, "output": output_full, "failed": True, "call_failed": failed, "schema_errors": schema_errors, "provider": provider, "latency_ms": latency_ms, "attempts": attempts}
         review = _normalize_deep_review(result, item, tech_map)
-        return {"index": index, "item": item, "review": review, "input_hash": input_hash, "input_payload": input_payload, "output": output_full, "failed": False, "provider": provider, "latency_ms": latency_ms, "attempts": attempts}
+        return {"index": index, "item": item, "review": review, "input_hash": input_hash, "input_payload": input_payload, "output": output_full, "failed": False, "call_failed": False, "schema_errors": [], "provider": provider, "latency_ms": latency_ms, "attempts": attempts}
 
     if not items:
         return [], metrics
@@ -116,10 +135,14 @@ def enrich_candidates(
         input_payload = {**_review_payload(item, tech_map), "model_identity": model_identity}
         input_hash = _input_hash(input_payload)
         request_key = _model_request_key("news_deep_review", model_profile, REVIEW_PROMPT_VERSION, input_payload)
+        if review_queue.is_rejected(conn, request_key):
+            metrics["human_rejected"] += 1
+            resolved[index] = None
+            continue
         review = _cached_stage(conn, str(item.get("item_key") or ""), "review", input_hash, REVIEW_PROMPT_VERSION)
         if not review:
             cached_result = _cached_model_result(conn, request_key)
-            review = _normalize_deep_review(cached_result, item, tech_map) if cached_result is not None else None
+            review = _normalize_deep_review(cached_result, item, tech_map) if cached_result is not None and not _review_schema_errors(cached_result, tech_map) else None
         if review:
             metrics["cache_hits"] += 1
             resolved[index] = {**item, "review": {**review, "input_hash": input_hash, "prompt_version": REVIEW_PROMPT_VERSION, "tech_map_version": tech_map.version, "model_identity": model_identity}}
@@ -130,6 +153,13 @@ def enrich_candidates(
         for idx, future in enumerate(as_completed(futures), 1):
             r = future.result()
             _record_attempts(conn, run_id=run_id, agent_name="news_deep_review", model_profile=model_profile, prompt_version=REVIEW_PROMPT_VERSION, provider=r["provider"], input_payload=r["input_payload"], attempts=r["attempts"])
+            request_key = _model_request_key("news_deep_review", model_profile, REVIEW_PROMPT_VERSION, r["input_payload"])
+            if r["schema_errors"]:
+                review_queue.queue_schema_failure(conn, stage="deep_review", item=r["item"], request_key=request_key, run_id=run_id, prompt_version=REVIEW_PROMPT_VERSION, errors=r["schema_errors"], fallback=r["review"])
+                metrics["schema_invalid"] += 1
+                metrics["queued_for_review"] += 1
+            elif not r["call_failed"]:
+                review_queue.resolve_schema_failure(conn, request_key)
             conn.commit()
             metrics["model_calls"] += 1
             if r["failed"]:
@@ -263,6 +293,63 @@ def _candidate_payload(item: dict[str, Any], *, include_readme: bool) -> dict[st
     if include_readme:
         payload["readme"] = str(raw.get("readme") or raw.get("readme_text") or "")[:12000]
     return payload
+
+
+def _gate_schema_errors(value: Any, tech_map: AgentTechMap) -> list[str]:
+    result = _unwrap(value)
+    if not isinstance(result, dict):
+        return ["gate result must be an object"]
+    errors = []
+    required = {"decision", "map_relevance_score", "potential_value_score", "information_sufficiency", "provisional_tech_paths", "match_evidence", "reason", "confidence"}
+    missing = sorted(required - result.keys())
+    if missing:
+        errors.append(f"gate fields missing: {', '.join(missing)}")
+    if result.get("decision") not in {"pass", "reject", "needs_review"}:
+        errors.append("gate decision is invalid")
+    for field in ["map_relevance_score", "potential_value_score"]:
+        if not _number_in_range(result.get(field), 0, 100):
+            errors.append(f"{field} must be 0-100")
+    for field in ["information_sufficiency", "confidence"]:
+        if not _number_in_range(result.get(field), 0, 1):
+            errors.append(f"{field} must be 0-1")
+    raw_paths = result.get("provisional_tech_paths")
+    if not isinstance(raw_paths, list):
+        errors.append("provisional_tech_paths must be a list")
+    elif raw_paths and len(tech_map.validate_paths(raw_paths)) != len(raw_paths):
+        errors.append("provisional_tech_paths contains unknown paths")
+    if not isinstance(result.get("match_evidence"), list):
+        errors.append("match_evidence must be a list")
+    if not isinstance(result.get("reason"), str) or not result.get("reason", "").strip():
+        errors.append("gate reason is required")
+    return errors
+
+
+def _review_schema_errors(value: Any, tech_map: AgentTechMap) -> list[str]:
+    result = _unwrap(value)
+    if not isinstance(result, dict):
+        return ["deep review result must be an object"]
+    errors = []
+    required = {"score_breakdown", "tech_paths", "topic", "work_name", "theme_descriptor", "summary_zh", "promo_line", "highlight_line", "review_reason", "confidence"}
+    missing = sorted(required - result.keys())
+    if missing:
+        errors.append(f"deep review fields missing: {', '.join(missing)}")
+    breakdown = result.get("score_breakdown")
+    score_fields = {"map_relevance", "novelty", "technical_depth", "engineering_value", "reproducibility", "influence", "freshness"}
+    if not isinstance(breakdown, dict) or set(breakdown) != score_fields:
+        errors.append("score_breakdown must contain exactly seven required fields")
+    elif any(not _number_in_range(breakdown.get(field), 0, 100) for field in score_fields):
+        errors.append("score_breakdown values must be 0-100")
+    raw_paths = result.get("tech_paths")
+    if not isinstance(raw_paths, list) or not raw_paths:
+        errors.append("tech_paths must be a non-empty list")
+    elif len(tech_map.validate_paths(raw_paths)) != len(raw_paths):
+        errors.append("tech_paths contains unknown paths")
+    for field in ["topic", "work_name", "theme_descriptor", "summary_zh", "promo_line", "highlight_line", "review_reason"]:
+        if not isinstance(result.get(field), str) or not result.get(field, "").strip():
+            errors.append(f"{field} is required")
+    if not _number_in_range(result.get("confidence"), 0, 1):
+        errors.append("confidence must be 0-1")
+    return errors
 
 
 def _normalize_gate(value: Any, item: dict[str, Any], tech_map: AgentTechMap) -> dict[str, Any]:
@@ -510,6 +597,16 @@ def _fraction(value: Any) -> float:
     except (TypeError, ValueError):
         return 0.0
     return round(max(0.0, min(1.0, number)), 2)
+
+
+def _number_in_range(value: Any, minimum: float, maximum: float) -> bool:
+    if isinstance(value, bool):
+        return False
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return False
+    return minimum <= number <= maximum
 
 
 def _string_list(value: Any) -> list[str]:

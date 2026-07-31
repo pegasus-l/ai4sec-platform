@@ -87,6 +87,9 @@ class PipelineRunner:
             if resumed_steps:
                 for step in resumed_steps:
                     repo.create_task_run(conn, run_id=run_id, step_name=step["name"], status="restored", metrics=step.get("metrics") or {})
+                checkpoint = self._write_checkpoint(conn, context, definition, summary)
+                if checkpoint:
+                    artifacts.append(checkpoint)
                 conn.commit()
             status = "success"
             error_message = ""

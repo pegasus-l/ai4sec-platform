@@ -10,6 +10,10 @@ class LocalRuleProvider:
         agent = _agent_name(prompt, payload)
         if agent == "capability_assess":
             result = _assess_capability(payload)
+        elif agent == "news_gate":
+            result = _news_gate(payload)
+        elif agent == "news_review":
+            result = _news_review(payload)
         elif agent == "repo_summary":
             result = _repo_summary(payload)
         elif agent == "risk_reasoning":
@@ -23,6 +27,10 @@ class LocalRuleProvider:
 
 def _agent_name(prompt: str, payload: dict) -> str:
     value = f"{prompt} {payload.get('item_type', '')} {payload.get('domain', '')}".lower()
+    if "技术情报门控" in prompt:
+        return "news_gate"
+    if "技术情报深度评审" in prompt:
+        return "news_review"
     if "代码仓摘要" in prompt or "repo_summary" in value:
         return "repo_summary"
     if "威胁" in prompt or "风险" in prompt or "risk" in value or payload.get("domain") == "threats":
@@ -32,6 +40,56 @@ def _agent_name(prompt: str, payload: dict) -> str:
     if "能力" in prompt or "复现" in prompt or payload.get("domain") == "capabilities":
         return "capability_assess"
     return "summary"
+
+
+def _news_gate(payload: dict) -> dict[str, Any]:
+    candidate = payload.get("candidate") or {}
+    paths = [path for path in payload.get("tech_map") or [] if isinstance(path, dict)][:1]
+    title = str(candidate.get("title") or "")
+    summary = str(candidate.get("summary") or "")
+    decision = "pass" if paths else "reject"
+    return {
+        "decision": decision,
+        "map_relevance_score": 72 if paths else 0,
+        "potential_value_score": 65 if paths else 0,
+        "information_sufficiency": 0.6 if title or summary else 0.2,
+        "provisional_tech_paths": paths,
+        "match_evidence": [text for text in [title, summary[:160]] if text],
+        "reason": "本地规则按候选标题、摘要和技术地图生成门控结果。",
+        "confidence": 0.55 if paths else 0.2,
+    }
+
+
+def _news_review(payload: dict) -> dict[str, Any]:
+    candidate = payload.get("candidate") or {}
+    gate = payload.get("gate_review") or {}
+    paths = [path for path in gate.get("provisional_tech_paths") or [] if isinstance(path, dict)]
+    if not paths:
+        paths = [path for path in payload.get("tech_map") or [] if isinstance(path, dict)][:1]
+    title = " ".join(str(candidate.get("title") or "未命名条目").split())
+    summary = " ".join(str(candidate.get("summary") or title).split())
+    topic = str(paths[0].get("category") or "待复核") if paths else "待复核"
+    work_name = title[:80]
+    return {
+        "score_breakdown": {
+            "map_relevance": 82,
+            "novelty": 72,
+            "technical_depth": 75,
+            "engineering_value": 80,
+            "reproducibility": 80,
+            "influence": 60,
+            "freshness": 75,
+        },
+        "tech_paths": paths,
+        "topic": topic,
+        "work_name": work_name,
+        "theme_descriptor": f"围绕{topic}的本地规则技术情报候选",
+        "summary_zh": summary[:250],
+        "promo_line": f"{work_name} 是一项与{topic}相关的技术情报候选。",
+        "highlight_line": "具备明确技术地图路径，建议结合原始资料进一步核验。",
+        "review_reason": "本地规则根据候选元数据和门控路径完成离线评审。",
+        "confidence": 0.55,
+    }
 
 
 def _assess_capability(payload: dict) -> dict[str, Any]:
