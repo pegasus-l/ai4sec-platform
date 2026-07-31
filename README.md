@@ -234,6 +234,15 @@ PYTHONPATH=src python -m ai4sec_platform.cli repro-worker
 
 运维检查可使用 `--once --task-id <id>` 只领取指定任务，或使用 `--recover-only` 对账异常退出时遗留的 `running` 任务。单机文件锁禁止同时启动两个复现 Worker。停止和清理接口只写持久请求，Worker 负责终止容器、删除 workspace 并更新最终状态；API 重启不会丢失尚未领取的任务。
 
+Worker 启动后会写入独立注册表，默认每 10 秒更新心跳；连续 30 秒没有心跳即视为不可用。运行任务期间会同时记录当前 `task_id`，正常退出会写入 `stopped`，因此不能只用进程 PID 或任务表猜测执行面是否健康：
+
+```text
+GET /api/capabilities/repro-worker-status
+GET /api/capabilities/repro-limits
+```
+
+生产进程管理器应以长驻 `repro-worker` CLI 作为唯一 ExecStart，并配置异常自动重启；不要使用 `--once` 作为正式服务。双 Worker 会被单机文件锁拒绝，资源和队列配置不合法、模型 Secret 不安全或 Runner 镜像含长期认证文件时，Worker 会在领取任务前退出。
+
 任务可以通过以下接口请求取消：
 
 ```text

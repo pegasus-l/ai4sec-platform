@@ -16,6 +16,7 @@ from ai4sec_platform.domains.capabilities.repro_jobs import (
     ReproStateTransitionError,
     claim_next_repro_task,
     reconcile_interrupted_repro_tasks,
+    register_repro_worker,
     request_repro_cleanup,
     request_repro_stop,
     transition_repro_task,
@@ -144,6 +145,7 @@ def test_worker_executes_claimed_task_without_api_thread(monkeypatch, tmp_path: 
     settings = _settings(tmp_path)
     task_id = _create_task(settings)
     _allow_test_runtime(monkeypatch)
+    observed_current_tasks: list[int | None] = []
 
     class FakeRunner:
         def __init__(self, task_id, repo_url, on_log, on_status, web_port, should_stop, on_heartbeat):
@@ -155,6 +157,11 @@ def test_worker_executes_claimed_task_without_api_thread(monkeypatch, tmp_path: 
             self.workspace = tmp_path / f"task-{task_id}"
 
         def run(self) -> None:
+            with connect(settings) as conn:
+                worker = conn.execute(
+                    "SELECT current_task_id FROM capability_repro_workers WHERE worker_id = 'worker-1'"
+                ).fetchone()
+                observed_current_tasks.append(worker["current_task_id"])
             self.on_log("worker log")
             self.on_heartbeat()
             self.on_status("success", result="done")
@@ -166,8 +173,14 @@ def test_worker_executes_claimed_task_without_api_thread(monkeypatch, tmp_path: 
     assert result and result["status"] == "success"
     with connect(settings) as conn:
         task = repo.get_repro_task(conn, task_id)
+        worker = conn.execute(
+            "SELECT * FROM capability_repro_workers WHERE worker_id = 'worker-1'"
+        ).fetchone()
     assert task and task["container_name"] == f"fake-{task_id}"
     assert "worker log" in task["log"]
+    assert observed_current_tasks == [task_id]
+    assert worker and worker["status"] == "stopped"
+    assert worker["current_task_id"] is None
 
 
 def test_platform_kill_switch_stops_queued_repro_task(tmp_path: Path) -> None:
@@ -339,10 +352,49 @@ def test_repro_limits_api_reports_configured_limits_and_usage(tmp_path: Path) ->
         "max_queued_tasks": 20,
         "max_attempts_per_item_24h": 3,
         "max_automatic_retries": 0,
+        "worker_heartbeat_seconds": 10,
     }
     assert response.json()["usage"]["queued"] == 1
     assert response.json()["resources"]["cpus"] == 2.0
     assert response.json()["resources"]["log_max_bytes"] == 5 * 1024 * 1024
+
+
+def test_repro_worker_status_reports_healthy_and_stale_workers(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    with connect(settings) as conn:
+        init_db(conn)
+        register_repro_worker(
+            conn,
+            worker_id="repro-health-worker",
+            hostname="test-host",
+            pid=123,
+            metadata={"kind": "capability_repro"},
+        )
+    app = create_app()
+
+    def override_db():
+        with connect(settings) as conn:
+            init_db(conn)
+            yield conn
+            conn.commit()
+
+    app.dependency_overrides[get_db] = override_db
+    client = TestClient(app)
+
+    healthy = client.get("/api/capabilities/repro-worker-status")
+    assert healthy.status_code == 200
+    assert healthy.json()["status"] == "ready"
+    assert healthy.json()["workers"][0]["status"] == "healthy"
+
+    with connect(settings) as conn:
+        conn.execute(
+            "UPDATE capability_repro_workers SET heartbeat_at = '2000-01-01T00:00:00Z' "
+            "WHERE worker_id = 'repro-health-worker'"
+        )
+        conn.commit()
+    stale = client.get("/api/capabilities/repro-worker-status")
+    assert stale.json()["status"] == "unavailable"
+    assert stale.json()["workers"][0]["status"] == "stale"
 
 
 def test_start_repro_rejects_when_global_queue_is_full(monkeypatch, tmp_path: Path) -> None:

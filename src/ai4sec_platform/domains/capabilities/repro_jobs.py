@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+import json
 from typing import Any
 
 from ai4sec_platform.core.time import utc_now
@@ -131,6 +132,65 @@ def heartbeat_repro_task(conn: sqlite3.Connection, *, task_id: int, worker_id: s
         "UPDATE capability_repro_tasks SET heartbeat_at = ?, updated_at = ? "
         "WHERE id = ? AND worker_id = ? AND status = 'running'",
         (now, now, task_id, worker_id),
+    )
+    conn.commit()
+    return cursor.rowcount == 1
+
+
+def register_repro_worker(
+    conn: sqlite3.Connection,
+    *,
+    worker_id: str,
+    hostname: str,
+    pid: int,
+    metadata: dict[str, Any] | None = None,
+) -> None:
+    now = utc_now()
+    conn.execute(
+        """
+        INSERT INTO capability_repro_workers (
+            worker_id, status, hostname, pid, started_at, heartbeat_at, stopped_at,
+            current_task_id, metadata_json, updated_at
+        ) VALUES (?, 'running', ?, ?, ?, ?, '', NULL, ?, ?)
+        ON CONFLICT(worker_id) DO UPDATE SET
+            status = 'running', hostname = excluded.hostname, pid = excluded.pid,
+            started_at = excluded.started_at, heartbeat_at = excluded.heartbeat_at,
+            stopped_at = '', current_task_id = NULL, metadata_json = excluded.metadata_json,
+            updated_at = excluded.updated_at
+        """,
+        (worker_id, hostname, pid, now, now, json.dumps(metadata or {}, ensure_ascii=False), now),
+    )
+    conn.commit()
+
+
+def heartbeat_repro_worker(
+    conn: sqlite3.Connection,
+    *,
+    worker_id: str,
+    current_task_id: int | None = None,
+) -> bool:
+    now = utc_now()
+    cursor = conn.execute(
+        """
+        UPDATE capability_repro_workers
+        SET status = 'running', heartbeat_at = ?, current_task_id = ?, updated_at = ?
+        WHERE worker_id = ?
+        """,
+        (now, current_task_id, now, worker_id),
+    )
+    conn.commit()
+    return cursor.rowcount == 1
+
+
+def stop_repro_worker(conn: sqlite3.Connection, *, worker_id: str) -> bool:
+    now = utc_now()
+    cursor = conn.execute(
+        """
+        UPDATE capability_repro_workers
+        SET status = 'stopped', stopped_at = ?, current_task_id = NULL, updated_at = ?
+        WHERE worker_id = ?
+        """,
+        (now, now, worker_id),
     )
     conn.commit()
     return cursor.rowcount == 1

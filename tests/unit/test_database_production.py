@@ -279,6 +279,9 @@ def test_legacy_database_is_upgraded_without_losing_rows(tmp_path: Path) -> None
     assert {row[1] for row in conn.execute("PRAGMA table_info(pipeline_jobs)")} >= {"cancel_requested"}
     assert {row[1] for row in conn.execute("PRAGMA table_info(pipeline_jobs)")} >= {"lease_expires_at"}
     assert conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'pipeline_workers'").fetchone()
+    assert conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'capability_repro_workers'"
+    ).fetchone()
     assert {row[1] for row in conn.execute("PRAGMA table_info(capability_repro_tasks)")} >= {
         "started_at", "updated_at", "worker_id", "heartbeat_at", "cancel_requested", "cleanup_requested"
     }

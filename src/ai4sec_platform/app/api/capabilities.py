@@ -37,6 +37,7 @@ from ai4sec_platform.domains.capabilities.repro_policy import (
     ReproQuotaExceededError,
     enqueue_repro_task,
     repro_limits_payload,
+    repro_worker_status_payload,
 )
 from ai4sec_platform.domains.capabilities.schemas import ReproTaskResponse
 from ai4sec_platform.domains.capabilities.selectors import pick_top_repro_candidates, _resolve_repo_url
@@ -163,6 +164,11 @@ def repro_limits(conn: sqlite3.Connection = Depends(get_db)) -> dict:
     payload = repro_limits_payload(conn)
     payload["resources"] = repro_resource_limits_payload()
     return payload
+
+
+@router.get("/repro-worker-status")
+def repro_worker_status(conn: sqlite3.Connection = Depends(get_db)) -> dict:
+    return repro_worker_status_payload(conn)
 
 
 @router.get("/repro/{task_id}")

@@ -16,6 +16,8 @@ REPRO_MAX_CONCURRENT_TASKS = int(os.environ.get("REPRO_MAX_CONCURRENT_TASKS", "1
 REPRO_MAX_QUEUED_TASKS = int(os.environ.get("REPRO_MAX_QUEUED_TASKS", "20"))
 REPRO_MAX_ATTEMPTS_PER_ITEM_24H = int(os.environ.get("REPRO_MAX_ATTEMPTS_PER_ITEM_24H", "3"))
 REPRO_MAX_AUTOMATIC_RETRIES = int(os.environ.get("REPRO_MAX_AUTOMATIC_RETRIES", "0"))
+REPRO_WORKER_HEARTBEAT_SECONDS = int(os.environ.get("REPRO_WORKER_HEARTBEAT_SECONDS", "10"))
+REPRO_WORKER_STALE_SECONDS = int(os.environ.get("REPRO_WORKER_STALE_SECONDS", "30"))
 
 
 class ReproQuotaExceededError(RuntimeError):
@@ -33,6 +35,10 @@ def validate_repro_queue_limits() -> None:
         raise RuntimeError("REPRO_MAX_ATTEMPTS_PER_ITEM_24H must be between 1 and 20")
     if REPRO_MAX_AUTOMATIC_RETRIES != 0:
         raise RuntimeError("REPRO_MAX_AUTOMATIC_RETRIES must remain 0 until task execution is safely replayable")
+    if not 1 <= REPRO_WORKER_HEARTBEAT_SECONDS <= 300:
+        raise RuntimeError("REPRO_WORKER_HEARTBEAT_SECONDS must be between 1 and 300")
+    if not max(10, REPRO_WORKER_HEARTBEAT_SECONDS * 2) <= REPRO_WORKER_STALE_SECONDS <= 3600:
+        raise RuntimeError("REPRO_WORKER_STALE_SECONDS must be between 10 and 3600")
 
 
 def enqueue_repro_task(
@@ -131,6 +137,47 @@ def repro_limits_payload(conn: sqlite3.Connection) -> dict[str, Any]:
             "max_queued_tasks": REPRO_MAX_QUEUED_TASKS,
             "max_attempts_per_item_24h": REPRO_MAX_ATTEMPTS_PER_ITEM_24H,
             "max_automatic_retries": REPRO_MAX_AUTOMATIC_RETRIES,
+            "worker_heartbeat_seconds": REPRO_WORKER_HEARTBEAT_SECONDS,
         },
         "usage": repro_quota_usage(conn),
+    }
+
+
+def repro_worker_status_payload(conn: sqlite3.Connection) -> dict[str, Any]:
+    validate_repro_queue_limits()
+    now = datetime.now(timezone.utc)
+    rows = conn.execute(
+        "SELECT worker_id, status, heartbeat_at, stopped_at, current_task_id "
+        "FROM capability_repro_workers ORDER BY updated_at DESC LIMIT 20"
+    ).fetchall()
+    workers: list[dict[str, Any]] = []
+    healthy = 0
+    for row in rows:
+        heartbeat_at = str(row["heartbeat_at"] or "")
+        age_seconds: int | None = None
+        if heartbeat_at:
+            try:
+                heartbeat = datetime.fromisoformat(heartbeat_at.replace("Z", "+00:00"))
+                age_seconds = max(0, int((now - heartbeat).total_seconds()))
+            except ValueError:
+                age_seconds = None
+        registered_running = str(row["status"]) == "running"
+        is_healthy = registered_running and age_seconds is not None and age_seconds <= REPRO_WORKER_STALE_SECONDS
+        effective_status = "healthy" if is_healthy else "stale" if registered_running else "stopped"
+        healthy += int(is_healthy)
+        workers.append(
+            {
+                "worker_id": str(row["worker_id"]),
+                "status": effective_status,
+                "heartbeat_at": heartbeat_at,
+                "heartbeat_age_seconds": age_seconds,
+                "current_task_id": row["current_task_id"],
+                "stopped_at": str(row["stopped_at"] or ""),
+            }
+        )
+    return {
+        "status": "ready" if healthy else "unavailable",
+        "healthy_workers": healthy,
+        "stale_after_seconds": REPRO_WORKER_STALE_SECONDS,
+        "workers": workers,
     }

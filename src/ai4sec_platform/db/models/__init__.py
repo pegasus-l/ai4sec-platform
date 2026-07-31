@@ -335,6 +335,21 @@ CREATE TABLE IF NOT EXISTS capability_repro_tasks (
 CREATE INDEX IF NOT EXISTS idx_cap_repro_item ON capability_repro_tasks(item_id);
 CREATE INDEX IF NOT EXISTS idx_cap_repro_status ON capability_repro_tasks(status);
 CREATE INDEX IF NOT EXISTS idx_cap_repro_created ON capability_repro_tasks(created_at DESC);
+
+CREATE TABLE IF NOT EXISTS capability_repro_workers (
+    worker_id TEXT PRIMARY KEY,
+    status TEXT NOT NULL DEFAULT 'running',
+    hostname TEXT NOT NULL DEFAULT '',
+    pid INTEGER NOT NULL DEFAULT 0,
+    started_at TEXT NOT NULL,
+    heartbeat_at TEXT NOT NULL,
+    stopped_at TEXT NOT NULL DEFAULT '',
+    current_task_id INTEGER,
+    metadata_json TEXT NOT NULL DEFAULT '{}',
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_cap_repro_workers_status_heartbeat
+ON capability_repro_workers(status, heartbeat_at);
 """
 
 
@@ -375,6 +390,7 @@ def reset_db(conn: sqlite3.Connection) -> None:
         "news_daily_reports",
         "news_user_states",
         "news_item_index",
+        "capability_repro_workers",
         "capability_repro_tasks",
         "human_queue_items",
         "quality_audits",

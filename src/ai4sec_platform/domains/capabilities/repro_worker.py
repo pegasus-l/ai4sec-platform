@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import fcntl
 import json
+import os
 from pathlib import Path
 import shutil
+import socket
 import subprocess
 import time
 from typing import Any, TextIO
@@ -28,10 +30,14 @@ from ai4sec_platform.domains.capabilities.repro_jobs import (
     claim_cleanup_request,
     claim_next_repro_task,
     heartbeat_repro_task,
+    heartbeat_repro_worker,
     is_repro_cancel_requested,
     reconcile_interrupted_repro_tasks,
+    register_repro_worker,
+    stop_repro_worker,
     transition_repro_task,
 )
+from ai4sec_platform.domains.capabilities.repro_policy import REPRO_WORKER_HEARTBEAT_SECONDS
 from ai4sec_platform.pipelines.jobs import is_execution_kill_switch_active
 
 
@@ -43,10 +49,15 @@ class CapabilityReproWorker:
     def __init__(self, settings: Settings | None = None, *, worker_id: str | None = None) -> None:
         self.settings = settings or load_settings()
         self.worker_id = worker_id or new_id("repro-worker")
+        self._last_worker_heartbeat = 0.0
 
     def recover(self) -> list[int]:
         with self._worker_lock():
-            return self._recover()
+            self._register()
+            try:
+                return self._recover()
+            finally:
+                self._stop()
 
     def _recover(self) -> list[int]:
         with connect(self.settings) as conn:
@@ -72,7 +83,11 @@ class CapabilityReproWorker:
     def run_once(self, *, task_id: int | None = None) -> dict[str, Any] | None:
         validate_repro_runtime_config(check_image=True)
         with self._worker_lock():
-            return self._run_once(task_id=task_id)
+            self._register()
+            try:
+                return self._run_once(task_id=task_id)
+            finally:
+                self._stop()
 
     def _run_once(self, *, task_id: int | None = None) -> dict[str, Any] | None:
         cleanup = self._claim_cleanup(task_id=task_id)
@@ -83,7 +98,9 @@ class CapabilityReproWorker:
             init_db(conn)
             task = claim_next_repro_task(conn, worker_id=self.worker_id, task_id=task_id)
         if not task:
+            self._heartbeat_worker()
             return None
+        self._heartbeat_worker(current_task_id=int(task["id"]), force=True)
         try:
             self._run_task(task)
         except Exception as exc:
@@ -93,15 +110,21 @@ class CapabilityReproWorker:
             self._finish_cleanup(cleanup)
         with connect(self.settings) as conn:
             init_db(conn)
-            return repo.get_repro_task(conn, int(task["id"]))
+            result = repo.get_repro_task(conn, int(task["id"]))
+        self._heartbeat_worker(force=True)
+        return result
 
     def serve_forever(self, *, poll_interval: float = 1.0) -> None:
         validate_repro_runtime_config(check_image=True)
         with self._worker_lock():
-            self._recover()
-            while True:
-                if self._run_once() is None:
-                    time.sleep(poll_interval)
+            self._register()
+            try:
+                self._recover()
+                while True:
+                    if self._run_once() is None:
+                        time.sleep(poll_interval)
+            finally:
+                self._stop()
 
     def _run_task(self, task: dict[str, Any]) -> None:
         task_id = int(task["id"])
@@ -148,6 +171,7 @@ class CapabilityReproWorker:
             with connect(self.settings) as conn:
                 init_db(conn)
                 heartbeat_repro_task(conn, task_id=task_id, worker_id=self.worker_id)
+                heartbeat_repro_worker(conn, worker_id=self.worker_id, current_task_id=task_id)
             last_heartbeat = now
 
         runner = ReproRunner(
@@ -250,6 +274,38 @@ class CapabilityReproWorker:
 
     def _worker_lock(self) -> "_ExclusiveFileLock":
         return _ExclusiveFileLock(self.settings.output_dir / "locks" / "capability-repro-worker.lock")
+
+    def _register(self) -> None:
+        with connect(self.settings) as conn:
+            init_db(conn)
+            register_repro_worker(
+                conn,
+                worker_id=self.worker_id,
+                hostname=socket.gethostname(),
+                pid=os.getpid(),
+                metadata={"kind": "capability_repro", "execution": "single_host"},
+            )
+        self._last_worker_heartbeat = time.monotonic()
+
+    def _heartbeat_worker(self, current_task_id: int | None = None, *, force: bool = False) -> bool:
+        now = time.monotonic()
+        if not force and now - self._last_worker_heartbeat < REPRO_WORKER_HEARTBEAT_SECONDS:
+            return True
+        with connect(self.settings) as conn:
+            init_db(conn)
+            updated = heartbeat_repro_worker(
+                conn,
+                worker_id=self.worker_id,
+                current_task_id=current_task_id,
+            )
+        if updated:
+            self._last_worker_heartbeat = now
+        return updated
+
+    def _stop(self) -> None:
+        with connect(self.settings) as conn:
+            init_db(conn)
+            stop_repro_worker(conn, worker_id=self.worker_id)
 
 
 class _ExclusiveFileLock:

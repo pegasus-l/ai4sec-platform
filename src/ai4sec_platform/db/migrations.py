@@ -124,6 +124,15 @@ MIGRATIONS: tuple[Migration, ...] = (
             "unique pending domain/queue_type/dedupe_key;index domain/status/type"
         ),
     ),
+    Migration(
+        version=13,
+        name="add_capability_repro_workers",
+        apply=lambda conn: _add_capability_repro_workers(conn),
+        checksum_source=(
+            "capability_repro_workers(worker_id,status,hostname,pid,started_at,heartbeat_at,"
+            "stopped_at,current_task_id,metadata_json,updated_at);index status/heartbeat"
+        ),
+    ),
 )
 
 
@@ -200,6 +209,29 @@ def _add_repro_worker_fields(conn: sqlite3.Connection) -> None:
         ("cleanup_requested", "INTEGER NOT NULL DEFAULT 0"),
     ):
         _add_column_if_missing(conn, "capability_repro_tasks", column, definition)
+
+
+def _add_capability_repro_workers(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS capability_repro_workers (
+            worker_id TEXT PRIMARY KEY,
+            status TEXT NOT NULL DEFAULT 'running',
+            hostname TEXT NOT NULL DEFAULT '',
+            pid INTEGER NOT NULL DEFAULT 0,
+            started_at TEXT NOT NULL,
+            heartbeat_at TEXT NOT NULL,
+            stopped_at TEXT NOT NULL DEFAULT '',
+            current_task_id INTEGER,
+            metadata_json TEXT NOT NULL DEFAULT '{}',
+            updated_at TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_cap_repro_workers_status_heartbeat "
+        "ON capability_repro_workers(status, heartbeat_at)"
+    )
 
 
 def _add_platform_identity_constraints(conn: sqlite3.Connection) -> None:

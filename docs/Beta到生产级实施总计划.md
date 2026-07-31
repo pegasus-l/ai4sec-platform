@@ -901,7 +901,7 @@ D11 暂缓的是公网入口和完整公网暴露治理，不代表复现容器�
 - [x] 固定复现状态转换和所有异常收尾路径。
 - [x] 实现启动时容器、任务、报告状态对账。
 - [x] 声明任务资源、日志、重试和并发配额。
-- [ ] 完成独立受限复现 Worker 接入。
+- [x] 完成独立受限复现 Worker 接入。
 - [ ] 建立 Model Gateway 短期任务令牌，不向复现容器注入真实 Provider Key。
 - [ ] 建立代码仓、软件包仓、模型仓和声明外部 API 的出口策略与审计日志。
 - [ ] 阻断回环、私网、链路本地、云 metadata、Docker 网桥和平台管理网段。
@@ -2005,3 +2005,13 @@ Python full test suite: 199 passed
 - 运行时校验 CPU、内存、swap、PIDs、普通/Web 墙钟超时、报告宽限、workspace 和日志上限的格式及安全范围；错误配置在任务启动前失败，不交给 Docker 静默解释。
 - `.env.example` 已完整声明上述资源和队列参数；新增只读 `/api/capabilities/repro-limits`，返回当前队列使用量、重试/并发策略及容器资源上限，供运营页面和部署验收读取。
 - 新增资源非法值、配额查询、全局队列满和条目尝试次数超限回归；能力专项测试 74 passed，全仓 Python 测试 319 passed，`compileall` 与 `git diff --check` 通过。workspace 仍是周期扫描软上限，Sysbox 嵌套 Docker 的资源继承与硬 quota 继续由后续双 Profile 隔离任务处理。
+
+### 2026-07-31：独立 Repro Worker 服务接入
+
+- 新增 migration v13 `capability_repro_workers`，独立保存 Worker 注册、进程状态、启动时间、心跳、停止时间和当前任务，不再通过是否存在 `running` 任务反推 Worker 是否存活。
+- 长驻 Worker 启动后注册，空闲和执行阶段均持续心跳，领取任务时原子关联当前 `task_id`，任务结束后清空；正常退出在 `finally` 中写入 `stopped`，异常退出则由心跳年龄判定 stale。
+- 空闲轮询不再每秒写 SQLite：Worker 心跳默认 10 秒节流，默认 30 秒未更新视为不可用；配置校验要求 stale 窗口至少是心跳间隔的两倍。
+- `run_once` 和 `recover_only` 同样执行注册与停止生命周期，便于运维检查和测试，不会遗留一个看似健康的伪 Worker 记录。
+- 新增只读 `/api/capabilities/repro-worker-status`，返回 `ready/unavailable`、健康 Worker 数、心跳年龄、当前任务和停止状态；不暴露宿主机 PID、主机名或 Worker metadata。
+- 复现执行仍由独立 CLI 进程完成，API/Uvicorn 不启动 Worker，不接触 Docker；单机文件锁、镜像认证审计、只读模型 Secret、容器资源边界和持久任务配额共同构成当前受限服务契约。
+- 当前条目完成的是独立进程及平台生命周期接入。标准 rootless 与 nested_docker Sysbox 双 Profile、细粒度网络出口和最小 OpenCode 权限仍按后续独立条目验收，不能因 Worker 已可观测而提前视为完成。
