@@ -4,6 +4,51 @@ import sqlite3
 from typing import Any
 
 from ai4sec_platform.core.time import utc_now
+
+
+REPRO_TERMINAL_STATUSES = frozenset({"success", "partial", "failed", "timeout", "stopped"})
+REPRO_STATUSES = frozenset({"queued", "running", *REPRO_TERMINAL_STATUSES, "cleaned"})
+_REPRO_TRANSITIONS = {
+    "queued": frozenset({"running", "stopped"}),
+    "running": REPRO_TERMINAL_STATUSES,
+    "success": frozenset({"cleaned"}),
+    "partial": frozenset({"cleaned"}),
+    "failed": frozenset({"cleaned"}),
+    "timeout": frozenset({"cleaned"}),
+    "stopped": frozenset({"cleaned"}),
+    "cleaned": frozenset(),
+}
+
+
+class ReproStateTransitionError(RuntimeError):
+    pass
+
+
+def transition_repro_task(
+    conn: sqlite3.Connection,
+    *,
+    task_id: int,
+    status: str,
+    fields: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    row = conn.execute("SELECT status FROM capability_repro_tasks WHERE id = ?", (task_id,)).fetchone()
+    if not row:
+        raise ReproStateTransitionError(f"repro task not found: {task_id}")
+    current = str(row["status"])
+    if status not in REPRO_STATUSES:
+        raise ReproStateTransitionError(f"unknown repro task status: {status}")
+    if status != current and status not in _REPRO_TRANSITIONS.get(current, frozenset()):
+        raise ReproStateTransitionError(f"invalid repro task transition: {current} -> {status}")
+    updates = dict(fields or {})
+    updates["status"] = status
+    updates["updated_at"] = utc_now()
+    assignments = ", ".join(f"{name} = ?" for name in updates)
+    conn.execute(
+        f"UPDATE capability_repro_tasks SET {assignments} WHERE id = ?",
+        [*updates.values(), task_id],
+    )
+    updated = conn.execute("SELECT * FROM capability_repro_tasks WHERE id = ?", (task_id,)).fetchone()
+    return dict(updated)
 from ai4sec_platform.pipelines.jobs import is_execution_kill_switch_active
 
 
@@ -135,19 +180,31 @@ def request_repro_cleanup(conn: sqlite3.Connection, task_id: int) -> str | None:
     return "cancelling" if row and row["status"] == "running" else "cleanup_queued"
 
 
-def reconcile_interrupted_repro_tasks(conn: sqlite3.Connection) -> list[dict[str, Any]]:
+def reconcile_interrupted_repro_tasks(
+    conn: sqlite3.Connection,
+    *,
+    recovered_outcomes: dict[int, dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
     rows = conn.execute("SELECT * FROM capability_repro_tasks WHERE status = 'running'").fetchall()
     now = utc_now()
-    if rows:
-        conn.execute(
-            """
-            UPDATE capability_repro_tasks
-            SET status = 'failed', result = 'repro worker interrupted; task was not replayed automatically',
-                finished_at = ?, updated_at = ?, worker_id = '', heartbeat_at = ''
-            WHERE status = 'running'
-            """,
-            (now, now),
-        )
+    outcomes = recovered_outcomes or {}
+    for row in rows:
+        task_id = int(row["id"])
+        outcome = outcomes.get(task_id, {})
+        status = str(outcome.get("status") or "failed")
+        fields = {
+            "result": str(
+                outcome.get("result")
+                or "repro worker interrupted; task was not replayed automatically"
+            )[:10000],
+            "finished_at": now,
+            "worker_id": "",
+            "heartbeat_at": "",
+            "cleanup_requested": 1,
+        }
+        if outcome.get("report_json"):
+            fields["report_json"] = str(outcome["report_json"])
+        transition_repro_task(conn, task_id=task_id, status=status, fields=fields)
     conn.execute(
         "UPDATE capability_repro_tasks SET cleanup_requested = 1, updated_at = ? WHERE cleanup_requested = 2",
         (now,),

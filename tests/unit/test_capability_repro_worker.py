@@ -12,10 +12,12 @@ from ai4sec_platform.db.models import init_db
 from ai4sec_platform.db.session import connect
 from ai4sec_platform.domains.capabilities import repro_worker as worker_module
 from ai4sec_platform.domains.capabilities.repro_jobs import (
+    ReproStateTransitionError,
     claim_next_repro_task,
     reconcile_interrupted_repro_tasks,
     request_repro_cleanup,
     request_repro_stop,
+    transition_repro_task,
 )
 from ai4sec_platform.domains.capabilities.repro_worker import CapabilityReproWorker
 from ai4sec_platform.pipelines.jobs import set_execution_kill_switch
@@ -92,6 +94,49 @@ def test_recovery_requeues_interrupted_cleanup(tmp_path: Path) -> None:
         task = repo.get_repro_task(conn, task_id)
 
     assert task and task["cleanup_requested"] == 1
+
+
+def test_repro_state_machine_rejects_invalid_transition(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    task_id = _create_task(settings)
+
+    with connect(settings) as conn:
+        try:
+            transition_repro_task(conn, task_id=task_id, status="success")
+        except ReproStateTransitionError as exc:
+            assert "queued -> success" in str(exc)
+        else:
+            raise AssertionError("invalid transition was accepted")
+
+
+def test_recovery_accepts_completed_report_and_schedules_cleanup(monkeypatch, tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    task_id = _create_task(settings)
+    report = {
+        "status": "success",
+        "summary": "core workflow verified",
+        "evidence": ["command exited successfully"],
+        "limitations": [],
+    }
+    with connect(settings) as conn:
+        claim_next_repro_task(conn, worker_id="dead-worker", task_id=task_id)
+        repo.update_repro_task(
+            conn,
+            task_id=task_id,
+            log=f"some output\n```json\n{__import__('json').dumps(report)}\n```",
+        )
+        conn.commit()
+
+    monkeypatch.setattr(worker_module, "_safe_run", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(CapabilityReproWorker, "_cleanup_resources", lambda *_args: None)
+    recovered = CapabilityReproWorker(settings).recover()
+
+    assert recovered == [task_id]
+    with connect(settings) as conn:
+        task = repo.get_repro_task(conn, task_id)
+    assert task and task["status"] == "success"
+    assert task["cleanup_requested"] == 1
+    assert "recovered completed report" in task["result"]
 
 
 def test_worker_executes_claimed_task_without_api_thread(monkeypatch, tmp_path: Path) -> None:
@@ -216,6 +261,62 @@ def test_start_api_only_queues_task(tmp_path: Path) -> None:
 
     duplicate = TestClient(app).post(f"/api/capabilities/items/{item_id}/start-repro", json={"web": False})
     assert duplicate.status_code == 409
+
+
+def test_repro_stop_and_cleanup_apis_persist_requests(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    task_id = _create_task(settings)
+    app = create_app()
+
+    def override_db():
+        with connect(settings) as conn:
+            init_db(conn)
+            yield conn
+            conn.commit()
+
+    app.dependency_overrides[get_db] = override_db
+    client = TestClient(app)
+
+    stopped = client.post(f"/api/capabilities/repro/{task_id}/stop")
+    cleanup = client.post(f"/api/capabilities/repro/{task_id}/cleanup")
+
+    assert stopped.status_code == 200
+    assert stopped.json()["status"] == "stopped"
+    assert cleanup.status_code == 200
+    assert cleanup.json()["status"] == "cleanup_queued"
+    with connect(settings) as conn:
+        task = repo.get_repro_task(conn, task_id)
+    assert task and task["status"] == "stopped"
+    assert task["cancel_requested"] == 1
+    assert task["cleanup_requested"] == 1
+
+
+def test_repro_sse_stream_uses_request_database_and_closes_on_terminal_task(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    task_id = _create_task(settings, status="failed")
+    with connect(settings) as conn:
+        repo.update_repro_task(
+            conn,
+            task_id=task_id,
+            log="✓ cloned\n✗ verification failed\n",
+            report_json="invalid-json",
+        )
+        conn.commit()
+    app = create_app()
+
+    def override_db():
+        with connect(settings) as conn:
+            init_db(conn)
+            yield conn
+
+    app.dependency_overrides[get_db] = override_db
+    response = TestClient(app).get(f"/api/capabilities/repro/{task_id}/logs/stream")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/event-stream")
+    assert response.text.count("event: log") == 2
+    assert '"status": "failed", "report": null' in response.text
+    assert response.text.endswith("event: end\ndata: {}\n\n")
 
 
 def test_capability_ops_endpoints_read_persisted_state(tmp_path: Path) -> None:

@@ -4,6 +4,7 @@ import fcntl
 import json
 from pathlib import Path
 import shutil
+import subprocess
 import time
 from typing import Any, TextIO
 
@@ -14,13 +15,22 @@ from ai4sec_platform.db import repositories as repo
 from ai4sec_platform.db.models import init_db
 from ai4sec_platform.db.session import connect
 from ai4sec_platform.domains.capabilities.adapters.repro_results import update_capability_from_report
-from ai4sec_platform.domains.capabilities.adapters.repro_runner import ReproRunner, _safe_run, validate_repro_runtime_config
+from ai4sec_platform.domains.capabilities.adapters.repro_runner import (
+    ReproRunner,
+    _safe_run,
+    enforce_report_acceptance,
+    extract_report,
+    task_status_from_report,
+    validate_repro_runtime_config,
+)
 from ai4sec_platform.domains.capabilities.repro_jobs import (
+    REPRO_TERMINAL_STATUSES,
     claim_cleanup_request,
     claim_next_repro_task,
     heartbeat_repro_task,
     is_repro_cancel_requested,
     reconcile_interrupted_repro_tasks,
+    transition_repro_task,
 )
 from ai4sec_platform.pipelines.jobs import is_execution_kill_switch_active
 
@@ -41,7 +51,20 @@ class CapabilityReproWorker:
     def _recover(self) -> list[int]:
         with connect(self.settings) as conn:
             init_db(conn)
-            interrupted = reconcile_interrupted_repro_tasks(conn)
+            running = [
+                dict(row)
+                for row in conn.execute(
+                    "SELECT * FROM capability_repro_tasks WHERE status = 'running' ORDER BY id"
+                ).fetchall()
+            ]
+            outcomes = {int(task["id"]): self._recovery_outcome(task) for task in running}
+            interrupted = reconcile_interrupted_repro_tasks(conn, recovered_outcomes=outcomes)
+            for task in interrupted:
+                outcome = outcomes[int(task["id"])]
+                report = outcome.get("report")
+                if report:
+                    update_capability_from_report(conn, item_id=int(task["item_id"]), report=report)
+            conn.commit()
         for task in interrupted:
             self._cleanup_resources(task)
         return [int(task["id"]) for task in interrupted]
@@ -91,10 +114,10 @@ class CapabilityReproWorker:
                 conn.commit()
 
         def on_status(status: str, **values: Any) -> None:
-            fields: dict[str, Any] = {"status": status}
+            fields: dict[str, Any] = {}
             if "result" in values:
                 fields["result"] = str(values["result"])[:10000]
-            if status in {"success", "partial", "failed", "timeout", "stopped"}:
+            if status in REPRO_TERMINAL_STATUSES:
                 fields["finished_at"] = utc_now()
                 fields["worker_id"] = ""
                 fields["heartbeat_at"] = ""
@@ -107,7 +130,7 @@ class CapabilityReproWorker:
                 fields["web_url"] = values["web_url"]
             with connect(self.settings) as conn:
                 init_db(conn)
-                repo.update_repro_task(conn, task_id=task_id, **fields)
+                transition_repro_task(conn, task_id=task_id, status=status, fields=fields)
                 if report:
                     update_capability_from_report(conn, item_id=int(task["item_id"]), report=report)
                 conn.commit()
@@ -150,14 +173,16 @@ class CapabilityReproWorker:
     def _fail_task(self, task: dict[str, Any], error: Exception) -> None:
         with connect(self.settings) as conn:
             init_db(conn)
-            repo.update_repro_task(
+            transition_repro_task(
                 conn,
                 task_id=int(task["id"]),
                 status="failed",
-                result=f"repro worker error: {error}"[:10000],
-                finished_at=utc_now(),
-                worker_id="",
-                heartbeat_at="",
+                fields={
+                    "result": f"repro worker error: {error}"[:10000],
+                    "finished_at": utc_now(),
+                    "worker_id": "",
+                    "heartbeat_at": "",
+                },
             )
             conn.commit()
 
@@ -170,16 +195,47 @@ class CapabilityReproWorker:
         self._cleanup_resources(task)
         with connect(self.settings) as conn:
             init_db(conn)
-            repo.update_repro_task(
+            transition_repro_task(
                 conn,
                 task_id=int(task["id"]),
                 status="cleaned",
-                cleaned_at=utc_now(),
-                cleanup_requested=0,
-                worker_id="",
-                heartbeat_at="",
+                fields={
+                    "cleaned_at": utc_now(),
+                    "cleanup_requested": 0,
+                    "worker_id": "",
+                    "heartbeat_at": "",
+                },
             )
             conn.commit()
+
+    @staticmethod
+    def _recovery_outcome(task: dict[str, Any]) -> dict[str, Any]:
+        report = enforce_report_acceptance(extract_report(str(task.get("log") or "")))
+        if report:
+            return {
+                "status": task_status_from_report(report),
+                "result": "recovered completed report after repro worker interruption",
+                "report": report,
+                "report_json": json.dumps(report, ensure_ascii=False),
+            }
+        container_name = str(task.get("container_name") or "")
+        container_alive = False
+        if container_name:
+            try:
+                inspected = _safe_run(
+                    ["docker", "inspect", "--format", "{{.State.Running}}", container_name],
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                )
+                container_alive = inspected.returncode == 0 and str(inspected.stdout).strip().lower() == "true"
+            except (OSError, subprocess.TimeoutExpired):
+                container_alive = False
+        detail = "running orphan container found and scheduled for cleanup" if container_alive else "no running container found"
+        return {
+            "status": "failed",
+            "result": f"repro worker interrupted; {detail}; task was not replayed automatically",
+        }
 
     @staticmethod
     def _cleanup_resources(task: dict[str, Any]) -> None:

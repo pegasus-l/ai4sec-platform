@@ -198,6 +198,8 @@ async def stream_repro_logs(task_id: int, request: Request, conn: sqlite3.Connec
     task = repo.get_repro_task(conn, task_id)
     if not task:
         raise HTTPException(status_code=404, detail="repro task not found")
+    database_row = conn.execute("PRAGMA database_list").fetchone()
+    database_path = str(database_row["file"])
 
     async def event_generator():
         last_len = 0
@@ -205,8 +207,8 @@ async def stream_repro_logs(task_id: int, request: Request, conn: sqlite3.Connec
             # 重新查 task（因为 conn 可能被其他线程修改，这里每次新建查询）
             # 注意: Depends(get_db) 的 conn 在 async 生成器里可能已关闭，
             #       改为直接用 session.connect 新建连接
-            from ai4sec_platform.db.session import connect as db_connect
-            local_conn = db_connect()
+            local_conn = sqlite3.connect(database_path, timeout=5, check_same_thread=False)
+            local_conn.row_factory = sqlite3.Row
             try:
                 row = local_conn.execute("SELECT * FROM capability_repro_tasks WHERE id = ?", (task_id,)).fetchone()
             finally:
@@ -229,7 +231,10 @@ async def stream_repro_logs(task_id: int, request: Request, conn: sqlite3.Connec
             status = task_dict.get("status", "queued")
             if status in ("success", "partial", "failed", "timeout", "stopped", "cleaned"):
                 report_json = task_dict.get("report_json") or "{}"
-                report_data = json.loads(report_json) if report_json and report_json != "{}" else None
+                try:
+                    report_data = json.loads(report_json) if report_json and report_json != "{}" else None
+                except (TypeError, json.JSONDecodeError):
+                    report_data = None
                 status_data = json.dumps({"status": status, "report": report_data}, ensure_ascii=False)
                 yield f"event: status\ndata: {status_data}\n\n"
                 yield f"event: end\ndata: {{}}\n\n"

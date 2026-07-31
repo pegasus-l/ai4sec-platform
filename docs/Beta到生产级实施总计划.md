@@ -898,8 +898,8 @@ D11 暂缓的是公网入口和完整公网暴露治理，不代表复现容器�
 
 #### 3B. 能力洞察
 
-- [ ] 固定复现状态转换和所有异常收尾路径。
-- [ ] 实现启动时容器、任务、报告状态对账。
+- [x] 固定复现状态转换和所有异常收尾路径。
+- [x] 实现启动时容器、任务、报告状态对账。
 - [ ] 声明任务资源、日志、重试和并发配额。
 - [ ] 完成独立受限复现 Worker 接入。
 - [ ] 建立 Model Gateway 短期任务令牌，不向复现容器注入真实 Provider Key。
@@ -1986,3 +1986,12 @@ Python full test suite: 199 passed
 - 第 1 个合格周期指标：arXiv 1678、GitHub 843、WeRSS 300、ASIS 100、Awesome 5，共采集 2926 条；引用/规范化 3200 条，去重后 2807 条，重复率 12.28%；门控 40 条，通过 4、待观察 1；深评 5 条，selected 4、watch 1；Schema 通过率 100%，最终 4 条入库并生成日报，质量审计得分 1.0。
 - 当前验收状态为 `in_progress`，合格业务日期 `1/3`，`ready_to_start_cycle=true`。前面因 OOM、租约、元数据和模型输出失败的 Run 保留审计，但不计入合格周期。
 - 新增回归覆盖 WeRSS 已扫描整页早停、正文上限、日更查询轮换、日更默认边界、多请求元数据、采集事务模式、heartbeat 锁恢复、恢复链验收聚合和 reasoning 包裹 JSON；全仓 Python 测试 310 passed，`compileall` 与 `git diff --check` 通过。
+
+### 2026-07-31：能力复现状态机与启动对账
+
+- 明确定义能力复现任务状态集合 `queued/running/success/partial/failed/timeout/stopped/cleaned` 及合法转换；重复写入当前状态保持幂等，跳过运行态直接成功、终态回到运行态和未知状态均被拒绝。
+- Worker 的 Runner 回调、异常收尾和资源清理统一经过状态转换契约，不再通过通用字段更新任意改写状态；Runner 崩溃仍可靠收尾为 `failed` 并清空 Worker 与 heartbeat 占用。
+- Worker 启动时对所有遗留 `running` 任务执行报告、容器和任务三方对账。日志中已有通过正式验收规则的结构化报告时，恢复为报告对应的 `success` 或 `partial` 并回写能力卡；没有合格报告时安全标记 `failed`，不自动重放可能产生副作用的复现任务。
+- 启动对账会通过 Docker inspect 区分仍存活的孤儿容器与已消失容器，并将两者都纳入持久清理队列；恢复策略明确选择“安全失败、人工重试”，因为 Worker 重启后无法可靠重新附着原 OpenCode 子进程及完整 stdout，盲目续接会造成双重执行。
+- SSE 日志流改为绑定本次 API 请求实际使用的 SQLite 数据库，而不是在生成器内重新加载默认配置；终态任务会依次发送历史日志、status 和 end，损坏的历史 `report_json` 降级为 `null`，不再中断整个流。
+- 新增状态非法转换、完整报告恢复、停止 API、清理 API、终态 SSE 和错误报告 JSON 回归；能力专项测试 69 passed，全仓 Python 测试 314 passed，`compileall` 与 `git diff --check` 通过。
