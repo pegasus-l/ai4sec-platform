@@ -37,8 +37,24 @@ class AsisConnector(NewsLiveConnector):
             raw = json.loads(raw_text)
             raw_items = raw if isinstance(raw, list) else raw.get("items") or []
             min_score = int(request.config.get("min_score") or 0)
-            items = [_normalize_item(item) for item in raw_items if isinstance(item, dict) and int(item.get("score_total") or 0) >= min_score]
-            return SourceFetchResult(source_name=request.source_name, connector_name=self.connector_name, items=items, raw_text=raw_text, metadata={"base_url": base_url, "limit": limit, "total_fetched": len(raw_items), "min_score": min_score})
+            incremental_state = request.params.get("incremental_state") or {}
+            state_ids = [str(value) for value in incremental_state.get("scanned_ids") or []]
+            scanned_ids = set(state_ids)
+            state_max_ids = max(100, int(request.config.get("state_max_ids") or 20_000))
+            items = []
+            for item in raw_items:
+                if not isinstance(item, dict):
+                    continue
+                item_id = item.get("id")
+                if item_id is None or str(item_id).strip() == "":
+                    continue
+                state_id = f"asis:{item_id}"
+                if state_id not in scanned_ids and int(item.get("score_total") or 0) >= min_score:
+                    items.append(_normalize_item(item))
+                if state_id not in scanned_ids:
+                    scanned_ids.add(state_id)
+                    state_ids.append(state_id)
+            return SourceFetchResult(source_name=request.source_name, connector_name=self.connector_name, items=items, raw_text=raw_text, metadata={"base_url": base_url, "limit": limit, "total_fetched": len(raw_items), "min_score": min_score, "next_incremental_state": {"scanned_ids": state_ids[-state_max_ids:]}})
         except Exception as exc:
             return SourceFetchResult(source_name=request.source_name, connector_name=self.connector_name, metadata={"base_url": base_url}, errors=[str(exc)])
 

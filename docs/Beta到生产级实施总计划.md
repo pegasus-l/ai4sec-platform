@@ -886,8 +886,8 @@ D11 暂缓的是公网入口和完整公网暴露治理，不代表复现容器�
 - [x] 将历史导入改为受控一次性迁移命令。
 - [x] 在线连接器与本地 JSON 基类解耦。
 - [x] X 当前正式禁用：仓库未配置可用凭据，原 GetXAPI 方案不可用；替换服务完成连通性、认证、额度和样本质量验收前不得重新启用。
-- [ ] 六源真实健康检查、超时错误分类已完成；分页、业务重试和各源增量规则仍待逐源验收。
-- [ ] 建立 RSS/X/ASIS 等正式水位线。
+- [ ] 六源真实健康检查、超时错误分类已完成；分页和业务重试仍待逐源验收。
+- [x] RSS、ASIS 已建立 SQLite 正式水位线；X 当前禁用，替换 Provider 必须按同一契约实现来源 ID 水位线后才能启用。
 - [ ] 完成资讯、日报、ModelCall 幂等。
 - [ ] 定义采集、门控、评审、日报失败重跑语义。
 - [ ] 建立模型 Schema 失败降级和人工队列。
@@ -1882,7 +1882,7 @@ Python full test suite: 199 passed
 - 新增 `import_news_legacy_raw` 一次性迁移 CLI，必须显式提供源目录、日期和确认参数；不允许重置资讯域，通过单机文件锁防止并发导入，同一日期与文件内容 checksum 成功后禁止重复导入。
 - 历史文件读取物理隔离到 `domains/news/migrations.py`，删除旧 `adapters/ai_for_sec_raw.py`；迁移源绝对路径不写入可查询 Run 参数。
 - arXiv、GitHub、RSS、X、ASIS 和 Awesome 在线连接器不再继承 `JsonFileConnector`，正式 source adapter 不再接受 `legacy_raw`/`fixture` 模式。
-- RSS 增量状态只读取平台 `output/source_state/rss.json`，不再回退旧系统 `state_rss.json`。
+- RSS 在本批次先停止回退旧系统 `state_rss.json`；后续 migration v10 已进一步删除平台 JSON 状态文件并迁移到 SQLite 水位线。
 - 资讯迁移、API、架构、在线连接器和资讯模块聚焦测试 39 passed；全仓 Python 测试 267 passed，`compileall` 与 `git diff --check` 通过。
 
 ### 2026-07-30：X 数据源正式禁用
@@ -1904,3 +1904,14 @@ Python full test suite: 199 passed
 - 运营接口按时间叠加最新健康记录，保留原采集摘要；页面展示最近探测、最近成功、连续失败和探测延迟。
 - 健康探测专项测试覆盖禁用持久化、成功探测、错误分类、连续失败累加和成功清零；额度具体剩余量仍取决于替换 Provider 是否提供可读取的 quota 字段。
 - 数据库/健康/资讯聚焦测试 51 passed；全仓 Python 测试 273 passed，前端生产构建、`compileall` 与 `git diff --check` 通过。
+
+### 2026-07-30：RSS 与 ASIS 正式增量水位线
+
+- 新增 migration v10 `source_incremental_states`，按 `domain + source + state_key` 唯一保存连接器当前水位线；当前资讯域使用 `default` 状态键。
+- RSS 删除本地 `output/source_state/rss.json` 读写，只接收 Pipeline 注入的 `incremental_state.scanned_ids`；ASIS 同样按稳定来源 ID 过滤已扫描条目，低于评分阈值的有效条目也会标记为已扫描，避免每日重复扫描。
+- `CollectNewsSourcesStep` 在步骤开始时读取全部资讯来源状态，在连接器无错误时 upsert 下一状态；水位线、采集 Artifact 和步骤状态受同一 savepoint 保护，步骤失败会共同回滚。
+- 连接器出现任一错误时不推进该来源水位线，防止部分分页失败造成漏采；独立健康探测不持久化连接器返回的下一状态，因此不会消耗正式日更数据。
+- 每个来源默认最多保留 20,000 个已扫描 ID，可通过连接器 `state_max_ids` 调整但下限为 100，避免状态无限增长。
+- 普通 `reset_domain(news)` 有意保留增量水位线，避免运维重置导致历史数据和模型调用大规模回放；确需全量重采时必须先备份，再显式删除目标来源状态，不能把该行为混入日常 reset。
+- X 继续保持 disabled；未来替换 Provider 除真实健康、认证和额度验收外，还必须返回同一 `next_incremental_state` 契约。
+- RSS/ASIS/数据库增量专项测试 50 passed；全仓 Python 测试 276 passed，`compileall` 与 `git diff --check` 通过。

@@ -11,6 +11,7 @@ from ai4sec_platform.domains.news.dedupe import dedupe_normalized_items
 from ai4sec_platform.domains.news.normalizers import normalize_raw_item
 from ai4sec_platform.domains.news.references import extract_source_records
 from ai4sec_platform.domains.news.links import resolve_candidate_links
+from ai4sec_platform.domains.news.incremental_state import load_news_incremental_states, save_news_incremental_state
 from ai4sec_platform.domains.news.reviewer import enrich_candidates, gate_candidates
 from ai4sec_platform.domains.news import repository as news_repo
 from ai4sec_platform.pipelines.context import PipelineContext
@@ -25,7 +26,13 @@ class CollectNewsSourcesStep:
     def run(self, context: PipelineContext) -> StepResult:
         if "mode" not in context.params:
             context.params["mode"] = "shadow"
-        records = collect_news_sources(context.settings, context.params)
+        collection_params = {**context.params, "_incremental_states": load_news_incremental_states(context.conn)}
+        records = collect_news_sources(context.settings, collection_params)
+        for record in records:
+            metadata = record.get("metadata") or {}
+            next_state = metadata.get("next_incremental_state") if isinstance(metadata, dict) else None
+            if isinstance(next_state, dict) and not record.get("errors"):
+                save_news_incremental_state(context.conn, str(record["source"]), next_state)
         return persist_news_source_records(context, records)
 
 

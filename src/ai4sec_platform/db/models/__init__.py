@@ -170,6 +170,17 @@ CREATE TABLE IF NOT EXISTS source_health_checks (
 CREATE INDEX IF NOT EXISTS idx_source_health_source_recent ON source_health_checks(domain, source, id DESC);
 CREATE INDEX IF NOT EXISTS idx_source_health_status_recent ON source_health_checks(status, id DESC);
 
+CREATE TABLE IF NOT EXISTS source_incremental_states (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    domain TEXT NOT NULL,
+    source TEXT NOT NULL,
+    state_key TEXT NOT NULL DEFAULT 'default',
+    state_json TEXT NOT NULL DEFAULT '{}',
+    updated_at TEXT NOT NULL,
+    UNIQUE(domain, source, state_key)
+);
+CREATE INDEX IF NOT EXISTS idx_source_incremental_domain_source ON source_incremental_states(domain, source);
+
 CREATE TABLE IF NOT EXISTS task_runs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     run_id TEXT NOT NULL,

@@ -96,6 +96,15 @@ MIGRATIONS: tuple[Migration, ...] = (
             "last_success_at,details_json,checked_at);indexes source_recent,status_recent"
         ),
     ),
+    Migration(
+        version=10,
+        name="add_source_incremental_state",
+        apply=lambda conn: _add_source_incremental_state(conn),
+        checksum_source=(
+            "source_incremental_states(domain,source,state_key,state_json,updated_at);"
+            "unique domain/source/state_key;index domain/source"
+        ),
+    ),
 )
 
 
@@ -292,3 +301,20 @@ def _add_source_health_history(conn: sqlite3.Connection) -> None:
     )
     conn.execute("CREATE INDEX IF NOT EXISTS idx_source_health_source_recent ON source_health_checks(domain, source, id DESC)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_source_health_status_recent ON source_health_checks(status, id DESC)")
+
+
+def _add_source_incremental_state(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS source_incremental_states (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            domain TEXT NOT NULL,
+            source TEXT NOT NULL,
+            state_key TEXT NOT NULL DEFAULT 'default',
+            state_json TEXT NOT NULL DEFAULT '{}',
+            updated_at TEXT NOT NULL,
+            UNIQUE(domain, source, state_key)
+        )
+        """
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_source_incremental_domain_source ON source_incremental_states(domain, source)")

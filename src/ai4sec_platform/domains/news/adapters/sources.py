@@ -72,9 +72,10 @@ def _collect_live_source(settings: Settings, source: str, source_config: dict[st
                 time.sleep(delay)
         items = _dedupe_collected_items(source, items)
         return {"source": source, "path": f"connector:{source}", "exists": True, "mode": mode, "items": items, "errors": errors, "metadata": metadata}
-    source_params: dict[str, Any] = {"timeout_seconds": params.get("timeout_seconds", 30)}
-    if source == "rss":
-        source_params["state_path"] = str(settings.output_dir / "source_state" / "rss.json")
+    source_params: dict[str, Any] = {
+        "timeout_seconds": params.get("timeout_seconds", 30),
+        "incremental_state": (params.get("_incremental_states") or {}).get(source, {}),
+    }
     result = connector.fetch(SourceFetchRequest(source_name=source, config=source_config, params=source_params))
     return {"source": source, "path": f"connector:{source}", "exists": True, "mode": mode, "items": result.items, "errors": result.errors, "metadata": result.metadata}
 

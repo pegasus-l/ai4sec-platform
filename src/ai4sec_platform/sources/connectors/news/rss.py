@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 import xml.etree.ElementTree as ET
 import urllib.parse
 
@@ -24,8 +23,10 @@ class RssConnector(NewsLiveConnector):
         errors: list[str] = []
         feed_metrics: list[dict] = []
         timeout = int(request.params.get("timeout_seconds") or 30)
-        state_path = Path(str(request.params.get("state_path") or "")) if request.params.get("state_path") else None
-        scanned_ids = _load_scanned_ids(state_path)
+        incremental_state = request.params.get("incremental_state") or {}
+        state_ids = [str(value) for value in incremental_state.get("scanned_ids") or []]
+        scanned_ids = set(state_ids)
+        state_max_ids = max(100, int(request.config.get("state_max_ids") or 20_000))
         initial_scanned_count = len(scanned_ids)
         for feed in feeds:
             feed_config = feed if isinstance(feed, dict) else {"name": str(feed), "url": str(feed)}
@@ -55,7 +56,10 @@ class RssConnector(NewsLiveConnector):
                 if page_key in seen_page_keys:
                     break
                 seen_page_keys.add(page_key)
-                scanned_ids.update(page_ids)
+                for page_id in page_ids:
+                    if page_id not in scanned_ids:
+                        scanned_ids.add(page_id)
+                        state_ids.append(page_id)
                 for item in page_items:
                     if not item.get("text") and item.get("feed_item_id") and feed_config.get("article_api_base"):
                         item["text"] = self._fetch_article_text(str(feed_config["article_api_base"]), str(item["feed_item_id"]), timeout=min(timeout, 15))
@@ -65,9 +69,13 @@ class RssConnector(NewsLiveConnector):
                 page += 1
             items.extend(feed_items)
             feed_metrics.append({"name": feed_config.get("name") or url, "url": url, "pages": pages, "new_items": len(feed_items), "scanned_items": len(scanned_ids) - initial_scanned_count})
-        if state_path and not errors:
-            _save_scanned_ids(state_path, scanned_ids)
-        return SourceFetchResult(source_name=request.source_name, connector_name=self.connector_name, items=items, metadata={"feeds": feed_metrics}, errors=errors)
+        return SourceFetchResult(
+            source_name=request.source_name,
+            connector_name=self.connector_name,
+            items=items,
+            metadata={"feeds": feed_metrics, "next_incremental_state": {"scanned_ids": state_ids[-state_max_ids:]}},
+            errors=errors,
+        )
 
     def _fetch_article_text(self, api_base: str, feed_item_id: str, *, timeout: int) -> str:
         try:
@@ -140,23 +148,6 @@ def _page_url(url: str, offset: int) -> str:
 
 def _state_id(link: str, source_type: str) -> str:
     return f"rss:{source_type}:{urllib.parse.quote(link, safe='')[:120]}"
-
-
-def _load_scanned_ids(state_path: Path | None) -> set[str]:
-    if state_path and state_path.exists():
-        try:
-            data = json.loads(state_path.read_text(encoding="utf-8"))
-            return {str(value) for value in data.get("scanned_rss_ids") or []}
-        except Exception:
-            return set()
-    return set()
-
-
-def _save_scanned_ids(state_path: Path, scanned_ids: set[str]) -> None:
-    state_path.parent.mkdir(parents=True, exist_ok=True)
-    temporary_path = state_path.with_suffix(".tmp")
-    temporary_path.write_text(json.dumps({"scanned_rss_ids": sorted(scanned_ids)}, ensure_ascii=False), encoding="utf-8")
-    temporary_path.replace(state_path)
 
 
 def _find_namespaced_text(node: ET.Element, suffix: str) -> str:

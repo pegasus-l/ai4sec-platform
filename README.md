@@ -90,6 +90,8 @@ PYTHONPATH=src python3 -m ai4sec_platform.cli.news_health
 PYTHONPATH=src python3 -m ai4sec_platform.cli.news_health --source arxiv --source github --timeout-seconds 10
 ```
 
+RSS 和 ASIS 的已扫描来源 ID 保存在 SQLite `source_incremental_states` 表，不再使用本地 JSON 状态文件。水位线与采集步骤的 Artifact 在同一事务中提交；连接器返回错误时不推进水位线，健康探测也不会修改水位线。状态默认每个来源最多保留 20,000 个 ID。普通资讯域 reset 会保留水位线，防止运维重置后回放全部历史数据；确需全量重采时应先备份数据库，再由管理员显式清理对应来源状态。X 当前禁用，未来替换 Provider 必须接入同一状态契约后才能启用。
+
 数据库初始化会创建 `schema_migrations` 并按版本顺序执行迁移。迁移名称和 checksum 已写入历史后不可静默修改；版本不匹配或迁移失败会阻止启动并回滚当前版本。生产升级前仍应先执行数据库备份，再启动新版本 API 和 Worker。
 
 在线创建一致性备份并校验：

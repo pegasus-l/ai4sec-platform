@@ -23,6 +23,7 @@ from ai4sec_platform.domains.news import service
 from ai4sec_platform.domains.news.adapters import sources as source_adapter
 from ai4sec_platform.domains.news.adapters.sources import _arxiv_requests, _github_requests
 from ai4sec_platform.schemas.sources import SourceFetchRequest
+from ai4sec_platform.sources.connectors.news.asis import AsisConnector
 from ai4sec_platform.sources.connectors.news.rss import RssConnector
 from ai4sec_platform.sources.connectors.news.awesome import AwesomeConnector
 from ai4sec_platform.sources.result import SourceFetchResult
@@ -142,19 +143,50 @@ def test_werss_pagination_and_article_content_fallback(monkeypatch) -> None:
     assert {reference["source_type"] for reference in references} == {"paper", "project"}
 
 
-def test_werss_legacy_state_filters_seen_articles(monkeypatch, tmp_path) -> None:
-    state_path = tmp_path / "rss.json"
-    state_path.write_text('{"scanned_rss_ids":["rss:wechat:https%3A%2F%2Fexample.com%2Fseen"]}', encoding="utf-8")
+def test_werss_incremental_state_filters_seen_articles(monkeypatch) -> None:
     feed = b"""<rss><channel>
       <item><title>Seen</title><link>https://example.com/seen</link><description>old</description></item>
       <item><title>New</title><link>https://example.com/new</link><description>https://github.com/acme/new</description></item>
     </channel></rss>"""
     connector = RssConnector()
     monkeypatch.setattr(connector, "get_bytes", lambda *_args, **_kwargs: feed)
-    result = connector.fetch(SourceFetchRequest(source_name="rss", config={"feeds": [{"url": "http://localhost/feed", "source_type": "wechat", "page_size": 30}]}, params={"state_path": str(state_path)}))
+    result = connector.fetch(SourceFetchRequest(
+        source_name="rss",
+        config={"feeds": [{"url": "http://localhost/feed", "source_type": "wechat", "page_size": 30}]},
+        params={"incremental_state": {"scanned_ids": ["rss:wechat:https%3A%2F%2Fexample.com%2Fseen"]}},
+    ))
     assert [item["title"] for item in result.items] == ["New"]
-    stored = state_path.read_text(encoding="utf-8")
-    assert "https%3A%2F%2Fexample.com%2Fnew" in stored
+    state_ids = result.metadata["next_incremental_state"]["scanned_ids"]
+    assert "rss:wechat:https%3A%2F%2Fexample.com%2Fseen" in state_ids
+    assert "rss:wechat:https%3A%2F%2Fexample.com%2Fnew" in state_ids
+
+
+def test_asis_incremental_state_filters_seen_items(monkeypatch) -> None:
+    class FakeResponse:
+        def __init__(self, content: bytes) -> None:
+            self.content = content
+
+        def read(self) -> bytes:
+            return self.content
+
+    class FakeOpener:
+        def open(self, request, timeout):
+            if request.full_url.endswith("/api/auth/login"):
+                return FakeResponse(b"ok")
+            return FakeResponse(b'{"items":[{"id":1,"title":"Seen","score_total":10},{"id":2,"title":"New","score_total":10},{"title":"Invalid","score_total":10}]}')
+
+    monkeypatch.setenv("ASIS_USERNAME", "operator")
+    monkeypatch.setenv("ASIS_PASSWORD", "secret")
+    monkeypatch.setattr("ai4sec_platform.sources.connectors.news.asis.urllib.request.build_opener", lambda *_args: FakeOpener())
+    result = AsisConnector().fetch(SourceFetchRequest(
+        source_name="asis",
+        config={"base_url": "https://asis.example", "min_score": 5},
+        params={"incremental_state": {"scanned_ids": ["asis:1"]}},
+    ))
+
+    assert result.errors == []
+    assert [item["id"] for item in result.items] == ["asis:2"]
+    assert result.metadata["next_incremental_state"]["scanned_ids"] == ["asis:1", "asis:2"]
 
 
 def test_awesome_loads_up_to_four_recent_research_subpages(monkeypatch) -> None:
