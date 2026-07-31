@@ -1,5 +1,7 @@
+const BASE = '/insights';  // ASIS 反代挂载路径
+
 export async function getJson<T>(path: string): Promise<T> {
-  const response = await fetch(path, { cache: 'no-store' });
+  const response = await fetch(BASE + path, { cache: 'no-store' });
   if (!response.ok) {
     throw new Error(`${path}: ${response.status}`);
   }
@@ -7,7 +9,7 @@ export async function getJson<T>(path: string): Promise<T> {
 }
 
 export async function postJson<T>(path: string, body?: unknown): Promise<T> {
-  const response = await fetch(path, {
+  const response = await fetch(BASE + path, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     cache: 'no-store',

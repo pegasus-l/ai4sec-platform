@@ -133,7 +133,7 @@ export async function rejectKnowledgeField(itemId: number, fieldName: string, bo
 }
 
 async function postFieldReview(itemId: number, fieldName: string, action: 'accept' | 'modify' | 'reject', body: FieldReviewRequest): Promise<FieldReviewResponse> {
-  const response = await fetch(`/api/vulnerabilities/knowledge/${itemId}/fields/${encodeURIComponent(fieldName)}/${action}`, {
+  const response = await fetch(`/insights/api/vulnerabilities/knowledge/${itemId}/fields/${encodeURIComponent(fieldName)}/${action}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
