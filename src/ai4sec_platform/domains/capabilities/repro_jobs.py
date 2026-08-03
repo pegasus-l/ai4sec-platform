@@ -8,8 +8,16 @@ from ai4sec_platform.core.time import utc_now
 
 
 REPRO_TERMINAL_STATUSES = frozenset({"success", "partial", "failed", "timeout", "stopped"})
-REPRO_STATUSES = frozenset({"awaiting_egress_approval", "queued", "running", *REPRO_TERMINAL_STATUSES, "cleaned"})
+REPRO_STATUSES = frozenset({
+    "awaiting_profile_approval",
+    "awaiting_egress_approval",
+    "queued",
+    "running",
+    *REPRO_TERMINAL_STATUSES,
+    "cleaned",
+})
 _REPRO_TRANSITIONS = {
+    "awaiting_profile_approval": frozenset({"awaiting_egress_approval", "queued", "stopped"}),
     "awaiting_egress_approval": frozenset({"queued", "stopped"}),
     "queued": frozenset({"running", "stopped"}),
     "running": REPRO_TERMINAL_STATUSES,
@@ -59,6 +67,7 @@ def claim_next_repro_task(
     *,
     worker_id: str,
     task_id: int | None = None,
+    execution_profile: str | None = None,
 ) -> dict[str, Any] | None:
     now = utc_now()
     conn.execute("BEGIN IMMEDIATE")
@@ -68,12 +77,17 @@ def claim_next_repro_task(
             return None
         sql = (
             "SELECT * FROM capability_repro_tasks "
-            "WHERE status = 'queued' AND cancel_requested = 0 AND cleanup_requested = 0"
+            "WHERE status = 'queued' AND cancel_requested = 0 AND cleanup_requested = 0 "
+            "AND (execution_profile != 'nested_docker' OR profile_approval_status = 'approved') "
+            "AND NOT EXISTS (SELECT 1 FROM capability_repro_tasks active WHERE active.status = 'running')"
         )
         params: list[Any] = []
         if task_id is not None:
             sql += " AND id = ?"
             params.append(task_id)
+        if execution_profile is not None:
+            sql += " AND execution_profile = ?"
+            params.append(execution_profile)
         sql += " ORDER BY created_at, id LIMIT 1"
         row = conn.execute(sql, params).fetchone()
         if not row:
@@ -84,6 +98,8 @@ def claim_next_repro_task(
             UPDATE capability_repro_tasks
             SET status = 'running', worker_id = ?, started_at = ?, heartbeat_at = ?, updated_at = ?
             WHERE id = ? AND status = 'queued' AND cancel_requested = 0 AND cleanup_requested = 0
+              AND (execution_profile != 'nested_docker' OR profile_approval_status = 'approved')
+              AND NOT EXISTS (SELECT 1 FROM capability_repro_tasks active WHERE active.status = 'running')
             """,
             (worker_id, now, now, now, row["id"]),
         )
@@ -98,7 +114,12 @@ def claim_next_repro_task(
         raise
 
 
-def claim_cleanup_request(conn: sqlite3.Connection, *, task_id: int | None = None) -> dict[str, Any] | None:
+def claim_cleanup_request(
+    conn: sqlite3.Connection,
+    *,
+    task_id: int | None = None,
+    execution_profile: str | None = None,
+) -> dict[str, Any] | None:
     conn.execute("BEGIN IMMEDIATE")
     try:
         sql = "SELECT * FROM capability_repro_tasks WHERE cleanup_requested = 1 AND status != 'running'"
@@ -106,6 +127,9 @@ def claim_cleanup_request(conn: sqlite3.Connection, *, task_id: int | None = Non
         if task_id is not None:
             sql += " AND id = ?"
             params.append(task_id)
+        if execution_profile is not None:
+            sql += " AND execution_profile = ?"
+            params.append(execution_profile)
         sql += " ORDER BY updated_at, id LIMIT 1"
         row = conn.execute(sql, params).fetchone()
         if not row:
@@ -210,7 +234,7 @@ def request_repro_stop(conn: sqlite3.Connection, task_id: int) -> str | None:
     queued = conn.execute(
         "UPDATE capability_repro_tasks SET status = 'stopped', cancel_requested = 1, "
         "finished_at = ?, updated_at = ? "
-        "WHERE id = ? AND status IN ('awaiting_egress_approval', 'queued')",
+        "WHERE id = ? AND status IN ('awaiting_profile_approval', 'awaiting_egress_approval', 'queued')",
         (now, now, task_id),
     )
     if queued.rowcount == 1:
@@ -246,8 +270,14 @@ def reconcile_interrupted_repro_tasks(
     conn: sqlite3.Connection,
     *,
     recovered_outcomes: dict[int, dict[str, Any]] | None = None,
+    execution_profile: str | None = None,
 ) -> list[dict[str, Any]]:
-    rows = conn.execute("SELECT * FROM capability_repro_tasks WHERE status = 'running'").fetchall()
+    sql = "SELECT * FROM capability_repro_tasks WHERE status = 'running'"
+    params: tuple[Any, ...] = ()
+    if execution_profile is not None:
+        sql += " AND execution_profile = ?"
+        params = (execution_profile,)
+    rows = conn.execute(sql, params).fetchall()
     now = utc_now()
     outcomes = recovered_outcomes or {}
     for row in rows:

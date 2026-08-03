@@ -1,0 +1,35 @@
+FROM ubuntu:22.04@sha256:ce4a593b4e323dcc3dd728e397e0a866a1bf516a1b7c31d6aa06991baec4f2e0
+
+ARG NODE_MAJOR=20
+ARG NODE_VERSION=20.20.2-1nodesource1
+ARG OPENCODE_VERSION=1.15.12
+ARG NPM_REGISTRY=https://registry.npmjs.org
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        curl \
+        git \
+        gnupg \
+        python3 \
+        python3-pip \
+        python3-venv \
+        unzip \
+    && install -m 0755 -d /etc/apt/keyrings \
+    && curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key \
+        | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg \
+    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_${NODE_MAJOR}.x nodistro main" \
+        > /etc/apt/sources.list.d/nodesource.list \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends nodejs="${NODE_VERSION}" \
+    && npm install --global "opencode-ai@${OPENCODE_VERSION}" \
+        --registry "${NPM_REGISTRY}" \
+        --fetch-retries 5 \
+        --fetch-timeout 600000 \
+    && install -d /workspace \
+    && rm -rf /var/lib/apt/lists/* /root/.npm
+
+WORKDIR /workspace
+CMD ["sleep", "infinity"]

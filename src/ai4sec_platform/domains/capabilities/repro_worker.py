@@ -41,6 +41,7 @@ from ai4sec_platform.domains.capabilities.repro_jobs import (
 )
 from ai4sec_platform.domains.capabilities.model_gateway import issue_task_model_token, revoke_task_model_tokens
 from ai4sec_platform.domains.capabilities.repro_policy import REPRO_WORKER_HEARTBEAT_SECONDS
+from ai4sec_platform.domains.capabilities.repro_profiles import REPRO_EXECUTION_PROFILES
 from ai4sec_platform.pipelines.jobs import is_execution_kill_switch_active
 
 
@@ -49,9 +50,18 @@ class ReproWorkerAlreadyRunningError(RuntimeError):
 
 
 class CapabilityReproWorker:
-    def __init__(self, settings: Settings | None = None, *, worker_id: str | None = None) -> None:
+    def __init__(
+        self,
+        settings: Settings | None = None,
+        *,
+        worker_id: str | None = None,
+        execution_profile: str = "standard",
+    ) -> None:
+        if execution_profile not in REPRO_EXECUTION_PROFILES:
+            raise ValueError(f"unknown reproduction execution profile: {execution_profile}")
         self.settings = settings or load_settings()
-        self.worker_id = worker_id or new_id("repro-worker")
+        self.execution_profile = execution_profile
+        self.worker_id = worker_id or new_id(f"repro-{execution_profile}-worker")
         self._last_worker_heartbeat = 0.0
 
     def recover(self) -> list[int]:
@@ -68,11 +78,17 @@ class CapabilityReproWorker:
             running = [
                 dict(row)
                 for row in conn.execute(
-                    "SELECT * FROM capability_repro_tasks WHERE status = 'running' ORDER BY id"
+                    "SELECT * FROM capability_repro_tasks "
+                    "WHERE status = 'running' AND execution_profile = ? ORDER BY id",
+                    (self.execution_profile,),
                 ).fetchall()
             ]
             outcomes = {int(task["id"]): self._recovery_outcome(task) for task in running}
-            interrupted = reconcile_interrupted_repro_tasks(conn, recovered_outcomes=outcomes)
+            interrupted = reconcile_interrupted_repro_tasks(
+                conn,
+                recovered_outcomes=outcomes,
+                execution_profile=self.execution_profile,
+            )
             for task in interrupted:
                 outcome = outcomes[int(task["id"])]
                 report = outcome.get("report")
@@ -84,7 +100,11 @@ class CapabilityReproWorker:
         return [int(task["id"]) for task in interrupted]
 
     def run_once(self, *, task_id: int | None = None) -> dict[str, Any] | None:
-        validate_repro_runtime_config(check_image=True, require_token=False)
+        validate_repro_runtime_config(
+            check_image=True,
+            require_token=False,
+            execution_profile=self.execution_profile,
+        )
         with self._worker_lock():
             self._register()
             try:
@@ -99,7 +119,12 @@ class CapabilityReproWorker:
             return {"task_id": cleanup["id"], "status": "cleaned"}
         with connect(self.settings) as conn:
             init_db(conn)
-            task = claim_next_repro_task(conn, worker_id=self.worker_id, task_id=task_id)
+            task = claim_next_repro_task(
+                conn,
+                worker_id=self.worker_id,
+                task_id=task_id,
+                execution_profile=self.execution_profile,
+            )
         if not task:
             self._heartbeat_worker()
             return None
@@ -118,7 +143,11 @@ class CapabilityReproWorker:
         return result
 
     def serve_forever(self, *, poll_interval: float = 1.0) -> None:
-        validate_repro_runtime_config(check_image=True, require_token=False)
+        validate_repro_runtime_config(
+            check_image=True,
+            require_token=False,
+            execution_profile=self.execution_profile,
+        )
         with self._worker_lock():
             self._register()
             try:
@@ -192,6 +221,7 @@ class CapabilityReproWorker:
                 on_heartbeat=heartbeat,
                 model_token_path=token_path,
                 approved_egress_domains=task_egress_domains,
+                execution_profile=self.execution_profile,
             )
             with connect(self.settings) as conn:
                 init_db(conn)
@@ -258,7 +288,11 @@ class CapabilityReproWorker:
     def _claim_cleanup(self, *, task_id: int | None = None) -> dict[str, Any] | None:
         with connect(self.settings) as conn:
             init_db(conn)
-            return claim_cleanup_request(conn, task_id=task_id)
+            return claim_cleanup_request(
+                conn,
+                task_id=task_id,
+                execution_profile=self.execution_profile,
+            )
 
     def _finish_cleanup(self, task: dict[str, Any]) -> None:
         self._cleanup_resources(task)
@@ -318,7 +352,9 @@ class CapabilityReproWorker:
                 shutil.rmtree(workspace, ignore_errors=True)
 
     def _worker_lock(self) -> "_ExclusiveFileLock":
-        return _ExclusiveFileLock(self.settings.output_dir / "locks" / "capability-repro-worker.lock")
+        return _ExclusiveFileLock(
+            self.settings.output_dir / "locks" / f"capability-repro-{self.execution_profile}-worker.lock"
+        )
 
     def _register(self) -> None:
         with connect(self.settings) as conn:
@@ -328,7 +364,11 @@ class CapabilityReproWorker:
                 worker_id=self.worker_id,
                 hostname=socket.gethostname(),
                 pid=os.getpid(),
-                metadata={"kind": "capability_repro", "execution": "single_host"},
+                metadata={
+                    "kind": "capability_repro",
+                    "execution": "single_host",
+                    "profile": self.execution_profile,
+                },
             )
         self._last_worker_heartbeat = time.monotonic()
 

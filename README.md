@@ -229,10 +229,11 @@ Worker 重启时，尚未领取的 `queued` 任务会保留。已经处于 `runn
 能力复现使用独立的单机持久 Worker。API 和能力 Pipeline 只创建 `queued` 任务，不在请求进程中启动 Docker 后台线程：
 
 ```bash
-PYTHONPATH=src python -m ai4sec_platform.cli repro-worker
+PYTHONPATH=src python -m ai4sec_platform.cli repro-worker --profile standard
+PYTHONPATH=src python -m ai4sec_platform.cli repro-worker --profile nested_docker
 ```
 
-运维检查可使用 `--once --task-id <id>` 只领取指定任务，或使用 `--recover-only` 对账异常退出时遗留的 `running` 任务。单机文件锁禁止同时启动两个复现 Worker。停止和清理接口只写持久请求，Worker 负责终止容器、删除 workspace 并更新最终状态；API 重启不会丢失尚未领取的任务。
+运维检查可使用 `--once --task-id <id>` 只领取指定任务，或使用 `--recover-only` 对账该 Profile 异常退出时遗留的 `running` 任务。每个 Profile 各自使用单机文件锁；数据库领取条件保证全机同时最多一个复现任务处于 `running`。停止和清理接口只写持久请求，Worker 负责终止容器、删除 workspace 并更新最终状态；API 重启不会丢失尚未领取的任务。
 
 Worker 启动后会写入独立注册表，默认每 10 秒更新心跳；连续 30 秒没有心跳即视为不可用。运行任务期间会同时记录当前 `task_id`，正常退出会写入 `stopped`，因此不能只用进程 PID 或任务表猜测执行面是否健康：
 
@@ -282,15 +283,18 @@ PYTHONPATH=src python -m ai4sec_platform.cli repro-worker --check-config
 
 Worker 启动预检要求能够读取 Docker `bridge` 并操作 `iptables -S DOCKER-USER`。生产复现 Worker 系统账号必须仅获得维护 AI4SEC 专用防火墙链所需的受控权限；如果宿主机使用 rootless Docker/nftables，必须先提供等价执行器，不能关闭预检绕过隔离。固定扩展依赖域名可由管理员通过 `REPRO_EGRESS_EXTRA_DOMAINS` 配置。任务需要额外业务 API 时，在启动请求中提交精确域名、用途和申请人；任务进入 `awaiting_egress_approval`，不会被 Worker 领取。操作员通过 `/api/capabilities/repro/{task_id}/egress` 查看请求，并使用对应 `approve` 或 `reject` 端点记录复核人和理由。所有域名批准且再次通过公网 DNS 校验后任务才进入 `queued`，任一拒绝则任务停止。通配符、URL、端口、IP、localhost 和解析到私网的域名均被拒绝；运行时批准域名到实际 IP 的映射写入持久任务日志，未知域名仍不可解析且不可连接。
 
-能力复现默认镜像为不包含认证文件的 `repro-runner:v4`，构建定义位于 `configs/repro-runner/Dockerfile`：
+能力复现提供两个镜像。`nested_docker` 使用包含内部 Docker daemon 的 `repro-runner:v4`；`standard` 使用不含 Docker daemon、systemd 和 Docker CLI 的 `repro-runner-standard:v1`：
 
 ```bash
 docker build --tag repro-runner:v4 configs/repro-runner
+docker build --file configs/repro-runner/Dockerfile.standard --tag repro-runner-standard:v1 configs/repro-runner
 # 当前网络无法稳定访问 npm 官方仓时，可显式使用镜像仓
 docker build --build-arg NPM_REGISTRY=https://registry.npmmirror.com --tag repro-runner:v4 configs/repro-runner
 ```
 
 Worker 启动前会运行镜像审计；镜像不存在，或镜像中存在 `/root/.local/share/opencode/auth.json`、`/home/repro/.local/share/opencode/auth.json` 时拒绝领取任务。旧 `repro-runner:v3` 已确认含认证文件，禁止继续创建新任务；其中的凭据必须轮换，旧容器完成迁移后再删除容器和镜像。
+
+新任务默认使用 `standard`。该 Profile 要求专用 rootless Docker daemon，容器只读根文件系统、`cap-drop ALL`、无嵌套 Docker；容器内 root 映射为宿主普通用户，以便继续只读访问任务级 `0600` 模型令牌。当前宿主机没有 rootless Docker，而且 rootless 网络尚未实现与现有 `DOCKER-USER` 等价的强制出口适配器，因此 standard Worker 会失败关闭，不能为恢复运行而改用 rootful `runc`。`nested_docker` 仅用于明确依赖 Docker/Compose 的项目，启动后先进入 `awaiting_profile_approval`；必须记录复核人和风险接受理由，全部批准后才可能进入队列。其默认 CPU、内存和 PIDs 上限低于 standard，且全机并发仍为 1。
 
 能力复现默认限制为 `REPRO_CPUS=2.0`、`REPRO_MEMORY=4g`、`REPRO_MEMORY_SWAP=4g`、`REPRO_PIDS_LIMIT=1024`、workspace 10 GiB 软上限和数据库日志 5 MiB 上限。Web 端口代理只监听 `127.0.0.1`。workspace 上限通过周期扫描实现，不是文件系统硬 quota；生产部署仍建议为复现目录使用独立受限文件系统或项目配额。
 

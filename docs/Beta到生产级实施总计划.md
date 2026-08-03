@@ -906,7 +906,7 @@ D11 暂缓的是公网入口和完整公网暴露治理，不代表复现容器�
 - [x] 建立代码仓、软件包仓、模型仓基础出口白名单、任务声明外部 API 的持久审批、运行时域名/IP 映射日志和防火墙计数审计。
 - [x] 阻断回环、私网、链路本地、云 metadata、Docker 网桥和平台管理网段。
 - [ ] 实现 standard rootless 与 nested_docker Sysbox 双 Profile。
-- [ ] nested_docker 必须人工批准、单并发并使用更严格的资源与网络限制。
+- [x] nested_docker 必须人工批准、单并发并使用更严格的资源与网络限制。
 - [ ] 将 OpenCode 权限从全量 allow 收敛为 Profile 对应的最小权限。
 - [ ] 修复静默子进程超时、孤儿容器、容器信息持久化和 Web 端口暴露。
 - [ ] 完善 Web、CLI、官方 Demo 和不可复现项目策略。
@@ -2048,3 +2048,14 @@ Python full test suite: 199 passed
 - 当前简单认证尚未进入阶段 4，`requested_by/reviewer` 暂由调用方提交，只能作为内部运营记录；认证上线后必须改为从统一 `CurrentUser` 注入，不能继续信任请求体身份字段。
 - 自动 Pipeline 不声明额外业务域名，保持原 `queued` 行为；固定软件生态域名仍是平台级白名单，不借任务输入隐式扩大。
 - 回归覆盖域名格式归一化、重复去除、待审批任务不可领取、多域名全批准后入队、拒绝停止、私网 DNS 拒绝、API 审计字段和 Worker 只传递已批准域名；全仓 Python 测试 336 passed，`compileall` 与 `git diff --check` 通过。
+
+### 2026-07-31：能力复现双 Profile 第一阶段
+
+- 新增 migration v16，为复现任务持久保存 `execution_profile`、审批状态、复核人、风险理由和复核时间。迁移期间遗留的 `queued/running` 任务统一停止并要求显式重新提交，避免旧 Sysbox 任务被无审批地解释为 standard。
+- 启动 API 支持 `standard` 与 `nested_docker`，默认 standard。nested 任务先进入 `awaiting_profile_approval`，批准必须填写风险接受理由；若还申请外部域名，则按“Profile 审批 → 域名审批 → queued”顺序执行，任一拒绝转为 `stopped`。
+- standard 与 nested 使用 Profile 专用 Worker、文件锁、恢复和清理范围；Worker 只能领取自身 Profile。数据库领取语句同时验证 nested 已批准，并用原子 `NOT EXISTS running` 条件保证两个 Worker 合计最多一个运行任务。
+- 新增无 Docker daemon/systemd 的 `Dockerfile.standard`。standard 命令使用只读根文件系统、`cap-drop ALL` 和 rootless daemon；容器内 root 映射到宿主普通用户，不等同宿主 root，并继续只读挂载任务级 `0600` 模型令牌。
+- nested 继续使用 Sysbox，但仅在人工批准后可领取；默认资源收紧为 1.5 CPU、3 GiB 内存/交换和 768 PIDs，全机并发固定为 1。Worker 启动检查必须确认 `sysbox-runc` 存在。
+- 当前宿主机实测只有 rootful Docker、`runc` 与 `sysbox-runc`，没有 rootless Docker/Podman。更重要的是，rootless 网络尚无与当前 `DOCKER-USER` 等价的强制出口执行器；standard 预检因此显式失败关闭。不能用 rootful runc 或自由出网冒充完成，3B 的双 Profile 总条目继续保持未勾选。
+- `repro-runner-standard:v1` 已在当前宿主机从 `Dockerfile.standard` 真实构建成功；无网络烟测确认 Python 3.10.12、Node 20.20.2、OpenCode 1.15.12 可用，镜像内无 Docker 命令和 OpenCode auth 文件，只读根文件系统下启动成功且 `/proc/self/status` 的 `CapEff=0`。
+- Profile、迁移、API、领取隔离、审批顺序、rootful 拒绝、rootless 出口适配器缺失时失败关闭及两类 Docker 命令均有回归覆盖；全仓 Python 测试 342 passed，`compileall` 与 `git diff --check` 通过。

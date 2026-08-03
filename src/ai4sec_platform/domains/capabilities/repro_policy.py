@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+import json
 import os
 import sqlite3
 from typing import Any
@@ -48,23 +49,27 @@ def enqueue_repro_task(
     repo_url: str,
     trigger: str,
     initial_status: str = "queued",
+    execution_profile: str = "standard",
 ) -> int:
     validate_repro_queue_limits()
-    if initial_status not in {"queued", "awaiting_egress_approval"}:
+    if initial_status not in {"queued", "awaiting_profile_approval", "awaiting_egress_approval"}:
         raise ValueError(f"invalid initial repro task status: {initial_status}")
+    if execution_profile not in {"standard", "nested_docker"}:
+        raise ValueError(f"invalid reproduction execution profile: {execution_profile}")
     now = utc_now()
     cutoff = (datetime.now(timezone.utc) - timedelta(hours=24)).replace(microsecond=0).isoformat().replace("+00:00", "Z")
     cursor = conn.execute(
         """
-        INSERT INTO capability_repro_tasks (item_id, repo_url, status, created_at, updated_at, trigger)
-        SELECT ?, ?, ?, ?, ?, ?
+        INSERT INTO capability_repro_tasks
+            (item_id, repo_url, status, created_at, updated_at, trigger, execution_profile, profile_approval_status)
+        SELECT ?, ?, ?, ?, ?, ?, ?, ?
         WHERE NOT EXISTS (
             SELECT 1 FROM capability_repro_tasks
-            WHERE item_id = ? AND status IN ('awaiting_egress_approval', 'queued', 'running')
+            WHERE item_id = ? AND status IN ('awaiting_profile_approval', 'awaiting_egress_approval', 'queued', 'running')
         )
         AND (
             SELECT COUNT(*) FROM capability_repro_tasks
-            WHERE status IN ('awaiting_egress_approval', 'queued')
+            WHERE status IN ('awaiting_profile_approval', 'awaiting_egress_approval', 'queued')
         ) < ?
         AND (
             SELECT COUNT(*) FROM capability_repro_tasks WHERE item_id = ? AND created_at >= ?
@@ -77,6 +82,8 @@ def enqueue_repro_task(
             now,
             now,
             trigger,
+            execution_profile,
+            "pending" if execution_profile == "nested_docker" else "not_required",
             item_id,
             REPRO_MAX_QUEUED_TASKS,
             item_id,
@@ -109,7 +116,8 @@ def repro_quota_usage(
     counts = conn.execute(
         """
         SELECT
-            SUM(CASE WHEN status IN ('awaiting_egress_approval', 'queued') THEN 1 ELSE 0 END) AS queued,
+            SUM(CASE WHEN status IN ('awaiting_profile_approval', 'awaiting_egress_approval', 'queued') THEN 1 ELSE 0 END) AS queued,
+            SUM(CASE WHEN status = 'awaiting_profile_approval' THEN 1 ELSE 0 END) AS awaiting_profile_approval,
             SUM(CASE WHEN status = 'awaiting_egress_approval' THEN 1 ELSE 0 END) AS awaiting_egress_approval,
             SUM(CASE WHEN status = 'running' THEN 1 ELSE 0 END) AS running
         FROM capability_repro_tasks
@@ -121,7 +129,7 @@ def repro_quota_usage(
         item_counts = conn.execute(
             """
             SELECT
-                SUM(CASE WHEN status IN ('awaiting_egress_approval', 'queued', 'running') THEN 1 ELSE 0 END) AS active,
+                SUM(CASE WHEN status IN ('awaiting_profile_approval', 'awaiting_egress_approval', 'queued', 'running') THEN 1 ELSE 0 END) AS active,
                 SUM(CASE WHEN created_at >= ? THEN 1 ELSE 0 END) AS attempts
             FROM capability_repro_tasks WHERE item_id = ?
             """,
@@ -131,6 +139,7 @@ def repro_quota_usage(
         item_attempts = int(item_counts["attempts"] or 0)
     return {
         "queued": int(counts["queued"] or 0),
+        "awaiting_profile_approval": int(counts["awaiting_profile_approval"] or 0),
         "awaiting_egress_approval": int(counts["awaiting_egress_approval"] or 0),
         "running": int(counts["running"] or 0),
         "item_active": item_active,
@@ -157,11 +166,15 @@ def repro_worker_status_payload(conn: sqlite3.Connection) -> dict[str, Any]:
     validate_repro_queue_limits()
     now = datetime.now(timezone.utc)
     rows = conn.execute(
-        "SELECT worker_id, status, heartbeat_at, stopped_at, current_task_id "
+        "SELECT worker_id, status, heartbeat_at, stopped_at, current_task_id, metadata_json "
         "FROM capability_repro_workers ORDER BY updated_at DESC LIMIT 20"
     ).fetchall()
     workers: list[dict[str, Any]] = []
     healthy = 0
+    by_profile = {
+        "standard": {"healthy_workers": 0, "registered_workers": 0},
+        "nested_docker": {"healthy_workers": 0, "registered_workers": 0},
+    }
     for row in rows:
         heartbeat_at = str(row["heartbeat_at"] or "")
         age_seconds: int | None = None
@@ -175,6 +188,14 @@ def repro_worker_status_payload(conn: sqlite3.Connection) -> dict[str, Any]:
         is_healthy = registered_running and age_seconds is not None and age_seconds <= REPRO_WORKER_STALE_SECONDS
         effective_status = "healthy" if is_healthy else "stale" if registered_running else "stopped"
         healthy += int(is_healthy)
+        try:
+            metadata = json.loads(str(row["metadata_json"] or "{}"))
+        except json.JSONDecodeError:
+            metadata = {}
+        profile = str(metadata.get("profile") or "legacy")
+        if profile in by_profile:
+            by_profile[profile]["registered_workers"] += 1
+            by_profile[profile]["healthy_workers"] += int(is_healthy)
         workers.append(
             {
                 "worker_id": str(row["worker_id"]),
@@ -183,11 +204,13 @@ def repro_worker_status_payload(conn: sqlite3.Connection) -> dict[str, Any]:
                 "heartbeat_age_seconds": age_seconds,
                 "current_task_id": row["current_task_id"],
                 "stopped_at": str(row["stopped_at"] or ""),
+                "profile": profile,
             }
         )
     return {
         "status": "ready" if healthy else "unavailable",
         "healthy_workers": healthy,
+        "profiles": by_profile,
         "stale_after_seconds": REPRO_WORKER_STALE_SECONDS,
         "workers": workers,
     }

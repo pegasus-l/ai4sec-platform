@@ -347,6 +347,11 @@ CREATE TABLE IF NOT EXISTS capability_repro_tasks (
     heartbeat_at TEXT NOT NULL DEFAULT '',
     cancel_requested INTEGER NOT NULL DEFAULT 0,
     cleanup_requested INTEGER NOT NULL DEFAULT 0,
+    execution_profile TEXT NOT NULL DEFAULT 'standard',
+    profile_approval_status TEXT NOT NULL DEFAULT 'not_required',
+    profile_reviewed_by TEXT NOT NULL DEFAULT '',
+    profile_review_reason TEXT NOT NULL DEFAULT '',
+    profile_reviewed_at TEXT NOT NULL DEFAULT '',
     FOREIGN KEY (item_id) REFERENCES domain_items(id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS idx_cap_repro_item ON capability_repro_tasks(item_id);

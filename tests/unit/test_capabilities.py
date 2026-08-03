@@ -422,9 +422,16 @@ def test_repro_runtime_rejects_image_with_baked_auth(monkeypatch, tmp_path: Path
     monkeypatch.setattr(repro_runner, "REPRO_LLM_BASE_URL", "https://gateway.internal/api/model-gateway/v1")
 
     class Result:
-        returncode = 1
+        def __init__(self, returncode, stdout=""):
+            self.returncode = returncode
+            self.stdout = stdout
 
-    monkeypatch.setattr(repro_runner, "_safe_run", lambda *_args, **_kwargs: Result())
+    def fake_run(command, **_kwargs):
+        if command[1:3] == ["info", "--format"]:
+            return Result(0, '{"sysbox-runc": {}}')
+        return Result(1)
+
+    monkeypatch.setattr(repro_runner, "_safe_run", fake_run)
 
     import pytest
     with pytest.raises(RuntimeError, match="contains a baked OpenCode auth file"):
@@ -473,10 +480,10 @@ def test_repro_container_command_has_resource_and_privilege_limits(monkeypatch, 
 
     command = runner.build_run_command()
 
-    assert command[command.index("--cpus") + 1] == repro_runner.REPRO_CPUS
-    assert command[command.index("--memory") + 1] == repro_runner.REPRO_MEMORY
-    assert command[command.index("--memory-swap") + 1] == repro_runner.REPRO_MEMORY_SWAP
-    assert command[command.index("--pids-limit") + 1] == repro_runner.REPRO_PIDS_LIMIT
+    assert command[command.index("--cpus") + 1] == repro_runner.REPRO_NESTED_CPUS
+    assert command[command.index("--memory") + 1] == repro_runner.REPRO_NESTED_MEMORY
+    assert command[command.index("--memory-swap") + 1] == repro_runner.REPRO_NESTED_MEMORY_SWAP
+    assert command[command.index("--pids-limit") + 1] == repro_runner.REPRO_NESTED_PIDS_LIMIT
     assert "no-new-privileges=true" in command
     assert command[command.index("--network") + 1] == "bridge"
     assert command[command.index("--dns") + 1] == "127.0.0.1"

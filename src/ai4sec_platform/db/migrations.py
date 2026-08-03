@@ -152,6 +152,15 @@ MIGRATIONS: tuple[Migration, ...] = (
             "unique task/domain;index task/status/id"
         ),
     ),
+    Migration(
+        version=16,
+        name="add_capability_repro_execution_profiles",
+        apply=lambda conn: _add_capability_repro_execution_profiles(conn),
+        checksum_source=(
+            "capability_repro_tasks.execution_profile standard;profile_approval_status not_required;"
+            "profile_reviewed_by;profile_review_reason;profile_reviewed_at;index profile/status/id"
+        ),
+    ),
 )
 
 
@@ -456,4 +465,27 @@ def _add_capability_repro_egress_domains(conn: sqlite3.Connection) -> None:
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_cap_repro_egress_task "
         "ON capability_repro_egress_domains(task_id, status, id)"
+    )
+
+
+def _add_capability_repro_execution_profiles(conn: sqlite3.Connection) -> None:
+    _add_column_if_missing(conn, "capability_repro_tasks", "execution_profile", "TEXT NOT NULL DEFAULT 'standard'")
+    _add_column_if_missing(conn, "capability_repro_tasks", "profile_approval_status", "TEXT NOT NULL DEFAULT 'not_required'")
+    _add_column_if_missing(conn, "capability_repro_tasks", "profile_reviewed_by", "TEXT NOT NULL DEFAULT ''")
+    _add_column_if_missing(conn, "capability_repro_tasks", "profile_review_reason", "TEXT NOT NULL DEFAULT ''")
+    _add_column_if_missing(conn, "capability_repro_tasks", "profile_reviewed_at", "TEXT NOT NULL DEFAULT ''")
+    now = utc_now()
+    conn.execute(
+        """
+        UPDATE capability_repro_tasks
+        SET status = 'stopped', cancel_requested = 1,
+            result = 'task stopped during execution profile migration; resubmit with an explicit profile',
+            finished_at = ?, updated_at = ?
+        WHERE status IN ('queued', 'running')
+        """,
+        (now, now),
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_cap_repro_profile_status "
+        "ON capability_repro_tasks(execution_profile, status, id)"
     )

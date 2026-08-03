@@ -171,6 +171,7 @@ def test_worker_executes_claimed_task_without_api_thread(monkeypatch, tmp_path: 
             on_heartbeat,
             model_token_path,
             approved_egress_domains,
+            execution_profile,
         ):
             self.task_id = task_id
             self.model_token_path = model_token_path
@@ -178,6 +179,7 @@ def test_worker_executes_claimed_task_without_api_thread(monkeypatch, tmp_path: 
             self.on_status = on_status
             self.on_heartbeat = on_heartbeat
             assert approved_egress_domains == ("api.example.com",)
+            assert execution_profile == "standard"
             self.container_name = f"fake-{task_id}"
             self.workspace = tmp_path / f"task-{task_id}"
 

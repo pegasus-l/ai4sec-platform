@@ -38,6 +38,7 @@ load_env_file()
 # ============================================================================
 REPRO_IMAGE = os.environ.get("REPRO_IMAGE", "repro-runner:v4")
 REPRO_RUNTIME = os.environ.get("REPRO_RUNTIME", "sysbox-runc")
+REPRO_STANDARD_IMAGE = os.environ.get("REPRO_STANDARD_IMAGE", "repro-runner-standard:v1")
 WORKSPACE_ROOT = Path(os.environ.get("REPRO_WORKSPACE_ROOT", str(Path.home() / "repro_workspaces")))
 CONTAINER_TIMEOUT = int(os.environ.get("REPRO_CONTAINER_TIMEOUT", str(30 * 60)))  # 30 分钟
 WEB_CONTAINER_TIMEOUT = int(os.environ.get("REPRO_WEB_CONTAINER_TIMEOUT", str(50 * 60)))  # 50 分钟
@@ -48,6 +49,10 @@ REPRO_CPUS = os.environ.get("REPRO_CPUS", "2.0")
 REPRO_MEMORY = os.environ.get("REPRO_MEMORY", "4g")
 REPRO_MEMORY_SWAP = os.environ.get("REPRO_MEMORY_SWAP", REPRO_MEMORY)
 REPRO_PIDS_LIMIT = os.environ.get("REPRO_PIDS_LIMIT", "1024")
+REPRO_NESTED_CPUS = os.environ.get("REPRO_NESTED_CPUS", "1.5")
+REPRO_NESTED_MEMORY = os.environ.get("REPRO_NESTED_MEMORY", "3g")
+REPRO_NESTED_MEMORY_SWAP = os.environ.get("REPRO_NESTED_MEMORY_SWAP", REPRO_NESTED_MEMORY)
+REPRO_NESTED_PIDS_LIMIT = os.environ.get("REPRO_NESTED_PIDS_LIMIT", "768")
 REPRO_WORKSPACE_MAX_BYTES = int(os.environ.get("REPRO_WORKSPACE_MAX_BYTES", str(10 * 1024 * 1024 * 1024)))
 REPRO_LOG_MAX_BYTES = int(os.environ.get("REPRO_LOG_MAX_BYTES", str(5 * 1024 * 1024)))
 _DOCKER_SIZE_RE = re.compile(r"^[1-9][0-9]*(?:[bkmg])?$", re.IGNORECASE)
@@ -146,7 +151,15 @@ def _validated_token_path(token_path: Path | None = None) -> Path:
     return token_path.resolve()
 
 
-def validate_repro_runtime_config(*, check_image: bool = False, token_path: Path | None = None, require_token: bool = True) -> Path | None:
+def validate_repro_runtime_config(
+    *,
+    check_image: bool = False,
+    token_path: Path | None = None,
+    require_token: bool = True,
+    execution_profile: str = "nested_docker",
+) -> Path | None:
+    if execution_profile not in {"standard", "nested_docker"}:
+        raise RuntimeError(f"unknown reproduction execution profile: {execution_profile}")
     validate_repro_resource_limits()
     validate_repro_queue_limits()
     validated_token_path = _validated_token_path(token_path) if require_token else None
@@ -156,9 +169,29 @@ def validate_repro_runtime_config(*, check_image: bool = False, token_path: Path
     if parsed_gateway.scheme not in {"http", "https"} or parsed_gateway.username or parsed_gateway.password or not parsed_gateway.path.rstrip("/").endswith("/api/model-gateway/v1"):
         raise RuntimeError("REPRO_LLM_BASE_URL must point to the AI4SEC /api/model-gateway/v1 endpoint")
     if check_image:
+        if execution_profile == "standard":
+            security = _safe_run(
+                ["docker", "info", "--format", "{{json .SecurityOptions}}"],
+                capture_output=True,
+                text=True,
+            )
+            if security.returncode != 0 or "rootless" not in str(security.stdout).casefold():
+                raise RuntimeError("standard reproduction profile requires a rootless Docker daemon")
+            raise RuntimeError(
+                "standard reproduction profile remains disabled until a rootless egress enforcement adapter is implemented"
+            )
+        else:
+            runtimes = _safe_run(
+                ["docker", "info", "--format", "{{json .Runtimes}}"],
+                capture_output=True,
+                text=True,
+            )
+            if runtimes.returncode != 0 or REPRO_RUNTIME not in str(runtimes.stdout):
+                raise RuntimeError(f"nested_docker reproduction profile requires Docker runtime: {REPRO_RUNTIME}")
+        image = REPRO_STANDARD_IMAGE if execution_profile == "standard" else REPRO_IMAGE
         image_check = _safe_run(
             [
-                "docker", "run", "--rm", "--entrypoint", "/bin/sh", REPRO_IMAGE, "-c",
+                "docker", "run", "--rm", "--entrypoint", "/bin/sh", image, "-c",
                 "test ! -e /root/.local/share/opencode/auth.json "
                 "-a ! -e /home/repro/.local/share/opencode/auth.json",
             ],
@@ -167,7 +200,7 @@ def validate_repro_runtime_config(*, check_image: bool = False, token_path: Path
         )
         if image_check.returncode != 0:
             raise RuntimeError(
-                f"Repro image is unavailable or contains a baked OpenCode auth file: {REPRO_IMAGE}"
+                f"Repro image is unavailable or contains a baked OpenCode auth file: {image}"
             )
         validate_repro_egress_runtime(_safe_run)
     return validated_token_path
@@ -176,19 +209,29 @@ def validate_repro_runtime_config(*, check_image: bool = False, token_path: Path
 def validate_repro_resource_limits() -> None:
     try:
         cpus = float(REPRO_CPUS)
+        nested_cpus = float(REPRO_NESTED_CPUS)
     except ValueError as exc:
-        raise RuntimeError("REPRO_CPUS must be a number") from exc
+        raise RuntimeError("REPRO_CPUS and REPRO_NESTED_CPUS must be numbers") from exc
     if not 0.1 <= cpus <= 64:
         raise RuntimeError("REPRO_CPUS must be between 0.1 and 64")
-    for name, value in (("REPRO_MEMORY", REPRO_MEMORY), ("REPRO_MEMORY_SWAP", REPRO_MEMORY_SWAP)):
+    if not 0.1 <= nested_cpus <= cpus:
+        raise RuntimeError("REPRO_NESTED_CPUS must be between 0.1 and REPRO_CPUS")
+    for name, value in (
+        ("REPRO_MEMORY", REPRO_MEMORY),
+        ("REPRO_MEMORY_SWAP", REPRO_MEMORY_SWAP),
+        ("REPRO_NESTED_MEMORY", REPRO_NESTED_MEMORY),
+        ("REPRO_NESTED_MEMORY_SWAP", REPRO_NESTED_MEMORY_SWAP),
+    ):
         if not _DOCKER_SIZE_RE.fullmatch(value):
             raise RuntimeError(f"{name} must be a positive Docker size such as 512m or 4g")
     try:
         pids_limit = int(REPRO_PIDS_LIMIT)
+        nested_pids_limit = int(REPRO_NESTED_PIDS_LIMIT)
     except ValueError as exc:
         raise RuntimeError("REPRO_PIDS_LIMIT must be an integer") from exc
     numeric_limits = (
         ("REPRO_PIDS_LIMIT", pids_limit, 16, 65536),
+        ("REPRO_NESTED_PIDS_LIMIT", nested_pids_limit, 16, 65536),
         ("REPRO_CONTAINER_TIMEOUT", CONTAINER_TIMEOUT, 60, 86400),
         ("REPRO_WEB_CONTAINER_TIMEOUT", WEB_CONTAINER_TIMEOUT, 60, 86400),
         ("REPRO_REPORT_GRACE_TIMEOUT", REPORT_GRACE_TIMEOUT, 0, 7200),
@@ -212,16 +255,37 @@ def repro_resource_limits_payload() -> dict[str, Any]:
         "report_grace_timeout_seconds": REPORT_GRACE_TIMEOUT,
         "workspace_max_bytes": REPRO_WORKSPACE_MAX_BYTES,
         "log_max_bytes": REPRO_LOG_MAX_BYTES,
+        "profiles": {
+            "standard": {
+                "cpus": float(REPRO_CPUS),
+                "memory": REPRO_MEMORY,
+                "memory_swap": REPRO_MEMORY_SWAP,
+                "pids": int(REPRO_PIDS_LIMIT),
+            },
+            "nested_docker": {
+                "cpus": float(REPRO_NESTED_CPUS),
+                "memory": REPRO_NESTED_MEMORY,
+                "memory_swap": REPRO_NESTED_MEMORY_SWAP,
+                "pids": int(REPRO_NESTED_PIDS_LIMIT),
+                "max_concurrent_tasks": 1,
+                "approval_required": True,
+            },
+        },
     }
 
 
 # ============================================================================
 # 复现任务 prompt
 # ============================================================================
-def _build_repro_prompt() -> str:
+def _build_repro_prompt(execution_profile: str = "nested_docker") -> str:
     """构建普通项目复现 prompt，不包含任何模型凭据。"""
     llm_section = _managed_llm_prompt_section()
-    return f"""你在一个隔离容器里(你是 root,可自由装包),目标是【把一个开源项目跑起来、确认环境可用、并尽量跑出真实运行效果】。
+    identity = (
+        "你是 root，可安装系统包并使用嵌套 Docker"
+        if execution_profile == "nested_docker"
+        else "你是 rootless 容器内的 root，但不能使用系统包管理器、sudo 或 Docker"
+    )
+    return f"""你在一个隔离容器里（{identity}），目标是【把一个开源项目跑起来、确认环境可用、并尽量跑出真实运行效果】。
 仓库已 clone 到 /workspace/repo。全程用中文说明你在做什么。
 {llm_section}
 # 第一步:判断复现难度(决定你要跑多深)
@@ -292,10 +356,15 @@ JSON 必须合法(可被解析),字符串里不要有未转义的引号或换行
 """
 
 
-def _build_web_repro_prompt() -> str:
+def _build_web_repro_prompt(execution_profile: str = "nested_docker") -> str:
     """构建 Web 项目复现 prompt，不包含任何模型凭据。"""
     llm_section = _managed_llm_prompt_section()
-    return f"""你在一个隔离容器里(你是 root,可自由装包),需要复现一个项目。仓库已 clone 到 /workspace/repo。全程用中文说明。
+    identity = (
+        "你是 root，可安装系统包并使用嵌套 Docker"
+        if execution_profile == "nested_docker"
+        else "你是 rootless 容器内的 root，但不能使用系统包管理器、sudo 或 Docker"
+    )
+    return f"""你在一个隔离容器里（{identity}），需要复现一个项目。仓库已 clone 到 /workspace/repo。全程用中文说明。
 {llm_section}
 # 时间纪律
 - Web 复现总预算约 50 分钟。必须在第 45 分钟前停止继续探索，把已经验证的事实立即整理成结构化报告。
@@ -395,6 +464,7 @@ class ReproRunner:
         on_heartbeat: Callable[[], None] | None = None,
         model_token_path: Path | None = None,
         approved_egress_domains: tuple[str, ...] = (),
+        execution_profile: str = "nested_docker",
     ):
         self.task_id = task_id
         self.repo_url = repo_url
@@ -407,6 +477,9 @@ class ReproRunner:
         self.on_heartbeat = on_heartbeat or (lambda: None)
         self.model_token_path = model_token_path
         self.approved_egress_domains = approved_egress_domains
+        if execution_profile not in {"standard", "nested_docker"}:
+            raise ValueError(f"unknown reproduction execution profile: {execution_profile}")
+        self.execution_profile = execution_profile
         _stamp = int(time.time())
         self.container_name = f"repro-{task_id}-{_stamp}"
         self.workspace = WORKSPACE_ROOT / f"task-{task_id}-{_stamp}"
@@ -420,36 +493,54 @@ class ReproRunner:
 
     # ---- docker 命令构建 ----
     def build_run_command(self):
-        """起一个 systemd 常驻容器（用 sysbox 运行时，让容器内能跑 docker）。"""
+        """按任务 Profile 创建隔离容器。"""
+        cpus, memory, memory_swap, pids_limit = (
+            (REPRO_NESTED_CPUS, REPRO_NESTED_MEMORY, REPRO_NESTED_MEMORY_SWAP, REPRO_NESTED_PIDS_LIMIT)
+            if self.execution_profile == "nested_docker"
+            else (REPRO_CPUS, REPRO_MEMORY, REPRO_MEMORY_SWAP, REPRO_PIDS_LIMIT)
+        )
         cmd = [
             "docker", "run",
-            "--runtime", REPRO_RUNTIME,
             "-d",
             "--name", self.container_name,
-            "--cpus", REPRO_CPUS,
-            "--memory", REPRO_MEMORY,
-            "--memory-swap", REPRO_MEMORY_SWAP,
-            "--pids-limit", REPRO_PIDS_LIMIT,
+            "--cpus", cpus,
+            "--memory", memory,
+            "--memory-swap", memory_swap,
+            "--pids-limit", pids_limit,
             "--security-opt", "no-new-privileges=true",
             "--network", "bridge",
             "--dns", "127.0.0.1",
             "--sysctl", "net.ipv6.conf.all.disable_ipv6=1",
             "--add-host", "host.docker.internal:host-gateway",
-            "--tmpfs", "/root/.local/share/opencode:rw,nosuid,nodev,noexec,mode=700",
             "-v", f"{self.workspace}:/workspace",
         ]
+        if self.execution_profile == "nested_docker":
+            cmd.extend([
+                "--runtime", REPRO_RUNTIME,
+                "--tmpfs", "/root/.local/share/opencode:rw,nosuid,nodev,noexec,mode=700",
+            ])
+            image = REPRO_IMAGE
+        else:
+            cmd.extend([
+                "--read-only",
+                "--cap-drop", "ALL",
+                "--tmpfs", "/tmp:rw,nosuid,nodev,noexec,mode=1777",
+                "--tmpfs", "/root/.config:rw,nosuid,nodev,noexec,mode=700",
+                "--tmpfs", "/root/.local:rw,nosuid,nodev,noexec,mode=700",
+            ])
+            image = REPRO_STANDARD_IMAGE
         if self._egress_policy:
             for domain, address in self._egress_policy.host_addresses:
                 if ":" not in address:
                     cmd.extend(["--add-host", f"{domain}:{address}"])
         token_path = _validated_token_path(self.model_token_path)
         cmd.extend(["--mount", f"type=bind,src={token_path},dst={CONTAINER_MODEL_TOKEN_FILE},readonly"])
-        cmd.append(REPRO_IMAGE)
+        cmd.append(image)
         return cmd
 
     def build_exec_command(self):
         """docker exec 进容器，以 root 跑 clone + opencode。"""
-        validate_repro_runtime_config(token_path=self.model_token_path)
+        validate_repro_runtime_config(token_path=self.model_token_path, execution_profile=self.execution_profile)
         managed_provider = "ai4sec-managed"
         opencode_config = json.dumps({
             "$schema": "https://opencode.ai/config.json",
@@ -472,13 +563,18 @@ class ReproRunner:
             },
         })
         encoded_config = base64.b64encode(opencode_config.encode()).decode()
+        home = "/root"
         inject_managed_config = (
-            "mkdir -p /root/.config/opencode; "
-            f"echo '{encoded_config}' | base64 -d > /root/.config/opencode/opencode.json; "
+            f"mkdir -p {home}/.config/opencode; "
+            f"echo '{encoded_config}' | base64 -d > {home}/.config/opencode/opencode.json; "
             f"echo '✓ opencode 已配置受管模型服务: {REPRO_LLM_BASE_URL}'; "
         )
 
-        prompt = _build_web_repro_prompt() if self.web_port else _build_repro_prompt()
+        prompt = (
+            _build_web_repro_prompt(self.execution_profile)
+            if self.web_port
+            else _build_repro_prompt(self.execution_profile)
+        )
 
         inner = (
             "export LANG=C.UTF-8 LC_ALL=C.UTF-8 PYTHONIOENCODING=utf-8; "
@@ -487,10 +583,10 @@ class ReproRunner:
             "export GIT_HTTP_LOW_SPEED_LIMIT=1000 GIT_HTTP_LOW_SPEED_TIME=30; "
             "set -e; "
             + inject_managed_config +
-            "mkdir -p /root/.pip /root/.config/pip; "
+            f"mkdir -p {home}/.pip {home}/.config/pip; "
             "printf '[global]\\nindex-url = https://pypi.tuna.tsinghua.edu.cn/simple\\n"
             "trusted-host = pypi.tuna.tsinghua.edu.cn\\ntimeout = 120\\nretries = 5\\n' "
-            "| tee /root/.pip/pip.conf /root/.config/pip/pip.conf > /dev/null; "
+            f"| tee {home}/.pip/pip.conf {home}/.config/pip/pip.conf > /dev/null; "
             "npm config set registry https://registry.npmmirror.com 2>/dev/null || true; "
             "if [ -n \"$(ls -A /workspace/repo 2>/dev/null)\" ]; then "
             "  echo '✓ 宿主机已预下载 repo,跳过 clone'; "
@@ -605,10 +701,12 @@ class ReproRunner:
                 addresses = sorted(address for mapped_domain, address in policy.host_addresses if mapped_domain == domain)
                 self.on_log(f"• 任务出口批准: {domain} -> {', '.join(addresses) or '未解析'}")
 
-            # 2. 等容器内 docker 守护进程就绪
-            self._emit_log("• 等待容器内服务就绪…")
-            if not self._wait_dockerd():
-                self._emit_log("⚠ 容器内 docker 未在预期时间就绪,仍继续(纯 Python 项目不受影响)")
+            if self.execution_profile == "nested_docker":
+                self._emit_log("• 等待容器内 Docker 服务就绪…")
+                if not self._wait_dockerd():
+                    self._emit_log("✗ nested_docker 容器内 Docker 未就绪")
+                    self._set_status("failed", error="nested Docker daemon did not become ready")
+                    return
 
             # 2.1 启动端口代理（sysbox 容器用 nsenter 替代 docker -p）
             self._start_port_proxy()
@@ -663,7 +761,11 @@ class ReproRunner:
                         self.on_log(f"⚠ 宿主机 zip 下载失败: {zr.stderr.strip()[:100]}")
 
             # 3. exec 进去跑复现，流式读输出
-            prompt = _build_web_repro_prompt() if self.web_port else _build_repro_prompt()
+            prompt = (
+                _build_web_repro_prompt(self.execution_profile)
+                if self.web_port
+                else _build_repro_prompt(self.execution_profile)
+            )
             self._emit_log("┌─ 发给 AI agent 的复现指令(prompt)─────────────")
             for pl in prompt.strip().split("\n"):
                 self._emit_log("│ " + pl)

@@ -15,12 +15,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--poll-interval", type=float, default=1.0)
     parser.add_argument("--recover-only", action="store_true", help="Reconcile interrupted tasks and exit")
     parser.add_argument("--check-config", action="store_true", help="Validate model gateway and Secret file configuration")
+    parser.add_argument("--profile", choices=("standard", "nested_docker"), default="standard")
     args = parser.parse_args(argv)
-    worker = CapabilityReproWorker()
+    worker = CapabilityReproWorker(execution_profile=args.profile)
     try:
         if args.check_config:
-            token_path = validate_repro_runtime_config(check_image=True)
-            print(json.dumps({"ok": True, "token_file": str(token_path)}, ensure_ascii=False))
+            token_path = validate_repro_runtime_config(check_image=True, execution_profile=args.profile)
+            print(json.dumps({"ok": True, "profile": args.profile, "token_file": str(token_path)}, ensure_ascii=False))
             return 0
         if args.recover_only:
             print(json.dumps({"recovered": worker.recover()}, ensure_ascii=False))
