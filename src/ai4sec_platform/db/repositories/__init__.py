@@ -446,6 +446,7 @@ _REPRO_UPDATABLE_FIELDS = {
     "heartbeat_at",
     "cancel_requested",
     "cleanup_requested",
+    "repro_strategy",
 }
 
 

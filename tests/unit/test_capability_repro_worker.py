@@ -431,7 +431,7 @@ def test_start_api_only_queues_task(tmp_path: Path) -> None:
             conn.commit()
 
     app.dependency_overrides[get_db] = override_db
-    response = TestClient(app).post(f"/api/capabilities/items/{item_id}/start-repro", json={"web": False})
+    response = TestClient(app).post(f"/api/capabilities/items/{item_id}/start-repro", json={"strategy": "cli"})
 
     assert response.status_code == 200
     assert response.json()["status"] == "queued"
@@ -441,7 +441,7 @@ def test_start_api_only_queues_task(tmp_path: Path) -> None:
     assert tasks[0]["status"] == "queued"
     assert tasks[0]["worker_id"] == ""
 
-    duplicate = TestClient(app).post(f"/api/capabilities/items/{item_id}/start-repro", json={"web": False})
+    duplicate = TestClient(app).post(f"/api/capabilities/items/{item_id}/start-repro", json={"strategy": "cli"})
     assert duplicate.status_code == 409
 
 
@@ -588,7 +588,7 @@ def test_start_repro_rejects_when_global_queue_is_full(monkeypatch, tmp_path: Pa
             conn.commit()
 
     app.dependency_overrides[get_db] = override_db
-    response = TestClient(app).post(f"/api/capabilities/items/{item_id}/start-repro", json={"web": False})
+    response = TestClient(app).post(f"/api/capabilities/items/{item_id}/start-repro", json={"strategy": "cli"})
 
     assert response.status_code == 429
     assert response.json()["detail"]["code"] == "queue_full"
@@ -612,7 +612,7 @@ def test_start_repro_rejects_item_attempt_limit(monkeypatch, tmp_path: Path) -> 
             conn.commit()
 
     app.dependency_overrides[get_db] = override_db
-    response = TestClient(app).post(f"/api/capabilities/items/{item_id}/start-repro", json={"web": False})
+    response = TestClient(app).post(f"/api/capabilities/items/{item_id}/start-repro", json={"strategy": "cli"})
 
     assert response.status_code == 429
     assert response.json()["detail"]["code"] == "item_attempt_limit"

@@ -909,7 +909,7 @@ D11 暂缓的是公网入口和完整公网暴露治理，不代表复现容器�
 - [x] nested_docker 必须人工批准、单并发并使用更严格的资源与网络限制。
 - [x] 将 OpenCode 权限从全量 allow 收敛为 Profile 对应的最小权限。
 - [x] 修复静默子进程超时、孤儿容器、容器信息持久化和 Web 端口暴露。
-- [ ] 完善 Web、CLI、官方 Demo 和不可复现项目策略。
+- [x] 完善 Web、CLI、官方 Demo 和不可复现项目策略。
 - [ ] 加强成功判定和证据要求。
 - [ ] 完成结构化报告与能力卡回写。
 - [ ] 完成正式能力洞察前端页面。
@@ -2083,3 +2083,13 @@ Python full test suite: 199 passed
 - Web 代理继续固定为 `127.0.0.1` 的 `socat + nsenter`。清理恢复只在 `/proc/<pid>/cmdline` 仍匹配任务端口对应的 loopback socat 监听器时发送 SIGTERM，避免 PID 复用后误杀其他进程；失败、停止和超时任务在 Runner finally 中统一停止代理和容器，只有 Web `success/partial` 保留运行环境供人工验收。
 - 宿主机实测当前生产硬化数据库实例标签过滤结果为空；两个连续运行约 6 天的 `repro-runner:v3` 容器来自旧 `/home/liuqi777/repro_workspaces`，没有 AI4SEC 归属标签且当前数据库没有任务 5/6。本批次按安全规则保持不动，后续只能在人工确认旧任务和报告后迁移或删除。
 - 回归覆盖静默超时、标签完整性、容器 ID/实例归属/PID 持久化、当前实例孤儿回收、无标签容器拒绝、workspace 越界拒绝、代理命令身份校验和 migration v17；全仓 Python 测试 350 passed，`compileall` 与 `git diff --check` 通过。
+
+### 2026-08-03：能力复现项目类型策略
+
+- 新增统一策略决策模块，将项目明确分为 `official_demo`、`local_web`、`cli` 和 `unsupported`。前端不再根据 `is_web` 自行传布尔值，API 的 `strategy=auto` 是唯一默认决策入口；操作者仍可显式选择 local_web 或 cli 覆盖自动分类。
+- 官方 Demo 只有同时存在 URL 和分类阶段真实探测后持久化的 `demo_verified=true` 才允许跳过本地部署。仅有未验证 demo URL 不会跳过，仍按 Web/CLI 本地策略执行；跳过响应返回策略、原因和 Demo URL，详情页及能力卡均可直接打开。
+- local_web 任务必须在入队前成功保留 `127.0.0.1` 端口，端口耗尽返回 503，不允许静默降级为 CLI；cli 任务禁止携带 Web 端口。Worker 再次校验该不变量，防止数据库被错误修改后以错误 Prompt 执行。
+- 明确配置为 unsupported 或 `implementation_depth.has_real_code=false` 的项目不创建昂贵复现任务，返回可解释跳过原因；操作者显式选择本地策略时仍可覆盖，覆盖后若没有仓库 URL 则按输入错误拒绝。
+- migration v18 为任务增加 `repro_strategy`，本地 Web/CLI 决策与任务一起持久化并通过任务详情和列表返回。分类批处理同步写回 Demo 验证结果、策略和理由；无法解析有效仓库的条目标记为 unsupported。
+- 删除旧 `web: true/false` 请求字段并设置额外字段拒绝，旧调用返回 422，避免继续维护已经与后端任务语义脱节的 Beta 兼容契约。
+- 回归覆盖已验证/未验证 Demo、无真实代码、操作者覆盖、官方 Demo 不建任务、无仓库 unsupported、local_web 策略与端口持久化及旧字段拒绝；能力/数据库专项测试 125 passed，全仓 Python 测试 356 passed，前端生产构建、`compileall` 与 `git diff --check` 通过。前端仍只有既有的动态/静态 import 与大 chunk 警告。

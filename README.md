@@ -300,6 +300,8 @@ OpenCode 权限按 Profile 生成，未知工具、外部目录、子代理、Sk
 
 复现容器使用 `com.ai4sec.*` 标签记录资源类型、数据库实例归属、任务 ID 和执行 Profile；任务表同时持久化容器名、容器 ID、workspace、实例归属 ID 和 Web 代理 PID。Worker 启动恢复时只自动回收“带平台标签、归属当前数据库实例、且无法与当前任务记录对应”的孤儿容器；旧版无标签容器或其他实例容器不会自动删除。Web 代理固定监听 `127.0.0.1`，清理时只有在持久化 PID 的真实命令仍匹配对应 loopback `socat` 监听器时才发送终止信号。
 
+能力复现由后端统一选择 `official_demo`、`local_web`、`cli` 或 `unsupported` 策略。只有分类阶段已真实探测并持久化 `demo_verified=true` 的官方 Demo 才跳过本地部署；Web 项目必须先保留 loopback 端口再入队，CLI 项目不得携带 Web 端口；明确无真实实现的项目返回可解释的跳过结果。操作者可显式选择 `local_web` 或 `cli` 覆盖自动分类，旧 `web: true/false` 请求字段已删除并返回 422，避免前端布尔值与后端任务语义再次漂移。
+
 能力复现默认限制为 `REPRO_CPUS=2.0`、`REPRO_MEMORY=4g`、`REPRO_MEMORY_SWAP=4g`、`REPRO_PIDS_LIMIT=1024`、workspace 10 GiB 软上限和数据库日志 5 MiB 上限。Web 端口代理只监听 `127.0.0.1`。workspace 上限通过周期扫描实现，不是文件系统硬 quota；生产部署仍建议为复现目录使用独立受限文件系统或项目配额。
 
 如需获取最新资讯，可运行 shadow 采集：

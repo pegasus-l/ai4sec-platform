@@ -33,16 +33,18 @@ export function fetchStats(): Promise<CapStats> {
   return getJson('/api/capabilities/stats');
 }
 
-export function startRepro(itemId: number, web = false): Promise<{
+export function startRepro(itemId: number, strategy: 'auto' | 'local_web' | 'cli' = 'auto'): Promise<{
   ok: boolean;
   task_id?: number;
   repo_url?: string;
   web_port?: number | null;
   skipped?: boolean;
-  reason?: 'official_demo';
+  reason?: 'official_demo' | 'unsupported';
+  strategy?: 'official_demo' | 'local_web' | 'cli' | 'unsupported';
+  message?: string;
   demo_url?: string;
 }> {
-  return postJson(`/api/capabilities/items/${itemId}/start-repro`, { web });
+  return postJson(`/api/capabilities/items/${itemId}/start-repro`, { strategy });
 }
 
 export function stopRepro(taskId: number): Promise<{ ok: boolean }> {

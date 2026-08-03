@@ -50,19 +50,22 @@ def enqueue_repro_task(
     trigger: str,
     initial_status: str = "queued",
     execution_profile: str = "standard",
+    repro_strategy: str = "cli",
 ) -> int:
     validate_repro_queue_limits()
     if initial_status not in {"queued", "awaiting_profile_approval", "awaiting_egress_approval"}:
         raise ValueError(f"invalid initial repro task status: {initial_status}")
     if execution_profile not in {"standard", "nested_docker"}:
         raise ValueError(f"invalid reproduction execution profile: {execution_profile}")
+    if repro_strategy not in {"local_web", "cli"}:
+        raise ValueError(f"invalid queued reproduction strategy: {repro_strategy}")
     now = utc_now()
     cutoff = (datetime.now(timezone.utc) - timedelta(hours=24)).replace(microsecond=0).isoformat().replace("+00:00", "Z")
     cursor = conn.execute(
         """
         INSERT INTO capability_repro_tasks
-            (item_id, repo_url, status, created_at, updated_at, trigger, execution_profile, profile_approval_status)
-        SELECT ?, ?, ?, ?, ?, ?, ?, ?
+            (item_id, repo_url, status, created_at, updated_at, trigger, execution_profile, profile_approval_status, repro_strategy)
+        SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?
         WHERE NOT EXISTS (
             SELECT 1 FROM capability_repro_tasks
             WHERE item_id = ? AND status IN ('awaiting_profile_approval', 'awaiting_egress_approval', 'queued', 'running')
@@ -84,6 +87,7 @@ def enqueue_repro_task(
             trigger,
             execution_profile,
             "pending" if execution_profile == "nested_docker" else "not_required",
+            repro_strategy,
             item_id,
             REPRO_MAX_QUEUED_TASKS,
             item_id,

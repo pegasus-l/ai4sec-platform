@@ -22,10 +22,11 @@ import asyncio
 import json
 import socket
 import sqlite3
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from ai4sec_platform.app.dependencies import get_db
 from ai4sec_platform.db import repositories as repo
@@ -52,6 +53,7 @@ from ai4sec_platform.domains.capabilities.repro_profiles import (
     repro_profile_payload,
     review_nested_docker_profile,
 )
+from ai4sec_platform.domains.capabilities.repro_strategy import resolve_repro_strategy
 from ai4sec_platform.domains.capabilities.schemas import ReproTaskResponse
 from ai4sec_platform.domains.capabilities.selectors import pick_top_repro_candidates, _resolve_repo_url
 from ai4sec_platform.domains.capabilities.service import classify_stats as capability_classify_stats
@@ -97,6 +99,7 @@ def repro_runs(conn: sqlite3.Connection = Depends(get_db)) -> dict:
                 "status": t["status"],
                 "repo_url": t.get("repo_url", ""),
                 "environment": "auto-runner",
+                "repro_strategy": t.get("repro_strategy", "cli"),
                 "last_event": t.get("result", "")[:100] if t.get("result") else "",
                 "artifacts": [],
                 "task_id": t["id"],
@@ -137,7 +140,9 @@ def conversions(conn: sqlite3.Connection = Depends(get_db)) -> dict:
 # 新增：复现任务端点
 # ============================================================================
 class StartReproRequest(BaseModel):
-    web: bool = False
+    model_config = ConfigDict(extra="forbid")
+
+    strategy: Literal["auto", "local_web", "cli"] = "auto"
     execution_profile: str = Field(default="standard", max_length=30)
     external_domains: list[str] = Field(default_factory=list, max_length=20)
     egress_purpose: str = Field(default="", max_length=500)
@@ -161,9 +166,23 @@ def start_repro(item_id: int, body: StartReproRequest = StartReproRequest(), con
     if not item:
         raise HTTPException(status_code=404, detail="capability item not found")
 
+    decision = resolve_repro_strategy(item, body.strategy)
+    if not decision.should_enqueue:
+        return {
+            "ok": True,
+            "skipped": True,
+            "reason": decision.strategy,
+            "strategy": decision.strategy,
+            "message": decision.reason,
+            "item_id": item_id,
+            "demo_url": decision.demo_url,
+        }
     repo_url = _resolve_repo_url(item)
     if not repo_url:
         raise HTTPException(status_code=400, detail="no repo URL found in item")
+    web_port = _alloc_web_port(conn) if decision.strategy == "local_web" else None
+    if decision.strategy == "local_web" and web_port is None:
+        raise HTTPException(status_code=503, detail={"code": "web_port_unavailable", "message": "no loopback Web port is available"})
 
     try:
         execution_profile = normalize_execution_profile(body.execution_profile)
@@ -182,6 +201,7 @@ def start_repro(item_id: int, body: StartReproRequest = StartReproRequest(), con
             trigger="manual",
             initial_status=initial_status,
             execution_profile=execution_profile,
+            repro_strategy=decision.strategy,
         )
         egress_requests = create_egress_requests(
             conn,
@@ -203,12 +223,8 @@ def start_repro(item_id: int, body: StartReproRequest = StartReproRequest(), con
         if old_task["status"] in ("failed", "timeout", "stopped"):
             request_repro_cleanup(conn, int(old_task["id"]))
 
-    # Web 端口分配
-    web_port = None
-    if body.web or (item.get("payload") or {}).get("is_web"):
-        web_port = _alloc_web_port(conn)
-        if web_port:
-            repo.update_repro_task(conn, task_id=task_id, web_port=web_port)
+    if web_port is not None:
+        repo.update_repro_task(conn, task_id=task_id, web_port=web_port)
 
     return {
         "ok": True,
@@ -217,6 +233,7 @@ def start_repro(item_id: int, body: StartReproRequest = StartReproRequest(), con
         "web_port": web_port,
         "status": initial_status,
         "execution_profile": execution_profile,
+        "strategy": decision.strategy,
         "egress_requests": egress_requests,
     }
 

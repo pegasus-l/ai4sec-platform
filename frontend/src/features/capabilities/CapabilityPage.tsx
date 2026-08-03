@@ -70,10 +70,14 @@ export function CapabilityPage() {
       subtitle: `${item.payload?.source_type ?? ''} · score ${item.score}`,
       render: () => <CapabilityDetailContent itemId={item.id} initialItem={item} onRepro={async () => {
         try {
-          const result = await startRepro(item.id, item.payload?.is_web ?? false);
+          const result = await startRepro(item.id);
           if (result.skipped && result.demo_url) {
             toast('检测到官方 Demo，无需启动本地复现', 'success');
             window.open(result.demo_url, '_blank', 'noopener');
+            return;
+          }
+          if (result.skipped) {
+            toast(result.message || '该项目当前不适合自动复现', 'info');
             return;
           }
           toast('已加入复现队列，正在打开实时工作台', 'success');
@@ -164,7 +168,7 @@ function CapabilityToday({ items, stats, openDetail }: { items: CapabilityItem[]
     <div className="asis-list">
       {filtered.length === 0 && <EmptyState title="暂无能力候选" description="先跑 news.ai_for_sec_local_raw_import + capabilities.from_news_pipeline" />}
       {filtered.map((item, i) => <CapabilityCard key={item.id} item={item} rank={i + 1} onClick={() => openDetail(item)} onRepro={async () => {
-        try { await startRepro(item.id, item.payload?.is_web ?? false); toast('已加入复现队列', 'success'); }
+        try { const result = await startRepro(item.id); if (result.reason === 'official_demo' && result.demo_url) window.open(result.demo_url, '_blank', 'noopener'); toast(result.skipped ? result.message || '已跳过自动复现' : '已加入复现队列', result.skipped ? 'info' : 'success'); }
         catch (e) { toast(`复现失败: ${e}`, 'error'); }
       }} />)}
     </div>
@@ -388,7 +392,7 @@ function ReproDetailContent({ task, capabilityItem, openDetail }: { task: ReproT
     <div className="repro-actions">
       {p.demo_url && <a className="btn primary" href={p.demo_url} target="_blank" rel="noreferrer">打开官方 Demo ↗</a>}
       {!p.demo_url && currentTask.web_url && report?.web_started && <a className="btn primary" href={currentTask.web_url} target="_blank" rel="noreferrer">打开 Web 验证 ↗</a>}
-      {!p.demo_url && <button className="btn primary" onClick={async () => { if (capabilityItem) { try { await startRepro(capabilityItem.id, p.is_web ?? false); toast('已重跑复现', 'success'); qc.invalidateQueries({ queryKey: ['cap-repro'] }); } catch (e) { toast(`重跑失败: ${e}`, 'error'); } } }}>重跑</button>}
+      {!p.demo_url && <button className="btn primary" onClick={async () => { if (capabilityItem) { try { const result = await startRepro(capabilityItem.id); toast(result.skipped ? result.message || '已跳过自动复现' : '已重跑复现', result.skipped ? 'info' : 'success'); qc.invalidateQueries({ queryKey: ['cap-repro'] }); } catch (e) { toast(`重跑失败: ${e}`, 'error'); } } }}>重跑</button>}
       {['running', 'queued'].includes(liveStatus) && <button className="btn" onClick={async () => { try { await stopRepro(currentTask.id); toast('已停止', 'success'); qc.invalidateQueries({ queryKey: ['cap-repro'] }); } catch (e) { toast(`停止失败: ${e}`, 'error'); } }}>停止</button>}
       <button className="btn" onClick={async () => { try { await cleanupRepro(currentTask.id); toast('已清理', 'success'); qc.invalidateQueries({ queryKey: ['cap-repro'] }); } catch (e) { toast(`清理失败: ${e}`, 'error'); } }}>清理</button>
       {capabilityItem && <button className="btn" onClick={() => openDetail(capabilityItem)}>查看能力详情</button>}

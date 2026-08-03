@@ -350,6 +350,7 @@ CREATE TABLE IF NOT EXISTS capability_repro_tasks (
     heartbeat_at TEXT NOT NULL DEFAULT '',
     cancel_requested INTEGER NOT NULL DEFAULT 0,
     cleanup_requested INTEGER NOT NULL DEFAULT 0,
+    repro_strategy TEXT NOT NULL DEFAULT 'cli',
     execution_profile TEXT NOT NULL DEFAULT 'standard',
     profile_approval_status TEXT NOT NULL DEFAULT 'not_required',
     profile_reviewed_by TEXT NOT NULL DEFAULT '',

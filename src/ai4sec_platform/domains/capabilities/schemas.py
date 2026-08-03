@@ -93,6 +93,7 @@ class ReproTaskResponse(BaseModel):
     finished_at: str = ""
     cleaned_at: str = ""
     trigger: str = "manual"
+    repro_strategy: str = "cli"
     report: ReproReport | None = None
     web_port: int | None = None
     web_url: str = ""
@@ -130,6 +131,7 @@ class ReproTaskResponse(BaseModel):
             finished_at=row.get("finished_at", ""),
             cleaned_at=row.get("cleaned_at", ""),
             trigger=row.get("trigger", "manual"),
+            repro_strategy=row.get("repro_strategy", "cli"),
             report=report,
             web_port=row.get("web_port"),
             web_url=row.get("web_url", ""),

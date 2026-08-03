@@ -28,6 +28,9 @@ export interface CapabilityItem {
     is_web?: boolean;
     web_framework?: string;
     demo_url?: string;
+    demo_verified?: boolean;
+    repro_strategy?: 'official_demo' | 'local_web' | 'cli' | 'unsupported';
+    repro_strategy_reason?: string;
     implementation_depth?: {
       has_real_code: boolean;
       has_tests: boolean;
@@ -91,6 +94,7 @@ export interface ReproTask {
   repo_url: string;
   status: string;
   trigger: string;
+  repro_strategy?: 'local_web' | 'cli';
   container_name?: string;
   workspace_path?: string;
   web_port?: number | null;

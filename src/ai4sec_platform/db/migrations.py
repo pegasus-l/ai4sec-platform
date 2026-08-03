@@ -170,6 +170,14 @@ MIGRATIONS: tuple[Migration, ...] = (
             "runtime_owner_id TEXT NOT NULL DEFAULT '';proxy_pid INTEGER NOT NULL DEFAULT 0"
         ),
     ),
+    Migration(
+        version=18,
+        name="add_capability_repro_strategy",
+        apply=lambda conn: _add_column_if_missing(
+            conn, "capability_repro_tasks", "repro_strategy", "TEXT NOT NULL DEFAULT 'cli'"
+        ),
+        checksum_source="capability_repro_tasks.repro_strategy TEXT NOT NULL DEFAULT 'cli'",
+    ),
 )
 
 

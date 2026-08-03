@@ -440,6 +440,7 @@ def classify_batch(
                     demo_url = result["demo_urls"][0]
                 if demo_url and not verify_demo_url(demo_url):
                     demo_url = ""
+                repro_strategy = "official_demo" if demo_url else "local_web" if is_web else "cli"
                 # 写回 domain_items payload（替代旧 db.update_item_web_class）
                 repo.update_domain_item(
                     conn,
@@ -449,6 +450,9 @@ def classify_batch(
                         "web_framework": framework,
                         "web_classify_ts": classify_ts,
                         "demo_url": demo_url,
+                        "demo_verified": bool(demo_url),
+                        "repro_strategy": repro_strategy,
+                        "repro_strategy_reason": "verified official demo" if demo_url else "Web classification" if is_web else "CLI/minimal example fallback",
                     },
                     metrics={"web_classify_score": result.get("rule_score", 0)},
                 )
@@ -462,7 +466,13 @@ def classify_batch(
             # 无有效 repo: 标记为不可分类
             repo.update_domain_item(
                 conn, item_id=item_id,
-                payload={"is_web": False, "web_framework": "SKIP", "web_classify_ts": datetime.now().isoformat()},
+                payload={
+                    "is_web": False,
+                    "web_framework": "SKIP",
+                    "web_classify_ts": datetime.now().isoformat(),
+                    "repro_strategy": "unsupported",
+                    "repro_strategy_reason": str(result.get("error") or "repository URL cannot be classified"),
+                },
             )
 
         time.sleep(1)  # GitHub API 限流

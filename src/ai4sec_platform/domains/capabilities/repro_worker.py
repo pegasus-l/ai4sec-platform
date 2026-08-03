@@ -172,6 +172,11 @@ class CapabilityReproWorker:
 
     def _run_task(self, task: dict[str, Any]) -> None:
         task_id = int(task["id"])
+        repro_strategy = str(task.get("repro_strategy") or "cli")
+        if repro_strategy == "local_web" and not task.get("web_port"):
+            raise RuntimeError("local_web reproduction task is missing its reserved loopback port")
+        if repro_strategy == "cli" and task.get("web_port"):
+            raise RuntimeError("cli reproduction task must not reserve a Web port")
         last_heartbeat = 0.0
         with connect(self.settings) as conn:
             init_db(conn)
