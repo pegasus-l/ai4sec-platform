@@ -460,3 +460,9 @@ PYTHONPATH=src python3 -m ai4sec_platform.cli.run_pipeline --pipeline capabiliti
 ```
 
 该 pipeline 会复用或生成能力候选，优先使用 `.env` 中配置的真实模型完成能力评估；如未配置模型则回退到本地规则引擎，并写入 `model_calls`。
+
+## 能力洞察工作台
+
+正式能力页面复用统一的领域 API，不保留旧 demo 聚合兼容层。复现任务列表与详情使用同一份 `ReproTaskResponse` 契约和真实数值任务 ID，确保查看详情、停止与清理操作指向同一数据库任务。
+
+复现详情会展示执行策略、Web 端口、报告 Schema 版本、实际命令、验收问题、结构化证据和已知限制。页面将 `success` 与 `partial` 分开统计，并提供当前视图筛选、完整能力查询刷新和 API 失败提示。

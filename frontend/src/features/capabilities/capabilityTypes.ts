@@ -59,6 +59,7 @@ export interface CapabilityItem {
 }
 
 export interface ReproReport {
+  schema_version?: string;
   level?: string;
   status: string;
   summary: string;
@@ -69,6 +70,8 @@ export interface ReproReport {
   blockers?: string[];
   gotchas?: string[];
   usage?: Record<string, string>;
+  evidence?: Array<string | Record<string, unknown>>;
+  limitations?: string[];
   is_web?: boolean;
   web_started?: boolean;
   web_framework?: string;
@@ -87,8 +90,6 @@ export interface ReproReport {
 
 export interface ReproTask {
   id: number;
-  task_id?: number;
-  display_id?: string;
   item_id: number;
   title?: string;
   repo_url: string;

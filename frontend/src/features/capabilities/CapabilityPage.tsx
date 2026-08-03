@@ -44,14 +44,15 @@ function formatScore(score: number): string {
 
 export function CapabilityPage() {
   const [view, setView] = useState<CapabilityView>('today');
+  const [searchTerm, setSearchTerm] = useState('');
   const { push } = useDrawerStack();
   const { toast } = useToast();
   const qc = useQueryClient();
 
-  const { data: todayData, isLoading: todayLoading } = useQuery({ queryKey: ['cap-today'], queryFn: fetchToday, staleTime: 300_000 });
-  const { data: libraryData } = useQuery({ queryKey: ['cap-library'], queryFn: () => fetchLibrary(50), staleTime: 300_000 });
-  const { data: reproData } = useQuery({ queryKey: ['cap-repro'], queryFn: fetchReproRuns, staleTime: 1_000, refetchInterval: 5_000 });
-  const { data: convData } = useQuery({ queryKey: ['cap-conversions'], queryFn: fetchConversions, staleTime: 300_000 });
+  const { data: todayData, isLoading: todayLoading, isError: todayError } = useQuery({ queryKey: ['cap-today'], queryFn: fetchToday, staleTime: 300_000 });
+  const { data: libraryData, isError: libraryError } = useQuery({ queryKey: ['cap-library'], queryFn: () => fetchLibrary(50), staleTime: 300_000 });
+  const { data: reproData, isError: reproError } = useQuery({ queryKey: ['cap-repro'], queryFn: fetchReproRuns, staleTime: 1_000, refetchInterval: 5_000 });
+  const { data: convData, isError: conversionError } = useQuery({ queryKey: ['cap-conversions'], queryFn: fetchConversions, staleTime: 300_000 });
   const { data: statsData } = useQuery({ queryKey: ['cap-classify-stats'], queryFn: fetchClassifyStats, staleTime: 300_000 });
 
   const todayItems = ((todayData as Record<string, unknown> | undefined)?.items ?? []) as CapabilityItem[];
@@ -59,6 +60,12 @@ export function CapabilityPage() {
   const reproRuns = ((reproData as Record<string, unknown> | undefined)?.items ?? []) as ReproTask[];
   const conversions = ((convData as Record<string, unknown> | undefined)?.items ?? []) as ConversionRecord[];
   const stats = statsData ?? { total: 0, classified: 0, unclassified: 0, web_count: 0 };
+  const normalizedSearch = searchTerm.trim().toLowerCase();
+  const visibleTodayItems = normalizedSearch ? todayItems.filter(item => capabilityMatches(item, normalizedSearch)) : todayItems;
+  const visibleLibraryItems = normalizedSearch ? libraryItems.filter(item => capabilityMatches(item, normalizedSearch)) : libraryItems;
+  const visibleReproRuns = normalizedSearch ? reproRuns.filter(run => `${run.repo_url} ${run.result || ''}`.toLowerCase().includes(normalizedSearch)) : reproRuns;
+  const visibleConversions = normalizedSearch ? conversions.filter(record => `${record.title} ${record.scenario} ${record.owner} ${record.next_action}`.toLowerCase().includes(normalizedSearch)) : conversions;
+  const viewError = (view === 'today' && todayError) || (view === 'library' && libraryError) || (view === 'repro' && reproError) || (view === 'conversion' && conversionError);
 
   const viewRef = useRef<HTMLDivElement>(null);
   useEffect(() => { if (viewRef.current) viewRef.current.scrollTop = 0; }, [view]);
@@ -112,20 +119,28 @@ export function CapabilityPage() {
     <section className="content">
       <section className="content-head">
         <div className="content-title"><span className="label">{navGroups.flatMap(g => g.items).find(i => i.id === view)?.title ?? '能力洞察'}</span><h1>{heroTitle(view)}</h1><p>{heroCopy(view)}</p></div>
-        <div className="head-actions"><label className="search"><span>⌕</span><input placeholder="搜索能力 / 仓库 / 技术点" onChange={() => {}} /></label><button className="btn" onClick={() => qc.invalidateQueries({ queryKey: ['cap-'] })}>刷新数据</button></div>
+        <div className="head-actions"><label className="search"><span>⌕</span><input value={searchTerm} placeholder="搜索能力 / 仓库 / 技术点" onChange={event => setSearchTerm(event.target.value)} /></label><button className="btn" onClick={() => qc.invalidateQueries({ predicate: query => String(query.queryKey[0] || '').startsWith('cap-') })}>刷新数据</button></div>
       </section>
       <div className="content-body view" ref={viewRef}>
         {todayLoading && view === 'today' && <EmptyState title="正在加载" description="从 /api/capabilities/today 拉取数据。" />}
-        {view === 'today' && <CapabilityToday items={todayItems} stats={stats} openDetail={openDetail} />}
-        {view === 'library' && <CapabilityLibrary items={libraryItems} openDetail={openDetail} />}
-        {view === 'repro' && <CapabilityRepro runs={reproRuns} openDetail={openDetail} items={libraryItems} />}
-        {view === 'conversion' && <CapabilityConversion conversions={conversions} openConversion={openConversion} />}
+        {viewError && <EmptyState title="能力数据加载失败" description="请检查 API 服务与网络连接后点击刷新数据。" />}
+        {!viewError && !todayLoading && view === 'today' && <CapabilityToday items={visibleTodayItems} stats={stats} openDetail={openDetail} />}
+        {!viewError && view === 'library' && <CapabilityLibrary items={visibleLibraryItems} openDetail={openDetail} />}
+        {!viewError && view === 'repro' && <CapabilityRepro runs={visibleReproRuns} openDetail={openDetail} items={libraryItems} />}
+        {!viewError && view === 'conversion' && <CapabilityConversion conversions={visibleConversions} openConversion={openConversion} />}
         {view === 'ops-overview' && <CapabilityOps />}
         {view === 'ops-quality' && <CapabilityOpsQuality />}
         {view === 'ops-runs' && <CapabilityOpsRuns />}
       </div>
     </section>
   </main>;
+}
+
+function capabilityMatches(item: CapabilityItem, search: string): boolean {
+  return [item.title, item.summary, item.source_url, ...(item.tags || []), ...(item.payload?.tech_points || []), item.payload?.code_url || '', item.payload?.capability_type || '']
+    .join(' ')
+    .toLowerCase()
+    .includes(search);
 }
 
 function heroTitle(view: CapabilityView): string {
@@ -291,7 +306,8 @@ function CapabilityRepro({ runs, items, openDetail }: { runs: ReproTask[]; items
   const selected = runs.find(run => run.id === selectedTaskId) ?? runs[0];
   const capabilityItem = items.find(i => i.id === selected?.item_id);
   const runningCount = runs.filter(run => run.status === 'running' || run.status === 'queued').length;
-  const successCount = runs.filter(run => run.status === 'success' || run.status === 'partial').length;
+  const successCount = runs.filter(run => run.status === 'success').length;
+  const partialCount = runs.filter(run => run.status === 'partial').length;
   const failedCount = runs.filter(run => run.status === 'failed' || run.status === 'timeout').length;
 
   return <div className="grid">
@@ -300,7 +316,7 @@ function CapabilityRepro({ runs, items, openDetail }: { runs: ReproTask[]; items
       <div className="repro-metrics">
         <div><span>全部任务</span><b>{runs.length}</b></div>
         <div><span>正在复现</span><b className="repro-running">{runningCount}</b></div>
-        <div><span>复现成功</span><b className="repro-success">{successCount}</b></div>
+        <div><span>成功 / 部分</span><b className="repro-success">{successCount} / {partialCount}</b></div>
         <div><span>失败 / 超时</span><b className="repro-failed">{failedCount}</b></div>
       </div>
       <div className="repro-workbench">
@@ -311,7 +327,7 @@ function CapabilityRepro({ runs, items, openDetail }: { runs: ReproTask[]; items
               <span className={`repro-status-dot status-${run.status}`} />
               <span className="repro-task-main">
                 <strong>{run.title || run.repo_url?.split('/').filter(Boolean).slice(-1)[0] || `task-${run.id}`}</strong>
-                <small>#{run.id} · {run.trigger || 'manual'} · {formatReproTime(run.created_at)}</small>
+                <small>#{run.id} · {reproStrategyLabel(run.repro_strategy)} · {formatReproTime(run.created_at)}</small>
               </span>
               <span className={`repro-status status-${run.status}`}>{reproStatusLabel(run.status)}</span>
               {index === 0 && (run.status === 'running' || run.status === 'queued') && <span className="repro-live">LIVE</span>}
@@ -387,7 +403,7 @@ function ReproDetailContent({ task, capabilityItem, openDetail }: { task: ReproT
   return <div className="repro-console">
     <div className="repro-console-head">
       <div><span className={`repro-status status-${liveStatus}`}>{reproStatusLabel(liveStatus)}</span><strong>{currentTask.repo_url?.split('/').filter(Boolean).slice(-1)[0]}</strong></div>
-      <div className="repro-meta">任务 #{currentTask.id}{currentTask.web_port ? ` · Web ${currentTask.web_port}` : ''}</div>
+      <div className="repro-meta">任务 #{currentTask.id} · {reproStrategyLabel(currentTask.repro_strategy)}{currentTask.web_port ? ` · Web ${currentTask.web_port}` : ''}</div>
     </div>
     <div className="repro-actions">
       {p.demo_url && <a className="btn primary" href={p.demo_url} target="_blank" rel="noreferrer">打开官方 Demo ↗</a>}
@@ -403,13 +419,13 @@ function ReproDetailContent({ task, capabilityItem, openDetail }: { task: ReproT
     </section>
     {report && <>
       <section className="repro-section">
-        <div className="repro-section-title"><span>复现结论</span><small>{report.level || report.web_framework || report.project_type || '自动报告'}</small></div>
+        <div className="repro-section-title"><span>复现结论</span><small>Schema {report.schema_version || '1.0'} · {report.level || report.web_framework || report.project_type || '自动报告'}</small></div>
         <div className={`repro-summary ${report.status === 'success' ? 'success' : report.status === 'partial' ? 'partial' : 'failed'}`}><strong>{report.summary || '暂无摘要'}</strong>{report.verify && <p>验证：{report.verify}</p>}</div>
         <div className="field-grid repro-fields">
           <div className="cap-field"><span>报告状态</span><b>{reproStatusLabel(report.status)}</b></div>
           <div className="cap-field"><span>项目类型</span><b>{report.web_framework || report.project_type || '-'}</b></div>
           <div className="cap-field"><span>Web 启动</span><b>{report.is_web ? (report.web_started ? '已启动并验证' : '未启动') : '非 Web 项目'}</b></div>
-          <div className="cap-field"><span>启动命令</span><code>{report.start_command || '-'}</code></div>
+          <div className="cap-field"><span>实际命令</span><code>{report.start_command || String(report.run_result?.command || '-')}</code></div>
         </div>
       </section>
       {report.is_web && <section className="repro-section">
@@ -420,9 +436,16 @@ function ReproDetailContent({ task, capabilityItem, openDetail }: { task: ReproT
           <p>验收结果：{report.core_workflow?.result || '未执行核心业务链'}</p>
           {(report.core_workflow?.evidence?.length ?? 0) > 0 && <p>证据：{report.core_workflow?.evidence?.join('；')}</p>}
         </div>
-        {(report.acceptance_issues?.length ?? 0) > 0 && <div className="repro-findings">
-          {(report.acceptance_issues ?? []).map((issue, index) => <div className="blocker" key={`acceptance-${index}`}>自动验收：{issue}</div>)}
-        </div>}
+      </section>}
+      {(report.acceptance_issues?.length ?? 0) > 0 && <section className="repro-section repro-findings">
+        {(report.acceptance_issues ?? []).map((issue, index) => <div className="blocker" key={`acceptance-${index}`}>自动验收：{issue}</div>)}
+      </section>}
+      {((report.evidence?.length ?? 0) > 0 || (report.limitations?.length ?? 0) > 0) && <section className="repro-section">
+        <div className="repro-section-title"><span>证据与限制</span><small>结构化报告</small></div>
+        <div className="repro-findings">
+          {(report.evidence ?? []).map((evidence, index) => <div className="evidence" key={`evidence-${index}`}>证据：{typeof evidence === 'string' ? evidence : JSON.stringify(evidence)}</div>)}
+          {(report.limitations ?? []).map((limitation, index) => <div className="limitation" key={`limitation-${index}`}>限制：{limitation}</div>)}
+        </div>
       </section>}
       {report.usage && Object.keys(report.usage).length > 0 && <section className="repro-section">
         <div className="repro-section-title"><span>使用说明</span><small>面向使用者</small></div>
@@ -447,6 +470,10 @@ function ReproDetailContent({ task, capabilityItem, openDetail }: { task: ReproT
 
 function reproStatusLabel(status: string): string {
   return { queued: '排队中', running: '复现中', success: '复现成功', partial: '部分成功', failed: '复现失败', stopped: '已停止', timeout: '已超时', cleaned: '已清理' }[status] ?? status;
+}
+
+function reproStrategyLabel(strategy?: string): string {
+  return { local_web: '本地 Web', cli: 'CLI / 最小示例' }[strategy || ''] ?? '自动策略';
 }
 
 function formatReproTime(value?: string): string {

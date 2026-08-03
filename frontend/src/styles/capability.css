@@ -163,6 +163,8 @@
 .repro-findings > div { border-radius: 9px; padding: 9px 11px; font-size: 11px; }
 .repro-findings .blocker { color: var(--rose); background: rgba(251,113,133,0.07); }
 .repro-findings .gotcha { color: var(--amber); background: rgba(245,158,11,0.07); }
+.repro-findings .evidence { color: var(--green); background: rgba(52,211,153,0.07); }
+.repro-findings .limitation { color: var(--amber); background: rgba(245,158,11,0.07); }
 @keyframes repro-pulse { 50% { opacity: .45; } }
 
 /* 抽屉分区 */

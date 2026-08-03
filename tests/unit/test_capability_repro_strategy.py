@@ -102,6 +102,11 @@ def test_start_repro_persists_local_web_strategy_and_reserved_port(monkeypatch, 
         task = repo.list_repro_tasks(conn, item_id=item_id)[0]
     assert task["repro_strategy"] == "local_web"
     assert task["web_port"] == 18123
+    listed = client.get("/api/capabilities/repro-runs")
+    assert listed.status_code == 200
+    assert listed.json()["items"][0]["id"] == task["id"]
+    assert listed.json()["items"][0]["item_id"] == item_id
+    assert listed.json()["items"][0]["repro_strategy"] == "local_web"
 
 
 def test_start_repro_rejects_removed_web_boolean(tmp_path: Path) -> None:

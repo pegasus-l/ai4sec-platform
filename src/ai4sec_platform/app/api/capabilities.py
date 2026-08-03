@@ -4,7 +4,7 @@
   GET  /today                          ← demo today.json
   GET  /items                           ← demo library.json
   GET  /items/{id}                      ← demo capability_detail.sample.json
-  GET  /repro-runs                      ← demo repro_runs.json
+  GET  /repro-runs                      ← 正式复现任务列表
   GET  /conversions                     ← demo conversions.json
   POST /items/{id}/start-repro          ← 旧 /api/repro/start
   POST /repro/{task_id}/stop           ← 旧 /api/repro/{task_id}/stop
@@ -87,25 +87,11 @@ def item_detail(item_id: int, conn: sqlite3.Connection = Depends(get_db)) -> dic
 
 @router.get("/repro-runs")
 def repro_runs(conn: sqlite3.Connection = Depends(get_db)) -> dict:
-    """复现任务列表（对齐 demo repro_runs.json）"""
+    """复现任务列表，使用与单任务详情相同的正式契约。"""
     tasks = repo.list_repro_tasks(conn)
     return {
         "domain": DOMAIN,
-        "items": [
-            {
-                "id": f"repro-{t['item_id']}",
-                "capability_id": str(t["item_id"]),
-                "title": t.get("repo_url", "").split("/")[-1] if t.get("repo_url") else "",
-                "status": t["status"],
-                "repo_url": t.get("repo_url", ""),
-                "environment": "auto-runner",
-                "repro_strategy": t.get("repro_strategy", "cli"),
-                "last_event": t.get("result", "")[:100] if t.get("result") else "",
-                "artifacts": [],
-                "task_id": t["id"],
-            }
-            for t in tasks
-        ],
+        "items": [ReproTaskResponse.from_row(task, log_tail_lines=20).model_dump() for task in tasks],
     }
 
 
