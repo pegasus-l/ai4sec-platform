@@ -21,7 +21,9 @@ class BuildCapabilitiesFromNewsStep:
         selected = [item["id"] for item in existing[:limit]]
         created: list[int] = []
         if not selected:
-            news_items = repo.list_domain_items(context.conn, "news", limit=limit)
+            from ai4sec_platform.domains.capabilities.adapters.asis_items_source import ASISItemsSource
+            source = ASISItemsSource(context.conn)
+            news_items = source.fetch_since()
             candidates = capability_candidates_from_news(news_items)
             for item in candidates[:limit]:
                 payload = item.get("payload") or {}
