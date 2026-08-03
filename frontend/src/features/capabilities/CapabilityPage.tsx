@@ -10,7 +10,6 @@ import {
 } from './capabilityQueries';
 import type { CapabilityItem, ReproTask, ConversionRecord, CapabilityView } from './capabilityTypes';
 import { CapabilityOps, CapabilityOpsQuality, CapabilityOpsRuns } from './CapabilityOps';
-import '../../styles/capability.css';
 
 const navGroups: Array<{ title: string; items: Array<{ id: CapabilityView; icon: string; title: string }> }> = [
   { title: '能力洞察', items: [

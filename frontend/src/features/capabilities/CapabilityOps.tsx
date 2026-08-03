@@ -4,7 +4,6 @@ import { Card, MetricCard, EmptyState, Drawer } from '../../components/ui';
 import { useToast } from '../../components/Toast';
 import { getJson } from '../../api/client';
 import { fetchRuns, fetchRunDetail, type OpsRun } from '../../api/opsClient';
-import '../../styles/capability.css';
 
 interface OpsData {
   stats: { total: number; candidates: number; capabilities: number; conversions: number; repro_succeeded: number; repro_active: number };
