@@ -1,7 +1,7 @@
 import type { PropsWithChildren, ReactNode, CSSProperties } from 'react';
 
 export function Card({ children, className = '', onClick, style }: PropsWithChildren<{ className?: string; onClick?: () => void; style?: CSSProperties }>) {
-  return <section className={`surface ${className}`} onClick={onClick} style={style}>{children}</section>;
+  return <section className={`card ${className}`} onClick={onClick} style={style}>{children}</section>;
 }
 
 export function Badge({ children, tone = 'slate' }: PropsWithChildren<{ tone?: 'slate' | 'sky' | 'green' | 'amber' | 'red' | 'violet' }>) {
@@ -9,11 +9,11 @@ export function Badge({ children, tone = 'slate' }: PropsWithChildren<{ tone?: '
 }
 
 export function MetricCard({ label, value, hint, tone = 'sky', onClick }: { label: string; value: ReactNode; hint?: string; tone?: 'sky' | 'green' | 'amber' | 'red' | 'violet'; onClick?: () => void }) {
-  return <Card className={`metric-card metric-${tone} ${onClick ? 'clickable' : ''}`} onClick={onClick}><span>{label}</span><strong>{value}</strong>{hint && <p>{hint}</p>}</Card>;
+  return <Card className={`kpi metric-${tone} ${onClick ? 'clickable' : ''}`} onClick={onClick}><span>{label}</span><strong>{value}</strong>{hint && <p>{hint}</p>}</Card>;
 }
 
 export function EmptyState({ title, description }: { title: string; description?: string }) {
-  return <div className="empty-state"><strong>{title}</strong>{description && <p>{description}</p>}</div>;
+  return <div className="empty"><strong>{title}</strong>{description && <p>{description}</p>}</div>;
 }
 
 export function Drawer({ open, title, subtitle, onClose, children }: PropsWithChildren<{ open: boolean; title: string; subtitle?: string; onClose: () => void }>) {
