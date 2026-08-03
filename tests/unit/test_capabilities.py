@@ -21,6 +21,10 @@ import time
 from types import SimpleNamespace
 
 from ai4sec_platform.db.repositories import get_succeeded_repro_item_ids
+from ai4sec_platform.db import repositories as repo
+from ai4sec_platform.db.models import init_db
+from ai4sec_platform.db.session import connect
+from ai4sec_platform.core.config import Settings
 from ai4sec_platform.domains.capabilities.adapters import repro_runner
 from ai4sec_platform.domains.capabilities.adapters.from_news import capability_candidates_from_news
 from ai4sec_platform.domains.capabilities.adapters.repro_runner import (
@@ -723,6 +727,37 @@ def test_update_capability_from_report_status_mapping() -> None:
         # 不传 conn，只验证映射逻辑（update_capability_from_report 内部会 from ai4sec_platform.db import repositories）
         # 这里只验证 status_map 正确
         assert status_map[report["status"]] == expected
+
+
+def test_update_capability_from_report_preserves_structured_evidence(tmp_path: Path) -> None:
+    settings = Settings(project_root=tmp_path, output_dir=tmp_path / "output", database_path=tmp_path / "test.db")
+    with connect(settings) as conn:
+        init_db(conn)
+        item_id = repo.create_domain_item(
+            conn,
+            domain="capabilities",
+            item_type="capability",
+            title="Evidence item",
+            source_url="https://github.com/example/repo",
+            payload={"repro_status": "candidate"},
+        )
+        result = update_capability_from_report(conn, item_id=item_id, report={
+            "status": "partial",
+            "schema_version": "1.0",
+            "summary": "CLI ran but a required provider was unavailable",
+            "evidence": ["command output: provider unavailable"],
+            "limitations": ["requires provider credentials"],
+            "usage": {"what": "example tool", "limitations": "provider required"},
+            "blockers": ["provider unavailable"],
+        })
+        conn.commit()
+        item = repo.get_domain_item(conn, "capabilities", item_id)
+
+    assert result["updated"] is True
+    assert item and item["status"] == "部分复现"
+    assert item["payload"]["repro_report_schema_version"] == "1.0"
+    assert item["payload"]["evidence"] == ["command output: provider unavailable"]
+    assert item["payload"]["limitations"] == ["requires provider credentials"]
 
 
 # ============================================================================

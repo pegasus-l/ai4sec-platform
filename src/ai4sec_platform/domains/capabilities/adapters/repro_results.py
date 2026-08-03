@@ -61,9 +61,12 @@ def update_capability_from_report(
     # 构造回写 payload
     payload_update: dict[str, Any] = {
         "repro_report": report,  # 完整报告（11+ 字段）
+        "repro_report_schema_version": report.get("schema_version", "1.0"),
         "repro_summary": report.get("summary", ""),
         "repro_status": rep_status,
         "usage": report.get("usage", {}),
+        "evidence": report.get("evidence") or (report.get("core_workflow") or {}).get("evidence", []),
+        "limitations": report.get("limitations", []),
         "blockers": report.get("blockers", []),
         "gotchas": report.get("gotchas", []),
     }

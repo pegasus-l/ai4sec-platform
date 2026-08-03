@@ -60,6 +60,7 @@ class ReproReport(BaseModel):
     Web 项目（WEB_REPRO_PROMPT）追加：is_web/web_started/web_framework/start_command/verify
     """
 
+    schema_version: str = "1.0"
     level: str = "L1"  # L1|L2|L3
     status: str = "failed"  # success|partial|failed
     summary: str = ""
@@ -70,6 +71,8 @@ class ReproReport(BaseModel):
     blockers: list[str] = Field(default_factory=list)
     gotchas: list[str] = Field(default_factory=list)
     usage: dict[str, Any] = Field(default_factory=dict)
+    evidence: list[Any] = Field(default_factory=list)
+    limitations: list[str] = Field(default_factory=list)
     # Web 项目追加字段
     is_web: bool = False
     web_started: bool = False

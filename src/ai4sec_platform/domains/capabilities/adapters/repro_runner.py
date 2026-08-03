@@ -471,6 +471,7 @@ def _build_repro_prompt(execution_profile: str = "nested_docker") -> str:
 完成后,你必须在最后输出一段 JSON 报告,用下面的标记包裹(便于程序提取):
 ===REPRO_REPORT_START===
 {{
+  "schema_version": "1.0",
   "level": "L1|L2|L3",
   "status": "success|partial|failed",
   "summary": "一句话结论,如:成功装好依赖并跑通最小示例,输出符合预期",
@@ -491,6 +492,8 @@ def _build_repro_prompt(execution_profile: str = "nested_docker") -> str:
     "output_excerpt": "真实输出的关键片段(没有填空)",
     "what_it_does": "用中文说明跑出了什么、是否符合项目宣称的功能"
   }},
+  "evidence": ["真实命令输出、生成文件或服务响应摘要"],
+  "limitations": ["当前限制"],
   "blockers": ["卡点/缺失项,如:需 OpenAI key 才能调用核心功能"],
   "gotchas": ["踩坑记录,如:README 命令有误,真实入口是 src/run.py"],
   "usage": {{
@@ -576,6 +579,7 @@ def _build_web_repro_prompt(execution_profile: str = "nested_docker") -> str:
 # 最后必须输出结构化报告(用标记包裹)
 ===REPRO_REPORT_START===
 {{
+  "schema_version": "1.0",
   "is_web": true/false,
   "status": "success|partial|failed",
   "summary": "一句话结论。若项目无 Web 界面,明确说明它是什么类型、为什么没界面",
@@ -586,6 +590,8 @@ def _build_web_repro_prompt(execution_profile: str = "nested_docker") -> str:
   "core_workflow": {{"goal": "核心用户价值", "mode": "real|mock", "steps": [{{"action": "实际操作", "ok": true/false}}], "evidence": ["真实响应/产物摘要"], "result": "产物或失败阶段", "verified": true/false}},
   "environment": {{"language": "如 Python 3.10", "key_deps": ["关键依赖"]}},
   "steps": [{{"cmd": "关键命令", "ok": true/false, "note": "可选"}}],
+  "evidence": ["真实响应/产物摘要"],
+  "limitations": ["当前限制"],
   "blockers": ["卡点;若项目本身无Web界面,在此说明"],
   "gotchas": ["踩坑"],
   "usage": {{
@@ -1162,6 +1168,7 @@ def enforce_report_acceptance(report: dict | None) -> dict | None:
         return report
 
     normalized = copy.deepcopy(report)
+    normalized.setdefault("schema_version", "1.0")
     status = normalized.get("status")
     if status not in {"success", "partial", "failed"}:
         normalized["status"] = "failed"
