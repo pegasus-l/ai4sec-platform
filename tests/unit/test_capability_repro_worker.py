@@ -146,10 +146,12 @@ def test_worker_executes_claimed_task_without_api_thread(monkeypatch, tmp_path: 
     task_id = _create_task(settings)
     _allow_test_runtime(monkeypatch)
     observed_current_tasks: list[int | None] = []
+    observed_token_paths: list[Path] = []
 
     class FakeRunner:
-        def __init__(self, task_id, repo_url, on_log, on_status, web_port, should_stop, on_heartbeat):
+        def __init__(self, task_id, repo_url, on_log, on_status, web_port, should_stop, on_heartbeat, model_token_path):
             self.task_id = task_id
+            self.model_token_path = model_token_path
             self.on_log = on_log
             self.on_status = on_status
             self.on_heartbeat = on_heartbeat
@@ -157,6 +159,9 @@ def test_worker_executes_claimed_task_without_api_thread(monkeypatch, tmp_path: 
             self.workspace = tmp_path / f"task-{task_id}"
 
         def run(self) -> None:
+            observed_token_paths.append(self.model_token_path)
+            assert self.model_token_path.read_text(encoding="utf-8").startswith("rmt_")
+            assert self.model_token_path.stat().st_mode & 0o077 == 0
             with connect(settings) as conn:
                 worker = conn.execute(
                     "SELECT current_task_id FROM capability_repro_workers WHERE worker_id = 'worker-1'"
@@ -176,11 +181,14 @@ def test_worker_executes_claimed_task_without_api_thread(monkeypatch, tmp_path: 
         worker = conn.execute(
             "SELECT * FROM capability_repro_workers WHERE worker_id = 'worker-1'"
         ).fetchone()
+        token = conn.execute("SELECT revoked_at FROM repro_model_tokens WHERE task_id = ?", (task_id,)).fetchone()
     assert task and task["container_name"] == f"fake-{task_id}"
     assert "worker log" in task["log"]
     assert observed_current_tasks == [task_id]
+    assert observed_token_paths and not observed_token_paths[0].exists()
     assert worker and worker["status"] == "stopped"
     assert worker["current_task_id"] is None
+    assert token and token["revoked_at"]
 
 
 def test_platform_kill_switch_stops_queued_repro_task(tmp_path: Path) -> None:

@@ -25,6 +25,7 @@ import queue
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
+import urllib.parse
 
 from ai4sec_platform.core.env import load_env_file
 from ai4sec_platform.domains.capabilities.repro_policy import validate_repro_queue_limits
@@ -128,10 +129,11 @@ def _task_secret_values() -> tuple[str, ...]:
     return tuple(dict.fromkeys(values))
 
 
-def _validated_token_path() -> Path:
-    if not REPRO_MODEL_TOKEN_FILE:
+def _validated_token_path(token_path: Path | None = None) -> Path:
+    configured_path = str(token_path or REPRO_MODEL_TOKEN_FILE)
+    if not configured_path:
         raise RuntimeError("REPRO_MODEL_TOKEN_FILE is required for capability reproduction")
-    token_path = Path(REPRO_MODEL_TOKEN_FILE).expanduser()
+    token_path = Path(configured_path).expanduser()
     try:
         file_stat = token_path.lstat()
     except FileNotFoundError as exc:
@@ -143,12 +145,15 @@ def _validated_token_path() -> Path:
     return token_path.resolve()
 
 
-def validate_repro_runtime_config(*, check_image: bool = False) -> Path:
+def validate_repro_runtime_config(*, check_image: bool = False, token_path: Path | None = None, require_token: bool = True) -> Path | None:
     validate_repro_resource_limits()
     validate_repro_queue_limits()
-    token_path = _validated_token_path()
+    validated_token_path = _validated_token_path(token_path) if require_token else None
     if not REPRO_LLM_BASE_URL:
         raise RuntimeError("REPRO_LLM_BASE_URL is required for capability reproduction")
+    parsed_gateway = urllib.parse.urlparse(REPRO_LLM_BASE_URL)
+    if parsed_gateway.scheme not in {"http", "https"} or parsed_gateway.username or parsed_gateway.password or not parsed_gateway.path.rstrip("/").endswith("/api/model-gateway/v1"):
+        raise RuntimeError("REPRO_LLM_BASE_URL must point to the AI4SEC /api/model-gateway/v1 endpoint")
     if check_image:
         image_check = _safe_run(
             [
@@ -163,7 +168,7 @@ def validate_repro_runtime_config(*, check_image: bool = False) -> Path:
             raise RuntimeError(
                 f"Repro image is unavailable or contains a baked OpenCode auth file: {REPRO_IMAGE}"
             )
-    return token_path
+    return validated_token_path
 
 
 def validate_repro_resource_limits() -> None:
@@ -386,6 +391,7 @@ class ReproRunner:
         web_port: int | None = None,
         should_stop: Callable[[], bool] | None = None,
         on_heartbeat: Callable[[], None] | None = None,
+        model_token_path: Path | None = None,
     ):
         self.task_id = task_id
         self.repo_url = repo_url
@@ -396,6 +402,7 @@ class ReproRunner:
         self.on_status = on_status or (lambda status, **kw: None)
         self.should_stop = should_stop or (lambda: False)
         self.on_heartbeat = on_heartbeat or (lambda: None)
+        self.model_token_path = model_token_path
         _stamp = int(time.time())
         self.container_name = f"repro-{task_id}-{_stamp}"
         self.workspace = WORKSPACE_ROOT / f"task-{task_id}-{_stamp}"
@@ -418,17 +425,18 @@ class ReproRunner:
             "--memory-swap", REPRO_MEMORY_SWAP,
             "--pids-limit", REPRO_PIDS_LIMIT,
             "--security-opt", "no-new-privileges=true",
+            "--add-host", "host.docker.internal:host-gateway",
             "--tmpfs", "/root/.local/share/opencode:rw,nosuid,nodev,noexec,mode=700",
             "-v", f"{self.workspace}:/workspace",
         ]
-        token_path = _validated_token_path()
+        token_path = _validated_token_path(self.model_token_path)
         cmd.extend(["--mount", f"type=bind,src={token_path},dst={CONTAINER_MODEL_TOKEN_FILE},readonly"])
         cmd.append(REPRO_IMAGE)
         return cmd
 
     def build_exec_command(self):
         """docker exec 进容器，以 root 跑 clone + opencode。"""
-        validate_repro_runtime_config()
+        validate_repro_runtime_config(token_path=self.model_token_path)
         managed_provider = "ai4sec-managed"
         opencode_config = json.dumps({
             "$schema": "https://opencode.ai/config.json",

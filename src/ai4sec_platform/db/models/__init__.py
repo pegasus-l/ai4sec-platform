@@ -229,6 +229,23 @@ CREATE TABLE IF NOT EXISTS model_calls (
 CREATE INDEX IF NOT EXISTS idx_model_calls_run ON model_calls(run_id);
 CREATE INDEX IF NOT EXISTS idx_model_calls_agent ON model_calls(agent_name);
 
+CREATE TABLE IF NOT EXISTS repro_model_tokens (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_id INTEGER NOT NULL,
+    token_hash TEXT NOT NULL UNIQUE,
+    model TEXT NOT NULL,
+    max_calls INTEGER NOT NULL,
+    calls_used INTEGER NOT NULL DEFAULT 0,
+    max_tokens INTEGER NOT NULL,
+    tokens_used INTEGER NOT NULL DEFAULT 0,
+    expires_at INTEGER NOT NULL,
+    revoked_at TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    FOREIGN KEY(task_id) REFERENCES capability_repro_tasks(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_repro_model_tokens_task ON repro_model_tokens(task_id, revoked_at);
+
 CREATE TABLE IF NOT EXISTS data_sources (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     domain TEXT NOT NULL,

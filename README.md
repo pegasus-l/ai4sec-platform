@@ -268,17 +268,15 @@ PYTHONPATH=src python3 -m ai4sec_platform.cli.run_pipeline --pipeline news.daily
 
 该 pipeline 会创建总控 PipelineRun，通过在线连接器采集数据，执行标准化、去重、资讯对象构建、日报生成和质量审计，写入 TaskRun、Artifact 和 manifest，仍保持 `production_writes=false`。
 
-能力复现强制使用受管模型 Secret，必须配置 `REPRO_MODEL_TOKEN_FILE` 指向权限为 `0600` 的普通文件，并配置 `REPRO_LLM_BASE_URL`。Runner 将 Secret 只读挂载到容器，OpenCode 配置通过 `{file:...}` 引用，不会把 token 放入 Prompt、Docker 命令行、`opencode.json` 或宿主机子进程环境。符号链接、目录、缺失文件和 group/other 可读文件会被拒绝。
+能力复现强制通过平台内 Model Gateway 调用模型。`REPRO_LLM_BASE_URL` 必须指向容器可访问的 `/api/model-gateway/v1` 端点。Worker 每个任务签发独立 `rmt_` 短令牌，只在 Linux 运行目录创建 `0600` 临时文件并只读挂载；OpenCode 通过 `{file:...}` 引用。任务成功、失败、取消或超时后数据库令牌立即撤销且临时文件删除。真实 Provider Key 只存在于平台 API 环境，不进入 Worker、复现容器、Prompt、Docker 命令行、`opencode.json`、SQLite 日志或 SSE。
 
 ```bash
-install -d -m 700 /var/lib/ai4sec/secrets
-install -m 600 /dev/null /var/lib/ai4sec/secrets/repro_model_token
-# 通过受控方式写入 token，不要把值写入 shell 历史或 .env
 cp .env.example .env
+REPRO_LLM_BASE_URL=http://host.docker.internal:8000/api/model-gateway/v1
 PYTHONPATH=src python -m ai4sec_platform.cli repro-worker --check-config
 ```
 
-`REPRO_MODEL_TOKEN_FILE` 必须是宿主机 Docker daemon 可见的绝对路径。若 Repro Worker 后续运行在 Compose 容器中，该文件需要以相同绝对路径只读挂载到 Worker，不能只使用容器内部 `/run/secrets` 路径，否则宿主机 Docker daemon 无法作为 bind source 使用。
+短令牌限制任务 ID、模型、有效期、最大调用次数和预留 Token 总量，默认分别为当前任务、`glm-5.2`、4200 秒、200 次和 1,000,000 Token，可通过 `REPRO_MODEL_TOKEN_TTL_SECONDS`、`REPRO_MODEL_MAX_CALLS`、`REPRO_MODEL_MAX_TOKENS` 收紧。数据库只保存 SHA-256 哈希，不保存明文令牌。模型网关将任务声明模型映射到平台配置的真实模型，并由平台注入 Provider Key。
 
 能力复现默认镜像为不包含认证文件的 `repro-runner:v4`，构建定义位于 `configs/repro-runner/Dockerfile`：
 

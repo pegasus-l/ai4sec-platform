@@ -902,7 +902,7 @@ D11 暂缓的是公网入口和完整公网暴露治理，不代表复现容器�
 - [x] 实现启动时容器、任务、报告状态对账。
 - [x] 声明任务资源、日志、重试和并发配额。
 - [x] 完成独立受限复现 Worker 接入。
-- [ ] 建立 Model Gateway 短期任务令牌，不向复现容器注入真实 Provider Key。
+- [x] 建立 Model Gateway 短期任务令牌，不向复现容器注入真实 Provider Key。
 - [ ] 建立代码仓、软件包仓、模型仓和声明外部 API 的出口策略与审计日志。
 - [ ] 阻断回环、私网、链路本地、云 metadata、Docker 网桥和平台管理网段。
 - [ ] 实现 standard rootless 与 nested_docker Sysbox 双 Profile。
@@ -2015,3 +2015,13 @@ Python full test suite: 199 passed
 - 新增只读 `/api/capabilities/repro-worker-status`，返回 `ready/unavailable`、健康 Worker 数、心跳年龄、当前任务和停止状态；不暴露宿主机 PID、主机名或 Worker metadata。
 - 复现执行仍由独立 CLI 进程完成，API/Uvicorn 不启动 Worker，不接触 Docker；单机文件锁、镜像认证审计、只读模型 Secret、容器资源边界和持久任务配额共同构成当前受限服务契约。
 - 当前条目完成的是独立进程及平台生命周期接入。标准 rootless 与 nested_docker Sysbox 双 Profile、细粒度网络出口和最小 OpenCode 权限仍按后续独立条目验收，不能因 Worker 已可观测而提前视为完成。
+
+### 2026-07-31：能力复现任务级 Model Gateway
+
+- 新增平台内 OpenAI-compatible `POST /api/model-gateway/v1/chat/completions`。复现容器只访问该端点，平台 API 使用自身受控环境中的 Provider 配置转发请求，真实 Provider Key 不进入 Worker 或任务容器。
+- 新增 migration v14 `repro_model_tokens`。每个复现任务领取后签发独立 `rmt_` 随机令牌，数据库只保存 SHA-256 哈希，并绑定任务、声明模型、有效期、最大调用次数和预留 Token 总量。
+- Worker 在 Linux 运行目录以原子 `0600` 文件创建短令牌，Docker 只读挂载到 `/run/secrets/repro_model_token`，OpenCode 继续使用 `{file:...}`。任务成功、失败、取消、超时或 Runner 异常都会在 `finally` 中撤销数据库令牌并删除明文文件；文件创建失败同样立即撤销。
+- Model Gateway 用单条条件 UPDATE 原子预留调用次数和 Token 预算，错误模型、过期、撤销、调用耗尽或 Token 超限统一拒绝；上游模型名由平台映射，任务不能借令牌切换其他模型。
+- `REPRO_LLM_BASE_URL` 现在必须明确指向 `/api/model-gateway/v1`，容器增加 `host.docker.internal:host-gateway` 解析；原长期 `REPRO_MODEL_TOKEN_FILE` 不再是 Worker 启动依赖。默认任务令牌 TTL 4200 秒、最多 200 次调用、预留 1,000,000 Token，均可通过受控环境变量收紧。
+- 回归覆盖令牌模型绑定、调用/Token 配额、撤销、哈希存储、网关 Provider Key 隔离、无效 Bearer 拒绝、临时文件权限和 Worker 收尾删除；能力及网关聚焦测试 107 passed，全仓 Python 测试 322 passed，`compileall`、`git diff --check` 与敏感信息扫描通过。
+- 本项只完成模型流量的凭据隔离与逻辑配额。代码仓/软件包仓出口白名单、RFC1918/metadata/Docker 网桥阻断和强制网络层审计仍是后续 3B 项，不能仅依赖该 HTTP 网关替代网络隔离。

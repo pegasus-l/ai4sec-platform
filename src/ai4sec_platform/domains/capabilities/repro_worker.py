@@ -7,6 +7,7 @@ from pathlib import Path
 import shutil
 import socket
 import subprocess
+import secrets
 import time
 from typing import Any, TextIO
 
@@ -37,6 +38,7 @@ from ai4sec_platform.domains.capabilities.repro_jobs import (
     stop_repro_worker,
     transition_repro_task,
 )
+from ai4sec_platform.domains.capabilities.model_gateway import issue_task_model_token, revoke_task_model_tokens
 from ai4sec_platform.domains.capabilities.repro_policy import REPRO_WORKER_HEARTBEAT_SECONDS
 from ai4sec_platform.pipelines.jobs import is_execution_kill_switch_active
 
@@ -81,7 +83,7 @@ class CapabilityReproWorker:
         return [int(task["id"]) for task in interrupted]
 
     def run_once(self, *, task_id: int | None = None) -> dict[str, Any] | None:
-        validate_repro_runtime_config(check_image=True)
+        validate_repro_runtime_config(check_image=True, require_token=False)
         with self._worker_lock():
             self._register()
             try:
@@ -115,7 +117,7 @@ class CapabilityReproWorker:
         return result
 
     def serve_forever(self, *, poll_interval: float = 1.0) -> None:
-        validate_repro_runtime_config(check_image=True)
+        validate_repro_runtime_config(check_image=True, require_token=False)
         with self._worker_lock():
             self._register()
             try:
@@ -174,25 +176,63 @@ class CapabilityReproWorker:
                 heartbeat_repro_worker(conn, worker_id=self.worker_id, current_task_id=task_id)
             last_heartbeat = now
 
-        runner = ReproRunner(
-            task_id=task_id,
-            repo_url=str(task["repo_url"]),
-            on_log=on_log,
-            on_status=on_status,
-            web_port=task.get("web_port"),
-            should_stop=should_stop,
-            on_heartbeat=heartbeat,
-        )
+        token_path = self._issue_model_token(task_id)
+        try:
+            runner = ReproRunner(
+                task_id=task_id,
+                repo_url=str(task["repo_url"]),
+                on_log=on_log,
+                on_status=on_status,
+                web_port=task.get("web_port"),
+                should_stop=should_stop,
+                on_heartbeat=heartbeat,
+                model_token_path=token_path,
+            )
+            with connect(self.settings) as conn:
+                init_db(conn)
+                repo.update_repro_task(
+                    conn,
+                    task_id=task_id,
+                    container_name=runner.container_name,
+                    workspace_path=str(runner.workspace),
+                )
+                conn.commit()
+            runner.run()
+        finally:
+            with connect(self.settings) as conn:
+                init_db(conn)
+                revoke_task_model_tokens(conn, task_id=task_id)
+                conn.commit()
+            token_path.unlink(missing_ok=True)
+
+    def _issue_model_token(self, task_id: int) -> Path:
+        secret_dir = self.settings.output_dir / "runtime_secrets" / "repro"
+        secret_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+        secret_dir.chmod(0o700)
         with connect(self.settings) as conn:
             init_db(conn)
-            repo.update_repro_task(
+            token = issue_task_model_token(
                 conn,
                 task_id=task_id,
-                container_name=runner.container_name,
-                workspace_path=str(runner.workspace),
+                model=os.getenv("REPRO_LLM_MODEL", "glm-5.2"),
+                ttl_seconds=min(14_400, max(300, int(os.getenv("REPRO_MODEL_TOKEN_TTL_SECONDS", "4200")))),
+                max_calls=max(1, int(os.getenv("REPRO_MODEL_MAX_CALLS", "200"))),
+                max_tokens=max(1_000, int(os.getenv("REPRO_MODEL_MAX_TOKENS", "1000000"))),
             )
             conn.commit()
-        runner.run()
+        token_path = secret_dir / f"task-{task_id}-{secrets.token_hex(8)}.token"
+        try:
+            descriptor = os.open(token_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            with os.fdopen(descriptor, "w", encoding="utf-8") as token_file:
+                token_file.write(token)
+            return token_path
+        except Exception:
+            with connect(self.settings) as conn:
+                init_db(conn)
+                revoke_task_model_tokens(conn, task_id=task_id)
+                conn.commit()
+            token_path.unlink(missing_ok=True)
+            raise
 
     def _fail_task(self, task: dict[str, Any], error: Exception) -> None:
         with connect(self.settings) as conn:

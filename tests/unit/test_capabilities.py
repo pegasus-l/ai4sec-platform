@@ -347,7 +347,7 @@ def test_github_archive_uses_codeload_fallback() -> None:
 def test_repro_prompt_never_contains_model_secret(monkeypatch) -> None:
     secret = "sk-production-secret-123456789"
     monkeypatch.setenv("REPRO_LLM_API_KEY", secret)
-    monkeypatch.setattr(repro_runner, "REPRO_LLM_BASE_URL", "https://gateway.internal/v1")
+    monkeypatch.setattr(repro_runner, "REPRO_LLM_BASE_URL", "https://gateway.internal/api/model-gateway/v1")
     monkeypatch.setattr(repro_runner, "REPRO_MODEL_TOKEN_FILE", "/run/secrets/task-token")
 
     prompt = _build_repro_prompt()
@@ -418,7 +418,7 @@ def test_repro_runtime_rejects_image_with_baked_auth(monkeypatch, tmp_path: Path
     token_file.write_text("secret", encoding="utf-8")
     token_file.chmod(0o600)
     monkeypatch.setattr(repro_runner, "REPRO_MODEL_TOKEN_FILE", str(token_file))
-    monkeypatch.setattr(repro_runner, "REPRO_LLM_BASE_URL", "https://gateway.internal/v1")
+    monkeypatch.setattr(repro_runner, "REPRO_LLM_BASE_URL", "https://gateway.internal/api/model-gateway/v1")
 
     class Result:
         returncode = 1
@@ -435,7 +435,7 @@ def test_opencode_config_references_secret_file_and_not_image_auth(monkeypatch, 
     token_file.write_text("managed-task-token", encoding="utf-8")
     token_file.chmod(0o600)
     monkeypatch.setattr(repro_runner, "REPRO_MODEL_TOKEN_FILE", str(token_file))
-    monkeypatch.setattr(repro_runner, "REPRO_LLM_BASE_URL", "https://gateway.internal/v1")
+    monkeypatch.setattr(repro_runner, "REPRO_LLM_BASE_URL", "https://gateway.internal/api/model-gateway/v1")
 
     command = ReproRunner(4, "https://github.com/example/repo").build_exec_command()
     shell_command = command[-1]
@@ -543,7 +543,7 @@ def test_silent_repro_process_still_times_out(monkeypatch, tmp_path: Path) -> No
     token_file.write_text("secret", encoding="utf-8")
     token_file.chmod(0o600)
     monkeypatch.setattr(repro_runner, "REPRO_MODEL_TOKEN_FILE", str(token_file))
-    monkeypatch.setattr(repro_runner, "REPRO_LLM_BASE_URL", "https://gateway.internal/v1")
+    monkeypatch.setattr(repro_runner, "REPRO_LLM_BASE_URL", "https://gateway.internal/api/model-gateway/v1")
     statuses: list[str] = []
     runner = ReproRunner(8, "https://github.com/example/repo", on_status=lambda status, **_kw: statuses.append(status))
     repo_dir = runner.workspace / "repo"

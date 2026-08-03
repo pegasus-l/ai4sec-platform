@@ -133,6 +133,15 @@ MIGRATIONS: tuple[Migration, ...] = (
             "stopped_at,current_task_id,metadata_json,updated_at);index status/heartbeat"
         ),
     ),
+    Migration(
+        version=14,
+        name="add_repro_model_tokens",
+        apply=lambda conn: _add_repro_model_tokens(conn),
+        checksum_source=(
+            "repro_model_tokens(task_id,token_hash,model,max_calls,calls_used,max_tokens,"
+            "tokens_used,expires_at,revoked_at,created_at,updated_at);indexes token_hash/task"
+        ),
+    ),
 )
 
 
@@ -389,3 +398,26 @@ def _add_human_queue_deduplication(conn: sqlite3.Connection) -> None:
         "CREATE UNIQUE INDEX IF NOT EXISTS uq_human_queue_pending_dedupe "
         "ON human_queue_items(domain, queue_type, dedupe_key) WHERE dedupe_key <> '' AND status = 'pending'"
     )
+
+
+def _add_repro_model_tokens(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS repro_model_tokens (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            task_id INTEGER NOT NULL,
+            token_hash TEXT NOT NULL UNIQUE,
+            model TEXT NOT NULL,
+            max_calls INTEGER NOT NULL,
+            calls_used INTEGER NOT NULL DEFAULT 0,
+            max_tokens INTEGER NOT NULL,
+            tokens_used INTEGER NOT NULL DEFAULT 0,
+            expires_at INTEGER NOT NULL,
+            revoked_at TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY(task_id) REFERENCES capability_repro_tasks(id) ON DELETE CASCADE
+        )
+        """
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_repro_model_tokens_task ON repro_model_tokens(task_id, revoked_at)")
