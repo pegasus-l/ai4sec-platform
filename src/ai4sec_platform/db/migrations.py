@@ -142,6 +142,16 @@ MIGRATIONS: tuple[Migration, ...] = (
             "tokens_used,expires_at,revoked_at,created_at,updated_at);indexes token_hash/task"
         ),
     ),
+    Migration(
+        version=15,
+        name="add_capability_repro_egress_domains",
+        apply=lambda conn: _add_capability_repro_egress_domains(conn),
+        checksum_source=(
+            "capability_repro_egress_domains(task_id,domain,purpose,status,requested_by,"
+            "reviewed_by,review_reason,created_at,reviewed_at,updated_at);"
+            "unique task/domain;index task/status/id"
+        ),
+    ),
 )
 
 
@@ -421,3 +431,29 @@ def _add_repro_model_tokens(conn: sqlite3.Connection) -> None:
         """
     )
     conn.execute("CREATE INDEX IF NOT EXISTS idx_repro_model_tokens_task ON repro_model_tokens(task_id, revoked_at)")
+
+
+def _add_capability_repro_egress_domains(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS capability_repro_egress_domains (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            task_id INTEGER NOT NULL,
+            domain TEXT NOT NULL,
+            purpose TEXT NOT NULL DEFAULT '',
+            status TEXT NOT NULL DEFAULT 'pending',
+            requested_by TEXT NOT NULL DEFAULT 'operator',
+            reviewed_by TEXT NOT NULL DEFAULT '',
+            review_reason TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL,
+            reviewed_at TEXT NOT NULL DEFAULT '',
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY(task_id) REFERENCES capability_repro_tasks(id) ON DELETE CASCADE,
+            UNIQUE(task_id, domain)
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_cap_repro_egress_task "
+        "ON capability_repro_egress_domains(task_id, status, id)"
+    )

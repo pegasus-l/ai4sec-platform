@@ -25,13 +25,20 @@ import sqlite3
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from ai4sec_platform.app.dependencies import get_db
 from ai4sec_platform.db import repositories as repo
 from ai4sec_platform.domains.capabilities.adapters.repro_runner import classify_log_line, repro_resource_limits_payload
 from ai4sec_platform.domains.capabilities.assessments import classify_batch
 from ai4sec_platform.domains.capabilities.audits import audit_missing_fields, audit_repro_failures
+from ai4sec_platform.domains.capabilities.egress_approvals import (
+    ReproEgressApprovalError,
+    create_egress_requests,
+    list_egress_requests,
+    normalize_requested_domains,
+    review_egress_request,
+)
 from ai4sec_platform.domains.capabilities.repro_jobs import request_repro_cleanup, request_repro_stop
 from ai4sec_platform.domains.capabilities.repro_policy import (
     ReproQuotaExceededError,
@@ -125,6 +132,14 @@ def conversions(conn: sqlite3.Connection = Depends(get_db)) -> dict:
 # ============================================================================
 class StartReproRequest(BaseModel):
     web: bool = False
+    external_domains: list[str] = Field(default_factory=list, max_length=20)
+    egress_purpose: str = Field(default="", max_length=500)
+    requested_by: str = Field(default="operator", max_length=100)
+
+
+class ReproEgressReviewRequest(BaseModel):
+    reviewer: str = Field(default="operator", max_length=100)
+    reason: str = Field(default="", max_length=500)
 
 
 @router.post("/items/{item_id}/start-repro")
@@ -139,10 +154,27 @@ def start_repro(item_id: int, body: StartReproRequest = StartReproRequest(), con
         raise HTTPException(status_code=400, detail="no repo URL found in item")
 
     try:
-        task_id = enqueue_repro_task(conn, item_id=item_id, repo_url=repo_url, trigger="manual")
+        external_domains = normalize_requested_domains(body.external_domains)
+        initial_status = "awaiting_egress_approval" if external_domains else "queued"
+        task_id = enqueue_repro_task(
+            conn,
+            item_id=item_id,
+            repo_url=repo_url,
+            trigger="manual",
+            initial_status=initial_status,
+        )
+        egress_requests = create_egress_requests(
+            conn,
+            task_id=task_id,
+            domains=external_domains,
+            purpose=body.egress_purpose,
+            requested_by=body.requested_by,
+        )
     except ReproQuotaExceededError as exc:
         status_code = 409 if exc.code == "item_active" else 429
         raise HTTPException(status_code=status_code, detail={"code": exc.code, "message": str(exc)}) from exc
+    except ReproEgressApprovalError as exc:
+        raise HTTPException(status_code=422, detail={"code": exc.code, "message": str(exc)}) from exc
 
     # 旧失败任务交给 Worker 异步清理，API 不直接操作 Docker 或工作目录。
     for old_task in repo.list_repro_tasks(conn, item_id=item_id, include_cleaned=True):
@@ -156,7 +188,14 @@ def start_repro(item_id: int, body: StartReproRequest = StartReproRequest(), con
         if web_port:
             repo.update_repro_task(conn, task_id=task_id, web_port=web_port)
 
-    return {"ok": True, "task_id": task_id, "repo_url": repo_url, "web_port": web_port, "status": "queued"}
+    return {
+        "ok": True,
+        "task_id": task_id,
+        "repo_url": repo_url,
+        "web_port": web_port,
+        "status": initial_status,
+        "egress_requests": egress_requests,
+    }
 
 
 @router.get("/repro-limits")
@@ -178,6 +217,69 @@ def get_repro_task(task_id: int, conn: sqlite3.Connection = Depends(get_db)) -> 
     if not task:
         raise HTTPException(status_code=404, detail="repro task not found")
     return ReproTaskResponse.from_row(task).model_dump()
+
+
+@router.get("/repro/{task_id}/egress")
+def get_repro_egress_requests(task_id: int, conn: sqlite3.Connection = Depends(get_db)) -> dict:
+    if not repo.get_repro_task(conn, task_id):
+        raise HTTPException(status_code=404, detail="repro task not found")
+    return {"task_id": task_id, "items": list_egress_requests(conn, task_id=task_id)}
+
+
+def _review_repro_egress(
+    *,
+    task_id: int,
+    request_id: int,
+    decision: str,
+    body: ReproEgressReviewRequest,
+    conn: sqlite3.Connection,
+) -> dict:
+    try:
+        request = review_egress_request(
+            conn,
+            task_id=task_id,
+            request_id=request_id,
+            decision=decision,
+            reviewed_by=body.reviewer,
+            reason=body.reason,
+        )
+    except ReproEgressApprovalError as exc:
+        status_code = 404 if exc.code in {"task_not_found", "request_not_found"} else 409 if exc.code in {"already_reviewed", "state_conflict"} else 422
+        raise HTTPException(status_code=status_code, detail={"code": exc.code, "message": str(exc)}) from exc
+    task = repo.get_repro_task(conn, task_id)
+    return {"ok": True, "task_status": task["status"], "request": request}
+
+
+@router.post("/repro/{task_id}/egress/{request_id}/approve")
+def approve_repro_egress(
+    task_id: int,
+    request_id: int,
+    body: ReproEgressReviewRequest = ReproEgressReviewRequest(),
+    conn: sqlite3.Connection = Depends(get_db),
+) -> dict:
+    return _review_repro_egress(
+        task_id=task_id,
+        request_id=request_id,
+        decision="approved",
+        body=body,
+        conn=conn,
+    )
+
+
+@router.post("/repro/{task_id}/egress/{request_id}/reject")
+def reject_repro_egress(
+    task_id: int,
+    request_id: int,
+    body: ReproEgressReviewRequest = ReproEgressReviewRequest(),
+    conn: sqlite3.Connection = Depends(get_db),
+) -> dict:
+    return _review_repro_egress(
+        task_id=task_id,
+        request_id=request_id,
+        decision="rejected",
+        body=body,
+        conn=conn,
+    )
 
 
 @router.post("/repro/{task_id}/stop")

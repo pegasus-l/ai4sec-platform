@@ -17,14 +17,19 @@ DEFAULT_REPRO_EGRESS_DOMAINS = (
     "api.github.com",
     "codeload.github.com",
     "githubusercontent.com",
+    "raw.githubusercontent.com",
+    "objects.githubusercontent.com",
     "pypi.org",
     "pythonhosted.org",
+    "files.pythonhosted.org",
     "pypi.tuna.tsinghua.edu.cn",
     "registry.npmjs.org",
     "registry.npmmirror.com",
     "repo.maven.apache.org",
+    "repo1.maven.org",
     "maven.org",
     "crates.io",
+    "index.crates.io",
     "static.crates.io",
     "proxy.golang.org",
     "storage.googleapis.com",
@@ -54,13 +59,19 @@ class ReproEgressPolicy:
     gateway_port: int
 
 
-def build_repro_egress_policy(repo_url: str, gateway_url: str, *, resolver=None) -> ReproEgressPolicy:
+def build_repro_egress_policy(
+    repo_url: str,
+    gateway_url: str,
+    *,
+    approved_domains: tuple[str, ...] = (),
+    resolver=None,
+) -> ReproEgressPolicy:
     repo_host = _validated_public_host(repo_url, resolver=resolver)
     gateway = urlsplit(gateway_url)
     if gateway.scheme not in {"http", "https"} or not gateway.hostname:
         raise RuntimeError("invalid AI4SEC Model Gateway URL")
     extra_domains = tuple(filter(None, (value.strip().casefold() for value in os.getenv("REPRO_EGRESS_EXTRA_DOMAINS", "").split(","))))
-    domains = tuple(dict.fromkeys([repo_host, *DEFAULT_REPRO_EGRESS_DOMAINS, *extra_domains]))
+    domains = tuple(dict.fromkeys([repo_host, *DEFAULT_REPRO_EGRESS_DOMAINS, *extra_domains, *approved_domains]))
     addresses: set[str] = set()
     host_addresses: list[tuple[str, str]] = []
     for domain in domains:

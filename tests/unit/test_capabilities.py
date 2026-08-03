@@ -597,7 +597,15 @@ def test_silent_repro_process_still_times_out(monkeypatch, tmp_path: Path) -> No
 
     monkeypatch.setattr(repro_runner, "_safe_run", lambda *_args, **_kwargs: Result())
     monkeypatch.setattr(repro_runner, "_safe_popen", lambda *_args, **_kwargs: process)
-    monkeypatch.setattr(repro_runner, "build_repro_egress_policy", lambda *_args: SimpleNamespace(gateway_host="host.docker.internal", gateway_port=8000, host_addresses=()))
+    monkeypatch.setattr(
+        repro_runner,
+        "build_repro_egress_policy",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            gateway_host="host.docker.internal",
+            gateway_port=8000,
+            host_addresses=(),
+        ),
+    )
     monkeypatch.setattr(repro_runner, "DockerEgressGuard", FakeEgressGuard)
     monkeypatch.setattr(runner, "_wait_dockerd", lambda: True)
     monkeypatch.setattr(runner, "_start_port_proxy", lambda: None)

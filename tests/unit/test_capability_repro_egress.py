@@ -24,6 +24,18 @@ def test_repro_egress_policy_allows_public_repo_and_gateway_exception() -> None:
     assert ("github.com", "93.184.216.34") in policy.host_addresses
 
 
+def test_repro_egress_policy_includes_task_approved_domain() -> None:
+    policy = build_repro_egress_policy(
+        "https://github.com/example/repo",
+        "http://host.docker.internal:8000/api/model-gateway/v1",
+        approved_domains=("api.example.com",),
+        resolver=_public_resolver,
+    )
+
+    assert "api.example.com" in policy.domains
+    assert ("api.example.com", "93.184.216.34") in policy.host_addresses
+
+
 def test_repro_egress_policy_rejects_private_repo_resolution() -> None:
     with pytest.raises(RuntimeError, match="unsafe reproduction repository URL"):
         build_repro_egress_policy(

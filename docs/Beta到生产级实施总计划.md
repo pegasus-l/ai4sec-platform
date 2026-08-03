@@ -903,7 +903,7 @@ D11 暂缓的是公网入口和完整公网暴露治理，不代表复现容器�
 - [x] 声明任务资源、日志、重试和并发配额。
 - [x] 完成独立受限复现 Worker 接入。
 - [x] 建立 Model Gateway 短期任务令牌，不向复现容器注入真实 Provider Key。
-- [ ] 已建立代码仓、软件包仓、模型仓基础出口白名单和防火墙计数审计；任务声明外部 API 的审批、持久策略和细粒度域名审计仍待完成。
+- [x] 建立代码仓、软件包仓、模型仓基础出口白名单、任务声明外部 API 的持久审批、运行时域名/IP 映射日志和防火墙计数审计。
 - [x] 阻断回环、私网、链路本地、云 metadata、Docker 网桥和平台管理网段。
 - [ ] 实现 standard rootless 与 nested_docker Sysbox 双 Profile。
 - [ ] nested_docker 必须人工批准、单并发并使用更严格的资源与网络限制。
@@ -2037,3 +2037,14 @@ Python full test suite: 199 passed
 - 回归覆盖私网 DNS 拒绝、公开仓库策略、Model Gateway 单端口例外、默认 REJECT、规则撤销与计数、外部 DNS/IPv6 禁用和启动预检失败关闭；能力网络聚焦测试 81 passed，全仓 Python 测试 326 passed，`compileall` 与 `git diff --check` 通过。
 - 本批次完成回环、私网、链路本地、metadata、Docker 网桥和平台管理端口的默认阻断。任务声明外部业务 API 的审批记录、按任务持久允许列表和完整域名连接日志仍保留为下一项，因此 3B 的总出口策略条目没有提前勾选完成。
 - 当前宿主机实测 Docker bridge 可用，gateway 为 `172.20.0.1`；当前开发用户直接执行和 `sudo -n` 执行 iptables 均无权限。按 fail-closed 契约，此环境在管理员配置 AI4SEC 专用最小防火墙权限前不会领取真实复现任务，不能为了继续运行而回退自由出网。
+
+### 2026-07-31：能力复现任务级外部域名审批
+
+- 新增 migration v15 `capability_repro_egress_domains`，按任务持久保存精确域名、用途、申请人、审批状态、复核人、理由和时间；`UNIQUE(task_id, domain)` 防止同一任务重复申请。
+- 手动启动复现可提交最多 20 个外部域名。只接受不带协议、路径、端口、凭据或通配符的完整域名；IP、localhost、格式错误和重复项在任务入队前被拒绝或归一化。
+- 含外部域名的任务从 `awaiting_egress_approval` 开始，Worker 的领取查询只接受 `queued`，不存在“先运行后审批”的竞态。全部域名批准后才转为 `queued`，任一拒绝立即转为 `stopped`。
+- 批准时重新执行公网 URL/DNS 安全校验，解析到回环、私网、链路本地或其他非公网地址时拒绝批准；运行前 `ReproEgressPolicy` 再次解析并失败关闭，防止审批后 DNS 漂移绕过。
+- 新增查询、批准和拒绝 API。审批记录构成持久策略与人工审计；Worker 只从数据库加载该任务已批准域名，并将运行时域名到 IP 映射写入任务日志，防火墙收尾继续记录拒绝包数和字节数。
+- 当前简单认证尚未进入阶段 4，`requested_by/reviewer` 暂由调用方提交，只能作为内部运营记录；认证上线后必须改为从统一 `CurrentUser` 注入，不能继续信任请求体身份字段。
+- 自动 Pipeline 不声明额外业务域名，保持原 `queued` 行为；固定软件生态域名仍是平台级白名单，不借任务输入隐式扩大。
+- 回归覆盖域名格式归一化、重复去除、待审批任务不可领取、多域名全批准后入队、拒绝停止、私网 DNS 拒绝、API 审计字段和 Worker 只传递已批准域名；全仓 Python 测试 336 passed，`compileall` 与 `git diff --check` 通过。

@@ -280,7 +280,7 @@ PYTHONPATH=src python -m ai4sec_platform.cli repro-worker --check-config
 
 复现 Worker 使用 Docker `bridge` 和宿主机 `DOCKER-USER` 链强制执行出口白名单，不能只依赖可被任务清除的代理环境变量。任务启动前校验 GitHub 仓库 URL 并解析批准的软件包仓域名，只将审核后的公网 IPv4 写入容器 `/etc/hosts`；容器外部 DNS 指向不可用的本地地址，IPv6 显式关闭。防火墙仅允许这些固定公网 IP 的 TCP 80/443，以及 Docker bridge gateway 上的 Model Gateway 端口，其他公网、回环、RFC1918、链路本地、metadata、Docker 网桥和平台管理端口统一 REJECT。任务结束记录链计数并删除规则。
 
-Worker 启动预检要求能够读取 Docker `bridge` 并操作 `iptables -S DOCKER-USER`。生产复现 Worker 系统账号必须仅获得维护 AI4SEC 专用防火墙链所需的受控权限；如果宿主机使用 rootless Docker/nftables，必须先提供等价执行器，不能关闭预检绕过隔离。固定扩展依赖域名可由管理员通过 `REPRO_EGRESS_EXTRA_DOMAINS` 配置；任务自行声明外部业务 API 的审批模型尚未开放，未知域名默认不可解析且不可连接。
+Worker 启动预检要求能够读取 Docker `bridge` 并操作 `iptables -S DOCKER-USER`。生产复现 Worker 系统账号必须仅获得维护 AI4SEC 专用防火墙链所需的受控权限；如果宿主机使用 rootless Docker/nftables，必须先提供等价执行器，不能关闭预检绕过隔离。固定扩展依赖域名可由管理员通过 `REPRO_EGRESS_EXTRA_DOMAINS` 配置。任务需要额外业务 API 时，在启动请求中提交精确域名、用途和申请人；任务进入 `awaiting_egress_approval`，不会被 Worker 领取。操作员通过 `/api/capabilities/repro/{task_id}/egress` 查看请求，并使用对应 `approve` 或 `reject` 端点记录复核人和理由。所有域名批准且再次通过公网 DNS 校验后任务才进入 `queued`，任一拒绝则任务停止。通配符、URL、端口、IP、localhost 和解析到私网的域名均被拒绝；运行时批准域名到实际 IP 的映射写入持久任务日志，未知域名仍不可解析且不可连接。
 
 能力复现默认镜像为不包含认证文件的 `repro-runner:v4`，构建定义位于 `configs/repro-runner/Dockerfile`：
 

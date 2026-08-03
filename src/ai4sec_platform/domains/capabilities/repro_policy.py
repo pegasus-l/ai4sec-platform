@@ -47,18 +47,25 @@ def enqueue_repro_task(
     item_id: int,
     repo_url: str,
     trigger: str,
+    initial_status: str = "queued",
 ) -> int:
     validate_repro_queue_limits()
+    if initial_status not in {"queued", "awaiting_egress_approval"}:
+        raise ValueError(f"invalid initial repro task status: {initial_status}")
     now = utc_now()
     cutoff = (datetime.now(timezone.utc) - timedelta(hours=24)).replace(microsecond=0).isoformat().replace("+00:00", "Z")
     cursor = conn.execute(
         """
         INSERT INTO capability_repro_tasks (item_id, repo_url, status, created_at, updated_at, trigger)
-        SELECT ?, ?, 'queued', ?, ?, ?
+        SELECT ?, ?, ?, ?, ?, ?
         WHERE NOT EXISTS (
-            SELECT 1 FROM capability_repro_tasks WHERE item_id = ? AND status IN ('queued', 'running')
+            SELECT 1 FROM capability_repro_tasks
+            WHERE item_id = ? AND status IN ('awaiting_egress_approval', 'queued', 'running')
         )
-        AND (SELECT COUNT(*) FROM capability_repro_tasks WHERE status = 'queued') < ?
+        AND (
+            SELECT COUNT(*) FROM capability_repro_tasks
+            WHERE status IN ('awaiting_egress_approval', 'queued')
+        ) < ?
         AND (
             SELECT COUNT(*) FROM capability_repro_tasks WHERE item_id = ? AND created_at >= ?
         ) < ?
@@ -66,6 +73,7 @@ def enqueue_repro_task(
         (
             item_id,
             repo_url,
+            initial_status,
             now,
             now,
             trigger,
@@ -101,7 +109,8 @@ def repro_quota_usage(
     counts = conn.execute(
         """
         SELECT
-            SUM(CASE WHEN status = 'queued' THEN 1 ELSE 0 END) AS queued,
+            SUM(CASE WHEN status IN ('awaiting_egress_approval', 'queued') THEN 1 ELSE 0 END) AS queued,
+            SUM(CASE WHEN status = 'awaiting_egress_approval' THEN 1 ELSE 0 END) AS awaiting_egress_approval,
             SUM(CASE WHEN status = 'running' THEN 1 ELSE 0 END) AS running
         FROM capability_repro_tasks
         """
@@ -112,7 +121,7 @@ def repro_quota_usage(
         item_counts = conn.execute(
             """
             SELECT
-                SUM(CASE WHEN status IN ('queued', 'running') THEN 1 ELSE 0 END) AS active,
+                SUM(CASE WHEN status IN ('awaiting_egress_approval', 'queued', 'running') THEN 1 ELSE 0 END) AS active,
                 SUM(CASE WHEN created_at >= ? THEN 1 ELSE 0 END) AS attempts
             FROM capability_repro_tasks WHERE item_id = ?
             """,
@@ -122,6 +131,7 @@ def repro_quota_usage(
         item_attempts = int(item_counts["attempts"] or 0)
     return {
         "queued": int(counts["queued"] or 0),
+        "awaiting_egress_approval": int(counts["awaiting_egress_approval"] or 0),
         "running": int(counts["running"] or 0),
         "item_active": item_active,
         "item_attempts_24h": item_attempts,

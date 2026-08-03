@@ -353,6 +353,23 @@ CREATE INDEX IF NOT EXISTS idx_cap_repro_item ON capability_repro_tasks(item_id)
 CREATE INDEX IF NOT EXISTS idx_cap_repro_status ON capability_repro_tasks(status);
 CREATE INDEX IF NOT EXISTS idx_cap_repro_created ON capability_repro_tasks(created_at DESC);
 
+CREATE TABLE IF NOT EXISTS capability_repro_egress_domains (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_id INTEGER NOT NULL,
+    domain TEXT NOT NULL,
+    purpose TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'pending',
+    requested_by TEXT NOT NULL DEFAULT 'operator',
+    reviewed_by TEXT NOT NULL DEFAULT '',
+    review_reason TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    reviewed_at TEXT NOT NULL DEFAULT '',
+    updated_at TEXT NOT NULL,
+    FOREIGN KEY(task_id) REFERENCES capability_repro_tasks(id) ON DELETE CASCADE,
+    UNIQUE(task_id, domain)
+);
+CREATE INDEX IF NOT EXISTS idx_cap_repro_egress_task ON capability_repro_egress_domains(task_id, status, id);
+
 CREATE TABLE IF NOT EXISTS capability_repro_workers (
     worker_id TEXT PRIMARY KEY,
     status TEXT NOT NULL DEFAULT 'running',
@@ -408,6 +425,7 @@ def reset_db(conn: sqlite3.Connection) -> None:
         "news_user_states",
         "news_item_index",
         "capability_repro_workers",
+        "capability_repro_egress_domains",
         "capability_repro_tasks",
         "human_queue_items",
         "quality_audits",

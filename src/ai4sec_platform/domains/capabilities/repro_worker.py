@@ -26,6 +26,7 @@ from ai4sec_platform.domains.capabilities.adapters.repro_runner import (
     task_status_from_report,
     validate_repro_runtime_config,
 )
+from ai4sec_platform.domains.capabilities.egress_approvals import approved_egress_domains
 from ai4sec_platform.domains.capabilities.repro_jobs import (
     REPRO_TERMINAL_STATUSES,
     claim_cleanup_request,
@@ -131,6 +132,9 @@ class CapabilityReproWorker:
     def _run_task(self, task: dict[str, Any]) -> None:
         task_id = int(task["id"])
         last_heartbeat = 0.0
+        with connect(self.settings) as conn:
+            init_db(conn)
+            task_egress_domains = approved_egress_domains(conn, task_id=task_id)
 
         def on_log(line: str) -> None:
             with connect(self.settings) as conn:
@@ -187,6 +191,7 @@ class CapabilityReproWorker:
                 should_stop=should_stop,
                 on_heartbeat=heartbeat,
                 model_token_path=token_path,
+                approved_egress_domains=task_egress_domains,
             )
             with connect(self.settings) as conn:
                 init_db(conn)

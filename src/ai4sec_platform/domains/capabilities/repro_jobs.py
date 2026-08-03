@@ -8,8 +8,9 @@ from ai4sec_platform.core.time import utc_now
 
 
 REPRO_TERMINAL_STATUSES = frozenset({"success", "partial", "failed", "timeout", "stopped"})
-REPRO_STATUSES = frozenset({"queued", "running", *REPRO_TERMINAL_STATUSES, "cleaned"})
+REPRO_STATUSES = frozenset({"awaiting_egress_approval", "queued", "running", *REPRO_TERMINAL_STATUSES, "cleaned"})
 _REPRO_TRANSITIONS = {
+    "awaiting_egress_approval": frozenset({"queued", "stopped"}),
     "queued": frozenset({"running", "stopped"}),
     "running": REPRO_TERMINAL_STATUSES,
     "success": frozenset({"cleaned"}),
@@ -208,7 +209,8 @@ def request_repro_stop(conn: sqlite3.Connection, task_id: int) -> str | None:
     now = utc_now()
     queued = conn.execute(
         "UPDATE capability_repro_tasks SET status = 'stopped', cancel_requested = 1, "
-        "finished_at = ?, updated_at = ? WHERE id = ? AND status = 'queued'",
+        "finished_at = ?, updated_at = ? "
+        "WHERE id = ? AND status IN ('awaiting_egress_approval', 'queued')",
         (now, now, task_id),
     )
     if queued.rowcount == 1:

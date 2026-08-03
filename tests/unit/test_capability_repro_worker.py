@@ -144,17 +144,40 @@ def test_recovery_accepts_completed_report_and_schedules_cleanup(monkeypatch, tm
 def test_worker_executes_claimed_task_without_api_thread(monkeypatch, tmp_path: Path) -> None:
     settings = _settings(tmp_path)
     task_id = _create_task(settings)
+    with connect(settings) as conn:
+        now = "2026-01-01T00:00:00Z"
+        conn.execute(
+            """
+            INSERT INTO capability_repro_egress_domains
+                (task_id, domain, purpose, status, requested_by, reviewed_by, created_at, reviewed_at, updated_at)
+            VALUES (?, 'api.example.com', 'test API', 'approved', 'developer', 'reviewer', ?, ?, ?)
+            """,
+            (task_id, now, now, now),
+        )
+        conn.commit()
     _allow_test_runtime(monkeypatch)
     observed_current_tasks: list[int | None] = []
     observed_token_paths: list[Path] = []
 
     class FakeRunner:
-        def __init__(self, task_id, repo_url, on_log, on_status, web_port, should_stop, on_heartbeat, model_token_path):
+        def __init__(
+            self,
+            task_id,
+            repo_url,
+            on_log,
+            on_status,
+            web_port,
+            should_stop,
+            on_heartbeat,
+            model_token_path,
+            approved_egress_domains,
+        ):
             self.task_id = task_id
             self.model_token_path = model_token_path
             self.on_log = on_log
             self.on_status = on_status
             self.on_heartbeat = on_heartbeat
+            assert approved_egress_domains == ("api.example.com",)
             self.container_name = f"fake-{task_id}"
             self.workspace = tmp_path / f"task-{task_id}"
 

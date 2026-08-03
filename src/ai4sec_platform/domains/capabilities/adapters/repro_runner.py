@@ -394,6 +394,7 @@ class ReproRunner:
         should_stop: Callable[[], bool] | None = None,
         on_heartbeat: Callable[[], None] | None = None,
         model_token_path: Path | None = None,
+        approved_egress_domains: tuple[str, ...] = (),
     ):
         self.task_id = task_id
         self.repo_url = repo_url
@@ -405,6 +406,7 @@ class ReproRunner:
         self.should_stop = should_stop or (lambda: False)
         self.on_heartbeat = on_heartbeat or (lambda: None)
         self.model_token_path = model_token_path
+        self.approved_egress_domains = approved_egress_domains
         _stamp = int(time.time())
         self.container_name = f"repro-{task_id}-{_stamp}"
         self.workspace = WORKSPACE_ROOT / f"task-{task_id}-{_stamp}"
@@ -579,7 +581,11 @@ class ReproRunner:
         try:
             # 1. 起 systemd 容器（后台）
             _safe_run(["docker", "rm", "-f", self.container_name], capture_output=True, text=True)
-            self._egress_policy = build_repro_egress_policy(self.repo_url, REPRO_LLM_BASE_URL)
+            self._egress_policy = build_repro_egress_policy(
+                self.repo_url,
+                REPRO_LLM_BASE_URL,
+                approved_domains=self.approved_egress_domains,
+            )
             run_cmd = self.build_run_command()
             self._emit_log(f"$ {' '.join(shlex.quote(c) for c in run_cmd)}")
             r = _safe_run(run_cmd, capture_output=True, text=True)
@@ -595,6 +601,9 @@ class ReproRunner:
                 f"✓ 已启用强制出口策略: {egress_summary['allowed_public_ips']} 个公网 IP, "
                 f"Gateway {egress_summary['gateway_ip'] or policy.gateway_host}:{policy.gateway_port}"
             )
+            for domain in self.approved_egress_domains:
+                addresses = sorted(address for mapped_domain, address in policy.host_addresses if mapped_domain == domain)
+                self.on_log(f"• 任务出口批准: {domain} -> {', '.join(addresses) or '未解析'}")
 
             # 2. 等容器内 docker 守护进程就绪
             self._emit_log("• 等待容器内服务就绪…")
