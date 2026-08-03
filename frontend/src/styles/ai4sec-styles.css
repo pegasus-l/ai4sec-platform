@@ -959,3 +959,69 @@
 .domain-main span { font-size: 11px; color: var(--muted); }
 .domain-tag { font-size: 10px; font-weight: 700; color: var(--accent); letter-spacing: 0.05em; }
 .ai4sec-sidebar-note { font-size: 11px; color: var(--muted); padding: 8px 10px 0; line-height: 1.5; }
+
+/* === ai4sec-sidebar 菜单栏整体(ASIS 风格) === */
+.ai4sec-sidebar {
+  width: 220px;
+  min-width: 220px;
+  background: var(--panel);
+  border-right: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  position: sticky;
+  top: 0;
+  overflow: hidden;
+}
+.ai4sec-sidebar-head { padding: 20px 16px 16px; border-bottom: 1px solid var(--line); }
+.ai4sec-sidebar-head .label { display: flex; align-items: center; gap: 6px; font-size: 11px; font-weight: 700; color: var(--accent); text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 8px; }
+.ai4sec-sidebar-head .label .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); }
+.ai4sec-sidebar-head h2 { font-size: 15px; font-weight: 800; color: var(--text); margin: 0 0 4px; line-height: 1.3; }
+.ai4sec-sidebar-head p { font-size: 11px; color: var(--muted); margin: 0; line-height: 1.5; }
+.nav-scroll { flex: 1; overflow-y: auto; padding: 8px 8px; }
+.nav-group { margin-bottom: 14px; }
+.group-title { font-size: 10px; font-weight: 800; color: var(--muted); text-transform: uppercase; letter-spacing: 0.1em; margin: 0 8px 6px; }
+.nav-item {
+  min-height: 38px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 10px;
+  color: var(--muted);
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  cursor: pointer;
+  background: transparent;
+  font-size: 13px;
+  font-weight: 500;
+  text-decoration: none;
+  transition: color .15s, border-color .15s, background .15s;
+}
+.nav-item:hover {
+  color: var(--text);
+  border-color: var(--line);
+  background: color-mix(in srgb, var(--panel-2) 72%, transparent);
+}
+.nav-item.active {
+  color: var(--text);
+  border-color: color-mix(in srgb, var(--accent) 50%, transparent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  font-weight: 600;
+}
+.nav-item svg { color: var(--muted); }
+.nav-item.active svg { color: var(--accent); }
+.domain-switcher { padding: 12px 8px 8px; }
+.domain-btn { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel-2); color: var(--text); cursor: pointer; width: 100%; }
+.domain-icon { display: flex; align-items: center; justify-content: center; width: 24px; height: 24px; border-radius: var(--radius); background: var(--accent); color: var(--bg); font-size: 11px; font-weight: 800; }
+.domain-main { display: flex; flex-direction: column; gap: 1px; flex: 1; }
+.domain-main strong { font-size: 13px; font-weight: 700; }
+.domain-main span { font-size: 11px; color: var(--muted); }
+.domain-tag { font-size: 10px; font-weight: 700; color: var(--accent); letter-spacing: 0.05em; }
+.ai4sec-sidebar-note { font-size: 11px; color: var(--muted); padding: 8px 12px 16px; line-height: 1.5; border-top: 1px solid var(--line); margin-top: auto; }
+.main { display: flex; height: 100vh; }
+.content { flex: 1; overflow-y: auto; padding: 24px 32px; }
+.content-head { margin-bottom: 24px; }
+.content-title .label { font-size: 11px; font-weight: 700; color: var(--accent); text-transform: uppercase; letter-spacing: 0.08em; }
+.content-title h1 { font-size: 24px; font-weight: 900; color: var(--text); margin: 4px 0; }
+.content-title p { font-size: 13px; color: var(--muted); margin: 0; }
+.head-actions { display: flex; align-items: center; gap: 8px; }

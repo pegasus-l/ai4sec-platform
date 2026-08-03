@@ -1,4 +1,5 @@
-import { useMemo, useState, useEffect, useRef } from 'react';
+import { useMemo, useState, useEffect, useRef, type ComponentType } from 'react';
+import { Star, Github, LayoutGrid, Database, Share2, ListChecks, Activity, RefreshCw, ShieldCheck, BrainCircuit } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
 import { fetchTargets, fetchAssets, fetchTrackingQueue, fetchSurfaceStats, trackAsset, postJson, getJson, type AiAssociationResult } from '../../api/client';
 import { Card, Drawer, EmptyState, MetricCard } from '../../components/ui';
@@ -17,21 +18,21 @@ import { OpsAISummary } from './ops/OpsAISummary';
 
 export type ViewId = 'today' | 'repos' | 'surface' | 'assets' | 'graph' | 'queue' | 'ops-overview' | 'ops-tasks' | 'ops-sources' | 'ops-quality' | 'ops-ai-summary';
 
-const navGroups: Array<{ title: string; items: Array<{ id: ViewId; icon: string; title: string }> }> = [
+const navGroups: Array<{ title: string; items: Array<{ id: ViewId; icon: ComponentType; title: string }> }> = [
   { title: '开源威胁洞察', items: [
-    { id: 'today', icon: '★', title: '今日关注' },
-    { id: 'repos', icon: '◎', title: '代码仓' },
-    { id: 'surface', icon: '◈', title: '攻击面视图' },
-    { id: 'assets', icon: '▣', title: '资产库' },
-    { id: 'graph', icon: '✣', title: '关联图谱' },
-    { id: 'queue', icon: '▤', title: '跟踪队列' }
+    { id: 'today', icon: Star, title: '今日关注' },
+    { id: 'repos', icon: Github, title: '代码仓' },
+    { id: 'surface', icon: LayoutGrid, title: '攻击面视图' },
+    { id: 'assets', icon: Database, title: '资产库' },
+    { id: 'graph', icon: Share2, title: '关联图谱' },
+    { id: 'queue', icon: ListChecks, title: '跟踪队列' }
   ]},
   { title: '运营', items: [
-    { id: 'ops-overview', icon: '◉', title: '运营概览' },
-    { id: 'ops-tasks', icon: '↻', title: '采集任务' },
-    { id: 'ops-sources', icon: '◇', title: '数据源' },
-    { id: 'ops-quality', icon: '◈', title: '质量审计' },
-    { id: 'ops-ai-summary', icon: '✦', title: 'AI 分析汇总' }
+    { id: 'ops-overview', icon: Activity, title: '运营概览' },
+    { id: 'ops-tasks', icon: RefreshCw, title: '采集任务' },
+    { id: 'ops-sources', icon: Database, title: '数据源' },
+    { id: 'ops-quality', icon: ShieldCheck, title: '质量审计' },
+    { id: 'ops-ai-summary', icon: BrainCircuit, title: 'AI 分析汇总' }
   ]}
 ];
 
@@ -119,7 +120,7 @@ export function ThreatPage() {
       <div className="domain-switcher">
         <button className="domain-btn active" type="button"><span className="domain-icon">OS</span><span className="domain-main"><strong>威胁洞察</strong><span>华为开源仓库风险与挖洞目标</span></span><span className="domain-tag">OPS</span></button>
       </div>
-      <nav className="nav-scroll">{navGroups.map(group => <div className="nav-group" key={group.title}><div className="group-title">{group.title}</div>{group.items.map(item => <button key={item.id} className={`nav-item ${view === item.id ? 'active' : ''}`} onClick={() => setView(item.id)}><span className="nav-left"><span className="nav-ico">{item.icon}</span><span className="nav-text"><b>{item.title}</b></span></span><span className="nav-meta" /></button>)}</div>)}</nav>
+      <nav className="nav-scroll">{navGroups.map(group => <div className="nav-group" key={group.title}><div className="group-title">{group.title}</div>{group.items.map(item => { const Icon = item.icon; return <button key={item.id} className={`nav-item ${view === item.id ? 'active' : ''}`} onClick={() => setView(item.id)}><Icon size={18} /><span>{item.title}</span></button>; })}</div>)}</nav>
       <div className="ai4sec-sidebar-note">目标详情不是单独页签；从今日关注、代码仓、关联图谱或跟踪队列点击对象后打开。资产关系默认按置信度展示，不做无证据强关联。</div>
     </aside>
     <section className="content">
