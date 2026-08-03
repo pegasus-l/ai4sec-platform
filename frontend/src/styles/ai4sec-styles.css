@@ -1025,3 +1025,16 @@
 .content-title h1 { font-size: 24px; font-weight: 900; color: var(--text); margin: 4px 0; }
 .content-title p { font-size: 13px; color: var(--muted); margin: 0; }
 .head-actions { display: flex; align-items: center; gap: 8px; }
+
+/* === 根本原因修正: 对齐 ASIS side-link === */
+.ai4sec-sidebar {
+  width: 180px;
+  min-width: 180px;
+  background: var(--bg-soft);
+  padding: 18px 12px 14px;
+}
+.nav-item {
+  justify-content: flex-start;
+  font-size: 14px;
+  font-weight: 400;
+}
