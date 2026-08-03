@@ -40,7 +40,7 @@ class ASISItemsSource:
 
     def fetch_since(self) -> list[dict[str, Any]]:
         cursor = self._load_cursor()
-        url = f"{self.asis_base_url}/api/items/export?min_score=0&limit=500&include_status=all"
+        url = f"{self.asis_base_url}/api/items/export?min_score=0&limit=1000&include_status=all"
         if cursor:
             url += f"&since={cursor}"
         req = urllib.request.Request(url, headers={"ADMIN_TOKEN": self.admin_token})
