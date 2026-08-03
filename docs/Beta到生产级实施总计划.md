@@ -908,7 +908,7 @@ D11 暂缓的是公网入口和完整公网暴露治理，不代表复现容器�
 - [ ] 实现 standard rootless 与 nested_docker Sysbox 双 Profile。
 - [x] nested_docker 必须人工批准、单并发并使用更严格的资源与网络限制。
 - [x] 将 OpenCode 权限从全量 allow 收敛为 Profile 对应的最小权限。
-- [ ] 修复静默子进程超时、孤儿容器、容器信息持久化和 Web 端口暴露。
+- [x] 修复静默子进程超时、孤儿容器、容器信息持久化和 Web 端口暴露。
 - [ ] 完善 Web、CLI、官方 Demo 和不可复现项目策略。
 - [ ] 加强成功判定和证据要求。
 - [ ] 完成结构化报告与能力卡回写。
@@ -2072,3 +2072,14 @@ Python full test suite: 199 passed
 - standard 与 nested 生成配置均使用真实 `repro-runner-standard:v1` 中的 OpenCode 1.15.12 在无网络容器内执行 `opencode debug config --pure`，完整解析成功；standard 的 `docker *`、nested 的 `docker run *--privileged*`、两类默认工具和外部目录 deny 均在解析结果中生效。
 - 回归覆盖默认 deny、无 `ask`、危险命令、Profile 差异、令牌文件引用、managed config 权限与收尾删除、配置注入和过度宽松策略拒绝；全仓 Python 测试 347 passed，`compileall` 与 `git diff --check` 通过。
 - 镜像复核期间发现宿主机仍有两个旧 `repro-*` 容器已连续运行约 6 天。本批次未在缺少任务归属和数据库对账证据时擅自停止；该事实作为下一项“静默超时、孤儿容器与容器信息持久化”真实样本处理。
+
+### 2026-08-03：能力复现运行资源对账与安全回收
+
+- 复核确认 Runner 已使用独立 stdout 读取线程和带超时的队列轮询；即使 OpenCode 子进程完全静默，主循环仍每 0.5 秒执行心跳、停止请求、墙钟超时和 workspace 检查。静默进程超时回归继续通过，不再使用阻塞式 `for stdout` 作为生命周期时钟。
+- migration v17 为复现任务增加 `container_id`、`runtime_owner_id` 和 `proxy_pid`。容器名与 workspace 在执行前持久化，Docker 成功创建后立即持久化容器 ID，Web loopback 代理启动后立即持久化宿主 PID；因此 Worker 重启不再只依赖内存中的 Runner 对象。
+- 每个新容器写入 `com.ai4sec.resource`、`com.ai4sec.runtime-owner`、`com.ai4sec.task-id` 和 `com.ai4sec.execution-profile` 标签。实例归属 ID 由当前数据库绝对路径的 SHA-256 摘要派生，使同机不同 clone/数据库的 Worker 不会互相回收资源。
+- Worker 恢复时只扫描“资源类型、当前实例归属和当前 Profile”三项标签均匹配的容器。与数据库任务、容器名和已持久化容器 ID一致的资源保留；任务不存在、身份不一致或任务已 cleaned 的同实例资源才按容器 ID强制回收。
+- 显式清理同样先验证容器四项标签和任务归属，不再仅凭数据库中的容器名执行 `docker rm -f`；旧无标签容器默认拒绝自动删除。workspace 只有在规范化路径严格位于配置的 `REPRO_WORKSPACE_ROOT` 下时才允许递归删除。
+- Web 代理继续固定为 `127.0.0.1` 的 `socat + nsenter`。清理恢复只在 `/proc/<pid>/cmdline` 仍匹配任务端口对应的 loopback socat 监听器时发送 SIGTERM，避免 PID 复用后误杀其他进程；失败、停止和超时任务在 Runner finally 中统一停止代理和容器，只有 Web `success/partial` 保留运行环境供人工验收。
+- 宿主机实测当前生产硬化数据库实例标签过滤结果为空；两个连续运行约 6 天的 `repro-runner:v3` 容器来自旧 `/home/liuqi777/repro_workspaces`，没有 AI4SEC 归属标签且当前数据库没有任务 5/6。本批次按安全规则保持不动，后续只能在人工确认旧任务和报告后迁移或删除。
+- 回归覆盖静默超时、标签完整性、容器 ID/实例归属/PID 持久化、当前实例孤儿回收、无标签容器拒绝、workspace 越界拒绝、代理命令身份校验和 migration v17；全仓 Python 测试 350 passed，`compileall` 与 `git diff --check` 通过。

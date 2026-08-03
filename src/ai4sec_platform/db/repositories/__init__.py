@@ -428,7 +428,10 @@ def count_by_domain(conn: sqlite3.Connection, domain: str) -> int:
 _REPRO_UPDATABLE_FIELDS = {
     "status",
     "container_name",
+    "container_id",
     "workspace_path",
+    "runtime_owner_id",
+    "proxy_pid",
     "log",
     "result",
     "finished_at",

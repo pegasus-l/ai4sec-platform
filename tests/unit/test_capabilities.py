@@ -538,19 +538,35 @@ def test_workspace_limit_detects_excess_files(monkeypatch, tmp_path: Path) -> No
 
 
 def test_web_proxy_binds_only_loopback(monkeypatch) -> None:
-    runner = ReproRunner(7, "https://github.com/example/repo", web_port=18080)
+    runtime_updates: list[dict] = []
+    runner = ReproRunner(
+        7,
+        "https://github.com/example/repo",
+        web_port=18080,
+        on_runtime=lambda **values: runtime_updates.append(values),
+    )
 
     class Result:
         stdout = "1234\n"
 
     commands: list[list[str]] = []
+    class ProxyProcess:
+        pid = 4321
+
+        def terminate(self):
+            pass
+
+        def wait(self, timeout=None):
+            return 0
+
     monkeypatch.setattr(repro_runner, "_safe_run", lambda *_args, **_kwargs: Result())
-    monkeypatch.setattr(repro_runner, "_safe_popen", lambda command, **_kwargs: commands.append(command) or object())
+    monkeypatch.setattr(repro_runner, "_safe_popen", lambda command, **_kwargs: commands.append(command) or ProxyProcess())
 
     runner._start_port_proxy()
 
     assert commands
     assert "bind=127.0.0.1" in commands[0][1]
+    assert runtime_updates == [{"proxy_pid": 4321}]
 
 
 def test_silent_repro_process_still_times_out(monkeypatch, tmp_path: Path) -> None:
@@ -571,7 +587,7 @@ def test_silent_repro_process_still_times_out(monkeypatch, tmp_path: Path) -> No
 
     class Result:
         returncode = 0
-        stdout = ""
+        stdout = "a" * 64
         stderr = ""
 
     class SilentStream:

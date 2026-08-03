@@ -298,6 +298,8 @@ Worker 启动前会运行镜像审计；镜像不存在，或镜像中存在 `/r
 
 OpenCode 权限按 Profile 生成，未知工具、外部目录、子代理、Skill、交互提问、WebFetch/WebSearch 和重复调用默认拒绝；文件读取禁止 `/run/secrets` 和 `.env`，写入限制在项目工作区及批准的 `/workspace`、`/tmp` 范围。standard 额外拒绝 Docker/Podman，nested 拒绝 privileged 子容器及 host network/PID/IPC/UTS namespace。Worker 将同一策略写入独立 `0600` 文件，并只读挂载为最高优先级的 `/etc/opencode/opencode.json` managed settings，同时使用 `--pure --agent build`；仓库自己的 `opencode.json`、build agent 权限或插件声明不能覆盖平台策略。复现需要执行未知项目命令，因此 bash 仍有显式 allow fallback；这些规则用于减少代理误操作，不是恶意代码沙箱，最终安全边界仍是 rootless/Sysbox 容器、强制出口、资源限制和任务短令牌。
 
+复现容器使用 `com.ai4sec.*` 标签记录资源类型、数据库实例归属、任务 ID 和执行 Profile；任务表同时持久化容器名、容器 ID、workspace、实例归属 ID 和 Web 代理 PID。Worker 启动恢复时只自动回收“带平台标签、归属当前数据库实例、且无法与当前任务记录对应”的孤儿容器；旧版无标签容器或其他实例容器不会自动删除。Web 代理固定监听 `127.0.0.1`，清理时只有在持久化 PID 的真实命令仍匹配对应 loopback `socat` 监听器时才发送终止信号。
+
 能力复现默认限制为 `REPRO_CPUS=2.0`、`REPRO_MEMORY=4g`、`REPRO_MEMORY_SWAP=4g`、`REPRO_PIDS_LIMIT=1024`、workspace 10 GiB 软上限和数据库日志 5 MiB 上限。Web 端口代理只监听 `127.0.0.1`。workspace 上限通过周期扫描实现，不是文件系统硬 quota；生产部署仍建议为复现目录使用独立受限文件系统或项目配额。
 
 如需获取最新资讯，可运行 shadow 采集：

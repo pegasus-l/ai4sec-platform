@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import fcntl
+import hashlib
 import json
 import os
 from pathlib import Path
+import signal
 import shutil
 import socket
-import subprocess
 import secrets
 import time
 from typing import Any, TextIO
@@ -20,6 +21,12 @@ from ai4sec_platform.db.session import connect
 from ai4sec_platform.domains.capabilities.adapters.repro_results import update_capability_from_report
 from ai4sec_platform.domains.capabilities.adapters.repro_runner import (
     ReproRunner,
+    REPRO_DOCKER_LABEL_OWNER,
+    REPRO_DOCKER_LABEL_PROFILE,
+    REPRO_DOCKER_LABEL_RESOURCE,
+    REPRO_DOCKER_LABEL_TASK,
+    REPRO_DOCKER_RESOURCE,
+    WORKSPACE_ROOT,
     _safe_run,
     enforce_report_acceptance,
     extract_report,
@@ -63,6 +70,9 @@ class CapabilityReproWorker:
         self.settings = settings or load_settings()
         self.execution_profile = execution_profile
         self.worker_id = worker_id or new_id(f"repro-{execution_profile}-worker")
+        self.runtime_owner_id = hashlib.sha256(
+            str(self.settings.database_path.expanduser().resolve()).encode("utf-8")
+        ).hexdigest()[:24]
         self._last_worker_heartbeat = 0.0
 
     def recover(self) -> list[int]:
@@ -74,6 +84,7 @@ class CapabilityReproWorker:
                 self._stop()
 
     def _recover(self) -> list[int]:
+        self._reconcile_managed_orphans()
         with connect(self.settings) as conn:
             init_db(conn)
             running = [
@@ -210,6 +221,15 @@ class CapabilityReproWorker:
                 heartbeat_repro_worker(conn, worker_id=self.worker_id, current_task_id=task_id)
             last_heartbeat = now
 
+        def on_runtime(**values: Any) -> None:
+            allowed = {key: values[key] for key in ("container_id", "proxy_pid") if key in values}
+            if not allowed:
+                return
+            with connect(self.settings) as conn:
+                init_db(conn)
+                repo.update_repro_task(conn, task_id=task_id, **allowed)
+                conn.commit()
+
         token_path = self._issue_model_token(task_id)
         managed_config_path = token_path.with_suffix(".opencode.json")
         try:
@@ -226,6 +246,8 @@ class CapabilityReproWorker:
                 approved_egress_domains=task_egress_domains,
                 execution_profile=self.execution_profile,
                 managed_config_path=managed_config_path,
+                runtime_owner_id=self.runtime_owner_id,
+                on_runtime=on_runtime,
             )
             with connect(self.settings) as conn:
                 init_db(conn)
@@ -234,6 +256,7 @@ class CapabilityReproWorker:
                     task_id=task_id,
                     container_name=runner.container_name,
                     workspace_path=str(runner.workspace),
+                    runtime_owner_id=self.runtime_owner_id,
                 )
                 conn.commit()
             runner.run()
@@ -325,8 +348,7 @@ class CapabilityReproWorker:
             )
             conn.commit()
 
-    @staticmethod
-    def _recovery_outcome(task: dict[str, Any]) -> dict[str, Any]:
+    def _recovery_outcome(self, task: dict[str, Any]) -> dict[str, Any]:
         report = enforce_report_acceptance(extract_report(str(task.get("log") or "")))
         if report:
             return {
@@ -335,35 +357,125 @@ class CapabilityReproWorker:
                 "report": report,
                 "report_json": json.dumps(report, ensure_ascii=False),
             }
-        container_name = str(task.get("container_name") or "")
-        container_alive = False
-        if container_name:
-            try:
-                inspected = _safe_run(
-                    ["docker", "inspect", "--format", "{{.State.Running}}", container_name],
-                    capture_output=True,
-                    text=True,
-                    timeout=10,
-                )
-                container_alive = inspected.returncode == 0 and str(inspected.stdout).strip().lower() == "true"
-            except (OSError, subprocess.TimeoutExpired):
-                container_alive = False
+        container_ref = str(task.get("container_id") or task.get("container_name") or "")
+        inspected = self._inspect_container(container_ref)
+        container_alive = bool(
+            inspected
+            and self._container_belongs_to_task(inspected, task)
+            and inspected.get("State", {}).get("Running") is True
+        )
         detail = "running orphan container found and scheduled for cleanup" if container_alive else "no running container found"
         return {
             "status": "failed",
             "result": f"repro worker interrupted; {detail}; task was not replayed automatically",
         }
 
-    @staticmethod
-    def _cleanup_resources(task: dict[str, Any]) -> None:
+    def _cleanup_resources(self, task: dict[str, Any]) -> None:
+        self._stop_persisted_proxy(task)
         container_name = str(task.get("container_name") or "")
-        if container_name:
-            _safe_run(["docker", "rm", "-f", container_name], capture_output=True)
+        container_id = str(task.get("container_id") or "")
+        container_ref = container_id or container_name
+        if container_ref:
+            inspected = self._inspect_container(container_ref)
+            if inspected and self._container_belongs_to_task(inspected, task):
+                _safe_run(["docker", "rm", "-f", str(inspected["Id"])], capture_output=True)
         workspace_path = str(task.get("workspace_path") or "")
         if workspace_path:
-            workspace = Path(workspace_path)
-            if workspace.exists():
+            workspace = Path(workspace_path).expanduser().resolve()
+            workspace_root = WORKSPACE_ROOT.expanduser().resolve()
+            if workspace != workspace_root and workspace.is_relative_to(workspace_root) and workspace.exists():
                 shutil.rmtree(workspace, ignore_errors=True)
+
+    def _reconcile_managed_orphans(self) -> list[str]:
+        listed = _safe_run(
+            [
+                "docker", "ps", "-aq",
+                "--filter", f"label={REPRO_DOCKER_LABEL_RESOURCE}={REPRO_DOCKER_RESOURCE}",
+                "--filter", f"label={REPRO_DOCKER_LABEL_OWNER}={self.runtime_owner_id}",
+                "--filter", f"label={REPRO_DOCKER_LABEL_PROFILE}={self.execution_profile}",
+            ],
+            capture_output=True,
+            text=True,
+        )
+        if getattr(listed, "returncode", 1) != 0:
+            return []
+        removed: list[str] = []
+        with connect(self.settings) as conn:
+            init_db(conn)
+            for container_ref in str(listed.stdout or "").splitlines():
+                inspected = self._inspect_container(container_ref.strip())
+                if not inspected:
+                    continue
+                labels = inspected.get("Config", {}).get("Labels") or {}
+                if not self._container_has_runtime_scope(labels):
+                    continue
+                try:
+                    task_id = int(labels.get(REPRO_DOCKER_LABEL_TASK, ""))
+                except ValueError:
+                    task_id = 0
+                task = repo.get_repro_task(conn, task_id) if task_id else None
+                container_name = str(inspected.get("Name") or "").removeprefix("/")
+                container_id = str(inspected.get("Id") or "")
+                is_current = bool(
+                    task
+                    and str(task.get("runtime_owner_id") or "") == self.runtime_owner_id
+                    and str(task.get("container_name") or "") == container_name
+                    and (not task.get("container_id") or str(task["container_id"]) == container_id)
+                    and str(task.get("status") or "") != "cleaned"
+                )
+                if is_current:
+                    continue
+                if not container_id:
+                    continue
+                deleted = _safe_run(["docker", "rm", "-f", container_id], capture_output=True)
+                if getattr(deleted, "returncode", 1) == 0:
+                    removed.append(container_id)
+        return removed
+
+    @staticmethod
+    def _inspect_container(container_ref: str) -> dict[str, Any] | None:
+        if not container_ref:
+            return None
+        inspected = _safe_run(["docker", "inspect", container_ref], capture_output=True, text=True)
+        if getattr(inspected, "returncode", 1) != 0:
+            return None
+        try:
+            payload = json.loads(str(inspected.stdout or ""))
+        except json.JSONDecodeError:
+            return None
+        return payload[0] if isinstance(payload, list) and payload and isinstance(payload[0], dict) else None
+
+    def _container_belongs_to_task(self, inspected: dict[str, Any], task: dict[str, Any]) -> bool:
+        labels = inspected.get("Config", {}).get("Labels") or {}
+        return bool(
+            self._container_has_runtime_scope(labels)
+            and labels.get(REPRO_DOCKER_LABEL_TASK) == str(task.get("id"))
+            and str(task.get("runtime_owner_id") or "") == self.runtime_owner_id
+        )
+
+    def _container_has_runtime_scope(self, labels: dict[str, Any]) -> bool:
+        return bool(
+            labels.get(REPRO_DOCKER_LABEL_RESOURCE) == REPRO_DOCKER_RESOURCE
+            and labels.get(REPRO_DOCKER_LABEL_OWNER) == self.runtime_owner_id
+            and labels.get(REPRO_DOCKER_LABEL_PROFILE) == self.execution_profile
+        )
+
+    @staticmethod
+    def _stop_persisted_proxy(task: dict[str, Any]) -> None:
+        proxy_pid = int(task.get("proxy_pid") or 0)
+        web_port = int(task.get("web_port") or 0)
+        if proxy_pid <= 1 or web_port <= 0:
+            return
+        try:
+            command = Path(f"/proc/{proxy_pid}/cmdline").read_bytes().replace(b"\0", b" ").decode("utf-8", "replace")
+        except OSError:
+            return
+        if "socat" not in command or f"TCP-LISTEN:{web_port},bind=127.0.0.1" not in command:
+            return
+        try:
+            os.kill(proxy_pid, signal.SIGTERM)
+        except ProcessLookupError:
+            return
 
     def _worker_lock(self) -> "_ExclusiveFileLock":
         return _ExclusiveFileLock(

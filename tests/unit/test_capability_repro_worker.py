@@ -175,6 +175,8 @@ def test_worker_executes_claimed_task_without_api_thread(monkeypatch, tmp_path: 
             approved_egress_domains,
             execution_profile,
             managed_config_path,
+            runtime_owner_id,
+            on_runtime,
         ):
             self.task_id = task_id
             self.model_token_path = model_token_path
@@ -182,8 +184,11 @@ def test_worker_executes_claimed_task_without_api_thread(monkeypatch, tmp_path: 
             self.on_status = on_status
             self.on_heartbeat = on_heartbeat
             self.managed_config_path = managed_config_path
+            self.runtime_owner_id = runtime_owner_id
+            self.on_runtime = on_runtime
             assert approved_egress_domains == ("api.example.com",)
             assert execution_profile == "standard"
+            assert len(runtime_owner_id) == 24
             self.container_name = f"fake-{task_id}"
             self.workspace = tmp_path / f"task-{task_id}"
 
@@ -202,6 +207,7 @@ def test_worker_executes_claimed_task_without_api_thread(monkeypatch, tmp_path: 
                 ).fetchone()
                 observed_current_tasks.append(worker["current_task_id"])
             self.on_log("worker log")
+            self.on_runtime(container_id="a" * 64)
             self.on_heartbeat()
             self.on_status("success", result="done")
 
@@ -217,6 +223,8 @@ def test_worker_executes_claimed_task_without_api_thread(monkeypatch, tmp_path: 
         ).fetchone()
         token = conn.execute("SELECT revoked_at FROM repro_model_tokens WHERE task_id = ?", (task_id,)).fetchone()
     assert task and task["container_name"] == f"fake-{task_id}"
+    assert task["container_id"] == "a" * 64
+    assert len(task["runtime_owner_id"]) == 24
     assert "worker log" in task["log"]
     assert observed_current_tasks == [task_id]
     assert observed_token_paths and not observed_token_paths[0].exists()
@@ -266,21 +274,138 @@ def test_cleanup_is_queued_and_executed_by_worker(monkeypatch, tmp_path: Path) -
     settings = _settings(tmp_path)
     task_id = _create_task(settings, status="failed")
     _allow_test_runtime(monkeypatch)
+    worker = CapabilityReproWorker(settings)
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     with connect(settings) as conn:
-        repo.update_repro_task(conn, task_id=task_id, container_name="old-container", workspace_path=str(workspace))
+        repo.update_repro_task(
+            conn,
+            task_id=task_id,
+            container_name="managed-container",
+            container_id="a" * 64,
+            workspace_path=str(workspace),
+            runtime_owner_id=worker.runtime_owner_id,
+        )
         assert request_repro_cleanup(conn, task_id) == "cleanup_queued"
         conn.commit()
 
     commands: list[list[str]] = []
     monkeypatch.setattr(worker_module, "_safe_run", lambda command, **_kwargs: commands.append(command))
+    monkeypatch.setattr(worker_module, "WORKSPACE_ROOT", tmp_path)
+    monkeypatch.setattr(
+        CapabilityReproWorker,
+        "_inspect_container",
+        staticmethod(lambda _container_ref: {
+            "Id": "a" * 64,
+            "Name": "/managed-container",
+            "Config": {"Labels": {
+                worker_module.REPRO_DOCKER_LABEL_RESOURCE: worker_module.REPRO_DOCKER_RESOURCE,
+                worker_module.REPRO_DOCKER_LABEL_OWNER: worker.runtime_owner_id,
+                worker_module.REPRO_DOCKER_LABEL_TASK: str(task_id),
+                worker_module.REPRO_DOCKER_LABEL_PROFILE: "standard",
+            }},
+        }),
+    )
 
-    result = CapabilityReproWorker(settings).run_once(task_id=task_id)
+    result = worker.run_once(task_id=task_id)
 
     assert result == {"task_id": task_id, "status": "cleaned"}
-    assert commands == [["docker", "rm", "-f", "old-container"]]
+    assert commands == [["docker", "rm", "-f", "a" * 64]]
     assert not workspace.exists()
+
+
+def test_cleanup_refuses_unlabelled_container_and_workspace_outside_root(monkeypatch, tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    task_id = _create_task(settings, status="failed")
+    worker = CapabilityReproWorker(settings)
+    outside_workspace = tmp_path.parent / "outside-repro-workspace"
+    outside_workspace.mkdir(exist_ok=True)
+    task = {
+        "id": task_id,
+        "container_name": "legacy-container",
+        "container_id": "b" * 64,
+        "runtime_owner_id": worker.runtime_owner_id,
+        "workspace_path": str(outside_workspace),
+        "proxy_pid": 0,
+    }
+    commands: list[list[str]] = []
+    monkeypatch.setattr(worker_module, "WORKSPACE_ROOT", tmp_path)
+    monkeypatch.setattr(worker_module, "_safe_run", lambda command, **_kwargs: commands.append(command))
+    monkeypatch.setattr(
+        CapabilityReproWorker,
+        "_inspect_container",
+        staticmethod(lambda _container_ref: {"Id": "b" * 64, "Name": "/legacy-container", "Config": {"Labels": {}}}),
+    )
+
+    worker._cleanup_resources(task)
+
+    assert commands == []
+    assert outside_workspace.exists()
+    outside_workspace.rmdir()
+
+
+def test_recovery_removes_only_unknown_container_for_current_runtime_owner(monkeypatch, tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    task_id = _create_task(settings, status="failed")
+    worker = CapabilityReproWorker(settings)
+    current_id = "c" * 64
+    orphan_id = "d" * 64
+    with connect(settings) as conn:
+        repo.update_repro_task(
+            conn,
+            task_id=task_id,
+            container_name="current-container",
+            container_id=current_id,
+            runtime_owner_id=worker.runtime_owner_id,
+        )
+        conn.commit()
+
+    class Result:
+        returncode = 0
+        stdout = f"{current_id}\n{orphan_id}\n"
+
+    removed_commands: list[list[str]] = []
+
+    def fake_run(command, **_kwargs):
+        if command[:3] == ["docker", "rm", "-f"]:
+            removed_commands.append(command)
+        return Result()
+
+    def inspect_container(container_ref: str):
+        is_current = container_ref == current_id
+        return {
+            "Id": container_ref,
+            "Name": "/current-container" if is_current else "/orphan-container",
+            "Config": {"Labels": {
+                worker_module.REPRO_DOCKER_LABEL_RESOURCE: worker_module.REPRO_DOCKER_RESOURCE,
+                worker_module.REPRO_DOCKER_LABEL_OWNER: worker.runtime_owner_id,
+                worker_module.REPRO_DOCKER_LABEL_TASK: str(task_id if is_current else 999),
+                worker_module.REPRO_DOCKER_LABEL_PROFILE: "standard",
+            }},
+        }
+
+    monkeypatch.setattr(worker_module, "_safe_run", fake_run)
+    monkeypatch.setattr(CapabilityReproWorker, "_inspect_container", staticmethod(inspect_container))
+
+    removed = worker._reconcile_managed_orphans()
+
+    assert removed == [orphan_id]
+    assert removed_commands == [["docker", "rm", "-f", orphan_id]]
+
+
+def test_persisted_proxy_stop_requires_expected_loopback_listener(monkeypatch) -> None:
+    killed: list[tuple[int, int]] = []
+    monkeypatch.setattr(
+        Path,
+        "read_bytes",
+        lambda self: b"socat\0TCP-LISTEN:18080,bind=127.0.0.1,fork,reuseaddr\0",
+    )
+    monkeypatch.setattr(worker_module.os, "kill", lambda pid, sig: killed.append((pid, sig)))
+
+    CapabilityReproWorker._stop_persisted_proxy({"proxy_pid": 4321, "web_port": 18080})
+    CapabilityReproWorker._stop_persisted_proxy({"proxy_pid": 4322, "web_port": 18081})
+
+    assert killed == [(4321, worker_module.signal.SIGTERM)]
 
 
 def test_start_api_only_queues_task(tmp_path: Path) -> None:

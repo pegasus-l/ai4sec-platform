@@ -123,6 +123,7 @@ def test_standard_profile_command_drops_privileges(monkeypatch, tmp_path: Path) 
         model_token_path=token,
         execution_profile="standard",
         managed_config_path=managed_config,
+        runtime_owner_id="a" * 24,
     )
 
     command = runner.build_run_command()
@@ -131,6 +132,10 @@ def test_standard_profile_command_drops_privileges(monkeypatch, tmp_path: Path) 
     assert command[command.index("--cap-drop") + 1] == "ALL"
     assert "--user" not in command
     assert "--runtime" not in command
+    assert f"{repro_runner.REPRO_DOCKER_LABEL_RESOURCE}={repro_runner.REPRO_DOCKER_RESOURCE}" in command
+    assert f"{repro_runner.REPRO_DOCKER_LABEL_OWNER}={'a' * 24}" in command
+    assert f"{repro_runner.REPRO_DOCKER_LABEL_TASK}=1" in command
+    assert f"{repro_runner.REPRO_DOCKER_LABEL_PROFILE}=standard" in command
     assert any(
         str(managed_config.resolve()) in argument and repro_runner.CONTAINER_MANAGED_OPENCODE_CONFIG in argument
         for argument in command
@@ -149,6 +154,7 @@ def test_nested_profile_command_uses_sysbox(monkeypatch, tmp_path: Path) -> None
         "https://github.com/example/repo",
         model_token_path=token,
         execution_profile="nested_docker",
+        runtime_owner_id="b" * 24,
     )
 
     command = runner.build_run_command()

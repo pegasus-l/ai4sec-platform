@@ -228,8 +228,10 @@ def test_new_database_records_all_schema_migrations() -> None:
     with connect() as conn:
         init_db(conn)
         rows = conn.execute("SELECT version, name FROM schema_migrations ORDER BY version").fetchall()
+        repro_columns = {row["name"] for row in conn.execute("PRAGMA table_info(capability_repro_tasks)").fetchall()}
 
     assert [(row["version"], row["name"]) for row in rows] == [(migration.version, migration.name) for migration in MIGRATIONS]
+    assert {"container_id", "runtime_owner_id", "proxy_pid"} <= repro_columns
 
 
 def test_legacy_database_is_upgraded_without_losing_rows(tmp_path: Path) -> None:

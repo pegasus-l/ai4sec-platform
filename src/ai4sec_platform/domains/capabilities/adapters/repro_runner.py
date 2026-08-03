@@ -66,6 +66,11 @@ REPRO_LLM_MODEL = os.environ.get("REPRO_LLM_MODEL", "glm-5.1")
 REPRO_MODEL_TOKEN_FILE = os.environ.get("REPRO_MODEL_TOKEN_FILE", "")
 CONTAINER_MODEL_TOKEN_FILE = "/run/secrets/repro_model_token"
 CONTAINER_MANAGED_OPENCODE_CONFIG = "/etc/opencode/opencode.json"
+REPRO_DOCKER_LABEL_RESOURCE = "com.ai4sec.resource"
+REPRO_DOCKER_LABEL_OWNER = "com.ai4sec.runtime-owner"
+REPRO_DOCKER_LABEL_TASK = "com.ai4sec.task-id"
+REPRO_DOCKER_LABEL_PROFILE = "com.ai4sec.execution-profile"
+REPRO_DOCKER_RESOURCE = "capability-repro"
 
 
 def _repo_archive_url(repo_url: str) -> str:
@@ -623,6 +628,8 @@ class ReproRunner:
         approved_egress_domains: tuple[str, ...] = (),
         execution_profile: str = "nested_docker",
         managed_config_path: Path | None = None,
+        runtime_owner_id: str = "",
+        on_runtime: Callable[..., None] | None = None,
     ):
         self.task_id = task_id
         self.repo_url = repo_url
@@ -639,8 +646,11 @@ class ReproRunner:
             raise ValueError(f"unknown reproduction execution profile: {execution_profile}")
         self.execution_profile = execution_profile
         self.managed_config_path = managed_config_path
+        self.runtime_owner_id = runtime_owner_id
+        self.on_runtime = on_runtime or (lambda **_values: None)
         _stamp = int(time.time())
         self.container_name = f"repro-{task_id}-{_stamp}"
+        self.container_id = ""
         self.workspace = WORKSPACE_ROOT / f"task-{task_id}-{_stamp}"
         self.proc: subprocess.Popen | None = None
         self.status = "queued"
@@ -649,6 +659,7 @@ class ReproRunner:
         self._log_truncated = False
         self._egress_guard: DockerEgressGuard | None = None
         self._egress_policy = None
+        self._proxy_proc: subprocess.Popen | None = None
 
     # ---- docker 命令构建 ----
     def build_run_command(self):
@@ -662,6 +673,10 @@ class ReproRunner:
             "docker", "run",
             "-d",
             "--name", self.container_name,
+            "--label", f"{REPRO_DOCKER_LABEL_RESOURCE}={REPRO_DOCKER_RESOURCE}",
+            "--label", f"{REPRO_DOCKER_LABEL_OWNER}={self.runtime_owner_id}",
+            "--label", f"{REPRO_DOCKER_LABEL_TASK}={self.task_id}",
+            "--label", f"{REPRO_DOCKER_LABEL_PROFILE}={self.execution_profile}",
             "--cpus", cpus,
             "--memory", memory,
             "--memory-swap", memory_swap,
@@ -771,6 +786,8 @@ class ReproRunner:
         if not self.managed_config_path:
             raise RuntimeError("managed OpenCode config is required for reproduction execution")
         _validated_managed_config_path(self.managed_config_path)
+        if not re.fullmatch(r"[a-f0-9]{24}", self.runtime_owner_id):
+            raise RuntimeError("valid repro runtime owner id is required")
         self._prepare_workspace()
         self._run()
 
@@ -837,6 +854,18 @@ class ReproRunner:
                 self._emit_log(f"✗ 起容器失败: {r.stderr.strip()}")
                 self._set_status("failed", error=r.stderr.strip())
                 return
+            self.container_id = str(r.stdout or "").strip().splitlines()[0]
+            if not re.fullmatch(r"[a-f0-9]{12,64}", self.container_id):
+                inspected = _safe_run(
+                    ["docker", "inspect", "--format", "{{.Id}}", self.container_name],
+                    capture_output=True,
+                    text=True,
+                )
+                self.container_id = str(inspected.stdout or "").strip()
+            if not re.fullmatch(r"[a-f0-9]{12,64}", self.container_id):
+                self._set_status("failed", error="container started without a persistent container id")
+                return
+            self.on_runtime(container_id=self.container_id)
 
             policy = self._egress_policy
             self._egress_guard = DockerEgressGuard(task_id=self.task_id, container_name=self.container_name, policy=policy, run_command=_safe_run)
@@ -1031,6 +1060,11 @@ class ReproRunner:
             self.on_log(f"✗ 编排器错误: {e}")
             self._set_status("failed", error=str(e))
         finally:
+            if not (self.web_port and self.status in {"success", "partial"}):
+                try:
+                    self._stop_port_proxy()
+                finally:
+                    _safe_run(["docker", "stop", self.container_name], capture_output=True)
             if self._egress_guard:
                 audit = self._egress_guard.remove()
                 self.on_log(
@@ -1076,8 +1110,19 @@ class ReproRunner:
             self._proxy_proc = _safe_popen(
                 proxy_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             )
+            proxy_pid = int(getattr(self._proxy_proc, "pid", 0) or 0)
+            if proxy_pid <= 1:
+                raise RuntimeError("端口代理未返回有效 PID")
+            self.on_runtime(proxy_pid=proxy_pid)
             self.on_log(f"✓ 端口代理已启动: 127.0.0.1:{self.web_port} → 容器:8080 (nsenter PID={cpid})")
         except Exception as e:
+            if self._proxy_proc:
+                try:
+                    self._proxy_proc.terminate()
+                    self._proxy_proc.wait(timeout=5)
+                except Exception:
+                    pass
+                self._proxy_proc = None
             self.on_log(f"⚠ 启动端口代理失败: {e}")
 
     def _stop_port_proxy(self):
@@ -1092,6 +1137,10 @@ class ReproRunner:
                 except Exception:
                     pass
             self._proxy_proc = None
+            try:
+                self.on_runtime(proxy_pid=0)
+            except Exception as error:
+                self.on_log(f"⚠ 端口代理已停止，但 PID 状态持久化失败: {error}")
 
 # ============================================================================
 # 输出行分类（给大屏/SSE 上色用）- 迁自旧 repro.py 第 623-726 行

@@ -161,6 +161,15 @@ MIGRATIONS: tuple[Migration, ...] = (
             "profile_reviewed_by;profile_review_reason;profile_reviewed_at;index profile/status/id"
         ),
     ),
+    Migration(
+        version=17,
+        name="add_capability_repro_runtime_identity",
+        apply=lambda conn: _add_capability_repro_runtime_identity(conn),
+        checksum_source=(
+            "capability_repro_tasks.container_id TEXT NOT NULL DEFAULT '';"
+            "runtime_owner_id TEXT NOT NULL DEFAULT '';proxy_pid INTEGER NOT NULL DEFAULT 0"
+        ),
+    ),
 )
 
 
@@ -489,3 +498,9 @@ def _add_capability_repro_execution_profiles(conn: sqlite3.Connection) -> None:
         "CREATE INDEX IF NOT EXISTS idx_cap_repro_profile_status "
         "ON capability_repro_tasks(execution_profile, status, id)"
     )
+
+
+def _add_capability_repro_runtime_identity(conn: sqlite3.Connection) -> None:
+    _add_column_if_missing(conn, "capability_repro_tasks", "container_id", "TEXT NOT NULL DEFAULT ''")
+    _add_column_if_missing(conn, "capability_repro_tasks", "runtime_owner_id", "TEXT NOT NULL DEFAULT ''")
+    _add_column_if_missing(conn, "capability_repro_tasks", "proxy_pid", "INTEGER NOT NULL DEFAULT 0")
