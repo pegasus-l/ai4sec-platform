@@ -123,9 +123,9 @@ export function ThreatPage() {
       <div className="ai4sec-sidebar-note">目标详情不是单独页签；从今日关注、代码仓、关联图谱或跟踪队列点击对象后打开。资产关系默认按置信度展示，不做无证据强关联。</div>
     </aside>
     <section className="content">
-      <section className="content-head">
-        <div className="content-title"><span className="label">{navGroups.flatMap(g => g.items).find(i => i.id === view)?.title ?? '威胁洞察'}</span><h1>{heroTitle(view)}</h1><p>{heroCopy(view)}</p></div>
-        <div className="head-actions">{view === 'repos' ? <FiltersBar filters={filters} setFilters={setFilters} grades={repoGrades} surfaces={repoSurfaces} /> : <><label className="search"><span>⌕</span><input placeholder="搜索标题 / CVE / 仓库 / 资产" onChange={() => {}} /></label><button className="btn primary" onClick={() => location.reload()}>刷新数据</button><a className="btn" href="/api/threats/reports" target="_blank">查看报告 API</a></>}</div>
+      <section className="page-head">
+        <div className="page-title"><span className="label">{navGroups.flatMap(g => g.items).find(i => i.id === view)?.title ?? '威胁洞察'}</span><h1>{heroTitle(view)}</h1><p>{heroCopy(view)}</p></div>
+        <div className="head-actions">{view === 'repos' ? <FiltersBar filters={filters} setFilters={setFilters} grades={repoGrades} surfaces={repoSurfaces} /> : <><label className="search"><span>⌕</span><input placeholder="搜索标题 / CVE / 仓库 / 资产" onChange={() => {}} /></label><button className="btn" onClick={() => location.reload()}>刷新数据</button><a className="btn" href="/api/threats/reports" target="_blank">查看报告 API</a></>}</div>
       </section>
       <div className="content-body view" ref={viewRef}>
         {isLoading && <EmptyState title="正在加载" description="从 /api/threats/targets 拉取数据。" />}
@@ -174,12 +174,12 @@ function ThreatToday({ repos, openRepo, setView, setFilters }: { repos: ThreatRe
       <MetricCard label="待复核关联" value="—" hint="点击进入关联图谱查看弱关联。" tone="violet" onClick={() => kpiJump('weakRelations')} />
     </div>
     <div className="grid cols-2">
-      {focus.map((item) => <div className="focus-card" key={`${item.type}-${item.repo.id}`} onClick={() => openRepo(item.repo)}>
+      {focus.map((item) => <div className="surface" key={`${item.type}-${item.repo.id}`} onClick={() => openRepo(item.repo)}>
         <div className="row-title"><span className={`badge ${item.repo.grade || 'C'}`}>{item.type}</span><span className="muted small">点击钻取</span></div>
         <h3>{item.repo.org}/{item.repo.name}</h3>
         <p>{item.why}</p>
         <div className="split"><span className={`badge ${item.repo.grade || 'C'}`}>Grade {item.repo.grade}</span><span className="badge">{item.repo.surface}</span><span className="badge">score {Math.round(item.repo.score)}</span></div>
-        <div className="split"><button className="btn primary" onClick={(event) => { event.stopPropagation(); openRepo(item.repo); }}>查看详情</button><button className="btn" onClick={(event) => { event.stopPropagation(); import('../../api/client').then(m => m.trackTarget(item.repo.id).then(() => toast(`已加入跟踪: ${item.repo.org}/${item.repo.name}`, 'success')).catch(e => toast(`跟踪失败: ${e}`, 'error'))); }}>加入跟踪</button></div>
+        <div className="split"><button className="btn" onClick={(event) => { event.stopPropagation(); openRepo(item.repo); }}>查看详情</button><button className="btn" onClick={(event) => { event.stopPropagation(); import('../../api/client').then(m => m.trackTarget(item.repo.id).then(() => toast(`已加入跟踪: ${item.repo.org}/${item.repo.name}`, 'success')).catch(e => toast(`跟踪失败: ${e}`, 'error'))); }}>加入跟踪</button></div>
       </div>)}
     </div>
   </div>;
@@ -187,7 +187,7 @@ function ThreatToday({ repos, openRepo, setView, setFilters }: { repos: ThreatRe
 
 function ThreatRepos({ repos, filters, setFilters, openRepo, currentPage, totalPages, totalRepos, setCurrentPage }: { repos: ThreatRepo[]; filters: FilterState; setFilters: (filters: FilterState) => void; openRepo: (repo: ThreatRepo) => void; currentPage: number; totalPages: number; totalRepos: number; setCurrentPage: (page: number) => void; }) {
   const pageNav = totalPages > 1 ? <div className="split" style={{ justifyContent: 'center', gap: 6 }}>
-    <button className="btn sm" disabled={currentPage <= 1} onClick={() => setCurrentPage(currentPage - 1)}>上一页</button>
+    <button className="btn btn-sm" disabled={currentPage <= 1} onClick={() => setCurrentPage(currentPage - 1)}>上一页</button>
     {Array.from({ length: Math.min(totalPages, 10) }, (_, i) => {
       const p = i + 1;
       const showP = totalPages <= 10 ? p : (currentPage <= 5 ? p : (currentPage + (p - 6) > totalPages ? totalPages - 9 + i : currentPage - 5 + i));
@@ -195,7 +195,7 @@ function ThreatRepos({ repos, filters, setFilters, openRepo, currentPage, totalP
       return <button key={showP} className={`btn sm ${showP === currentPage ? 'primary' : ''}`} onClick={() => setCurrentPage(showP)}>{showP}</button>;
     })}
     {totalPages > 10 && currentPage < totalPages - 5 && <span className="muted small">...{totalPages}</span>}
-    <button className="btn sm" disabled={currentPage >= totalPages} onClick={() => setCurrentPage(currentPage + 1)}>下一页</button>
+    <button className="btn btn-sm" disabled={currentPage >= totalPages} onClick={() => setCurrentPage(currentPage + 1)}>下一页</button>
   </div> : null;
   return <div className="grid">
     <div className="row-title" style={{ marginBottom: 8 }}>
@@ -203,7 +203,7 @@ function ThreatRepos({ repos, filters, setFilters, openRepo, currentPage, totalP
       <span className="muted small">{filters.grade !== 'all' ? ` · ${filters.grade} 级` : ''}{filters.surface !== 'all' ? ` · ${filters.surface}` : ''}{filters.search ? ` · 搜索"${filters.search}"` : ''}</span>
     </div>
     {pageNav}
-    <div className="table-card"><RepoTable repos={repos} openRepo={openRepo} /></div>
+    <div className="table-shell"><RepoTable repos={repos} openRepo={openRepo} /></div>
     {pageNav}
   </div>;
 }
@@ -237,9 +237,9 @@ function ThreatSurface({ repos, openRepo, setFilters, setView }: { repos: Threat
     <div className="grid cols-2">
       <Card><h3>攻击面总览</h3><p className="muted small">点击左侧攻击面只切换本页分析；需要看仓库明细时，再点"查看该攻击面的代码仓"。</p><div className="surface-matrix">{surfaceCounts.map(s => <button key={s.id} className={`surface-matrix-item clickable ${s.id === activeSurfaceId ? 'active' : ''}`} onClick={() => setActiveSurfaceId(s.id)}><div className="row-title"><span><b>{s.icon} {s.title}</b></span><span className={`badge ${s.id === activeSurfaceId ? 'A' : 'C'}`}>{s.id === activeSurfaceId ? '当前' : '查看'}</span></div><p className="muted small">{s.desc}</p><div className="split"><span className="badge">代码仓 {s.realCount}</span><span className="badge">CVE {s.realCves}</span><span className="badge">线索 {s.realSec}</span></div><div className="score-bar" style={{ marginTop: 9 }}><i style={{ width: `${Math.min(100, Math.round(s.realCount / Math.max(1, totalRepos) * 100))}%` }} /></div></button>)}</div></Card>
       <div className="grid">
-        <Card className="detail-card"><h3>{selected?.title} 聚合指标</h3><p>{selected?.purpose}</p><div className="asset-meta"><div><b>{relatedRepos.length}</b><span>相关代码仓</span></div><div><b>{relatedRepos.filter(r => r.grade === 'A').length}</b><span>A级仓库</span></div><div><b>{relatedRepos.reduce((sum, r) => sum + r.cve, 0)}</b><span>CVE</span></div><div><b>{relatedRepos.reduce((sum, r) => sum + r.sec, 0)}</b><span>安全线索</span></div><div><b>{relatedRepos.length ? Math.round(Math.max(...relatedRepos.map(r => r.score))) : 0}</b><span>最高风险分</span></div></div></Card>
-        <Card><h3>该攻击面的代码仓样例</h3>{relatedRepos.length ? <div className="timeline">{relatedRepos.slice(0, 5).map(r => <div key={r.id} className="timeline-item clickable" onClick={() => openRepo(r)}><div className="row-title"><b>{r.org}/{r.name}</b><span className={`badge ${r.grade || 'C'}`}>Grade {r.grade || '?'}</span></div><span className="muted small">score {Math.round(r.score)} · CVE {r.cve} · Sec {r.sec} · {r.surface}</span></div>)}</div> : <p className="muted">当前 demo 没有内嵌该攻击面的代码仓详情；正式版从全量数据聚合。</p>}<div className="split" style={{ marginTop: 10 }}><button className="btn primary" onClick={() => { setFilters({ search: '', grade: 'all', surface: activeSurfaceId, onlyCve: false, onlyHigh: false }); setView('repos'); }}>查看代码仓筛选</button></div></Card>
-        <div className="grid cols-2"><Card className="detail-card"><h3>挖洞路径</h3><div className="timeline">{(selected?.paths ?? []).map((p, i) => <div key={i} className="timeline-item">{p}</div>)}</div></Card><Card className="detail-card"><h3>代表证据</h3><div className="timeline">{(selected?.evidence ?? []).map((e, i) => <div key={i} className="timeline-item">{e}</div>)}</div></Card></div>
+        <Card className="surface"><h3>{selected?.title} 聚合指标</h3><p>{selected?.purpose}</p><div className="asset-meta"><div><b>{relatedRepos.length}</b><span>相关代码仓</span></div><div><b>{relatedRepos.filter(r => r.grade === 'A').length}</b><span>A级仓库</span></div><div><b>{relatedRepos.reduce((sum, r) => sum + r.cve, 0)}</b><span>CVE</span></div><div><b>{relatedRepos.reduce((sum, r) => sum + r.sec, 0)}</b><span>安全线索</span></div><div><b>{relatedRepos.length ? Math.round(Math.max(...relatedRepos.map(r => r.score))) : 0}</b><span>最高风险分</span></div></div></Card>
+        <Card><h3>该攻击面的代码仓样例</h3>{relatedRepos.length ? <div className="timeline">{relatedRepos.slice(0, 5).map(r => <div key={r.id} className="timeline-item clickable" onClick={() => openRepo(r)}><div className="row-title"><b>{r.org}/{r.name}</b><span className={`badge ${r.grade || 'C'}`}>Grade {r.grade || '?'}</span></div><span className="muted small">score {Math.round(r.score)} · CVE {r.cve} · Sec {r.sec} · {r.surface}</span></div>)}</div> : <p className="muted">当前 demo 没有内嵌该攻击面的代码仓详情；正式版从全量数据聚合。</p>}<div className="split" style={{ marginTop: 10 }}><button className="btn" onClick={() => { setFilters({ search: '', grade: 'all', surface: activeSurfaceId, onlyCve: false, onlyHigh: false }); setView('repos'); }}>查看代码仓筛选</button></div></Card>
+        <div className="grid cols-2"><Card className="surface"><h3>挖洞路径</h3><div className="timeline">{(selected?.paths ?? []).map((p, i) => <div key={i} className="timeline-item">{p}</div>)}</div></Card><Card className="surface"><h3>代表证据</h3><div className="timeline">{(selected?.evidence ?? []).map((e, i) => <div key={i} className="timeline-item">{e}</div>)}</div></Card></div>
         <Card><h3>下一步研判假设</h3><div className="timeline">{(selected?.hypotheses ?? []).map((h, i) => <div key={i} className="timeline-item">{h}</div>)}</div></Card>
       </div>
     </div>
@@ -316,7 +316,7 @@ function ThreatAssets({ openAsset }: { openAsset: (asset: ThreatAsset) => void }
 function OpenxGroupCard({ deviceModel, files, onClick }: { deviceModel: string; files: ThreatAsset[]; onClick: (a: ThreatAsset) => void }) {
   const [expanded, setExpanded] = useState(false);
   const latest = files.reduce((max, f) => (f.latest || '') > max ? (f.latest || '') : max, '');
-  return <div className="card asset-card" onClick={() => setExpanded(!expanded)}>
+  return <div className="surface asset-card" onClick={() => setExpanded(!expanded)}>
     <div className="row-title"><span className="badge">OpenX固件</span><span className="badge">{files.length} 个固件</span></div>
     <h3>{deviceModel}</h3>
     <div className="asset-meta">
@@ -381,7 +381,7 @@ function ThreatQueue() {
   };
   if (!items.length) return <EmptyState title="暂无跟踪队列" />;
   return <>
-    <div className="table-card"><table><thead><tr><th>对象</th><th>类型</th><th>优先级</th><th>状态</th><th>原因</th><th>操作</th></tr></thead><tbody>{items.map((item, index) => <tr key={index} className="clickable" onClick={() => setSelectedQueueItem(item)}><td><div className="repo-name">{String(item.name ?? item.title ?? '-')}</div><div className="muted small">{String(item.reason ?? '-')}</div></td><td><span className="badge">{String(item.queue_type ?? item.type ?? '-')}</span></td><td><span className={`badge ${String(item.priority) === 'P0' ? 'A' : 'B'}`}>{String(item.priority ?? '-')}</span></td><td><span className={`badge ${String(item.status).includes('待') ? 'B' : 'A'}`}>{String(item.status ?? '-')}</span></td><td><span className="muted small">{String(item.assignee ?? item.owner ?? '-')}</span></td><td><button className="btn" onClick={(e) => { e.stopPropagation(); advance(index); }}>推进</button></td></tr>)}</tbody></table></div>
+    <div className="table-shell"><table><thead><tr><th>对象</th><th>类型</th><th>优先级</th><th>状态</th><th>原因</th><th>操作</th></tr></thead><tbody>{items.map((item, index) => <tr key={index} className="clickable" onClick={() => setSelectedQueueItem(item)}><td><div className="repo-name">{String(item.name ?? item.title ?? '-')}</div><div className="muted small">{String(item.reason ?? '-')}</div></td><td><span className="badge">{String(item.queue_type ?? item.type ?? '-')}</span></td><td><span className={`badge ${String(item.priority) === 'P0' ? 'A' : 'B'}`}>{String(item.priority ?? '-')}</span></td><td><span className={`badge ${String(item.status).includes('待') ? 'B' : 'A'}`}>{String(item.status ?? '-')}</span></td><td><span className="muted small">{String(item.assignee ?? item.owner ?? '-')}</span></td><td><button className="btn" onClick={(e) => { e.stopPropagation(); advance(index); }}>推进</button></td></tr>)}</tbody></table></div>
     <Drawer open={Boolean(selectedQueueItem)} title={String(selectedQueueItem?.name ?? selectedQueueItem?.title ?? '跟踪项')} subtitle={String(selectedQueueItem?.queue_type ?? selectedQueueItem?.type ?? '')} onClose={() => setSelectedQueueItem(null)}>{selectedQueueItem && <div className="drawer-grid">
       <Card><h3>跟踪详情</h3><div className="asset-meta"><div><b>{String(selectedQueueItem.name ?? selectedQueueItem.title ?? '-')}</b><span>对象名称</span></div><div><b>{String(selectedQueueItem.queue_type ?? selectedQueueItem.type ?? '-')}</b><span>类型</span></div><div><b>{String(selectedQueueItem.priority ?? '-')}</b><span>优先级</span></div><div><b>{String(selectedQueueItem.status ?? '-')}</b><span>状态</span></div><div><b>{String(selectedQueueItem.assignee ?? selectedQueueItem.owner ?? '-')}</b><span>负责人</span></div><div><b>{String(selectedQueueItem.created_at ?? '-')}</b><span>创建时间</span></div></div></Card>
       <Card><h3>跟踪原因</h3><p>{String(selectedQueueItem.reason ?? '暂无说明。')}</p></Card>
@@ -396,7 +396,7 @@ function RepoTable({ repos, openRepo }: { repos: ThreatRepo[]; openRepo: (repo: 
     <td><span className="badge">{repo.surface}</span></td>
     <td>CVE {repo.cve}<br />SA {repo.sa}<br />Sec items {repo.sec}<div style={{ height: 7 }} />{(repo.cve + repo.sa + repo.sec) > 0 ? <button className="btn" onClick={(event) => { event.stopPropagation(); openRepo(repo); }}>{repo.cve + repo.sa + repo.sec} 条详情</button> : <span className="muted small">暂无详情</span>}</td>
     <td style={{ minWidth: 150 }}><ScoreBreakdown breakdown={repo.breakdown} mini /></td>
-    <td><button className="btn primary" onClick={(event) => { event.stopPropagation(); openRepo(repo); }}>详情</button><button className="btn" onClick={(event) => event.stopPropagation()}>跟踪</button></td>
+    <td><button className="btn" onClick={(event) => { event.stopPropagation(); openRepo(repo); }}>详情</button><button className="btn" onClick={(event) => event.stopPropagation()}>跟踪</button></td>
   </tr>)}</tbody></table>;
 }
 
@@ -410,7 +410,7 @@ function formatNum(n: number): string {
 function AssetCard({ asset, onClick }: { asset: ThreatAsset; onClick: () => void }) {
   const { toast } = useToast();
   const typeLabel = asset.type === 'firmware' ? '固件' : asset.type === 'image' ? '镜像' : asset.type === 'mirror' ? '软件源' : asset.type === 'openx_firmware' ? 'OpenX固件' : asset.type || '未知';
-  return <div className="card asset-card" onClick={onClick}>
+  return <div className="surface asset-card" onClick={onClick}>
     <div className="row-title"><span className="badge">{typeLabel}</span>{asset.official && <span className="badge A">官方</span>}</div>
     <h3>{asset.title}</h3>
     <p>{asset.evidence || asset.summary}</p>
@@ -451,7 +451,7 @@ function AssetCard({ asset, onClick }: { asset: ThreatAsset; onClick: () => void
     ) : (
       <div className="asset-meta"><div><b>{asset.model || '-'}</b><span>型号/名称</span></div><div><b>{asset.version || '-'}</b><span>版本</span></div><div><b>{asset.count || '-'}</b><span>数量</span></div><div><b>{asset.latest || '-'}</b><span>更新</span></div></div>
     )}
-    <div className="split"><button className="btn primary" onClick={(e) => { e.stopPropagation(); onClick(); }}>资产详情</button><button className="btn" onClick={(e) => { e.stopPropagation(); trackAsset(asset.id).then(() => toast(`已加入跟踪: ${asset.title}`, 'success')).catch(err => toast(`跟踪失败: ${err}`, 'error')); }}>加入跟踪</button></div>
+    <div className="split"><button className="btn" onClick={(e) => { e.stopPropagation(); onClick(); }}>资产详情</button><button className="btn" onClick={(e) => { e.stopPropagation(); trackAsset(asset.id).then(() => toast(`已加入跟踪: ${asset.title}`, 'success')).catch(err => toast(`跟踪失败: ${err}`, 'error')); }}>加入跟踪</button></div>
   </div>;
 }
 
@@ -484,8 +484,8 @@ function AssetDrawer({ asset, onClose, openRepo }: { asset: ThreatAsset | null; 
   };
 
   return <Drawer open={Boolean(asset)} title={asset?.title ?? ''} subtitle={asset ? `${typeLabel} · ${asset.source}` : ''} onClose={onClose}>{asset && <>
-    <div className="detail-card card"><h3>资产概览</h3><p>{asset.evidence || asset.summary || '暂无摘要。'}</p></div>
-    <div className="detail-card card"><h3>详细信息</h3>
+    <div className="surface"><h3>资产概览</h3><p>{asset.evidence || asset.summary || '暂无摘要。'}</p></div>
+    <div className="surface"><h3>详细信息</h3>
       {asset.type === 'mirror' ? (
         <div className="asset-meta">
           <div><b>{asset.catalog?.join(', ') || '-'}</b><span>分类</span></div>
@@ -522,7 +522,7 @@ function AssetDrawer({ asset, onClose, openRepo }: { asset: ThreatAsset | null; 
         </div>
       ) : <p className="muted">暂无详细信息。</p>}
     </div>
-    <div className="detail-card card">
+    <div className="surface">
       <h3>AI 关联分析</h3>
       {assocResult ? (
         <div>
@@ -547,10 +547,10 @@ function AssetDrawer({ asset, onClose, openRepo }: { asset: ThreatAsset | null; 
       ) : assocError ? (
         <p className="muted small">分析失败: {assocError}</p>
       ) : (
-        <button className="btn primary" onClick={handleAssociate}>开始 AI 关联分析</button>
+        <button className="btn" onClick={handleAssociate}>开始 AI 关联分析</button>
       )}
     </div>
-    <div className="detail-card card"><h3>建议动作</h3><div className="split"><button className="btn primary" onClick={() => trackAsset(asset.id).then(() => toast(`已加入跟踪: ${asset.title}`, 'success')).catch(e => toast(`跟踪失败: ${e}`, 'error'))}>加入跟踪</button><button className="btn">加入解包</button><button className="btn">加入 SBOM</button><button className="btn warn">标记关联待复核</button></div></div>
+    <div className="surface"><h3>建议动作</h3><div className="split"><button className="btn" onClick={() => trackAsset(asset.id).then(() => toast(`已加入跟踪: ${asset.title}`, 'success')).catch(e => toast(`跟踪失败: ${e}`, 'error'))}>加入跟踪</button><button className="btn">加入解包</button><button className="btn">加入 SBOM</button><button className="btn warn">标记关联待复核</button></div></div>
   </>}</Drawer>;
 }
 
