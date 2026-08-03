@@ -28,6 +28,7 @@ from typing import Any, Callable
 import urllib.parse
 
 from ai4sec_platform.core.env import load_env_file
+from ai4sec_platform.domains.capabilities.egress import DockerEgressGuard, build_repro_egress_policy, validate_repro_egress_runtime
 from ai4sec_platform.domains.capabilities.repro_policy import validate_repro_queue_limits
 
 load_env_file()
@@ -168,6 +169,7 @@ def validate_repro_runtime_config(*, check_image: bool = False, token_path: Path
             raise RuntimeError(
                 f"Repro image is unavailable or contains a baked OpenCode auth file: {REPRO_IMAGE}"
             )
+        validate_repro_egress_runtime(_safe_run)
     return validated_token_path
 
 
@@ -411,6 +413,8 @@ class ReproRunner:
         self.web_port = web_port  # 主机端口（有则映射到容器内 8080，用于 Web 项目复现）
         self._logged_bytes = 0
         self._log_truncated = False
+        self._egress_guard: DockerEgressGuard | None = None
+        self._egress_policy = None
 
     # ---- docker 命令构建 ----
     def build_run_command(self):
@@ -425,10 +429,17 @@ class ReproRunner:
             "--memory-swap", REPRO_MEMORY_SWAP,
             "--pids-limit", REPRO_PIDS_LIMIT,
             "--security-opt", "no-new-privileges=true",
+            "--network", "bridge",
+            "--dns", "127.0.0.1",
+            "--sysctl", "net.ipv6.conf.all.disable_ipv6=1",
             "--add-host", "host.docker.internal:host-gateway",
             "--tmpfs", "/root/.local/share/opencode:rw,nosuid,nodev,noexec,mode=700",
             "-v", f"{self.workspace}:/workspace",
         ]
+        if self._egress_policy:
+            for domain, address in self._egress_policy.host_addresses:
+                if ":" not in address:
+                    cmd.extend(["--add-host", f"{domain}:{address}"])
         token_path = _validated_token_path(self.model_token_path)
         cmd.extend(["--mount", f"type=bind,src={token_path},dst={CONTAINER_MODEL_TOKEN_FILE},readonly"])
         cmd.append(REPRO_IMAGE)
@@ -568,6 +579,7 @@ class ReproRunner:
         try:
             # 1. 起 systemd 容器（后台）
             _safe_run(["docker", "rm", "-f", self.container_name], capture_output=True, text=True)
+            self._egress_policy = build_repro_egress_policy(self.repo_url, REPRO_LLM_BASE_URL)
             run_cmd = self.build_run_command()
             self._emit_log(f"$ {' '.join(shlex.quote(c) for c in run_cmd)}")
             r = _safe_run(run_cmd, capture_output=True, text=True)
@@ -575,6 +587,14 @@ class ReproRunner:
                 self._emit_log(f"✗ 起容器失败: {r.stderr.strip()}")
                 self._set_status("failed", error=r.stderr.strip())
                 return
+
+            policy = self._egress_policy
+            self._egress_guard = DockerEgressGuard(task_id=self.task_id, container_name=self.container_name, policy=policy, run_command=_safe_run)
+            egress_summary = self._egress_guard.install()
+            self.on_log(
+                f"✓ 已启用强制出口策略: {egress_summary['allowed_public_ips']} 个公网 IP, "
+                f"Gateway {egress_summary['gateway_ip'] or policy.gateway_host}:{policy.gateway_port}"
+            )
 
             # 2. 等容器内 docker 守护进程就绪
             self._emit_log("• 等待容器内服务就绪…")
@@ -751,6 +771,13 @@ class ReproRunner:
         except Exception as e:
             self.on_log(f"✗ 编排器错误: {e}")
             self._set_status("failed", error=str(e))
+        finally:
+            if self._egress_guard:
+                audit = self._egress_guard.remove()
+                self.on_log(
+                    f"• 已撤销出口策略 {audit['chain']}; "
+                    f"拒绝 {audit['denied_packets']} 个包/{audit['denied_bytes']} 字节"
+                )
 
     def _wait_dockerd(self):
         """等容器内 docker 守护进程就绪（最多 DOCKERD_WAIT 秒）。"""

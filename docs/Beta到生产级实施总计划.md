@@ -903,8 +903,8 @@ D11 暂缓的是公网入口和完整公网暴露治理，不代表复现容器�
 - [x] 声明任务资源、日志、重试和并发配额。
 - [x] 完成独立受限复现 Worker 接入。
 - [x] 建立 Model Gateway 短期任务令牌，不向复现容器注入真实 Provider Key。
-- [ ] 建立代码仓、软件包仓、模型仓和声明外部 API 的出口策略与审计日志。
-- [ ] 阻断回环、私网、链路本地、云 metadata、Docker 网桥和平台管理网段。
+- [ ] 已建立代码仓、软件包仓、模型仓基础出口白名单和防火墙计数审计；任务声明外部 API 的审批、持久策略和细粒度域名审计仍待完成。
+- [x] 阻断回环、私网、链路本地、云 metadata、Docker 网桥和平台管理网段。
 - [ ] 实现 standard rootless 与 nested_docker Sysbox 双 Profile。
 - [ ] nested_docker 必须人工批准、单并发并使用更严格的资源与网络限制。
 - [ ] 将 OpenCode 权限从全量 allow 收敛为 Profile 对应的最小权限。
@@ -2025,3 +2025,15 @@ Python full test suite: 199 passed
 - `REPRO_LLM_BASE_URL` 现在必须明确指向 `/api/model-gateway/v1`，容器增加 `host.docker.internal:host-gateway` 解析；原长期 `REPRO_MODEL_TOKEN_FILE` 不再是 Worker 启动依赖。默认任务令牌 TTL 4200 秒、最多 200 次调用、预留 1,000,000 Token，均可通过受控环境变量收紧。
 - 回归覆盖令牌模型绑定、调用/Token 配额、撤销、哈希存储、网关 Provider Key 隔离、无效 Bearer 拒绝、临时文件权限和 Worker 收尾删除；能力及网关聚焦测试 107 passed，全仓 Python 测试 322 passed，`compileall`、`git diff --check` 与敏感信息扫描通过。
 - 本项只完成模型流量的凭据隔离与逻辑配额。代码仓/软件包仓出口白名单、RFC1918/metadata/Docker 网桥阻断和强制网络层审计仍是后续 3B 项，不能仅依赖该 HTTP 网关替代网络隔离。
+
+### 2026-07-31：能力复现强制出口与私网阻断
+
+- 新增能力域 `ReproEgressPolicy`，仓库 URL 只接受不含凭据的 GitHub HTTP(S) 地址，并在容器启动前解析 DNS；任一批准域名解析到非公网 IPv4/IPv6 时任务失败关闭，不继续运行未知代码。
+- 基础允许列表覆盖任务 GitHub 仓库、GitHub 内容域、PyPI、npm、Maven、Cargo、Go Proxy、Hugging Face 和当前配置镜像；管理员可以通过 `REPRO_EGRESS_EXTRA_DOMAINS` 增加固定依赖域名，但任务输入不能自行扩大允许范围。
+- 容器显式使用 Docker `bridge`、关闭 IPv6，并将 DNS 指向不可用的容器本地地址；只有启动时审核并固定的域名/IP 通过 `--add-host` 写入 `/etc/hosts`，未知域名不能通过 DNS 查询绕过 IP 白名单。
+- 容器启动后、clone 和依赖安装前，Worker 根据容器 IP 创建任务专用 iptables chain，并从 `DOCKER-USER` 跳转。只允许审核公网 IP 的 TCP 80/443 与 bridge gateway 上的 Model Gateway 端口，最后无条件 REJECT 其他出口。
+- 防火墙规则在 Runner `finally` 中读取包/字节计数并写入任务日志，然后删除跳转和任务 chain。安装任一规则失败会回滚已创建规则并终止任务，不允许降级为自由出网。
+- Worker `--check-config` 增加 Docker bridge 和 `DOCKER-USER` 可操作性预检；宿主机未提供强制隔离能力时不领取任务。rootless Docker/nftables 环境必须实现等价执行器，不能通过关闭检查上线。
+- 回归覆盖私网 DNS 拒绝、公开仓库策略、Model Gateway 单端口例外、默认 REJECT、规则撤销与计数、外部 DNS/IPv6 禁用和启动预检失败关闭；能力网络聚焦测试 81 passed，全仓 Python 测试 326 passed，`compileall` 与 `git diff --check` 通过。
+- 本批次完成回环、私网、链路本地、metadata、Docker 网桥和平台管理端口的默认阻断。任务声明外部业务 API 的审批记录、按任务持久允许列表和完整域名连接日志仍保留为下一项，因此 3B 的总出口策略条目没有提前勾选完成。
+- 当前宿主机实测 Docker bridge 可用，gateway 为 `172.20.0.1`；当前开发用户直接执行和 `sudo -n` 执行 iptables 均无权限。按 fail-closed 契约，此环境在管理员配置 AI4SEC 专用最小防火墙权限前不会领取真实复现任务，不能为了继续运行而回退自由出网。

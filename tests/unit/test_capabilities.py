@@ -18,6 +18,7 @@ import json
 from pathlib import Path
 import sqlite3
 import time
+from types import SimpleNamespace
 
 from ai4sec_platform.db.repositories import get_succeeded_repro_item_ids
 from ai4sec_platform.domains.capabilities.adapters import repro_runner
@@ -468,6 +469,7 @@ def test_repro_container_command_has_resource_and_privilege_limits(monkeypatch, 
     token_file.chmod(0o600)
     monkeypatch.setattr(repro_runner, "REPRO_MODEL_TOKEN_FILE", str(token_file))
     runner = ReproRunner(4, "https://github.com/example/repo")
+    runner._egress_policy = SimpleNamespace(host_addresses=(("github.com", "93.184.216.34"),))
 
     command = runner.build_run_command()
 
@@ -476,6 +478,10 @@ def test_repro_container_command_has_resource_and_privilege_limits(monkeypatch, 
     assert command[command.index("--memory-swap") + 1] == repro_runner.REPRO_MEMORY_SWAP
     assert command[command.index("--pids-limit") + 1] == repro_runner.REPRO_PIDS_LIMIT
     assert "no-new-privileges=true" in command
+    assert command[command.index("--network") + 1] == "bridge"
+    assert command[command.index("--dns") + 1] == "127.0.0.1"
+    assert "github.com:93.184.216.34" in command
+    assert "net.ipv6.conf.all.disable_ipv6=1" in command
 
 
 def test_repro_resource_validation_rejects_unbounded_cpu(monkeypatch) -> None:
@@ -579,8 +585,20 @@ def test_silent_repro_process_still_times_out(monkeypatch, tmp_path: Path) -> No
             return 0
 
     process = SilentProcess()
+    class FakeEgressGuard:
+        def __init__(self, **_kwargs):
+            pass
+
+        def install(self):
+            return {"allowed_public_ips": 1, "gateway_ip": "172.17.0.1"}
+
+        def remove(self):
+            return {"chain": "test-chain", "denied_packets": 0, "denied_bytes": 0}
+
     monkeypatch.setattr(repro_runner, "_safe_run", lambda *_args, **_kwargs: Result())
     monkeypatch.setattr(repro_runner, "_safe_popen", lambda *_args, **_kwargs: process)
+    monkeypatch.setattr(repro_runner, "build_repro_egress_policy", lambda *_args: SimpleNamespace(gateway_host="host.docker.internal", gateway_port=8000, host_addresses=()))
+    monkeypatch.setattr(repro_runner, "DockerEgressGuard", FakeEgressGuard)
     monkeypatch.setattr(runner, "_wait_dockerd", lambda: True)
     monkeypatch.setattr(runner, "_start_port_proxy", lambda: None)
 
