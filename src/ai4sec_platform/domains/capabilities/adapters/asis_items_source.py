@@ -54,7 +54,7 @@ class ASISItemsSource:
             self._save_cursor(cursor, 0, str(exc)[:200])
             return []
         items = data.get("items") or []
-        github_items = [it for it in items if "github.com" in (it.get("canonical_url") or "")]
+        github_items = [it for it in items if "github.com" in (it.get("canonical_url") or "").lower()]
         mapped = [self._map_item(it) for it in github_items]
         next_since = data.get("next_since")
         if next_since:
@@ -64,13 +64,13 @@ class ASISItemsSource:
     def _map_item(self, asis_item: dict) -> dict:
         canonical = asis_item.get("canonical_url") or ""
         code_url = ""
-        if "github.com" in canonical or "gitlab.com" in canonical:
+        if "github.com" in canonical.lower() or "gitlab.com" in canonical.lower():
             code_url = canonical
         elif asis_item.get("paper_url"):
             code_url = asis_item.get("paper_url") or ""
-        if "github.com" in canonical:
+        if "github.com" in canonical.lower():
             source_type = "github"
-        elif "arxiv.org" in canonical:
+        elif "arxiv.org" in canonical.lower():
             source_type = "arxiv"
         else:
             source_type = "unknown"
