@@ -912,6 +912,6 @@
   --bg: #080b12; --bg-soft: #0d121d; --panel: #141925; --panel-2: #171d2b; --panel-3: #1d2435;
   --line: rgba(150,164,190,0.18); --line-strong: rgba(150,164,190,0.32);
   --text: #eef5ff; --muted: #8d9bb4;
-  --sky: var(--accent); --green: var(--accent-2); --violet: var(--accent);
-  --amber: var(--warning); --red: var(--danger); --radius: 8px;
+  --sky: #24d3ce; --green: #35e19d; --violet: #24d3ce;
+  --amber: #f6c454; --red: #ff6f7d; --radius: 8px;
 }
