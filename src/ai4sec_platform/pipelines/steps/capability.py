@@ -24,7 +24,7 @@ class BuildCapabilitiesFromNewsStep:
             from ai4sec_platform.domains.capabilities.adapters.asis_items_source import ASISItemsSource
             source = ASISItemsSource(context.conn)
             news_items = source.fetch_since()
-            candidates = capability_candidates_from_news(news_items)
+            candidates = capability_candidates_from_news(news_items, score_threshold=0)
             for item in candidates[:limit]:
                 payload = item.get("payload") or {}
                 # 从 source_news_item 提取资讯洞察的展示字段

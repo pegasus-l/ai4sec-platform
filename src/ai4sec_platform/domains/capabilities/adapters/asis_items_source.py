@@ -40,7 +40,7 @@ class ASISItemsSource:
 
     def fetch_since(self) -> list[dict[str, Any]]:
         cursor = self._load_cursor()
-        url = f"{self.asis_base_url}/api/items/export?min_score=55&limit=500"
+        url = f"{self.asis_base_url}/api/items/export?min_score=0&limit=500&include_status=all"
         if cursor:
             url += f"&since={cursor}"
         req = urllib.request.Request(url, headers={"ADMIN_TOKEN": self.admin_token})
@@ -54,7 +54,8 @@ class ASISItemsSource:
             self._save_cursor(cursor, 0, str(exc)[:200])
             return []
         items = data.get("items") or []
-        mapped = [self._map_item(it) for it in items]
+        github_items = [it for it in items if "github.com" in (it.get("canonical_url") or "")]
+        mapped = [self._map_item(it) for it in github_items]
         next_since = data.get("next_since")
         if next_since:
             self._save_cursor(next_since, len(mapped))
