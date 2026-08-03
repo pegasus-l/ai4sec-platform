@@ -1,5 +1,5 @@
 import { useMemo, useState, useEffect, useRef, type ComponentType } from 'react';
-import { Star, Github, LayoutGrid, Database, Share2, ListChecks, Activity, RefreshCw, ShieldCheck, BrainCircuit } from 'lucide-react';
+import { Star, Github, LayoutGrid, Database, Share2, ListChecks, Activity, RefreshCw, ShieldCheck, BrainCircuit, type LucideIcon } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
 import { fetchTargets, fetchAssets, fetchTrackingQueue, fetchSurfaceStats, trackAsset, postJson, getJson, type AiAssociationResult } from '../../api/client';
 import { Card, Drawer, EmptyState, MetricCard } from '../../components/ui';
@@ -18,7 +18,7 @@ import { OpsAISummary } from './ops/OpsAISummary';
 
 export type ViewId = 'today' | 'repos' | 'surface' | 'assets' | 'graph' | 'queue' | 'ops-overview' | 'ops-tasks' | 'ops-sources' | 'ops-quality' | 'ops-ai-summary';
 
-const navGroups: Array<{ title: string; items: Array<{ id: ViewId; icon: ComponentType; title: string }> }> = [
+const navGroups: Array<{ title: string; items: Array<{ id: ViewId; icon: LucideIcon; title: string }> }> = [
   { title: '开源威胁洞察', items: [
     { id: 'today', icon: Star, title: '今日关注' },
     { id: 'repos', icon: Github, title: '代码仓' },
