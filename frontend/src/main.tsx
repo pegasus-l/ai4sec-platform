@@ -1,3 +1,4 @@
+import './styles/globals.css';
 import './styles/ai4sec-styles.css';
 import React from 'react';
 import ReactDOM from 'react-dom/client';

@@ -60,8 +60,8 @@ export function NewsPage() {
   };
 
   return <main className="main news-workspace">
-    <aside className="sidebar">
-      <div className="sidebar-head"><div className="label"><span className="dot" /><span>资讯洞察</span></div><h2>前沿论文与项目</h2><p>持续发现 AI 安全论文与开源项目，形成可跟踪、可阅读、可反馈的资讯流。</p></div>
+    <aside className="ai4sec-sidebar">
+      <div className="ai4sec-sidebar-head"><div className="label"><span className="dot" /><span>资讯洞察</span></div><h2>前沿论文与项目</h2><p>持续发现 AI 安全论文与开源项目，形成可跟踪、可阅读、可反馈的资讯流。</p></div>
       <div className="domain-switcher">
         <button className="domain-btn active" type="button"><span className="domain-icon">AI</span><span className="domain-main"><strong>资讯洞察</strong><span>AI 安全论文与开源项目</span></span><span className="domain-tag">NEWS</span></button>
       </div>
@@ -69,7 +69,7 @@ export function NewsPage() {
         <div className="nav-group"><div className="group-title">资讯洞察</div>{views.map(({ id, title, icon: Icon }) => <button key={id} className={`nav-item ${view === id ? 'active' : ''}`} onClick={() => setView(id)}><span className="nav-left"><span className="nav-ico"><Icon size={16} /></span><span className="nav-text"><b>{title}</b></span></span>{id === 'all' && allData?.total !== undefined ? <span className="nav-meta">{allData.total}</span> : <span className="nav-meta" />}</button>)}</div>
         <div className="nav-group"><div className="group-title">运营</div>{opsViews.map(({ id, title, icon: Icon }) => <button key={id} className={`nav-item ${view === id ? 'active' : ''}`} onClick={() => setView(id)}><span className="nav-left"><span className="nav-ico"><Icon size={16} /></span><span className="nav-text"><b>{title}</b></span></span><span className="nav-meta" /></button>)}</div>
       </nav>
-      <div className="sidebar-note">资讯洞察围绕“发现、精选、阅读、反馈、专题沉淀”组织；论文与项目统一进入动态流，并通过日报和专题持续跟踪。</div>
+      <div className="ai4sec-sidebar-note">资讯洞察围绕“发现、精选、阅读、反馈、专题沉淀”组织；论文与项目统一进入动态流，并通过日报和专题持续跟踪。</div>
     </aside>
     <section className="news-main">
       <div className="news-header"><div><span className="label">AI4SEC / NEWS</span><h2>{viewTitle(view)}</h2><p>{viewDescription(view)}</p></div><div className="news-header-actions"><Badge tone="green">论文 + 项目</Badge><button className="icon-button" title="刷新" onClick={() => query.refetch()}><Inbox size={17} /></button></div></div>

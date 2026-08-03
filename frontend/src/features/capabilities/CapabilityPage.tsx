@@ -96,13 +96,13 @@ export function CapabilityPage() {
   }, [push]);
 
   return <main className="main">
-    <aside className="sidebar">
-      <div className="sidebar-head"><div className="label"><span className="dot" /><span>能力洞察</span></div><h2>前沿项目能力化</h2><p>从资讯筛选可复现项目，到自动复现验证，再到能力转化落地。</p></div>
+    <aside className="ai4sec-sidebar">
+      <div className="ai4sec-sidebar-head"><div className="label"><span className="dot" /><span>能力洞察</span></div><h2>前沿项目能力化</h2><p>从资讯筛选可复现项目，到自动复现验证，再到能力转化落地。</p></div>
       <div className="domain-switcher">
         <button className="domain-btn active" type="button"><span className="domain-icon">A/S</span><span className="domain-main"><strong>AI for SEC</strong><span>AI 用于安全能力</span></span><span className="domain-tag">CAP</span></button>
       </div>
       <nav className="nav-scroll">{navGroups.map(group => <div className="nav-group" key={group.title}><div className="group-title">{group.title}</div>{group.items.map(item => <button key={item.id} className={`nav-item ${view === item.id ? 'active' : ''}`} onClick={() => setView(item.id)}><span className="nav-left"><span className="nav-ico">{item.icon}</span><span className="nav-text"><b>{item.title}</b></span></span>{item.id === 'today' && todayItems.length > 0 && <span className="badge badge-green">{todayItems.length}</span>}{item.id === 'library' && libraryItems.length > 0 && <span className="badge badge-sky">{libraryItems.length}</span>}{item.id === 'repro' && reproRuns.length > 0 && <span className="badge badge-amber">{reproRuns.length}</span>}{item.id === 'conversion' && conversions.length > 0 && <span className="badge badge-violet">{conversions.length}</span>}</button>)}</div>)}</nav>
-      <div className="sidebar-note">能力洞察不重复资讯流，而是把前沿论文和开源项目推进到评分、复现和能力转化。能力详情从今日能力、能力库、复现验证或能力转化点击进入。</div>
+      <div className="ai4sec-sidebar-note">能力洞察不重复资讯流，而是把前沿论文和开源项目推进到评分、复现和能力转化。能力详情从今日能力、能力库、复现验证或能力转化点击进入。</div>
     </aside>
     <section className="content">
       <section className="content-head">

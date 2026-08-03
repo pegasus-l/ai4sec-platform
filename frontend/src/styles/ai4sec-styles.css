@@ -137,16 +137,16 @@
     .status i { width: 9px; height: 9px; border-radius: 50%; background: var(--green); box-shadow: 0 0 14px var(--green); animation: pulse 1.6s ease-in-out infinite; }
     @keyframes pulse { 50% { opacity: 0.38; transform: scale(0.75); } }
     .main { min-height: 0; height: 100vh; display: grid; grid-template-columns: 292px minmax(0, 1fr); gap: 12px; }
-    .sidebar, .content {
+    .ai4sec-sidebar, .content {
       min-height: 0; overflow: hidden; border: 1px solid var(--line); border-radius: 22px;
       background: linear-gradient(165deg, rgba(15, 23, 42, 0.9), rgba(2, 6, 23, 0.7));
       box-shadow: var(--shadow);
     }
-    .sidebar { display: grid; grid-template-rows: auto auto minmax(0, 1fr) auto; }
-    .sidebar-head { padding: 18px 16px 15px; border-bottom: 1px solid var(--line); }
+    .ai4sec-sidebar { display: grid; grid-template-rows: auto auto minmax(0, 1fr) auto; }
+    .ai4sec-sidebar-head { padding: 18px 16px 15px; border-bottom: 1px solid var(--line); }
     .label { color: var(--sky); font-size: 11px; font-weight: 800; letter-spacing: 0.14em; text-transform: uppercase; display: flex; align-items: center; gap: 8px; }
-    .sidebar-head h2 { margin: 10px 0 0; font-size: 19px; }
-    .sidebar-head p { margin: 8px 0 0; color: var(--muted); font-size: 12px; line-height: 1.6; }
+    .ai4sec-sidebar-head h2 { margin: 10px 0 0; font-size: 19px; }
+    .ai4sec-sidebar-head p { margin: 8px 0 0; color: var(--muted); font-size: 12px; line-height: 1.6; }
     .data-basis { padding: 12px; display: grid; gap: 8px; border-bottom: 1px solid var(--line); }
     .mini-stat { display: grid; grid-template-columns: 1fr auto; gap: 10px; padding: 9px 10px; border: 1px solid var(--line); border-radius: 13px; background: rgba(15, 23, 42, 0.48); }
     .mini-stat span { color: var(--muted); font-size: 12px; }
@@ -185,7 +185,7 @@
     .nav-ico { color: var(--sky); width: 18px; text-align: center; }
     .nav-text { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .nav-meta { color: var(--faint); font-size: 10px; }
-    .sidebar-note { margin: 0 12px 12px; padding: 11px; border: 1px dashed rgba(56, 189, 248, 0.28); border-radius: 14px; background: rgba(56, 189, 248, 0.06); color: var(--muted); font-size: 12px; line-height: 1.6; }
+    .ai4sec-sidebar-note { margin: 0 12px 12px; padding: 11px; border: 1px dashed rgba(56, 189, 248, 0.28); border-radius: 14px; background: rgba(56, 189, 248, 0.06); color: var(--muted); font-size: 12px; line-height: 1.6; }
     .content { display: grid; grid-template-rows: auto minmax(0, 1fr); }
     .content-head { padding: 18px 20px 14px; border-bottom: 1px solid var(--line); display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 16px; }
     .content-title h1 { margin: 8px 0 0; font-size: 25px; letter-spacing: -0.02em; }
@@ -345,7 +345,7 @@
       .topbar { grid-template-columns: 1fr; height: auto; padding: 12px; }
       .shell { grid-template-rows: auto minmax(0,1fr); }
       .main { grid-template-columns: 1fr; }
-      .sidebar { display: none; }
+      .ai4sec-sidebar { display: none; }
       .grid.cols-4, .grid.cols-3, .grid.cols-2 { grid-template-columns: 1fr; }
       body { overflow: auto; }
       .shell, .main, .content { height: auto; overflow: visible; }
@@ -446,9 +446,9 @@
 .react-flow__attribution { display: none; }
 .shell.vuln-shell { height: calc(100vh - 16px); box-sizing: border-box; overflow: hidden; }
 .vuln-page { height: 100%; min-height: 0; }
-.vuln-page .sidebar-head h2 { margin: 10px 0 0; font-size: 19px; }
-.vuln-page .sidebar-head p { margin: 8px 0 0; color: var(--muted); font-size: 12px; line-height: 1.6; }
-.vuln-page .sidebar-note { padding: 12px 16px 16px; color: var(--faint); font-size: 12px; line-height: 1.55; border-top: 1px solid var(--line); }
+.vuln-page .ai4sec-sidebar-head h2 { margin: 10px 0 0; font-size: 19px; }
+.vuln-page .ai4sec-sidebar-head p { margin: 8px 0 0; color: var(--muted); font-size: 12px; line-height: 1.6; }
+.vuln-page .ai4sec-sidebar-note { padding: 12px 16px 16px; color: var(--faint); font-size: 12px; line-height: 1.55; border-top: 1px solid var(--line); }
 .v11-view { display: grid; gap: 12px; }
 .v11-view .panel, .drawer-detail .panel, .extraction-workbench .panel { border: 1px solid var(--line); border-radius: var(--radius); background: rgba(15,23,42,.58); box-shadow: inset 0 1px 0 rgba(255,255,255,.025); overflow: hidden; }
 .v11-view .panel-head, .drawer-detail .panel-head, .extraction-workbench .panel-head { display: flex; justify-content: space-between; align-items: start; gap: 10px; padding: 14px 15px 11px; border-bottom: 1px solid var(--line); }
