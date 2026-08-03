@@ -269,6 +269,53 @@ def test_task_status_uses_fallback_without_report() -> None:
     assert task_status_from_report(None, fallback="partial") == "partial"
 
 
+def test_cli_success_without_execution_evidence_is_downgraded() -> None:
+    report = enforce_report_acceptance({"status": "success", "summary": "looks good", "project_type": "python"})
+
+    assert report is not None
+    assert report["status"] == "partial"
+    assert "成功报告缺少真实运行证据" in report["acceptance_issues"]
+
+
+def test_cli_success_requires_real_command_output_and_passing_steps() -> None:
+    report = enforce_report_acceptance({
+        "status": "success",
+        "summary": "minimal example ran",
+        "project_type": "python",
+        "steps": [{"cmd": "python -m example", "ok": True}],
+        "run_result": {
+            "ran": True,
+            "command": "python -m example",
+            "output_excerpt": "result: ok",
+            "what_it_does": "produced the expected result",
+        },
+    })
+
+    assert report is not None
+    assert report["status"] == "success"
+    assert not report.get("acceptance_issues")
+
+
+def test_l3_environment_only_report_cannot_be_full_success() -> None:
+    report = enforce_report_acceptance({
+        "status": "success",
+        "level": "L3",
+        "summary": "environment prepared",
+        "project_type": "python",
+        "steps": [{"cmd": "python -c 'import package'", "ok": True}],
+        "run_result": {
+            "ran": True,
+            "command": "python -c 'import package'",
+            "output_excerpt": "import ok",
+            "what_it_does": "verified imports only",
+        },
+    })
+
+    assert report is not None
+    assert report["status"] == "partial"
+    assert "L3 项目只完成环境评估，不能标记完整成功" in report["acceptance_issues"]
+
+
 def test_web_success_without_core_validation_is_downgraded() -> None:
     report = enforce_report_acceptance({"status": "success", "is_web": True, "web_started": True})
     assert report is not None

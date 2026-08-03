@@ -302,6 +302,8 @@ OpenCode 权限按 Profile 生成，未知工具、外部目录、子代理、Sk
 
 能力复现由后端统一选择 `official_demo`、`local_web`、`cli` 或 `unsupported` 策略。只有分类阶段已真实探测并持久化 `demo_verified=true` 的官方 Demo 才跳过本地部署；Web 项目必须先保留 loopback 端口再入队，CLI 项目不得携带 Web 端口；明确无真实实现的项目返回可解释的跳过结果。操作者可显式选择 `local_web` 或 `cli` 覆盖自动分类，旧 `web: true/false` 请求字段已删除并返回 422，避免前端布尔值与后端任务语义再次漂移。
 
+成功判定不是容器启动、进程退出或首页 HTTP 200：Web 必须有真实核心业务闭环、非 mock 模式、通过步骤、结果证据和结果说明；CLI 必须有真实运行命令、所有关键步骤通过、真实输出摘要和结果说明；L3 只做环境评估，最多标记 `partial`。不满足门槛的模型 `success` 会被 Runner 自动降级并写入 `acceptance_issues`/`blockers`。
+
 能力复现默认限制为 `REPRO_CPUS=2.0`、`REPRO_MEMORY=4g`、`REPRO_MEMORY_SWAP=4g`、`REPRO_PIDS_LIMIT=1024`、workspace 10 GiB 软上限和数据库日志 5 MiB 上限。Web 端口代理只监听 `127.0.0.1`。workspace 上限通过周期扫描实现，不是文件系统硬 quota；生产部署仍建议为复现目录使用独立受限文件系统或项目配额。
 
 如需获取最新资讯，可运行 shadow 采集：

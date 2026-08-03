@@ -910,7 +910,7 @@ D11 暂缓的是公网入口和完整公网暴露治理，不代表复现容器�
 - [x] 将 OpenCode 权限从全量 allow 收敛为 Profile 对应的最小权限。
 - [x] 修复静默子进程超时、孤儿容器、容器信息持久化和 Web 端口暴露。
 - [x] 完善 Web、CLI、官方 Demo 和不可复现项目策略。
-- [ ] 加强成功判定和证据要求。
+- [x] 加强成功判定和证据要求。
 - [ ] 完成结构化报告与能力卡回写。
 - [ ] 完成正式能力洞察前端页面。
 - [ ] 补齐 API、SSE、停止、清理、超时和回写测试。
@@ -2093,3 +2093,11 @@ Python full test suite: 199 passed
 - migration v18 为任务增加 `repro_strategy`，本地 Web/CLI 决策与任务一起持久化并通过任务详情和列表返回。分类批处理同步写回 Demo 验证结果、策略和理由；无法解析有效仓库的条目标记为 unsupported。
 - 删除旧 `web: true/false` 请求字段并设置额外字段拒绝，旧调用返回 422，避免继续维护已经与后端任务语义脱节的 Beta 兼容契约。
 - 回归覆盖已验证/未验证 Demo、无真实代码、操作者覆盖、官方 Demo 不建任务、无仓库 unsupported、local_web 策略与端口持久化及旧字段拒绝；能力/数据库专项测试 125 passed，全仓 Python 测试 356 passed，前端生产构建、`compileall` 与 `git diff --check` 通过。前端仍只有既有的动态/静态 import 与大 chunk 警告。
+
+### 2026-08-03：能力复现成功判定与证据门槛
+
+- `enforce_report_acceptance` 从只校验 Web 报告扩展为同时校验 CLI/普通项目。非 Web 报告声称 `success` 时必须有摘要、项目类型、至少一个真实步骤且全部 `ok=true`，并提供 `run_result.ran=true`、实际命令、真实输出摘要和结果说明。
+- Web 报告继续要求服务真实启动、核心闭环 `verified=true`、`mode=real`、实测步骤、真实证据和结果说明；首页 200、服务启动或普通 CRUD 不再单独构成成功证据。
+- `level=L3` 的项目即使完成 import 或环境准备，也自动降级为 `partial`，因为尚未验证完整可用能力。所有自动降级原因同时进入 `acceptance_issues` 和 `blockers`，保留模型原始报告供人工复核。
+- 失败或部分成功报告保留其原始状态，不强行伪造成功；没有结构化报告仍由 Runner 按失败收尾。能力卡回写沿用降级后的最终状态，避免前端显示 success 而领域对象实际不可用。
+- Prompt 与校验规则同步，明确 CLI 成功所需的真实命令、输出和结果字段；新增回归覆盖缺证据 success、完整 CLI success、L3 降级和已有 Web 规则，专项测试 117 passed。

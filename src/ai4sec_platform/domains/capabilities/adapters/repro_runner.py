@@ -511,6 +511,7 @@ usage 字段是给用户看的"使用说明",注意:不要写安装部署步骤(
 - 如果复现失败(status=failed),usage 里只填 what 和 limitations
 
 报告要诚实:跑不起来就 status=failed 并在 blockers 说清缺什么;部分成功用 partial。
+非 Web 项目只有在真实执行了最小示例、所有关键 steps 的 ok 都为 true、run_result.ran=true 且同时填写 command、output_excerpt、what_it_does 后才能使用 status=success；只完成 import、--help 或环境准备的 L3 项目最多使用 partial。
 status=failed/partial 的报告同样有价值(让使用者知道这个项目要什么、卡在哪)。
 JSON 必须合法(可被解析),字符串里不要有未转义的引号或换行。
 """
@@ -1165,28 +1166,45 @@ def enforce_report_acceptance(report: dict | None) -> dict | None:
     if status not in {"success", "partial", "failed"}:
         normalized["status"] = "failed"
         status = "failed"
-    if not normalized.get("is_web"):
-        return normalized
-
     issues: list[str] = []
-    if not normalized.get("web_started"):
-        issues.append("Web 服务未成功启动或未验证")
-    workflow = normalized.get("core_workflow")
-    if not isinstance(workflow, dict):
-        workflow = {}
-    if workflow.get("verified") is not True:
-        issues.append("未完成核心业务闭环验证")
-    if str(workflow.get("mode") or "").strip().lower() != "real":
-        issues.append("核心功能未使用真实模式验证")
-    if not workflow.get("steps"):
-        issues.append("核心业务闭环缺少实测步骤")
-    if not workflow.get("evidence"):
-        issues.append("核心业务闭环缺少真实结果证据")
-    if not str(workflow.get("result") or "").strip():
-        issues.append("核心业务闭环缺少结果说明")
+    if normalized.get("is_web"):
+        if not normalized.get("web_started"):
+            issues.append("Web 服务未成功启动或未验证")
+        workflow = normalized.get("core_workflow")
+        if not isinstance(workflow, dict):
+            workflow = {}
+        if workflow.get("verified") is not True:
+            issues.append("未完成核心业务闭环验证")
+        if str(workflow.get("mode") or "").strip().lower() != "real":
+            issues.append("核心功能未使用真实模式验证")
+        if not workflow.get("steps"):
+            issues.append("核心业务闭环缺少实测步骤")
+        if not workflow.get("evidence"):
+            issues.append("核心业务闭环缺少真实结果证据")
+        if not str(workflow.get("result") or "").strip():
+            issues.append("核心业务闭环缺少结果说明")
+    elif status == "success":
+        if not str(normalized.get("summary") or "").strip():
+            issues.append("成功报告缺少摘要")
+        if not str(normalized.get("project_type") or "").strip():
+            issues.append("成功报告缺少项目类型")
+        steps = normalized.get("steps")
+        if not isinstance(steps, list) or not steps:
+            issues.append("成功报告缺少实测步骤")
+        elif any(not isinstance(step, dict) or step.get("ok") is not True for step in steps):
+            issues.append("成功报告包含未通过的实测步骤")
+        run_result = normalized.get("run_result")
+        if not isinstance(run_result, dict) or run_result.get("ran") is not True:
+            issues.append("成功报告缺少真实运行证据")
+        else:
+            for field, label in (("command", "实际运行命令"), ("output_excerpt", "真实输出"), ("what_it_does", "结果说明")):
+                if not str(run_result.get(field) or "").strip():
+                    issues.append(f"成功报告缺少{label}")
+        if str(normalized.get("level") or "").strip().upper() == "L3":
+            issues.append("L3 项目只完成环境评估，不能标记完整成功")
 
     if issues and status == "success":
-        normalized["status"] = "failed" if not normalized.get("web_started") else "partial"
+        normalized["status"] = "failed" if normalized.get("is_web") and not normalized.get("web_started") else "partial"
     if issues:
         existing_issues = normalized.get("acceptance_issues")
         if not isinstance(existing_issues, list):

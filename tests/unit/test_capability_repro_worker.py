@@ -118,8 +118,14 @@ def test_recovery_accepts_completed_report_and_schedules_cleanup(monkeypatch, tm
     report = {
         "status": "success",
         "summary": "core workflow verified",
-        "evidence": ["command exited successfully"],
-        "limitations": [],
+        "project_type": "python",
+        "steps": [{"cmd": "python -m example", "ok": True}],
+        "run_result": {
+            "ran": True,
+            "command": "python -m example",
+            "output_excerpt": "ok",
+            "what_it_does": "verified the example output",
+        },
     }
     with connect(settings) as conn:
         claim_next_repro_task(conn, worker_id="dead-worker", task_id=task_id)
