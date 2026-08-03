@@ -23,6 +23,7 @@ from ai4sec_platform.domains.capabilities.adapters.repro_runner import (
     _safe_run,
     enforce_report_acceptance,
     extract_report,
+    managed_opencode_config,
     task_status_from_report,
     validate_repro_runtime_config,
 )
@@ -210,7 +211,9 @@ class CapabilityReproWorker:
             last_heartbeat = now
 
         token_path = self._issue_model_token(task_id)
+        managed_config_path = token_path.with_suffix(".opencode.json")
         try:
+            self._write_managed_config(managed_config_path)
             runner = ReproRunner(
                 task_id=task_id,
                 repo_url=str(task["repo_url"]),
@@ -222,6 +225,7 @@ class CapabilityReproWorker:
                 model_token_path=token_path,
                 approved_egress_domains=task_egress_domains,
                 execution_profile=self.execution_profile,
+                managed_config_path=managed_config_path,
             )
             with connect(self.settings) as conn:
                 init_db(conn)
@@ -239,6 +243,16 @@ class CapabilityReproWorker:
                 revoke_task_model_tokens(conn, task_id=task_id)
                 conn.commit()
             token_path.unlink(missing_ok=True)
+            managed_config_path.unlink(missing_ok=True)
+
+    def _write_managed_config(self, config_path: Path) -> None:
+        descriptor = os.open(config_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        try:
+            with os.fdopen(descriptor, "w", encoding="utf-8") as config_file:
+                json.dump(managed_opencode_config(self.execution_profile), config_file, ensure_ascii=False)
+        except Exception:
+            config_path.unlink(missing_ok=True)
+            raise
 
     def _issue_model_token(self, task_id: int) -> Path:
         secret_dir = self.settings.output_dir / "runtime_secrets" / "repro"

@@ -65,6 +65,7 @@ REPRO_LLM_BASE_URL = os.environ.get("REPRO_LLM_BASE_URL", DASHSCOPE_PROXY_URL or
 REPRO_LLM_MODEL = os.environ.get("REPRO_LLM_MODEL", "glm-5.1")
 REPRO_MODEL_TOKEN_FILE = os.environ.get("REPRO_MODEL_TOKEN_FILE", "")
 CONTAINER_MODEL_TOKEN_FILE = "/run/secrets/repro_model_token"
+CONTAINER_MANAGED_OPENCODE_CONFIG = "/etc/opencode/opencode.json"
 
 
 def _repo_archive_url(repo_url: str) -> str:
@@ -95,6 +96,21 @@ def _managed_llm_prompt_section() -> str:
 - 模型: {REPRO_LLM_MODEL}
 - 任务凭据由执行器通过只读 Secret 文件管理；不要读取、输出、记录或复制任何凭据。
 - 使用上面的 Base URL；禁止把凭据写入源码、报告或日志。
+"""
+
+
+def _profile_permission_prompt_section(execution_profile: str) -> str:
+    docker_rule = (
+        "- 本任务禁止 Docker/Podman；如果项目必须依赖容器编排，在报告中说明需要 nested_docker Profile。"
+        if execution_profile == "standard"
+        else "- 允许使用 Docker/Compose，但禁止 privileged 容器以及 host network/PID/IPC/UTS namespace。"
+    )
+    return f"""
+# 执行权限边界
+- 只能修改 `/workspace` 或 `/tmp`，禁止访问其他外部目录和 `/run/secrets`。
+- 禁止 sudo、su、mount、nsenter、unshare、iptables、nft、systemctl 和递归启动 OpenCode。
+- 禁止子代理、Skill、WebFetch、WebSearch 和交互式提问；网络访问只能通过 shell，并受任务出口白名单约束。
+{docker_rule}
 """
 
 
@@ -149,6 +165,19 @@ def _validated_token_path(token_path: Path | None = None) -> Path:
     if file_stat.st_mode & 0o077:
         raise RuntimeError("Repro model token file permissions must not allow group or other access")
     return token_path.resolve()
+
+
+def _validated_managed_config_path(config_path: Path) -> Path:
+    config_path = config_path.expanduser()
+    try:
+        file_stat = config_path.lstat()
+    except FileNotFoundError as exc:
+        raise RuntimeError(f"Managed OpenCode config file does not exist: {config_path}") from exc
+    if stat.S_ISLNK(file_stat.st_mode) or not stat.S_ISREG(file_stat.st_mode):
+        raise RuntimeError("Managed OpenCode config path must be a regular non-symlink file")
+    if file_stat.st_mode & 0o077:
+        raise RuntimeError("Managed OpenCode config permissions must not allow group or other access")
+    return config_path.resolve()
 
 
 def validate_repro_runtime_config(
@@ -274,12 +303,137 @@ def repro_resource_limits_payload() -> dict[str, Any]:
     }
 
 
+def opencode_permission_policy(execution_profile: str) -> dict[str, Any]:
+    if execution_profile not in {"standard", "nested_docker"}:
+        raise ValueError(f"unknown reproduction execution profile: {execution_profile}")
+    bash_rules = {
+        "*": "allow",
+        "sudo": "deny",
+        "sudo *": "deny",
+        "su": "deny",
+        "su *": "deny",
+        "mount": "deny",
+        "mount *": "deny",
+        "umount": "deny",
+        "umount *": "deny",
+        "nsenter *": "deny",
+        "unshare *": "deny",
+        "iptables *": "deny",
+        "ip6tables *": "deny",
+        "nft *": "deny",
+        "systemctl *": "deny",
+        "service *": "deny",
+        "opencode *": "deny",
+    }
+    if execution_profile == "standard":
+        bash_rules.update({
+            "docker": "deny",
+            "docker *": "deny",
+            "dockerd *": "deny",
+            "podman": "deny",
+            "podman *": "deny",
+        })
+    else:
+        bash_rules.update({
+            "docker run *--privileged*": "deny",
+            "docker run *--network host*": "deny",
+            "docker run *--network=host*": "deny",
+            "docker run *--pid host*": "deny",
+            "docker run *--pid=host*": "deny",
+            "docker run *--ipc host*": "deny",
+            "docker run *--ipc=host*": "deny",
+            "docker run *--uts host*": "deny",
+            "docker run *--uts=host*": "deny",
+        })
+    policy = {
+        "*": "deny",
+        "read": {
+            "*": "allow",
+            "*.env": "deny",
+            "*.env.*": "deny",
+            "*.env.example": "allow",
+            "/run/secrets/**": "deny",
+        },
+        "edit": "allow",
+        "glob": "allow",
+        "grep": "allow",
+        "list": "allow",
+        "bash": bash_rules,
+        "task": "deny",
+        "skill": "deny",
+        "lsp": "allow",
+        "todowrite": "allow",
+        "question": "deny",
+        "webfetch": "deny",
+        "websearch": "deny",
+        "external_directory": {
+            "*": "deny",
+            "/workspace/**": "allow",
+            "/tmp/**": "allow",
+        },
+        "doom_loop": "deny",
+    }
+    validate_opencode_permission_policy(policy, execution_profile=execution_profile)
+    return policy
+
+
+def validate_opencode_permission_policy(policy: dict[str, Any], *, execution_profile: str) -> None:
+    actions = {"allow", "deny", "ask"}
+    for rule in policy.values():
+        if isinstance(rule, str):
+            if rule not in actions:
+                raise RuntimeError(f"invalid OpenCode permission action: {rule}")
+        elif isinstance(rule, dict):
+            if not rule or any(action not in actions for action in rule.values()):
+                raise RuntimeError("invalid granular OpenCode permission policy")
+        else:
+            raise RuntimeError("invalid OpenCode permission rule")
+    if policy.get("*") != "deny":
+        raise RuntimeError("OpenCode permissions must deny unknown tools by default")
+    if policy.get("external_directory", {}).get("*") != "deny":
+        raise RuntimeError("OpenCode external directories must be denied by default")
+    bash = policy.get("bash")
+    if not isinstance(bash, dict) or bash.get("*") != "allow":
+        raise RuntimeError("OpenCode reproduction requires an explicit bash fallback")
+    required_denials = ("sudo *", "mount *", "nsenter *", "unshare *", "iptables *", "nft *")
+    if any(bash.get(pattern) != "deny" for pattern in required_denials):
+        raise RuntimeError("OpenCode bash policy is missing a required dangerous-command denial")
+    if execution_profile == "standard" and bash.get("docker *") != "deny":
+        raise RuntimeError("standard OpenCode profile must deny Docker commands")
+    if execution_profile == "nested_docker" and bash.get("docker run *--privileged*") != "deny":
+        raise RuntimeError("nested_docker OpenCode profile must deny privileged child containers")
+
+
+def managed_opencode_config(execution_profile: str) -> dict[str, Any]:
+    managed_provider = "ai4sec-managed"
+    permissions = opencode_permission_policy(execution_profile)
+    return {
+        "$schema": "https://opencode.ai/config.json",
+        "provider": {
+            managed_provider: {
+                "npm": "@ai-sdk/openai-compatible",
+                "name": "AI4SEC Managed Model",
+                "options": {
+                    "baseURL": REPRO_LLM_BASE_URL,
+                    "apiKey": f"{{file:{CONTAINER_MODEL_TOKEN_FILE}}}",
+                },
+                "models": {REPRO_LLM_MODEL: {"name": REPRO_LLM_MODEL}},
+            }
+        },
+        "model": f"{managed_provider}/{REPRO_LLM_MODEL}",
+        "permission": permissions,
+        "agent": {"build": {"permission": permissions}},
+        "plugin": [],
+    }
+
+
 # ============================================================================
 # 复现任务 prompt
 # ============================================================================
 def _build_repro_prompt(execution_profile: str = "nested_docker") -> str:
     """构建普通项目复现 prompt，不包含任何模型凭据。"""
     llm_section = _managed_llm_prompt_section()
+    permission_section = _profile_permission_prompt_section(execution_profile)
     identity = (
         "你是 root，可安装系统包并使用嵌套 Docker"
         if execution_profile == "nested_docker"
@@ -288,6 +442,7 @@ def _build_repro_prompt(execution_profile: str = "nested_docker") -> str:
     return f"""你在一个隔离容器里（{identity}），目标是【把一个开源项目跑起来、确认环境可用、并尽量跑出真实运行效果】。
 仓库已 clone 到 /workspace/repo。全程用中文说明你在做什么。
 {llm_section}
+{permission_section}
 # 第一步:判断复现难度(决定你要跑多深)
 读 README、依赖清单、项目结构后,判断这个项目属于哪一级:
 - L1 轻量:纯库/命令行工具,依赖小。→ 装好 + 跑出最小示例/demo,看到真实输出。
@@ -359,6 +514,7 @@ JSON 必须合法(可被解析),字符串里不要有未转义的引号或换行
 def _build_web_repro_prompt(execution_profile: str = "nested_docker") -> str:
     """构建 Web 项目复现 prompt，不包含任何模型凭据。"""
     llm_section = _managed_llm_prompt_section()
+    permission_section = _profile_permission_prompt_section(execution_profile)
     identity = (
         "你是 root，可安装系统包并使用嵌套 Docker"
         if execution_profile == "nested_docker"
@@ -366,6 +522,7 @@ def _build_web_repro_prompt(execution_profile: str = "nested_docker") -> str:
     )
     return f"""你在一个隔离容器里（{identity}），需要复现一个项目。仓库已 clone 到 /workspace/repo。全程用中文说明。
 {llm_section}
+{permission_section}
 # 时间纪律
 - Web 复现总预算约 50 分钟。必须在第 45 分钟前停止继续探索，把已经验证的事实立即整理成结构化报告。
 - 核心闭环已经验证后，不要继续枚举非必要 API 或追求覆盖所有功能；优先输出报告，未覆盖部分写入 limitations。
@@ -465,6 +622,7 @@ class ReproRunner:
         model_token_path: Path | None = None,
         approved_egress_domains: tuple[str, ...] = (),
         execution_profile: str = "nested_docker",
+        managed_config_path: Path | None = None,
     ):
         self.task_id = task_id
         self.repo_url = repo_url
@@ -480,6 +638,7 @@ class ReproRunner:
         if execution_profile not in {"standard", "nested_docker"}:
             raise ValueError(f"unknown reproduction execution profile: {execution_profile}")
         self.execution_profile = execution_profile
+        self.managed_config_path = managed_config_path
         _stamp = int(time.time())
         self.container_name = f"repro-{task_id}-{_stamp}"
         self.workspace = WORKSPACE_ROOT / f"task-{task_id}-{_stamp}"
@@ -535,33 +694,19 @@ class ReproRunner:
                     cmd.extend(["--add-host", f"{domain}:{address}"])
         token_path = _validated_token_path(self.model_token_path)
         cmd.extend(["--mount", f"type=bind,src={token_path},dst={CONTAINER_MODEL_TOKEN_FILE},readonly"])
+        if self.managed_config_path:
+            config_path = _validated_managed_config_path(self.managed_config_path)
+            cmd.extend([
+                "--mount",
+                f"type=bind,src={config_path},dst={CONTAINER_MANAGED_OPENCODE_CONFIG},readonly",
+            ])
         cmd.append(image)
         return cmd
 
     def build_exec_command(self):
         """docker exec 进容器，以 root 跑 clone + opencode。"""
         validate_repro_runtime_config(token_path=self.model_token_path, execution_profile=self.execution_profile)
-        managed_provider = "ai4sec-managed"
-        opencode_config = json.dumps({
-            "$schema": "https://opencode.ai/config.json",
-            "provider": {
-                managed_provider: {
-                    "npm": "@ai-sdk/openai-compatible",
-                    "name": "AI4SEC Managed Model",
-                    "options": {
-                        "baseURL": REPRO_LLM_BASE_URL,
-                        "apiKey": f"{{file:{CONTAINER_MODEL_TOKEN_FILE}}}",
-                    },
-                    "models": {REPRO_LLM_MODEL: {"name": REPRO_LLM_MODEL}},
-                }
-            },
-            "model": f"{managed_provider}/{REPRO_LLM_MODEL}",
-            "permission": {
-                "*": "allow", "bash": "allow", "edit": "allow",
-                "write": "allow", "read": "allow", "webfetch": "allow",
-                "external_directory": "allow", "doom_loop": "allow",
-            },
-        })
+        opencode_config = json.dumps(managed_opencode_config(self.execution_profile))
         encoded_config = base64.b64encode(opencode_config.encode()).decode()
         home = "/root"
         inject_managed_config = (
@@ -611,7 +756,7 @@ class ReproRunner:
             "cd /workspace/repo; "
             "echo \"✓ 已 clone: $(git -C /workspace/repo remote get-url origin 2>/dev/null)\"; "
             "echo \"✓ pip 源: $(pip config get global.index-url 2>/dev/null || echo 默认)\"; "
-            f"stdbuf -oL -eL opencode run {shlex.quote(prompt)} 2>&1"
+            f"stdbuf -oL -eL opencode run --pure --agent build {shlex.quote(prompt)} 2>&1"
         )
         return [
             "docker", "exec", "-u", "root",
@@ -623,6 +768,9 @@ class ReproRunner:
 
     def run(self) -> None:
         """在当前线程执行，供持久 Worker 管理生命周期。"""
+        if not self.managed_config_path:
+            raise RuntimeError("managed OpenCode config is required for reproduction execution")
+        _validated_managed_config_path(self.managed_config_path)
         self._prepare_workspace()
         self._run()
 

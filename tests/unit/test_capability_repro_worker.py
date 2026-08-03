@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -158,6 +159,7 @@ def test_worker_executes_claimed_task_without_api_thread(monkeypatch, tmp_path: 
     _allow_test_runtime(monkeypatch)
     observed_current_tasks: list[int | None] = []
     observed_token_paths: list[Path] = []
+    observed_config_paths: list[Path] = []
 
     class FakeRunner:
         def __init__(
@@ -172,12 +174,14 @@ def test_worker_executes_claimed_task_without_api_thread(monkeypatch, tmp_path: 
             model_token_path,
             approved_egress_domains,
             execution_profile,
+            managed_config_path,
         ):
             self.task_id = task_id
             self.model_token_path = model_token_path
             self.on_log = on_log
             self.on_status = on_status
             self.on_heartbeat = on_heartbeat
+            self.managed_config_path = managed_config_path
             assert approved_egress_domains == ("api.example.com",)
             assert execution_profile == "standard"
             self.container_name = f"fake-{task_id}"
@@ -185,8 +189,13 @@ def test_worker_executes_claimed_task_without_api_thread(monkeypatch, tmp_path: 
 
         def run(self) -> None:
             observed_token_paths.append(self.model_token_path)
+            observed_config_paths.append(self.managed_config_path)
             assert self.model_token_path.read_text(encoding="utf-8").startswith("rmt_")
             assert self.model_token_path.stat().st_mode & 0o077 == 0
+            managed_config = json.loads(self.managed_config_path.read_text(encoding="utf-8"))
+            assert self.managed_config_path.stat().st_mode & 0o077 == 0
+            assert managed_config["permission"]["bash"]["docker *"] == "deny"
+            assert managed_config["agent"]["build"]["permission"]["*"] == "deny"
             with connect(settings) as conn:
                 worker = conn.execute(
                     "SELECT current_task_id FROM capability_repro_workers WHERE worker_id = 'worker-1'"
@@ -200,7 +209,7 @@ def test_worker_executes_claimed_task_without_api_thread(monkeypatch, tmp_path: 
 
     result = CapabilityReproWorker(settings, worker_id="worker-1").run_once(task_id=task_id)
 
-    assert result and result["status"] == "success"
+    assert result and result["status"] == "success", result and result["result"]
     with connect(settings) as conn:
         task = repo.get_repro_task(conn, task_id)
         worker = conn.execute(
@@ -211,6 +220,7 @@ def test_worker_executes_claimed_task_without_api_thread(monkeypatch, tmp_path: 
     assert "worker log" in task["log"]
     assert observed_current_tasks == [task_id]
     assert observed_token_paths and not observed_token_paths[0].exists()
+    assert observed_config_paths and not observed_config_paths[0].exists()
     assert worker and worker["status"] == "stopped"
     assert worker["current_task_id"] is None
     assert token and token["revoked_at"]

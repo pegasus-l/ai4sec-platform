@@ -455,6 +455,12 @@ def test_opencode_config_references_secret_file_and_not_image_auth(monkeypatch, 
     config = json.loads(base64.b64decode(encoded).decode())
     options = config["provider"]["ai4sec-managed"]["options"]
     assert options["apiKey"] == f"{{file:{repro_runner.CONTAINER_MODEL_TOKEN_FILE}}}"
+    assert config["permission"]["*"] == "deny"
+    assert config["permission"]["bash"]["docker run *--privileged*"] == "deny"
+    assert config["permission"]["external_directory"]["*"] == "deny"
+    assert config["agent"]["build"]["permission"]["*"] == "deny"
+    assert config["plugin"] == []
+    assert "opencode run --pure --agent build" in shell_command
 
 
 def test_repro_rejects_overly_permissive_token_file(monkeypatch, tmp_path: Path) -> None:

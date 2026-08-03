@@ -31,5 +31,7 @@ RUN apt-get update \
     && install -d /workspace \
     && rm -rf /var/lib/apt/lists/* /root/.npm
 
+RUN install -d /etc/opencode
+
 WORKDIR /workspace
 CMD ["sleep", "infinity"]

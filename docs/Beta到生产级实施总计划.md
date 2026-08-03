@@ -907,7 +907,7 @@ D11 暂缓的是公网入口和完整公网暴露治理，不代表复现容器�
 - [x] 阻断回环、私网、链路本地、云 metadata、Docker 网桥和平台管理网段。
 - [ ] 实现 standard rootless 与 nested_docker Sysbox 双 Profile。
 - [x] nested_docker 必须人工批准、单并发并使用更严格的资源与网络限制。
-- [ ] 将 OpenCode 权限从全量 allow 收敛为 Profile 对应的最小权限。
+- [x] 将 OpenCode 权限从全量 allow 收敛为 Profile 对应的最小权限。
 - [ ] 修复静默子进程超时、孤儿容器、容器信息持久化和 Web 端口暴露。
 - [ ] 完善 Web、CLI、官方 Demo 和不可复现项目策略。
 - [ ] 加强成功判定和证据要求。
@@ -2059,3 +2059,16 @@ Python full test suite: 199 passed
 - 当前宿主机实测只有 rootful Docker、`runc` 与 `sysbox-runc`，没有 rootless Docker/Podman。更重要的是，rootless 网络尚无与当前 `DOCKER-USER` 等价的强制出口执行器；standard 预检因此显式失败关闭。不能用 rootful runc 或自由出网冒充完成，3B 的双 Profile 总条目继续保持未勾选。
 - `repro-runner-standard:v1` 已在当前宿主机从 `Dockerfile.standard` 真实构建成功；无网络烟测确认 Python 3.10.12、Node 20.20.2、OpenCode 1.15.12 可用，镜像内无 Docker 命令和 OpenCode auth 文件，只读根文件系统下启动成功且 `/proc/self/status` 的 `CapEff=0`。
 - Profile、迁移、API、领取隔离、审批顺序、rootful 拒绝、rootless 出口适配器缺失时失败关闭及两类 Docker 命令均有回归覆盖；全仓 Python 测试 342 passed，`compileall` 与 `git diff --check` 通过。
+
+### 2026-08-03：能力复现 OpenCode 最小权限
+
+- 按 OpenCode 1.15.12 官方 `config.json` Schema 实现 Profile 权限生成和启动前自校验。规则使用官方“最后匹配者生效”语义，catch-all 放在前、具体 deny 放在后；非交互 Worker 不使用会等待人工输入的 `ask`。
+- 两类 Profile 均将未知工具设为 deny，并拒绝外部目录、子代理、Skill、交互提问、WebFetch、WebSearch 和 doom loop；读取额外拒绝 `.env` 与 `/run/secrets`，外部路径只放行 `/workspace/**` 和 `/tmp/**`。
+- standard 明确拒绝 Docker、dockerd 和 Podman。nested 允许项目使用 Docker/Compose，但拒绝命令行中明显的 privileged、host network、host PID/IPC/UTS namespace，并继续依赖 nested 人工审批和容器网络边界。
+- sudo、su、mount、umount、nsenter、unshare、iptables、ip6tables、nft、systemctl、service 和递归 OpenCode 命令在两类 Profile 中统一拒绝；Prompt 同步声明这些限制，减少模型反复尝试被阻断操作。
+- 平台权限不再只写入可被项目配置覆盖的用户级配置。Worker 为每个任务创建独立 `0600` managed config，只读挂载到 Linux 最高优先级 `/etc/opencode/opencode.json`，并在任务结束时与短令牌一起删除；Runner 缺少该文件或权限过宽时拒绝执行。
+- managed config 同时固定全局和 `build` agent 权限、清空插件列表；实际命令使用 `opencode run --pure --agent build`。在项目目录放置符合 Schema 的恶意 `opencode.json`，尝试把全局/build 权限改回 allow 并加载插件后，OpenCode 1.15.12 解析结果仍保持两级 deny 且插件为空。
+- 任意项目复现仍需要广泛 shell 命令，因此 bash 保留显式 allow fallback。OpenCode 权限只能降低代理误操作，无法约束恶意仓库通过解释器或 Compose 文件绕过命令字符串规则；安全结论仍以容器隔离、强制出口、资源配额和短令牌为准，不能把该配置宣称为沙箱。
+- standard 与 nested 生成配置均使用真实 `repro-runner-standard:v1` 中的 OpenCode 1.15.12 在无网络容器内执行 `opencode debug config --pure`，完整解析成功；standard 的 `docker *`、nested 的 `docker run *--privileged*`、两类默认工具和外部目录 deny 均在解析结果中生效。
+- 回归覆盖默认 deny、无 `ask`、危险命令、Profile 差异、令牌文件引用、managed config 权限与收尾删除、配置注入和过度宽松策略拒绝；全仓 Python 测试 347 passed，`compileall` 与 `git diff --check` 通过。
+- 镜像复核期间发现宿主机仍有两个旧 `repro-*` 容器已连续运行约 6 天。本批次未在缺少任务归属和数据库对账证据时擅自停止；该事实作为下一项“静默超时、孤儿容器与容器信息持久化”真实样本处理。
