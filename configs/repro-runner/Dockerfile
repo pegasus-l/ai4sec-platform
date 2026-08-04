@@ -5,18 +5,30 @@ ARG NODE_VERSION=20.20.2-1nodesource1
 ARG DOCKER_VERSION=5:29.6.2-1~ubuntu.22.04~jammy
 ARG CONTAINERD_VERSION=2.2.6-1~ubuntu.22.04~jammy
 ARG OPENCODE_VERSION=1.15.12
+ARG UBUNTU_ARCHIVE_MIRROR=http://archive.ubuntu.com/ubuntu
+ARG UBUNTU_SECURITY_MIRROR=http://security.ubuntu.com/ubuntu
+ARG DOCKER_APT_BASE=https://download.docker.com/linux/ubuntu
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-RUN apt-get update \
+RUN sed -i \
+        -e "s|http://archive.ubuntu.com/ubuntu|${UBUNTU_ARCHIVE_MIRROR}|g" \
+        -e "s|http://security.ubuntu.com/ubuntu|${UBUNTU_SECURITY_MIRROR}|g" \
+        /etc/apt/sources.list \
+    && apt-get update \
     && apt-get install -y --no-install-recommends \
+        build-essential \
         ca-certificates \
+        cargo \
         curl \
         git \
+        golang-go \
         gnupg \
+        pkg-config \
         python3 \
         python3-pip \
         python3-venv \
+        rustc \
         systemd \
         systemd-sysv \
         unzip \
@@ -28,9 +40,9 @@ RUN install -m 0755 -d /etc/apt/keyrings \
         | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg \
     && echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_${NODE_MAJOR}.x nodistro main" \
         > /etc/apt/sources.list.d/nodesource.list \
-    && curl -fsSL https://download.docker.com/linux/ubuntu/gpg \
+    && curl -fsSL "${DOCKER_APT_BASE}/gpg" \
         | gpg --dearmor -o /etc/apt/keyrings/docker.gpg \
-    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu jammy stable" \
+    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] ${DOCKER_APT_BASE} jammy stable" \
         > /etc/apt/sources.list.d/docker.list \
     && apt-get update \
     && apt-get install -y --no-install-recommends \

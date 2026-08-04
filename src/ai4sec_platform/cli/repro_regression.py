@@ -81,11 +81,24 @@ def report(manifest_path: Path) -> dict[str, Any]:
         init_db(conn)
         rows = conn.execute(
             """
-            SELECT t.*, json_extract(i.payload_json, '$.regression_sample_id') AS sample_id
-            FROM capability_repro_tasks t
-            JOIN domain_items i ON i.id = t.item_id
-            WHERE t.trigger = 'capability_repro_regression'
-            ORDER BY t.id
+            WITH ranked_attempts AS (
+                SELECT
+                    t.*,
+                    json_extract(i.payload_json, '$.regression_sample_id') AS sample_id,
+                    COUNT(*) OVER (
+                        PARTITION BY json_extract(i.payload_json, '$.regression_sample_id')
+                    ) AS attempt_count,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY json_extract(i.payload_json, '$.regression_sample_id')
+                        ORDER BY t.id DESC
+                    ) AS attempt_rank
+                FROM capability_repro_tasks t
+                JOIN domain_items i ON i.id = t.item_id
+                WHERE json_extract(i.payload_json, '$.regression_sample_id') <> ''
+            )
+            SELECT * FROM ranked_attempts
+            WHERE attempt_rank = 1
+            ORDER BY id
             """
         ).fetchall()
     items = []
@@ -95,6 +108,7 @@ def report(manifest_path: Path) -> dict[str, Any]:
         items.append({
             "sample_id": sample_id,
             "task_id": item["id"],
+            "attempt_count": item["attempt_count"],
             "repo_commit": item.get("repo_commit", ""),
             "status": item["status"],
             "result": item.get("result", "")[-1000:],

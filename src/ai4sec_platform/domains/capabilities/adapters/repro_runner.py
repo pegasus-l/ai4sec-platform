@@ -36,9 +36,9 @@ load_env_file()
 # ============================================================================
 # 配置（集中在这里，方便调整。从 .env 读，去硬编码）
 # ============================================================================
-REPRO_IMAGE = os.environ.get("REPRO_IMAGE", "repro-runner:v4")
+REPRO_IMAGE = os.environ.get("REPRO_IMAGE", "repro-runner:v5")
 REPRO_RUNTIME = os.environ.get("REPRO_RUNTIME", "sysbox-runc")
-REPRO_STANDARD_IMAGE = os.environ.get("REPRO_STANDARD_IMAGE", "repro-runner-standard:v1")
+REPRO_STANDARD_IMAGE = os.environ.get("REPRO_STANDARD_IMAGE", "repro-runner-standard:v2")
 WORKSPACE_ROOT = Path(os.environ.get("REPRO_WORKSPACE_ROOT", str(Path.home() / "repro_workspaces")))
 CONTAINER_TIMEOUT = int(os.environ.get("REPRO_CONTAINER_TIMEOUT", str(30 * 60)))  # 30 分钟
 WEB_CONTAINER_TIMEOUT = int(os.environ.get("REPRO_WEB_CONTAINER_TIMEOUT", str(50 * 60)))  # 50 分钟
@@ -62,7 +62,7 @@ DASHSCOPE_PROXY_URL = os.environ.get("DASHSCOPE_PROXY_URL", "")
 
 # 复现任务内 LLM 配置。真实凭据不得进入 Prompt。
 REPRO_LLM_BASE_URL = os.environ.get("REPRO_LLM_BASE_URL", DASHSCOPE_PROXY_URL or "")
-REPRO_LLM_MODEL = os.environ.get("REPRO_LLM_MODEL", "glm-5.1")
+REPRO_LLM_MODEL = os.environ.get("REPRO_LLM_MODEL", "glm-5.2")
 REPRO_MODEL_TOKEN_FILE = os.environ.get("REPRO_MODEL_TOKEN_FILE", "")
 CONTAINER_MODEL_TOKEN_FILE = "/run/secrets/repro_model_token"
 CONTAINER_MANAGED_OPENCODE_CONFIG = "/etc/opencode/opencode.json"
@@ -792,12 +792,12 @@ class ReproRunner:
             "fi; "
             "fi; "
             "cd /workspace/repo; "
+            "git config --global --add safe.directory /workspace/repo; "
             + (
                 f"if [ -d .git ]; then test \"$(git rev-parse HEAD)\" = {self.repo_commit}; "
                 f"else echo '✓ 已使用固定 commit archive: {self.repo_commit}'; fi; "
                 if self.repo_commit else ""
             ) +
-            "git config --global --add safe.directory /workspace/repo; "
             "echo \"✓ 已 clone: $(git -C /workspace/repo remote get-url origin 2>/dev/null)\"; "
             "echo \"✓ pip 源: $(pip config get global.index-url 2>/dev/null || echo 默认)\"; "
             f"stdbuf -oL -eL opencode run --pure --agent build {shlex.quote(prompt)} 2>&1"

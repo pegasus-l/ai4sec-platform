@@ -4,18 +4,29 @@ ARG NODE_MAJOR=20
 ARG NODE_VERSION=20.20.2-1nodesource1
 ARG OPENCODE_VERSION=1.15.12
 ARG NPM_REGISTRY=https://registry.npmjs.org
+ARG UBUNTU_ARCHIVE_MIRROR=http://archive.ubuntu.com/ubuntu
+ARG UBUNTU_SECURITY_MIRROR=http://security.ubuntu.com/ubuntu
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-RUN apt-get update \
+RUN sed -i \
+        -e "s|http://archive.ubuntu.com/ubuntu|${UBUNTU_ARCHIVE_MIRROR}|g" \
+        -e "s|http://security.ubuntu.com/ubuntu|${UBUNTU_SECURITY_MIRROR}|g" \
+        /etc/apt/sources.list \
+    && apt-get update \
     && apt-get install -y --no-install-recommends \
+        build-essential \
         ca-certificates \
+        cargo \
         curl \
         git \
+        golang-go \
         gnupg \
+        pkg-config \
         python3 \
         python3-pip \
         python3-venv \
+        rustc \
         unzip \
     && install -m 0755 -d /etc/apt/keyrings \
     && curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key \

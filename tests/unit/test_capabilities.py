@@ -410,6 +410,7 @@ def test_repro_prompt_never_contains_model_secret(monkeypatch) -> None:
     assert secret not in prompt
     assert "API Key:" not in prompt
     assert "只读 Secret 文件" in prompt
+    assert "glm-5.2" in prompt
 
 
 def test_repro_log_callback_redacts_known_and_pattern_secrets(monkeypatch, tmp_path: Path) -> None:
@@ -510,6 +511,7 @@ def test_opencode_config_references_secret_file_and_not_image_auth(monkeypatch, 
     assert f"test \"$(git rev-parse HEAD)\" = {repo_commit}" in shell_command
     assert f"https://codeload.github.com/example/repo/zip/{repo_commit}" in shell_command
     assert "git config --global --add safe.directory /workspace/repo" in shell_command
+    assert shell_command.index("git config --global --add safe.directory") < shell_command.index("git rev-parse HEAD")
     encoded = shell_command.split("echo '", 1)[1].split("' | base64 -d", 1)[0]
     config = json.loads(base64.b64decode(encoded).decode())
     options = config["provider"]["ai4sec-managed"]["options"]

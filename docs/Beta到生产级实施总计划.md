@@ -2178,3 +2178,30 @@ Python full test suite: 199 passed
 - OpenCode 开始前，Sysbox 容器内 root 访问宿主用户预 clone 的 `/workspace/repo` 触发 Git dubious ownership 拒绝。Runner 现在在验证固定 SHA 后显式将唯一挂载仓库加入 Git `safe.directory`，不扩大到通配路径或其他宿主目录。
 - finally 清理时，停止后的 Docker 容器可能不再返回 bridge IP；root helper 曾将空 IP 解析为未捕获错误，导致任务链无法撤销。helper 现在把空 IP 归类为受控错误，`remove` 在无法检查已停止容器时仍只按确定性 `A4R_<task>_<hash>` chain 清理对应 `DOCKER-USER` 跳转和链，不触及其他规则。
 - 该尝试属于运行器兼容性失败，不能计为 Click 项目复现失败；新 attempt 将从归档后的干净隔离库重新开始。helper/Runner/Worker/隔离 CLI 专项测试 101 passed。更新后的 root helper 需由用户重新运行受限安装器后才会生效。
+
+### 2026-08-04：Click 首个真实 CLI 基线通过
+
+- 从归档失败 attempt 后的干净隔离数据库重建四项固定 SHA 任务，Click `00e592cea702e0b2caa0dee42489fdb1c22cd845` 以 task 1、`nested_docker` Profile 完成真实复现并进入 `success`，耗时约 113 秒。
+- 报告证据包含 editable install、Click 开发版本、真实 hello 示例、help 和 nested naval command，不以首页 200、仓库 clone 或模型自述代替能力验证；报告同时给出使用说明、限制和 gotcha。
+- 本任务记录 14 次模型调用和 547895 记账 token。任务结束后模型令牌 `revoked=1`、Linux 运行秘密文件为 0、Sysbox 容器处于 stopped/exited，受限 helper 幂等 remove 返回无残留计数，确认任务级防火墙链已经清理。
+- Click 通过只解除首波后续样本的安全停止条件，不代表第 917 项完成。Ora、Cobra、clap 仍须在同一隔离边界内顺序运行，并分别核对报告质量、依赖联网、资源收尾和人工结论。
+
+### 2026-08-04：Ora Node.js CLI 真实样本通过
+
+- Ora `86403dcc176ad26a94f3005774f8c7fbebad2714` 以 task 2 完成 `success`，运行 1967 秒。报告包含 503 个 npm package 的真实安装、ESM 导入、90 个内置 spinner、TTY 帧捕获、成功/失败符号、`oraPromise` 和项目自带示例证据。
+- 报告明确保留环境限制：npmmirror DNS 不可达、挂载文件系统创建 npm bin link 时出现 `chmod EPERM`，最终使用官方 registry 和 `--no-bin-links` 完成不影响纯 JS 库能力的验证；这些属于可操作的运行环境 gotcha，不伪装成无异常成功。
+- 本任务记录 18 次模型调用、846533 记账 token。任务令牌已撤销，运行秘密文件为 0，容器已退出，helper 幂等 remove 确认任务链无残留。Node.js 样本通过后继续按顺序执行 Go Cobra，不并发启动高资源回归任务。
+
+### 2026-08-04：Cobra 首次运行暴露基础镜像工具链缺口
+
+- Cobra task 3 在固定提交 clone、受限出口和模型链路正常的情况下进入 `failed`：`repro-runner:v4` 没有 Go、make 或 C 编译器，受限运行阶段也无法从 Go 下载站、Docker Hub 或 apt 临时取得工具链，因此没有形成真实运行输出。
+- 该失败属于平台执行环境，不计为 Cobra 项目能力失败，也不通过扩大任务网络白名单来掩盖。原任务保留 505 秒、22 次模型调用、942699 记账 token 和完整 blocker 证据；令牌、秘密、容器、防火墙均安全收尾。
+- 镜像生产契约升级为 nested `repro-runner:v5` 和 standard `repro-runner-standard:v2`，两者预装 Python、Node.js、Go、Rust、build-essential 和 pkg-config。旧版本标签保留用于回滚，新任务默认使用新标签；镜像构建和离线工具链烟测通过后，以正式重跑语义创建 Cobra 新尝试。
+
+### 2026-08-04：首波多技术栈回归完成分类验收
+
+- `repro-runner:v5` 与 `repro-runner-standard:v2` 已从固定 Ubuntu digest 构建；离线审计确认 Python 3.10.12、Node 20.20.2、Go 1.18.1、Rust 1.75.0、Cargo 1.75.0、OpenCode 1.15.12 可用，两个镜像均无 OpenCode 长期认证文件；nested Sysbox Docker daemon 烟测通过。
+- Click task 1 和 Ora task 2 成功；Cobra 最新 task 7 为 `partial`，新镜像的 Go/gofmt 已验证，但 Go 模块代理在受控出口中不可达；clap task 4 因固定提交所需 Rust 版本和模型配额不足为 `failed`。首波最终是 `2 success / 1 partial / 1 failed`，第 917 项保持未完成。
+- Cobra 的 task 3（旧镜像缺 Go）、task 5/6（模型配额）和 task 7（依赖出口）均保留为独立尝试，不将平台故障混同为项目能力失败。所有尝试均核对令牌撤销、秘密文件为 0、容器退出和 helper 幂等清理。
+- 修复 `repro-regression report`：回归重跑通过正式 API 后 trigger 可能为 `manual`，报告现在按 `regression_sample_id` 聚合全部尝试并选择最大 task ID 的最新结果，同时输出 `attempt_count`；专项测试 4 passed。
+- 917 的下一步不是盲目增加样本，而是完成 Go 模块代理/静态依赖缓存策略、Rust 工具链版本矩阵和单任务模型预算治理，再重新运行 Cobra/clap；首波通过样本可继续作为平台安全链路基线。

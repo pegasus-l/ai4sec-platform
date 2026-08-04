@@ -8,6 +8,7 @@ import pytest
 from ai4sec_platform.cli import repro_regression
 from ai4sec_platform.core.config import Settings
 from ai4sec_platform.db import repositories as repo
+from ai4sec_platform.domains.capabilities.repro_policy import enqueue_repro_task
 from ai4sec_platform.db.session import connect
 
 
@@ -66,3 +67,39 @@ def test_manifest_rejects_mutable_ref(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="40-character commit SHA"):
         repro_regression.load_manifest(path)
+
+
+def test_report_uses_latest_attempt_regardless_of_trigger(monkeypatch, tmp_path: Path) -> None:
+    output_dir = tmp_path / "repro-regression"
+    settings = Settings(
+        project_root=tmp_path,
+        output_dir=output_dir,
+        database_path=output_dir / "ai4sec_platform.db",
+    )
+    monkeypatch.setenv("AI4SEC_REPRO_REGRESSION_CONFIRM", "isolated-regression")
+    monkeypatch.setattr(repro_regression, "load_settings", lambda: settings)
+    prepared = repro_regression.prepare(_manifest(tmp_path))
+
+    with connect(settings) as conn:
+        first_task_id = prepared["task_ids"][0]
+        first_task = repo.get_repro_task(conn, first_task_id)
+        repo.update_repro_task(conn, task_id=first_task_id, status="failed", result="old failure")
+        latest_task_id = enqueue_repro_task(
+            conn,
+            item_id=int(first_task["item_id"]),
+            repo_url=str(first_task["repo_url"]),
+            repo_commit=str(first_task["repo_commit"]),
+            trigger="manual",
+            initial_status="queued",
+            execution_profile="nested_docker",
+            repro_strategy="cli",
+        )
+        repo.update_repro_task(conn, task_id=latest_task_id, status="partial", result="latest result")
+        conn.commit()
+
+    result = repro_regression.report(_manifest(tmp_path))
+
+    assert result["counts"] == {"partial": 1}
+    assert result["items"][0]["task_id"] == latest_task_id
+    assert result["items"][0]["attempt_count"] == 2
+    assert result["items"][0]["result"] == "latest result"
