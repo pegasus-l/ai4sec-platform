@@ -78,17 +78,30 @@ class ASISItemsSource:
         else:
             source_type = "unknown"
         score = float(asis_item.get("score_total") or 0)
+        asis_id = asis_item.get("id")
+        summary = asis_item.get("summary") or ""
+        # reviewer 期望 source_type = "project"/"paper"(不是 "github"/"arxiv")
+        reviewer_type = "project" if source_type == "github" else "paper" if source_type == "arxiv" else "project"
         return {
-            "id": f"asis:{asis_item.get('id')}",
+            "id": f"asis:{asis_id}",
+            "item_key": f"asis:{asis_id}",  # reviewer 缓存用
             "title": asis_item.get("title_zh") or asis_item.get("title") or "",
             "source_url": canonical,
+            "url": canonical,  # reviewer 读 item.get("url")
+            "code_url": code_url,  # reviewer 读 item.get("code_url")
+            "source_type": reviewer_type,  # reviewer 读 item.get("source_type"), 期望 "project"/"paper"
             "score": score,
+            "summary": summary,  # reviewer 读 item.get("summary")
             "primary_date": asis_item.get("published_at") or asis_item.get("first_seen_at") or "",
+            "stars": 0,  # ASIS 没有, reviewer 用 .get() 兜底
+            "forks": 0,
+            "language": "",
+            "raw": {"description": summary},  # reviewer 读 raw.get("description")
             "payload": {
                 "code_url": code_url,
-                "source_type": source_type,
+                "source_type": source_type,  # 保留原始 "github"/"arxiv" 给 ai4sec 自己用
                 "scoring": {"score": score},
-                "summary": asis_item.get("summary") or "",
+                "summary": summary,
                 "recommendation_reason": asis_item.get("recommendation_reason") or "",
                 "primary_category": asis_item.get("primary_category") or "",
                 "sub_category": asis_item.get("sub_category") or "",
@@ -96,6 +109,6 @@ class ASISItemsSource:
                 "paper_url": asis_item.get("paper_url") or "",
                 "reader_url": asis_item.get("reader_url") or "",
                 "source_system": "asis",
-                "asis_id": asis_item.get("id"),
+                "asis_id": asis_id,
             },
         }
