@@ -2201,6 +2201,7 @@ Python full test suite: 199 passed
 ### 2026-08-04：首波多技术栈回归完成分类验收
 
 - `repro-runner:v5` 与 `repro-runner-standard:v2` 已从固定 Ubuntu digest 构建；离线审计确认 Python 3.10.12、Node 20.20.2、Go 1.18.1、Rust 1.75.0、Cargo 1.75.0、OpenCode 1.15.12 可用，两个镜像均无 OpenCode 长期认证文件；nested Sysbox Docker daemon 烟测通过。
+- 本机构建使用受信任的 Aliyun Ubuntu/Docker apt 镜像参数以绕过当前 Docker 官方源 TLS reset，仍保持基础 Ubuntu digest、Node、Docker 和 containerd 锁定版本；产物为 `repro-runner:v5` `sha256:9b593c898ced5d3b1d0924d08be6f37d40d213157d235ba8bd01b766d0f27dde`、`repro-runner-standard:v2` `sha256:00138d78ac564484c78d35e6e6f558d0d6aeac37ab7ee93adac9a7fdd8b27af1`。
 - Click task 1 和 Ora task 2 成功；Cobra 最新 task 7 为 `partial`，新镜像的 Go/gofmt 已验证，但 Go 模块代理在受控出口中不可达；clap task 4 因固定提交所需 Rust 版本和模型配额不足为 `failed`。首波最终是 `2 success / 1 partial / 1 failed`，第 917 项保持未完成。
 - Cobra 的 task 3（旧镜像缺 Go）、task 5/6（模型配额）和 task 7（依赖出口）均保留为独立尝试，不将平台故障混同为项目能力失败。所有尝试均核对令牌撤销、秘密文件为 0、容器退出和 helper 幂等清理。
 - 修复 `repro-regression report`：回归重跑通过正式 API 后 trigger 可能为 `manual`，报告现在按 `regression_sample_id` 聚合全部尝试并选择最大 task ID 的最新结果，同时输出 `attempt_count`；专项测试 4 passed。
