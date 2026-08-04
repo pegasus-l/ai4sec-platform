@@ -2123,3 +2123,10 @@ Python full test suite: 199 passed
 - 扩展中断恢复测试：从持久日志恢复合格报告后，任务状态、清理请求、能力卡顶层领域状态、机器可读 `payload.repro_status`、报告版本、证据和限制必须一起正确回写。顶层 `status=已复现` 与 payload `repro_status=success` 是刻意保留的人类展示/机器状态双层语义。
 - 新增 timeout 任务的正式任务详情和 SSE 契约测试，验证 `ReproTaskResponse` 保留报告 Schema 版本、状态、证据和限制，SSE 发送 timeout 状态和结构化报告后明确发送 end 事件。
 - 能力复现专项测试 89 passed，`compileall` 通过；下一项进入 10–20 个不同技术栈项目的真实批量回归与验收数据沉淀。
+
+### 2026-08-03：能力复现真实样本回归预检
+
+- 第 917 项未把任意公开仓库当作已经验收的能力样本。本地生产数据库当前没有 `capabilities` 条目和复现任务，因此没有可直接、可追溯地批量执行的候选；真实样本必须使用独立的回归数据库和经人工确认的仓库清单，不能污染生产数据或伪造业务来源。
+- 修复 `repro-worker --check-config` 的历史偏差：Worker 实际会为每个任务签发临时 Model Gateway 令牌，预检不再错误要求已废弃的长期 `REPRO_MODEL_TOKEN_FILE`。预检仍严格要求受管 `/api/model-gateway/v1` 地址、镜像、运行时和出口隔离能力。
+- 当前环境未配置 `REPRO_LLM_BASE_URL`；使用一次性本地 Gateway 地址进行无任务预检后，nested_docker Profile 在出口防火墙预检失败：当前用户与 `sudo -n` 均不能读取/管理 `DOCKER-USER`。这是预期的 fail-closed 行为，未创建任务、容器或网络规则。
+- 真实 10–20 项回归的前置条件为：配置 `REPRO_LLM_BASE_URL=http://host.docker.internal:8000/api/model-gateway/v1`（或部署环境的等价地址）、由宿主机管理员授予 AI4SEC 专用最小 `iptables`/nftables 规则管理能力，并人工确认独立样本数据库、仓库清单和允许的依赖域名。完成前，第 917 项保持未勾选，不以单元测试替代真实运行验收。

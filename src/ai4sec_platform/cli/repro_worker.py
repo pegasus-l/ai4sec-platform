@@ -20,7 +20,11 @@ def main(argv: list[str] | None = None) -> int:
     worker = CapabilityReproWorker(execution_profile=args.profile)
     try:
         if args.check_config:
-            token_path = validate_repro_runtime_config(check_image=True, execution_profile=args.profile)
+            token_path = validate_repro_runtime_config(
+                check_image=True,
+                require_token=False,
+                execution_profile=args.profile,
+            )
             print(json.dumps({"ok": True, "profile": args.profile, "token_file": str(token_path)}, ensure_ascii=False))
             return 0
         if args.recover_only:
