@@ -2130,3 +2130,4 @@ Python full test suite: 199 passed
 - 修复 `repro-worker --check-config` 的历史偏差：Worker 实际会为每个任务签发临时 Model Gateway 令牌，预检不再错误要求已废弃的长期 `REPRO_MODEL_TOKEN_FILE`。预检仍严格要求受管 `/api/model-gateway/v1` 地址、镜像、运行时和出口隔离能力。
 - 当前环境未配置 `REPRO_LLM_BASE_URL`；使用一次性本地 Gateway 地址进行无任务预检后，nested_docker Profile 在出口防火墙预检失败：当前用户与 `sudo -n` 均不能读取/管理 `DOCKER-USER`。这是预期的 fail-closed 行为，未创建任务、容器或网络规则。
 - 真实 10–20 项回归的前置条件为：配置 `REPRO_LLM_BASE_URL=http://host.docker.internal:8000/api/model-gateway/v1`（或部署环境的等价地址）、由宿主机管理员授予 AI4SEC 专用最小 `iptables`/nftables 规则管理能力，并人工确认独立样本数据库、仓库清单和允许的依赖域名。完成前，第 917 项保持未勾选，不以单元测试替代真实运行验收。
+- 具体样本矩阵、固定提交要求、分波停止条件和记录模板见 `docs/能力洞察多技术栈回归验收方案.md`；该文档只列候选，不代表已执行或已批准的仓库。
