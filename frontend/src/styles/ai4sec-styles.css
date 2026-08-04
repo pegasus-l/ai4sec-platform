@@ -1069,3 +1069,46 @@
   --red: #c83348;
   --radius: 8px;
 }
+
+/* === 浅色模式: 覆盖 ai4sec 硬编码暗色(不用 CSS 变量的) === */
+:root.light .btn,
+:root.light .search,
+:root.light input,
+:root.light select,
+:root.light textarea { background: rgba(0, 0, 0, 0.03) !important; color: var(--text) !important; border-color: var(--line) !important; }
+:root.light .btn:hover,
+:root.light .search:hover { background: rgba(0, 0, 0, 0.06) !important; }
+:root.light .btn.primary,
+:root.light .btn-primary { background: color-mix(in srgb, var(--accent) 12%, transparent) !important; color: var(--accent) !important; }
+:root.light .card,
+:root.light .surface,
+:root.light .detail-card,
+:root.light .focus-card { background: #ffffff !important; border-color: var(--line) !important; }
+:root.light .table-card,
+:root.light .table-shell,
+:root.light .data-table { background: #ffffff !important; }
+:root.light .drawer-mask { background: rgba(0, 0, 0, 0.3) !important; }
+:root.light .drawer,
+:root.light .drawer-panel,
+:root.light .drawer-head { background: #ffffff !important; color: var(--text) !important; }
+:root.light .close { background: rgba(0, 0, 0, 0.06) !important; color: var(--muted) !important; }
+:root.light .ai4sec-sidebar-note { background: transparent !important; }
+:root.light .nav-item { color: var(--muted) !important; }
+:root.light .nav-item.active { color: var(--text) !important; }
+:root.light .badge,
+:root.light .tag { border-color: var(--line) !important; }
+:root.light .score-bar,
+:root.light .break-row .bar { background: rgba(0, 0, 0, 0.06) !important; }
+:root.light .split,
+:root.light .row-title,
+:root.light .filter-row { color: var(--text) !important; }
+:root.light .muted,
+:root.light .small,
+:root.light .muted.small { color: var(--muted) !important; }
+:root.light table,
+:root.light th,
+:root.light td { color: var(--text) !important; border-color: var(--line) !important; }
+:root.light .content,
+:root.light .content-head,
+:root.light .content-body,
+:root.light .main { background: transparent !important; color: var(--text) !important; }
