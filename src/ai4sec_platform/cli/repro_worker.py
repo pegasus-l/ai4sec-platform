@@ -25,7 +25,11 @@ def main(argv: list[str] | None = None) -> int:
                 require_token=False,
                 execution_profile=args.profile,
             )
-            print(json.dumps({"ok": True, "profile": args.profile, "token_file": str(token_path)}, ensure_ascii=False))
+            print(json.dumps({
+                "ok": True,
+                "profile": args.profile,
+                "token_mode": "task_managed" if token_path is None else "configured_file",
+            }, ensure_ascii=False))
             return 0
         if args.recover_only:
             print(json.dumps({"recovered": worker.recover()}, ensure_ascii=False))

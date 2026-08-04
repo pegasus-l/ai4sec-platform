@@ -2140,3 +2140,4 @@ Python full test suite: 199 passed
 - helper、配置和 sudoers 都由一次性安装器复制为 root-owned 文件；sudoers 只允许指定用户执行 `/usr/local/libexec/ai4sec-repro-egress-helper` 且不带参数，并由 `visudo -cf` 校验。Gateway 端口变化必须由管理员重装配置，Worker 无权自行扩大。
 - 回归覆盖 Worker JSON 契约、helper 缺失失败关闭、私网/超量地址拒绝、错误容器归属拒绝、Gateway 端口白名单、固定规则形状、无参数 sudoers 和调用 UID；受限出口及能力 Runner 专项测试 95 passed，全仓 Python 测试 368 passed，helper `py_compile`、安装脚本 `bash -n`、sudoers `visudo -cf`、`compileall`、`git diff --check` 和敏感信息扫描通过。
 - 代码完成不等于宿主机权限已经生效。用户仍需人工审阅并执行 `sudo bash configs/repro-egress-helper/install.sh "$USER" 8000`，随后运行 nested_docker `--check-config`；预检通过后才能开始第 917 项真实样本。
+- 用户已在当前宿主机完成安装：sudoers `parsed OK`，helper 固定允许 UID 1000 和 Gateway 端口 8000。实际无任务 `preflight` 返回 `ok=true`，nested_docker Worker 对 Sysbox、镜像、Docker bridge、受限 helper 和 `DOCKER-USER` 的完整 `--check-config` 返回 `ok=true`；宿主机防火墙权限阻塞已解除。

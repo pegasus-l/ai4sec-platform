@@ -18,4 +18,6 @@ def test_check_config_uses_task_managed_model_token(monkeypatch, capsys) -> None
         "require_token": False,
         "execution_profile": "nested_docker",
     }
-    assert '"ok": true' in capsys.readouterr().out
+    output = capsys.readouterr().out
+    assert '"ok": true' in output
+    assert '"token_mode": "task_managed"' in output
