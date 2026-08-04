@@ -1,4 +1,5 @@
 import { useMemo, useState, useEffect, useRef, useCallback } from 'react';
+import { Star, ListChecks, Settings, ArrowUpRight, Activity, ShieldCheck, RefreshCw, type LucideIcon } from 'lucide-react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Badge, MetricCard, EmptyState } from '../../components/ui';
 import { useToast } from '../../components/Toast';
