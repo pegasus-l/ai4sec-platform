@@ -10,7 +10,7 @@ from ai4sec_platform.core.config import Settings, load_settings
 def connect(settings: Settings | None = None) -> sqlite3.Connection:
     cfg = settings or load_settings()
     cfg.database_path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(cfg.database_path, timeout=30, check_same_thread=False)
+    conn = sqlite3.connect(cfg.database_path, timeout=60, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode = WAL")
     conn.execute("PRAGMA foreign_keys = ON")
