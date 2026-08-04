@@ -1,4 +1,5 @@
 import { useMemo, useState, useEffect, useRef, useCallback } from 'react';
+import { ThemeToggle } from '../../components/ThemeToggle';
 import { Star, ListChecks, Settings, ArrowUpRight, Activity, ShieldCheck, RefreshCw, type LucideIcon } from 'lucide-react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Badge, MetricCard, EmptyState } from '../../components/ui';
@@ -98,9 +99,11 @@ export function CapabilityPage() {
 
   return <main className="main">
     <aside className="ai4sec-sidebar">
+      <a href="/" style={{ display: "block", padding: "8px 12px", color: "var(--accent)", fontSize: 12, textDecoration: "none", borderBottom: "1px solid var(--line)" }}>&larr; 返回 ASIS</a>
       <div className="ai4sec-sidebar-head"><div className="label"><span className="dot" /><span>能力洞察</span></div><h2>前沿项目能力化</h2><p>从资讯筛选可复现项目，到自动复现验证，再到能力转化落地。</p></div>
       <nav className="nav-scroll">{navGroups.map(group => <div className="nav-group" key={group.title}><div className="group-title">{group.title}</div>{group.items.map(item => { const Icon = item.icon; return <button key={item.id} className={`nav-item ${view === item.id ? 'active' : ''}`} onClick={() => setView(item.id)}><Icon size={18} /><span>{item.title}</span>{item.id === 'today' && todayItems.length > 0 && <span className="badge badge-green">{todayItems.length}</span>}{item.id === 'library' && libraryItems.length > 0 && <span className="badge badge-sky">{libraryItems.length}</span>}{item.id === 'repro' && reproRuns.length > 0 && <span className="badge badge-amber">{reproRuns.length}</span>}{item.id === 'conversion' && conversions.length > 0 && <span className="badge badge-violet">{conversions.length}</span>}</button>; })}</div>)}</nav>
       <div className="ai4sec-sidebar-note">能力洞察不重复资讯流，而是把前沿论文和开源项目推进到评分、复现和能力转化。能力详情从今日能力、能力库、复现验证或能力转化点击进入。</div>
+    <div className="ai4sec-sidebar-footer" style={{ marginTop: "auto", padding: "8px 12px", borderTop: "1px solid var(--line)", display: "flex", alignItems: "center" }}><ThemeToggle /></div>
     </aside>
     <section className="content">
       <section className="content-head">
