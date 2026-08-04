@@ -1038,3 +1038,7 @@
   font-size: 14px;
   font-weight: 400;
 }
+
+/* === 删 nav-meta/badge 计数(挤换行) === */
+.nav-item .nav-meta,
+.nav-item .badge { display: none !important; }
