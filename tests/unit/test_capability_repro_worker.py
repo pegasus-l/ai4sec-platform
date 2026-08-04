@@ -117,9 +117,12 @@ def test_recovery_accepts_completed_report_and_schedules_cleanup(monkeypatch, tm
     task_id = _create_task(settings)
     report = {
         "status": "success",
+        "schema_version": "1.0",
         "summary": "core workflow verified",
         "project_type": "python",
         "steps": [{"cmd": "python -m example", "ok": True}],
+        "evidence": ["example command completed"],
+        "limitations": ["test fixture uses a minimal project"],
         "run_result": {
             "ran": True,
             "command": "python -m example",
@@ -143,9 +146,15 @@ def test_recovery_accepts_completed_report_and_schedules_cleanup(monkeypatch, tm
     assert recovered == [task_id]
     with connect(settings) as conn:
         task = repo.get_repro_task(conn, task_id)
+        item = repo.get_domain_item(conn, "capabilities", int(task["item_id"])) if task else None
     assert task and task["status"] == "success"
     assert task["cleanup_requested"] == 1
     assert "recovered completed report" in task["result"]
+    assert item and item["status"] == "已复现"
+    assert item["payload"]["repro_status"] == "success"
+    assert item["payload"]["repro_report_schema_version"] == "1.0"
+    assert item["payload"]["evidence"] == ["example command completed"]
+    assert item["payload"]["limitations"] == ["test fixture uses a minimal project"]
 
 
 def test_worker_executes_claimed_task_without_api_thread(monkeypatch, tmp_path: Path) -> None:
@@ -505,6 +514,43 @@ def test_repro_sse_stream_uses_request_database_and_closes_on_terminal_task(tmp_
     assert response.text.count("event: log") == 2
     assert '"status": "failed", "report": null' in response.text
     assert response.text.endswith("event: end\ndata: {}\n\n")
+
+
+def test_timeout_repro_detail_and_sse_preserve_structured_report(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    task_id = _create_task(settings, status="timeout")
+    report = {
+        "schema_version": "1.0",
+        "status": "timeout",
+        "summary": "installation exceeded the task deadline",
+        "evidence": ["dependency installation remained active at 30 minutes"],
+        "limitations": ["requires a faster package mirror"],
+    }
+    with connect(settings) as conn:
+        repo.update_repro_task(conn, task_id=task_id, log="deadline reached\n", report_json=json.dumps(report))
+        conn.commit()
+    app = create_app()
+
+    def override_db():
+        with connect(settings) as conn:
+            init_db(conn)
+            yield conn
+
+    app.dependency_overrides[get_db] = override_db
+    client = TestClient(app)
+    detail = client.get(f"/api/capabilities/repro/{task_id}")
+    stream = client.get(f"/api/capabilities/repro/{task_id}/logs/stream")
+
+    assert detail.status_code == 200
+    assert detail.json()["status"] == "timeout"
+    assert detail.json()["report"]["schema_version"] == "1.0"
+    assert detail.json()["report"]["status"] == "timeout"
+    assert detail.json()["report"]["evidence"] == report["evidence"]
+    assert detail.json()["report"]["limitations"] == report["limitations"]
+    assert stream.status_code == 200
+    assert '"status": "timeout"' in stream.text
+    assert '"schema_version": "1.0"' in stream.text
+    assert stream.text.endswith("event: end\ndata: {}\n\n")
 
 
 def test_repro_limits_api_reports_configured_limits_and_usage(tmp_path: Path) -> None:
