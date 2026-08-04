@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from ai4sec_platform.domains.capabilities.normalizers import normalize_capability_candidate
@@ -24,6 +25,7 @@ def capability_candidates_from_news(
           候选 dict 字段对齐 CapabilityCandidate schema。
     """
     candidates: list[dict[str, Any]] = []
+    seen_repo_keys: set[str] = set()  # B: org/repo 去重(避免同项目不同 trending date 重复)
     for item in items:
         payload = item.get("payload") or {}
         scoring = payload.get("scoring") or {}
@@ -38,6 +40,14 @@ def capability_candidates_from_news(
         has_code = bool(code_url) or source_type == "repo" or "github.com" in (source_url or "")
         if require_code and not has_code:
             continue
+
+        # B: 从 URL 提取 org/repo 作为去重 key
+        repo_match = re.search(r'github\.com/([^/]+/[^/?]+)', (code_url or source_url or "").lower())
+        if repo_match:
+            repo_key = repo_match.group(1)
+            if repo_key in seen_repo_keys:
+                continue
+            seen_repo_keys.add(repo_key)
 
         candidate = normalize_capability_candidate(item)
         candidates.append(candidate)

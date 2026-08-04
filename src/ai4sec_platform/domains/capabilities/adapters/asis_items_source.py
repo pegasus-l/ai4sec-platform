@@ -63,9 +63,12 @@ class ASISItemsSource:
 
     def _map_item(self, asis_item: dict) -> dict:
         canonical = asis_item.get("canonical_url") or ""
+        # A: URL 规范化 - GitHub trending URL 去掉 ?github_trending_date=...&since=daily
+        if "github.com" in canonical.lower():
+            canonical = canonical.split("?")[0]
         code_url = ""
         if "github.com" in canonical.lower() or "gitlab.com" in canonical.lower():
-            code_url = canonical
+            code_url = canonical  # 已规范化(去 query 参数)
         elif asis_item.get("paper_url"):
             code_url = asis_item.get("paper_url") or ""
         if "github.com" in canonical.lower():
