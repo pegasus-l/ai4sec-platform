@@ -2141,3 +2141,10 @@ Python full test suite: 199 passed
 - 回归覆盖 Worker JSON 契约、helper 缺失失败关闭、私网/超量地址拒绝、错误容器归属拒绝、Gateway 端口白名单、固定规则形状、无参数 sudoers 和调用 UID；受限出口及能力 Runner 专项测试 95 passed，全仓 Python 测试 368 passed，helper `py_compile`、安装脚本 `bash -n`、sudoers `visudo -cf`、`compileall`、`git diff --check` 和敏感信息扫描通过。
 - 代码完成不等于宿主机权限已经生效。用户仍需人工审阅并执行 `sudo bash configs/repro-egress-helper/install.sh "$USER" 8000`，随后运行 nested_docker `--check-config`；预检通过后才能开始第 917 项真实样本。
 - 用户已在当前宿主机完成安装：sudoers `parsed OK`，helper 固定允许 UID 1000 和 Gateway 端口 8000。实际无任务 `preflight` 返回 `ok=true`，nested_docker Worker 对 Sysbox、镜像、Docker bridge、受限 helper 和 `DOCKER-USER` 的完整 `--check-config` 返回 `ok=true`；宿主机防火墙权限阻塞已解除。
+
+### 2026-08-03：将本机 8000 API 切换到生产化目录
+
+- 切换前确认 8000 端口运行的是旧 `/mnt/d/漏洞挖掘/洞察工具/dashboard/ai4sec-platform-capability` 目录，旧数据库为该目录下约 1.37 GiB 的 `output/ai4sec_platform.db`；生产化目录使用独立约 334 MiB 数据库。本次没有覆盖、迁移或删除旧数据库。
+- 先在系统分配的空闲回环端口旁路启动生产化 API，验证 `/api/health` 返回 200、OpenAPI 包含 `/api/model-gateway/v1/chat/completions`，且无任务令牌调用返回预期 401 后，才优雅停止旧 Uvicorn。
+- 新 API 从当前 `ai4sec-platform-production` 目录绑定 `0.0.0.0:8000`。切换后 readiness 返回 `status=ok`，SQLite 为 WAL、Schema v18、写探针成功；正式前端返回 200，Model Gateway 上游为 GLM-5.2，nested_docker Worker 完整预检返回 `ok=true` 和 `token_mode=task_managed`。
+- 当前通过 `nohup` 启动，PID 和日志保存在忽略版本控制的 `output/runtime/`。这满足本机开发验收，不替代后续 Compose/systemd 的开机自启、健康重启和日志轮转。
