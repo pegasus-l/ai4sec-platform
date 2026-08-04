@@ -46,6 +46,23 @@ def test_helper_rejects_wrong_container_ownership(monkeypatch) -> None:
         helper.inspect_container("repro-7", 7)
 
 
+def test_helper_rejects_stopped_container_without_bridge_ip(monkeypatch) -> None:
+    helper = _load_helper()
+    inspected = [{
+        "Config": {"Labels": {
+            helper.RESOURCE_LABEL: helper.EXPECTED_RESOURCE,
+            helper.TASK_LABEL: "7",
+            helper.PROFILE_LABEL: "nested_docker",
+        }},
+        "NetworkSettings": {"Networks": {"bridge": {"IPAddress": ""}}},
+    }]
+    monkeypatch.setattr(helper, "command_path", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr(helper, "run", lambda _command: SimpleNamespace(stdout=__import__("json").dumps(inspected)))
+
+    with pytest.raises(helper.HelperError, match="isolated Docker bridge IPv4"):
+        helper.inspect_container("repro-7", 7)
+
+
 def test_helper_install_restricts_gateway_port_and_rule_shape(monkeypatch) -> None:
     helper = _load_helper()
     commands: list[list[str]] = []
@@ -73,6 +90,20 @@ def test_helper_install_restricts_gateway_port_and_rule_shape(monkeypatch) -> No
 
     with pytest.raises(helper.HelperError, match="port is not allowed"):
         helper.install({**request, "gateway_port": 2375}, {"allowed_gateway_ports": (8000,)})
+
+
+def test_helper_remove_cleans_chain_when_stopped_container_has_no_ip(monkeypatch) -> None:
+    helper = _load_helper()
+    removed: list[str] = []
+    monkeypatch.setattr(helper, "inspect_container", lambda *_args: (_ for _ in ()).throw(helper.HelperError("no bridge IP")))
+    monkeypatch.setattr(helper, "chain_exists", lambda _chain: True)
+    monkeypatch.setattr(helper, "read_counters", lambda _chain: "1 2 REJECT")
+    monkeypatch.setattr(helper, "remove_chain", lambda chain: removed.append(chain))
+
+    result = helper.remove({"task_id": 7, "container_name": "repro-7"})
+
+    assert removed == [result["chain"]]
+    assert result["container_ip"] == ""
 
 
 def test_helper_requires_configured_sudo_caller(monkeypatch) -> None:

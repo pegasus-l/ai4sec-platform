@@ -22,7 +22,7 @@ from ai4sec_platform.domains.capabilities.repro_jobs import (
     request_repro_stop,
     transition_repro_task,
 )
-from ai4sec_platform.domains.capabilities.repro_worker import CapabilityReproWorker
+from ai4sec_platform.domains.capabilities.repro_worker import CapabilityReproWorker, repro_runtime_secret_dir
 from ai4sec_platform.pipelines.jobs import set_execution_kill_switch
 
 
@@ -50,6 +50,28 @@ def _create_task(settings: Settings, *, status: str = "queued") -> int:
             repo.update_repro_task(conn, task_id=task_id, status=status)
         conn.commit()
         return task_id
+
+
+def test_runtime_secret_directory_uses_secure_linux_path(monkeypatch, tmp_path: Path) -> None:
+    secret_root = tmp_path / "runtime"
+    monkeypatch.setenv("AI4SEC_RUNTIME_SECRET_DIR", str(secret_root))
+
+    actual = repro_runtime_secret_dir()
+
+    assert actual == secret_root
+    assert actual.stat().st_mode & 0o077 == 0
+
+
+def test_runtime_secret_directory_rejects_insecure_permissions(monkeypatch, tmp_path: Path) -> None:
+    secret_root = tmp_path / "runtime"
+    secret_root.mkdir()
+    secret_root.chmod(0o755)
+    monkeypatch.setenv("AI4SEC_RUNTIME_SECRET_DIR", str(secret_root))
+    monkeypatch.setattr(Path, "chmod", lambda self, _mode: None)
+
+    import pytest
+    with pytest.raises(RuntimeError, match="mode 0700"):
+        repro_runtime_secret_dir()
 
 
 def test_claim_and_stop_requests_are_persistent(tmp_path: Path) -> None:

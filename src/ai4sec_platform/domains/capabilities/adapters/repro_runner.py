@@ -797,6 +797,7 @@ class ReproRunner:
                 f"else echo '✓ 已使用固定 commit archive: {self.repo_commit}'; fi; "
                 if self.repo_commit else ""
             ) +
+            "git config --global --add safe.directory /workspace/repo; "
             "echo \"✓ 已 clone: $(git -C /workspace/repo remote get-url origin 2>/dev/null)\"; "
             "echo \"✓ pip 源: $(pip config get global.index-url 2>/dev/null || echo 默认)\"; "
             f"stdbuf -oL -eL opencode run --pure --agent build {shlex.quote(prompt)} 2>&1"

@@ -9,6 +9,7 @@ import signal
 import shutil
 import socket
 import secrets
+import stat
 import time
 from typing import Any, TextIO
 
@@ -51,6 +52,19 @@ from ai4sec_platform.domains.capabilities.model_gateway import issue_task_model_
 from ai4sec_platform.domains.capabilities.repro_policy import REPRO_WORKER_HEARTBEAT_SECONDS
 from ai4sec_platform.domains.capabilities.repro_profiles import REPRO_EXECUTION_PROFILES
 from ai4sec_platform.pipelines.jobs import is_execution_kill_switch_active
+
+
+def repro_runtime_secret_dir() -> Path:
+    configured = os.environ.get("AI4SEC_RUNTIME_SECRET_DIR", "").strip()
+    root = Path(configured).expanduser() if configured else Path(f"/tmp/ai4sec-runtime-{os.getuid()}")
+    root.mkdir(mode=0o700, parents=True, exist_ok=True)
+    root.chmod(0o700)
+    file_stat = root.lstat()
+    if stat.S_ISLNK(file_stat.st_mode) or not stat.S_ISDIR(file_stat.st_mode):
+        raise RuntimeError("AI4SEC runtime secret directory must be a regular non-symlink directory")
+    if file_stat.st_uid != os.getuid() or file_stat.st_mode & 0o077:
+        raise RuntimeError("AI4SEC runtime secret directory must be owned by the Worker and mode 0700")
+    return root
 
 
 class ReproWorkerAlreadyRunningError(RuntimeError):
@@ -284,9 +298,12 @@ class CapabilityReproWorker:
             raise
 
     def _issue_model_token(self, task_id: int) -> Path:
-        secret_dir = self.settings.output_dir / "runtime_secrets" / "repro"
+        secret_dir = repro_runtime_secret_dir() / "repro"
         secret_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
         secret_dir.chmod(0o700)
+        file_stat = secret_dir.lstat()
+        if stat.S_ISLNK(file_stat.st_mode) or not stat.S_ISDIR(file_stat.st_mode) or file_stat.st_uid != os.getuid() or file_stat.st_mode & 0o077:
+            raise RuntimeError("AI4SEC repro secret directory must be owned by the Worker and mode 0700")
         with connect(self.settings) as conn:
             init_db(conn)
             token = issue_task_model_token(

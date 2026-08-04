@@ -206,7 +206,10 @@ def inspect_container(container_name: str, task_id: int) -> dict[str, str]:
     networks = ((container.get("NetworkSettings") or {}).get("Networks") or {})
     bridge = networks.get("bridge") if isinstance(networks, dict) else None
     container_ip = str((bridge or {}).get("IPAddress") or "")
-    address = ipaddress.ip_address(container_ip)
+    try:
+        address = ipaddress.ip_address(container_ip)
+    except ValueError as exc:
+        raise HelperError("container does not have an isolated Docker bridge IPv4 address") from exc
     if address.version != 4 or address.is_global or address.is_loopback or address.is_link_local:
         raise HelperError("container does not have an isolated Docker bridge IPv4 address")
     return {"container_ip": str(address)}

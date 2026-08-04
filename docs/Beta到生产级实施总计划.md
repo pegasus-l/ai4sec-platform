@@ -2164,3 +2164,17 @@ Python full test suite: 199 passed
 - 首波 manifest 固定 Python Click、Node.js Ora、Go Cobra、Rust clap 四个 CLI 项目及 commit SHA，并记录预期许可证和真实能力验证目标。SHA 已由 Git remote/GitHub API 解析冻结，运行前仍需从固定提交核对许可证文件。
 - 隔离 API/Model Gateway 计划使用 19080，当前 8000 平台 API 和数据库不参与回归。受限 helper 安装器支持 1–16 个逗号分隔 Gateway 端口，仍由 root 配置决定允许范围，Worker 无权自行扩大。
 - 回归覆盖生产数据库拒绝、隔离任务创建、nested Profile 持久审批、固定 SHA 和 mutable ref 拒绝；全仓 Python 测试 372 passed，`compileall`、manifest 解析、安装脚本 `bash -n` 和 `git diff --check` 通过。
+
+### 2026-08-04：隔离首样本运行目录权限纠偏
+
+- root helper 已实际配置 8000 与 19080，隔离数据库创建了四个固定 SHA、已审批的 nested CLI 任务，19080 API/Gateway 健康检查为 200、无令牌请求为预期 401；许可证元数据也与 Click BSD-3、Ora MIT、Cobra Apache-2 和 clap 双许可证文件相符。
+- 第一个 Click 任务在创建容器前失败关闭，错误为“Managed OpenCode config permissions must not allow group or other access”。根因是短期 token 与受管配置曾位于 `/mnt/d` 的 Artifact 输出路径，该 DrvFs 挂载不能可靠保持 POSIX `0600`。
+- 该失败验证了权限校验有效，不计为项目复现失败或能力质量结论。Worker 改为默认在 `/tmp/ai4sec-runtime-<uid>` 创建严格验证的 `0700` 运行目录，并支持受控 `AI4SEC_RUNTIME_SECRET_DIR`；Artifact/Workspace 可继续位于挂载盘，短期秘密不得位于 `/mnt/*` 或网络共享。
+- 新增安全运行目录和不安全权限拒绝测试；Worker/固定 SHA/隔离 CLI 专项测试 95 passed。旧隔离 attempt 将归档，随后以 Linux 本地秘密目录重建并重新开始 Click 样本。
+
+### 2026-08-04：首个 Sysbox CLI 样本兼容性纠偏
+
+- 使用 Linux 本地秘密目录后，Click 任务已真实启动容器、安装任务级出口链并以固定 SHA 完成宿主机 clone；该过程确认 token、19080 Model Gateway、helper 端口白名单和固定提交链路均进入真实执行路径。
+- OpenCode 开始前，Sysbox 容器内 root 访问宿主用户预 clone 的 `/workspace/repo` 触发 Git dubious ownership 拒绝。Runner 现在在验证固定 SHA 后显式将唯一挂载仓库加入 Git `safe.directory`，不扩大到通配路径或其他宿主目录。
+- finally 清理时，停止后的 Docker 容器可能不再返回 bridge IP；root helper 曾将空 IP 解析为未捕获错误，导致任务链无法撤销。helper 现在把空 IP 归类为受控错误，`remove` 在无法检查已停止容器时仍只按确定性 `A4R_<task>_<hash>` chain 清理对应 `DOCKER-USER` 跳转和链，不触及其他规则。
+- 该尝试属于运行器兼容性失败，不能计为 Click 项目复现失败；新 attempt 将从归档后的干净隔离库重新开始。helper/Runner/Worker/隔离 CLI 专项测试 101 passed。更新后的 root helper 需由用户重新运行受限安装器后才会生效。

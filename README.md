@@ -271,6 +271,8 @@ PYTHONPATH=src python3 -m ai4sec_platform.cli.run_pipeline --pipeline news.daily
 
 能力复现强制通过平台内 Model Gateway 调用模型。`REPRO_LLM_BASE_URL` 必须指向容器可访问的 `/api/model-gateway/v1` 端点。Worker 每个任务签发独立 `rmt_` 短令牌，只在 Linux 运行目录创建 `0600` 临时文件并只读挂载；OpenCode 通过 `{file:...}` 引用。任务成功、失败、取消或超时后数据库令牌立即撤销且临时文件删除。真实 Provider Key 只存在于平台 API 环境，不进入 Worker、复现容器、Prompt、Docker 命令行、`opencode.json`、SQLite 日志或 SSE。
 
+`AI4SEC_RUNTIME_SECRET_DIR` 必须位于支持 POSIX 所有者和权限的 Linux 本地文件系统（推荐 systemd `RuntimeDirectory` 或 `/run/user/<uid>`）。Artifact、Workspace 和项目目录可以位于挂载盘，但短期 token 与受管 OpenCode 配置不能位于 `/mnt/*`、网络共享或任何不能可靠保持 `0700/0600` 权限的位置；Worker 会失败关闭。
+
 ```bash
 cp .env.example .env
 REPRO_LLM_BASE_URL=http://host.docker.internal:8000/api/model-gateway/v1
