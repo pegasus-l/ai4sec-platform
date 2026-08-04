@@ -83,8 +83,7 @@ export function ThreatPage() {
         sec: Number(signals.broad_sec_count ?? 0),
         filtered: false,
         filteredReason: '',
-        const _attackSurface = (i.attack_surface as Record<string, unknown>) ?? {};
-        breakdown: (_attackSurface.breakdown ?? i.breakdown) as Record<string, number> ?? {},
+        breakdown: ((i.attack_surface as Record<string, unknown> ?? {})?.breakdown ?? i.breakdown) as Record<string, number> ?? {},
         reasons: (i.reasons as string[]) ?? [],
         evidence: [] as string[],
         assets: [] as string[],
