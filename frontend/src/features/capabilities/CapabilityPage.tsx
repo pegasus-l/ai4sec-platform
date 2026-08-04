@@ -67,7 +67,7 @@ export function CapabilityPage() {
   // 【改动 4】抽屉打开时调 fetchDetail 获取完整 payload
   const openDetail = useCallback((item: CapabilityItem) => {
     push({
-      title: item.title,
+      title: item.payload?.display_title || item.title,
       subtitle: `${item.payload?.source_type ?? ''} · score ${item.score}`,
       render: () => <CapabilityDetailContent itemId={item.id} initialItem={item} onRepro={async () => {
         try {
@@ -180,7 +180,7 @@ function CapabilityCard({ item, rank, onClick }: { item: CapabilityItem; rank: n
   return <div className="asis-card clickable" onClick={onClick}>
     <div className="rank">{rank}</div>
     <div>
-      <h4>{p.display_theme || p.one_liner || item.title}</h4>
+      <h4>{p.display_title || p.display_theme || p.one_liner || item.title}</h4>
       <p>{p.overview || p.one_liner || item.summary}</p>
       <div className="badges">
         <Badge tone={sourceType === 'github' ? 'sky' : 'violet'}>{sourceType}</Badge>
@@ -232,8 +232,8 @@ function CapabilityLibrary({ items, openDetail }: { items: CapabilityItem[]; ope
 
     {/* 列表视图 */}
     {items.length > 0 && viewMode === '列表视图' && <div className="table-card"><table className="data-table"><thead><tr><th>能力</th><th>概述</th><th>能力评分</th><th>资讯洞察</th><th>标签</th></tr></thead><tbody>
-      {items.map(item => { const p = item.payload ?? {}; const st = p.source_type || (item.source_url?.includes('github.com') ? 'github' : 'arxiv'); const ov = p.overview || p.one_liner || ''; return <tr key={item.id} className="clickable" onClick={() => openDetail(item)}>
-        <td><div className="table-title">{item.title}</div><div className="table-sub">{st}</div></td>
+      {items.map(item => { const p = item.payload ?? {}; const st = p.source_type || (item.source_url?.includes('github.com') ? 'github' : 'arxiv'); const ov = p.display_summary || p.overview || p.one_liner || ''; return <tr key={item.id} className="clickable" onClick={() => openDetail(item)}>
+        <td><div className="table-title">{p.display_title || item.title}</div><div className="table-sub">{st}</div></td>
         <td style={{maxWidth: '320px'}} className="small muted">{ov.slice(0, 120)}{ov.length > 120 ? '…' : ''}</td>
         <td><div className="score-ring">{item.score}</div></td>
         <td>{sourceNewsScore(p) !== null ? <Badge tone="sky">{formatScore(sourceNewsScore(p)!)}</Badge> : <span className="muted">—</span>}</td>
