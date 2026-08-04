@@ -117,7 +117,7 @@ export function ThreatPage() {
 
   return <main className="main">
     <aside className="ai4sec-sidebar">
-      <a href="/" style={{ display: "block", padding: "8px 12px", color: "var(--accent)", fontSize: 12, textDecoration: "none", borderBottom: "1px solid var(--line)" }}>&larr; 返回 ASIS</a>
+      <a href="/" style={{ display: "block", padding: "8px 12px", color: "var(--accent)", fontSize: 12, textDecoration: "none", borderBottom: "1px solid var(--line)" }}>&larr; 返回</a>
       <div className="ai4sec-sidebar-head"><div className="label"><span className="dot" /><span>威胁洞察</span></div><h2>开源目标与运营</h2><p>开源威胁洞察围绕"发现目标、判断风险、查看证据、加入跟踪"的挖洞动线组织。</p></div>
       <nav className="nav-scroll">{navGroups.map(group => <div className="nav-group" key={group.title}><div className="group-title">{group.title}</div>{group.items.map(item => { const Icon = item.icon; return <button key={item.id} className={`nav-item ${view === item.id ? 'active' : ''}`} onClick={() => setView(item.id)}><Icon size={18} /><span>{item.title}</span></button>; })}</div>)}</nav>
       <div className="ai4sec-sidebar-note">目标详情不是单独页签；从今日关注、代码仓、关联图谱或跟踪队列点击对象后打开。资产关系默认按置信度展示，不做无证据强关联。</div>

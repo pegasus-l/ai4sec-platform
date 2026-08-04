@@ -62,7 +62,7 @@ export function NewsPage() {
 
   return <main className="main news-workspace">
     <aside className="ai4sec-sidebar">
-      <a href="/" style={{ display: "block", padding: "8px 12px", color: "var(--accent)", fontSize: 12, textDecoration: "none", borderBottom: "1px solid var(--line)" }}>&larr; 返回 ASIS</a>
+      <a href="/" style={{ display: "block", padding: "8px 12px", color: "var(--accent)", fontSize: 12, textDecoration: "none", borderBottom: "1px solid var(--line)" }}>&larr; 返回</a>
       <div className="ai4sec-sidebar-head"><div className="label"><span className="dot" /><span>资讯洞察</span></div><h2>前沿论文与项目</h2><p>持续发现 AI 安全论文与开源项目，形成可跟踪、可阅读、可反馈的资讯流。</p></div>
       <nav className="nav-scroll">
         <div className="nav-group"><div className="group-title">资讯洞察</div>{views.map(({ id, title, icon: Icon }) => <button key={id} className={`nav-item ${view === id ? 'active' : ''}`} onClick={() => setView(id)}><Icon size={18} /><span>{title}</span>{id === 'all' && allData?.total !== undefined ? <span className="nav-meta">{allData.total}</span> : <span className="nav-meta" />}</button>)}</div>
