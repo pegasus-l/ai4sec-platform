@@ -7,21 +7,35 @@ if [[ ${EUID} -ne 0 ]]; then
 fi
 
 worker_user=${1:-}
-gateway_port=${2:-8000}
+gateway_ports_csv=${2:-8000}
 if [[ ! ${worker_user} =~ ^[a-z_][a-z0-9_-]*[$]?$ ]] || ! id "${worker_user}" >/dev/null 2>&1; then
   echo "A valid non-root worker user is required" >&2
   exit 2
 fi
 worker_uid=$(id -u "${worker_user}")
-if [[ ${worker_uid} -eq 0 ]] || [[ ! ${gateway_port} =~ ^[0-9]+$ ]] || (( gateway_port < 1 || gateway_port > 65535 )); then
+if [[ ${worker_uid} -eq 0 ]]; then
   echo "Invalid worker user or gateway port" >&2
   exit 2
 fi
+IFS=',' read -r -a gateway_ports <<< "${gateway_ports_csv}"
+if (( ${#gateway_ports[@]} < 1 || ${#gateway_ports[@]} > 16 )); then
+  echo "Provide 1-16 comma-separated gateway ports" >&2
+  exit 2
+fi
+ports_json=''
+for gateway_port in "${gateway_ports[@]}"; do
+  if [[ ! ${gateway_port} =~ ^[0-9]+$ ]] || (( gateway_port < 1 || gateway_port > 65535 )); then
+    echo "Invalid gateway port: ${gateway_port}" >&2
+    exit 2
+  fi
+  if [[ -n ${ports_json} ]]; then ports_json+=','; fi
+  ports_json+="${gateway_port}"
+done
 
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 install -d -o root -g root -m 0755 /usr/local/libexec /etc/ai4sec
 install -o root -g root -m 0755 "${script_dir}/ai4sec-repro-egress-helper" /usr/local/libexec/ai4sec-repro-egress-helper
-printf '{"allowed_uid":%s,"allowed_gateway_ports":[%s]}\n' "${worker_uid}" "${gateway_port}" \
+printf '{"allowed_uid":%s,"allowed_gateway_ports":[%s]}\n' "${worker_uid}" "${ports_json}" \
   > /etc/ai4sec/repro-egress-helper.json
 chown root:root /etc/ai4sec/repro-egress-helper.json
 chmod 0644 /etc/ai4sec/repro-egress-helper.json
@@ -30,4 +44,4 @@ printf '%s ALL=(root) NOPASSWD: /usr/local/libexec/ai4sec-repro-egress-helper ""
 chmod 0440 /etc/sudoers.d/ai4sec-repro-egress-helper
 visudo -cf /etc/sudoers.d/ai4sec-repro-egress-helper
 
-echo "Installed restricted AI4SEC repro egress helper for ${worker_user} (uid ${worker_uid}), gateway port ${gateway_port}."
+echo "Installed restricted AI4SEC repro egress helper for ${worker_user} (uid ${worker_uid}), gateway ports ${gateway_ports_csv}."

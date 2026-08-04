@@ -2156,3 +2156,11 @@ Python full test suite: 199 passed
 - Worker 将持久 SHA 传给 Runner。固定提交任务不再执行普通默认分支 shallow clone，而是 `git init → fetch --depth 1 origin <SHA> → checkout --detach FETCH_HEAD`，并在进入 OpenCode 前校验 `git rev-parse HEAD`；codeload/zip fallback 同样使用该 SHA 的 archive URL。
 - 普通历史/Beta 任务暂时允许空 commit 以保持兼容，但第 917 项验收清单、独立回归入口和后续生产复现必须固定 SHA。不能仅在报告中写 commit、实际仍运行变化中的默认分支。
 - migration、API 拒绝非法 ref、任务列表契约、Worker 透传、Runner fetch/checkout/archive 和前端构建完成；固定提交相关专项测试 120 passed，前端生产构建通过，仍只有既有的动态/静态 import 与大 chunk 警告。
+
+### 2026-08-03：建立能力复现隔离回归入口
+
+- 新增 `repro-regression prepare/report` CLI，复用正式 domain item、持久任务、nested Profile 审批和报告表，不创建只为测试存在的第二套 Runner。
+- CLI 有三重数据保护：必须显式设置 `AI4SEC_REPRO_REGRESSION_CONFIRM=isolated-regression`，数据库和 output 必须位于路径组件 `repro-regression` 下，并明确拒绝当前平台默认数据库。manifest 限制 1–20 项、公开 GitHub URL、唯一 sample ID 和 40 位 SHA。
+- 首波 manifest 固定 Python Click、Node.js Ora、Go Cobra、Rust clap 四个 CLI 项目及 commit SHA，并记录预期许可证和真实能力验证目标。SHA 已由 Git remote/GitHub API 解析冻结，运行前仍需从固定提交核对许可证文件。
+- 隔离 API/Model Gateway 计划使用 19080，当前 8000 平台 API 和数据库不参与回归。受限 helper 安装器支持 1–16 个逗号分隔 Gateway 端口，仍由 root 配置决定允许范围，Worker 无权自行扩大。
+- 回归覆盖生产数据库拒绝、隔离任务创建、nested Profile 持久审批、固定 SHA 和 mutable ref 拒绝；全仓 Python 测试 372 passed，`compileall`、manifest 解析、安装脚本 `bash -n` 和 `git diff --check` 通过。

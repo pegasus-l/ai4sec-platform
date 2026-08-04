@@ -286,12 +286,12 @@ Worker 不直接获得任意 `iptables` 或 root shell 权限。宿主机安装�
 首次安装前应人工审阅 `configs/repro-egress-helper/`，然后执行一次：
 
 ```bash
-sudo bash configs/repro-egress-helper/install.sh "$USER" 8000
+sudo bash configs/repro-egress-helper/install.sh "$USER" 8000,19080
 REPRO_LLM_BASE_URL=http://host.docker.internal:8000/api/model-gateway/v1 \
   PYTHONPATH=src python -m ai4sec_platform.cli.repro_worker --check-config --profile nested_docker
 ```
 
-安装器将 helper 复制为 root-owned `0755` 文件，写入 root-owned 配置和精确 sudoers 规则，并使用 `visudo -cf` 校验。Gateway 端口变化时必须由管理员重新运行安装器；Worker 请求其他端口会在领取任务前失败关闭。卸载时先停止 Repro Worker 并确认不存在 `A4R_*` 链，再删除 `/etc/sudoers.d/ai4sec-repro-egress-helper`、`/usr/local/libexec/ai4sec-repro-egress-helper` 和 `/etc/ai4sec/repro-egress-helper.json`。
+安装器将 helper 复制为 root-owned `0755` 文件，写入 root-owned 配置和精确 sudoers 规则，并使用 `visudo -cf` 校验。Gateway 端口变化时必须由管理员重新运行安装器；隔离回归 Gateway 可通过逗号加入端口列表，Worker 请求其他端口会在领取任务前失败关闭。卸载时先停止 Repro Worker 并确认不存在 `A4R_*` 链，再删除 `/etc/sudoers.d/ai4sec-repro-egress-helper`、`/usr/local/libexec/ai4sec-repro-egress-helper` 和 `/etc/ai4sec/repro-egress-helper.json`。
 
 固定扩展依赖域名可由管理员通过 `REPRO_EGRESS_EXTRA_DOMAINS` 配置。任务需要额外业务 API 时，在启动请求中提交精确域名、用途和申请人；任务进入 `awaiting_egress_approval`，不会被 Worker 领取。操作员通过 `/api/capabilities/repro/{task_id}/egress` 查看请求，并使用对应 `approve` 或 `reject` 端点记录复核人和理由。所有域名批准且再次通过公网 DNS 校验后任务才进入 `queued`，任一拒绝则任务停止。通配符、URL、端口、IP、localhost 和解析到私网的域名均被拒绝；运行时批准域名到实际 IP 的映射写入持久任务日志，未知域名仍不可解析且不可连接。
 

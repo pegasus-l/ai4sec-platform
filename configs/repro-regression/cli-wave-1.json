@@ -1,0 +1,42 @@
+{
+  "name": "capability-repro-cli-wave-1",
+  "resolved_at": "2026-08-03",
+  "samples": [
+    {
+      "sample_id": "python-cli-click",
+      "technology": "Python",
+      "repository_url": "https://github.com/pallets/click",
+      "commit_sha": "00e592cea702e0b2caa0dee42489fdb1c22cd845",
+      "license_expected": "BSD-3-Clause",
+      "strategy": "cli",
+      "expected_capability": "install the project and execute a minimal Click command with real output"
+    },
+    {
+      "sample_id": "node-cli-ora",
+      "technology": "Node.js",
+      "repository_url": "https://github.com/sindresorhus/ora",
+      "commit_sha": "86403dcc176ad26a94f3005774f8c7fbebad2714",
+      "license_expected": "MIT",
+      "strategy": "cli",
+      "expected_capability": "install the package and run a minimal spinner example or project test with real output"
+    },
+    {
+      "sample_id": "go-cli-cobra",
+      "technology": "Go",
+      "repository_url": "https://github.com/spf13/cobra",
+      "commit_sha": "adbc8813901bba65827259daa8e22ff94ec1f30e",
+      "license_expected": "Apache-2.0",
+      "strategy": "cli",
+      "expected_capability": "build or test Cobra and execute a minimal command path with real output"
+    },
+    {
+      "sample_id": "rust-cli-clap",
+      "technology": "Rust",
+      "repository_url": "https://github.com/clap-rs/clap",
+      "commit_sha": "e48aba7bb0df74ca8658d9dc32f57b479e3a21fd",
+      "license_expected": "MIT OR Apache-2.0",
+      "strategy": "cli",
+      "expected_capability": "build or test clap and execute a minimal argument parser with real output"
+    }
+  ]
+}
