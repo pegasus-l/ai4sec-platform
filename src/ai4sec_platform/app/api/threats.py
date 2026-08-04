@@ -88,7 +88,7 @@ def targets(
                 item["raw_org"] = raw.get("org", "")
                 # Score breakdown + reasons (used by ScoreBreakdown component in list view)
                 scoring = payload.get("scoring") or {}
-                item["breakdown"] = scoring.get("breakdown") or attack_surface.get("breakdown") or {}
+                item["breakdown"] = attack_surface.get("breakdown") or scoring.get("breakdown") or {}
                 item["reasons"] = scoring.get("reasons") or attack_surface.get("reasons") or []
                 # Star count + total security items (used in list view)
                 item["stars"] = payload.get("stars") or raw.get("star_count") or 0
