@@ -1112,3 +1112,6 @@
 :root.light .content-head,
 :root.light .content-body,
 :root.light .main { background: transparent !important; color: var(--text) !important; }
+
+/* 隐藏 sidebar-note demo 文字 */
+.ai4sec-sidebar-note { display: none !important; }
