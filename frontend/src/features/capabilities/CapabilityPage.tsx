@@ -15,7 +15,7 @@ const navGroups: Array<{ title: string; items: Array<{ id: CapabilityView; icon:
   { title: '能力洞察', items: [
     { id: 'today', icon: Star, title: '今日能力' },
     { id: 'library', icon: ListChecks, title: '能力库' },
-    { id: 'repro', icon: Cog, title: '复现验证' },
+    { id: 'repro', icon: Settings, title: '复现验证' },
     { id: 'conversion', icon: ArrowUpRight, title: '能力转化' },
   ]},
   { title: '运营', items: [
