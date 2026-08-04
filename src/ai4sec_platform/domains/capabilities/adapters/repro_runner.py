@@ -236,7 +236,7 @@ def validate_repro_runtime_config(
             raise RuntimeError(
                 f"Repro image is unavailable or contains a baked OpenCode auth file: {image}"
             )
-        validate_repro_egress_runtime(_safe_run)
+        validate_repro_egress_runtime(_safe_run, gateway_url=REPRO_LLM_BASE_URL)
     return validated_token_path
 
 

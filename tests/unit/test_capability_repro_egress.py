@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import socket
 from types import SimpleNamespace
 
@@ -46,17 +47,23 @@ def test_repro_egress_policy_rejects_private_repo_resolution() -> None:
 
 
 def test_docker_egress_guard_installs_default_reject_and_cleans_up() -> None:
-    commands: list[list[str]] = []
+    requests: list[dict] = []
 
-    def fake_run(command, **_kwargs):
-        commands.append(command)
-        if command[:3] == ["docker", "inspect", "--format"]:
-            return SimpleNamespace(returncode=0, stdout="172.17.0.9\n", stderr="")
-        if command[:3] == ["docker", "network", "inspect"]:
-            return SimpleNamespace(returncode=0, stdout="172.17.0.1\n", stderr="")
-        if command[:3] == ["iptables", "-L", "A4R_7_123456"]:
-            return SimpleNamespace(returncode=0, stdout="pkts bytes target prot opt in out source destination\n12 640 REJECT all -- * * 0.0.0.0/0 0.0.0.0/0\n", stderr="")
-        return SimpleNamespace(returncode=0, stdout="", stderr="")
+    def fake_run(command, **kwargs):
+        assert command[0:2] == ["sudo", "-n"]
+        request = json.loads(kwargs["input"])
+        requests.append(request)
+        if request["action"] == "install":
+            response = {"ok": True, "chain": "A4R_7_123456", "container_ip": "172.17.0.9", "gateway_ip": "172.17.0.1"}
+        else:
+            response = {
+                "ok": True,
+                "chain": "A4R_7_123456",
+                "container_ip": "172.17.0.9",
+                "gateway_ip": "172.17.0.1",
+                "counters": "pkts bytes target prot opt in out source destination\n12 640 REJECT all -- * * 0.0.0.0/0 0.0.0.0/0\n",
+            }
+        return SimpleNamespace(returncode=0, stdout=json.dumps(response), stderr="")
 
     policy = build_repro_egress_policy(
         "https://github.com/example/repo",
@@ -69,19 +76,23 @@ def test_docker_egress_guard_installs_default_reject_and_cleans_up() -> None:
     audit = guard.remove()
 
     assert summary["container_ip"] == "172.17.0.9"
-    assert ["iptables", "-A", guard.chain, "-j", "REJECT"] in commands
-    assert ["iptables", "-I", "DOCKER-USER", "1", "-s", "172.17.0.9", "-j", guard.chain] in commands
-    assert ["iptables", "-A", guard.chain, "-d", "172.17.0.1", "-p", "tcp", "--dport", "8000", "-j", "ACCEPT"] in commands
+    assert requests[0]["action"] == "install"
+    assert requests[0]["task_id"] == 7
+    assert requests[0]["container_name"] == "repro"
+    assert requests[0]["public_addresses"] == ["93.184.216.34"]
+    assert requests[0]["gateway_port"] == 8000
+    assert requests[0]["use_bridge_gateway"] is True
+    assert requests[1]["action"] == "remove"
     assert audit["denied_packets"] == 12
     assert audit["denied_bytes"] == 640
-    assert ["iptables", "-X", guard.chain] in commands
 
 
 def test_repro_egress_preflight_fails_closed_without_docker_user_chain() -> None:
-    def fake_run(command, **_kwargs):
-        return SimpleNamespace(returncode=1 if command[0] == "iptables" else 0, stdout="", stderr="missing")
+    def fake_run(command, **kwargs):
+        assert json.loads(kwargs["input"]) == {"action": "preflight"}
+        return SimpleNamespace(returncode=2, stdout="", stderr='{"ok": false, "error": "DOCKER-USER unavailable"}')
 
-    with pytest.raises(RuntimeError, match="egress enforcement is unavailable"):
+    with pytest.raises(RuntimeError, match="DOCKER-USER unavailable"):
         validate_repro_egress_runtime(fake_run)
 
 

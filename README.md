@@ -281,7 +281,19 @@ PYTHONPATH=src python -m ai4sec_platform.cli repro-worker --check-config
 
 复现 Worker 使用 Docker `bridge` 和宿主机 `DOCKER-USER` 链强制执行出口白名单，不能只依赖可被任务清除的代理环境变量。任务启动前校验 GitHub 仓库 URL 并解析批准的软件包仓域名，只将审核后的公网 IPv4 写入容器 `/etc/hosts`；容器外部 DNS 指向不可用的本地地址，IPv6 显式关闭。防火墙仅允许这些固定公网 IP 的 TCP 80/443，以及 Docker bridge gateway 上的 Model Gateway 端口，其他公网、回环、RFC1918、链路本地、metadata、Docker 网桥和平台管理端口统一 REJECT。任务结束记录链计数并删除规则。
 
-Worker 启动预检要求能够读取 Docker `bridge` 并操作 `iptables -S DOCKER-USER`。生产复现 Worker 系统账号必须仅获得维护 AI4SEC 专用防火墙链所需的受控权限；如果宿主机使用 rootless Docker/nftables，必须先提供等价执行器，不能关闭预检绕过隔离。固定扩展依赖域名可由管理员通过 `REPRO_EGRESS_EXTRA_DOMAINS` 配置。任务需要额外业务 API 时，在启动请求中提交精确域名、用途和申请人；任务进入 `awaiting_egress_approval`，不会被 Worker 领取。操作员通过 `/api/capabilities/repro/{task_id}/egress` 查看请求，并使用对应 `approve` 或 `reject` 端点记录复核人和理由。所有域名批准且再次通过公网 DNS 校验后任务才进入 `queued`，任一拒绝则任务停止。通配符、URL、端口、IP、localhost 和解析到私网的域名均被拒绝；运行时批准域名到实际 IP 的映射写入持久任务日志，未知域名仍不可解析且不可连接。
+Worker 不直接获得任意 `iptables` 或 root shell 权限。宿主机安装固定路径 `/usr/local/libexec/ai4sec-repro-egress-helper`，sudoers 只允许指定 Worker 用户无参数调用这一份 root-owned helper。Worker 通过标准输入提交有大小上限的 JSON；helper 仅支持 `preflight/install/counters/remove`，独立校验调用 UID、AI4SEC 容器标签、任务 ID、Docker bridge 私网地址、最多 256 个公网 IPv4、root 配置允许的 Gateway 端口和固定 `A4R_*` 规则链，不能执行请求方提供的命令或修改其他防火墙链。
+
+首次安装前应人工审阅 `configs/repro-egress-helper/`，然后执行一次：
+
+```bash
+sudo bash configs/repro-egress-helper/install.sh "$USER" 8000
+REPRO_LLM_BASE_URL=http://host.docker.internal:8000/api/model-gateway/v1 \
+  PYTHONPATH=src python -m ai4sec_platform.cli.repro_worker --check-config --profile nested_docker
+```
+
+安装器将 helper 复制为 root-owned `0755` 文件，写入 root-owned 配置和精确 sudoers 规则，并使用 `visudo -cf` 校验。Gateway 端口变化时必须由管理员重新运行安装器；Worker 请求其他端口会在领取任务前失败关闭。卸载时先停止 Repro Worker 并确认不存在 `A4R_*` 链，再删除 `/etc/sudoers.d/ai4sec-repro-egress-helper`、`/usr/local/libexec/ai4sec-repro-egress-helper` 和 `/etc/ai4sec/repro-egress-helper.json`。
+
+固定扩展依赖域名可由管理员通过 `REPRO_EGRESS_EXTRA_DOMAINS` 配置。任务需要额外业务 API 时，在启动请求中提交精确域名、用途和申请人；任务进入 `awaiting_egress_approval`，不会被 Worker 领取。操作员通过 `/api/capabilities/repro/{task_id}/egress` 查看请求，并使用对应 `approve` 或 `reject` 端点记录复核人和理由。所有域名批准且再次通过公网 DNS 校验后任务才进入 `queued`，任一拒绝则任务停止。通配符、URL、端口、IP、localhost 和解析到私网的域名均被拒绝；运行时批准域名到实际 IP 的映射写入持久任务日志，未知域名仍不可解析且不可连接。
 
 能力复现提供两个镜像。`nested_docker` 使用包含内部 Docker daemon 的 `repro-runner:v4`；`standard` 使用不含 Docker daemon、systemd 和 Docker CLI 的 `repro-runner-standard:v1`：
 

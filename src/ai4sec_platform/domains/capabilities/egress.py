@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import ipaddress
 import hashlib
+import json
 import os
 import re
 import socket
@@ -35,18 +35,27 @@ DEFAULT_REPRO_EGRESS_DOMAINS = (
     "storage.googleapis.com",
     "huggingface.co",
 )
+REPRO_EGRESS_HELPER = os.environ.get(
+    "REPRO_EGRESS_HELPER",
+    "/usr/local/libexec/ai4sec-repro-egress-helper",
+)
 
 
-def validate_repro_egress_runtime(run_command=None) -> None:
+def validate_repro_egress_runtime(run_command=None, *, gateway_url: str = "") -> None:
     run_command = run_command or subprocess.run
-    checks = [
-        ["docker", "network", "inspect", "bridge"],
-        ["iptables", "-S", "DOCKER-USER"],
-    ]
-    for command in checks:
-        result = run_command(command, capture_output=True, text=True)
-        if result.returncode != 0:
-            raise RuntimeError(f"reproduction egress enforcement is unavailable: {' '.join(command)}")
+    gateway = urlsplit(gateway_url) if gateway_url else None
+    request = {"action": "preflight"}
+    if gateway:
+        request["gateway_port"] = gateway.port or (443 if gateway.scheme == "https" else 80)
+    result = run_command(
+        ["sudo", "-n", REPRO_EGRESS_HELPER],
+        input=json.dumps(request),
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        detail = _helper_error(result)
+        raise RuntimeError(f"reproduction egress helper is unavailable: {detail}")
 
 
 @dataclass(frozen=True)
@@ -118,45 +127,24 @@ class DockerEgressGuard:
         self.active = False
 
     def install(self) -> dict:
-        self.container_ip = self._output(["docker", "inspect", "--format", "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}", self.container_name])
-        if not _is_ip(self.container_ip):
-            raise RuntimeError("cannot determine reproduction container IP")
-        if self.policy.gateway_host == "host.docker.internal":
-            self.gateway_ip = self._output(["docker", "network", "inspect", "bridge", "--format", "{{(index .IPAM.Config 0).Gateway}}"])
-            if not _is_ip(self.gateway_ip):
-                raise RuntimeError("cannot determine Docker bridge gateway IP")
-        commands = [
-            ["iptables", "-N", self.chain],
-            ["iptables", "-A", self.chain, "-m", "conntrack", "--ctstate", "ESTABLISHED,RELATED", "-j", "ACCEPT"],
-        ]
-        for address in self.policy.public_addresses:
-            if ":" in address:
-                continue
-            commands.append(["iptables", "-A", self.chain, "-d", address, "-p", "tcp", "-m", "multiport", "--dports", "80,443", "-j", "ACCEPT"])
-        if self.gateway_ip:
-            commands.append(["iptables", "-A", self.chain, "-d", self.gateway_ip, "-p", "tcp", "--dport", str(self.policy.gateway_port), "-j", "ACCEPT"])
-        for address in self.policy.gateway_addresses:
-            if ":" not in address:
-                commands.append(["iptables", "-A", self.chain, "-d", address, "-p", "tcp", "--dport", str(self.policy.gateway_port), "-j", "ACCEPT"])
-        commands.extend([
-            ["iptables", "-A", self.chain, "-j", "REJECT"],
-            ["iptables", "-I", "DOCKER-USER", "1", "-s", self.container_ip, "-j", self.chain],
-        ])
-        try:
-            for command in commands:
-                self._run(command)
-            self.active = True
-        except Exception:
-            self.remove()
-            raise
+        response = self._helper(
+            "install",
+            public_addresses=[address for address in self.policy.public_addresses if ":" not in address],
+            gateway_addresses=[address for address in self.policy.gateway_addresses if ":" not in address],
+            gateway_port=self.policy.gateway_port,
+            use_bridge_gateway=self.policy.gateway_host == "host.docker.internal",
+        )
+        self.chain = str(response["chain"])
+        self.container_ip = str(response["container_ip"])
+        self.gateway_ip = str(response.get("gateway_ip") or "")
+        self.active = True
         return self.summary()
 
     def remove(self) -> dict:
-        counters = self.counters()
-        if self.container_ip:
-            self._run(["iptables", "-D", "DOCKER-USER", "-s", self.container_ip, "-j", self.chain], check=False)
-        self._run(["iptables", "-F", self.chain], check=False)
-        self._run(["iptables", "-X", self.chain], check=False)
+        response = self._helper("remove")
+        counters = str(response.get("counters") or "")
+        self.container_ip = str(response.get("container_ip") or self.container_ip)
+        self.gateway_ip = str(response.get("gateway_ip") or self.gateway_ip)
         self.active = False
         denied_packets, denied_bytes = _reject_counters(counters)
         return {**self.summary(), "counters": counters, "denied_packets": denied_packets, "denied_bytes": denied_bytes}
@@ -164,8 +152,7 @@ class DockerEgressGuard:
     def counters(self) -> str:
         if not self.active:
             return ""
-        result = self.run_command(["iptables", "-L", self.chain, "-n", "-v", "-x"], capture_output=True, text=True)
-        return str(result.stdout or "")[:5000]
+        return str(self._helper("counters").get("counters") or "")[:5000]
 
     def summary(self) -> dict:
         return {
@@ -178,15 +165,28 @@ class DockerEgressGuard:
             "host_mappings": len(self.policy.host_addresses),
         }
 
-    def _output(self, command: list[str]) -> str:
-        result = self._run(command)
-        return str(result.stdout or "").strip()
-
-    def _run(self, command: list[str], *, check: bool = True):
-        result = self.run_command(command, capture_output=True, text=True)
-        if check and result.returncode != 0:
-            raise RuntimeError(f"egress enforcement command failed: {' '.join(command)}: {str(result.stderr or '').strip()}")
-        return result
+    def _helper(self, action: str, **payload) -> dict:
+        request = {
+            "action": action,
+            "task_id": self.task_id,
+            "container_name": self.container_name,
+            **payload,
+        }
+        result = self.run_command(
+            ["sudo", "-n", REPRO_EGRESS_HELPER],
+            input=json.dumps(request),
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(f"egress helper request failed: {_helper_error(result)}")
+        try:
+            response = json.loads(str(result.stdout or "{}"))
+        except json.JSONDecodeError as exc:
+            raise RuntimeError("egress helper returned invalid JSON") from exc
+        if not isinstance(response, dict) or response.get("ok") is not True:
+            raise RuntimeError("egress helper returned an invalid response")
+        return response
 
 
 def _validated_public_host(url: str, *, resolver=None) -> str:
@@ -196,16 +196,18 @@ def _validated_public_host(url: str, *, resolver=None) -> str:
     return str(urlsplit(url).hostname or "").casefold().rstrip(".")
 
 
-def _is_ip(value: str) -> bool:
-    try:
-        return bool(ipaddress.ip_address(value))
-    except ValueError:
-        return False
-
-
 def _reject_counters(output: str) -> tuple[int, int]:
     for line in output.splitlines():
         fields = line.split()
         if len(fields) >= 3 and fields[2] == "REJECT" and fields[0].isdigit() and fields[1].isdigit():
             return int(fields[0]), int(fields[1])
     return 0, 0
+
+
+def _helper_error(result) -> str:
+    output = str(result.stderr or result.stdout or "helper command failed").strip()
+    try:
+        payload = json.loads(output)
+    except json.JSONDecodeError:
+        return output[:500]
+    return str(payload.get("error") or "helper command failed")[:500]

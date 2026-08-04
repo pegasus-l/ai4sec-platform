@@ -1,0 +1,274 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import hashlib
+import ipaddress
+import json
+import os
+import shlex
+import shutil
+import stat
+import subprocess
+import sys
+from pathlib import Path
+from typing import Any
+
+
+CONFIG_PATH = Path("/etc/ai4sec/repro-egress-helper.json")
+MAX_REQUEST_BYTES = 64 * 1024
+MAX_PUBLIC_ADDRESSES = 256
+CONTAINER_NAME_MAX = 128
+RESOURCE_LABEL = "com.ai4sec.resource"
+TASK_LABEL = "com.ai4sec.task-id"
+PROFILE_LABEL = "com.ai4sec.execution-profile"
+EXPECTED_RESOURCE = "capability-repro"
+EXPECTED_PROFILES = {"standard", "nested_docker"}
+
+
+class HelperError(RuntimeError):
+    pass
+
+
+def main() -> int:
+    try:
+        if len(sys.argv) != 1:
+            raise HelperError("helper does not accept command-line arguments")
+        config = load_config()
+        validate_caller(config)
+        request = read_request()
+        action = request.get("action")
+        if action == "preflight":
+            response = preflight(request, config)
+        elif action == "install":
+            response = install(request, config)
+        elif action == "counters":
+            response = counters(request)
+        elif action == "remove":
+            response = remove(request)
+        else:
+            raise HelperError("unsupported helper action")
+        print(json.dumps({"ok": True, **response}, ensure_ascii=False))
+        return 0
+    except (HelperError, OSError, ValueError, json.JSONDecodeError) as exc:
+        print(json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False), file=sys.stderr)
+        return 2
+
+
+def load_config() -> dict[str, Any]:
+    try:
+        file_stat = CONFIG_PATH.lstat()
+    except FileNotFoundError as exc:
+        raise HelperError(f"helper config does not exist: {CONFIG_PATH}") from exc
+    if not stat.S_ISREG(file_stat.st_mode) or stat.S_ISLNK(file_stat.st_mode):
+        raise HelperError("helper config must be a regular non-symlink file")
+    if file_stat.st_uid != 0 or file_stat.st_mode & 0o022:
+        raise HelperError("helper config must be root-owned and not group/world writable")
+    payload = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise HelperError("helper config must contain a JSON object")
+    allowed_uid = payload.get("allowed_uid")
+    ports = payload.get("allowed_gateway_ports")
+    if not isinstance(allowed_uid, int) or allowed_uid < 1:
+        raise HelperError("helper config allowed_uid must be a non-root integer")
+    if not isinstance(ports, list) or not ports or len(ports) > 16:
+        raise HelperError("helper config allowed_gateway_ports must contain 1-16 ports")
+    normalized_ports = []
+    for port in ports:
+        if not isinstance(port, int) or not 1 <= port <= 65535:
+            raise HelperError("helper config contains an invalid gateway port")
+        normalized_ports.append(port)
+    return {"allowed_uid": allowed_uid, "allowed_gateway_ports": tuple(sorted(set(normalized_ports)))}
+
+
+def validate_caller(config: dict[str, Any]) -> None:
+    if os.geteuid() != 0:
+        raise HelperError("helper must run as root through the installed sudo policy")
+    sudo_uid = os.environ.get("SUDO_UID", "")
+    if not sudo_uid.isdigit() or int(sudo_uid) != config["allowed_uid"]:
+        raise HelperError("caller is not the configured AI4SEC repro worker user")
+
+
+def read_request() -> dict[str, Any]:
+    raw = sys.stdin.buffer.read(MAX_REQUEST_BYTES + 1)
+    if not raw or len(raw) > MAX_REQUEST_BYTES:
+        raise HelperError("helper request is empty or too large")
+    payload = json.loads(raw.decode("utf-8"))
+    if not isinstance(payload, dict):
+        raise HelperError("helper request must contain a JSON object")
+    return payload
+
+
+def preflight(request: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
+    gateway_port = request.get("gateway_port")
+    if gateway_port is not None and gateway_port not in config["allowed_gateway_ports"]:
+        raise HelperError("configured Model Gateway port is not allowed by root configuration")
+    docker = command_path("docker")
+    iptables = command_path("iptables")
+    run([docker, "network", "inspect", "bridge"])
+    run([iptables, "-w", "5", "-S", "DOCKER-USER"])
+    return {"allowed_uid": config["allowed_uid"], "allowed_gateway_ports": list(config["allowed_gateway_ports"])}
+
+
+def install(request: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
+    task_id, container_name, chain = validate_task_request(request)
+    gateway_port = request.get("gateway_port")
+    if gateway_port not in config["allowed_gateway_ports"]:
+        raise HelperError("requested Model Gateway port is not allowed by root configuration")
+    public_addresses = validate_public_addresses(request.get("public_addresses"), "public_addresses")
+    gateway_addresses = validate_public_addresses(request.get("gateway_addresses"), "gateway_addresses")
+    use_bridge_gateway = request.get("use_bridge_gateway") is True
+    container = inspect_container(container_name, task_id)
+    container_ip = container["container_ip"]
+    gateway_ip = bridge_gateway() if use_bridge_gateway else ""
+    iptables = command_path("iptables")
+    if chain_exists(chain):
+        raise HelperError("task firewall chain already exists")
+    commands = [
+        [iptables, "-w", "5", "-N", chain],
+        [iptables, "-w", "5", "-A", chain, "-m", "conntrack", "--ctstate", "ESTABLISHED,RELATED", "-j", "ACCEPT"],
+    ]
+    for address in public_addresses:
+        commands.append([iptables, "-w", "5", "-A", chain, "-d", address, "-p", "tcp", "-m", "multiport", "--dports", "80,443", "-j", "ACCEPT"])
+    if gateway_ip:
+        commands.append([iptables, "-w", "5", "-A", chain, "-d", gateway_ip, "-p", "tcp", "--dport", str(gateway_port), "-j", "ACCEPT"])
+    for address in gateway_addresses:
+        commands.append([iptables, "-w", "5", "-A", chain, "-d", address, "-p", "tcp", "--dport", str(gateway_port), "-j", "ACCEPT"])
+    commands.extend([
+        [iptables, "-w", "5", "-A", chain, "-j", "REJECT"],
+        [iptables, "-w", "5", "-I", "DOCKER-USER", "1", "-s", container_ip, "-j", chain],
+    ])
+    try:
+        for command in commands:
+            run(command)
+    except HelperError:
+        remove_chain(chain)
+        raise
+    return response_payload(chain, container_ip, gateway_ip)
+
+
+def counters(request: dict[str, Any]) -> dict[str, Any]:
+    task_id, container_name, chain = validate_task_request(request)
+    container_ip = inspect_container(container_name, task_id)["container_ip"]
+    return {**response_payload(chain, container_ip, ""), "counters": read_counters(chain)}
+
+
+def remove(request: dict[str, Any]) -> dict[str, Any]:
+    task_id, container_name, chain = validate_task_request(request)
+    container_ip = ""
+    try:
+        container_ip = inspect_container(container_name, task_id)["container_ip"]
+    except HelperError:
+        pass
+    counter_output = read_counters(chain) if chain_exists(chain) else ""
+    remove_chain(chain)
+    return {**response_payload(chain, container_ip, ""), "counters": counter_output}
+
+
+def validate_task_request(request: dict[str, Any]) -> tuple[int, str, str]:
+    task_id = request.get("task_id")
+    container_name = request.get("container_name")
+    if not isinstance(task_id, int) or task_id < 1 or task_id > 2_147_483_647:
+        raise HelperError("invalid reproduction task id")
+    if not isinstance(container_name, str) or not 1 <= len(container_name) <= CONTAINER_NAME_MAX:
+        raise HelperError("invalid reproduction container name")
+    if any(character not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.-" for character in container_name):
+        raise HelperError("invalid reproduction container name")
+    suffix = hashlib.sha256(container_name.encode("utf-8")).hexdigest()[:6]
+    return task_id, container_name, f"A4R_{task_id}_{suffix}"
+
+
+def validate_public_addresses(value: Any, field: str) -> tuple[str, ...]:
+    if not isinstance(value, list) or len(value) > MAX_PUBLIC_ADDRESSES:
+        raise HelperError(f"{field} must be a bounded list")
+    addresses = []
+    for raw_address in value:
+        if not isinstance(raw_address, str):
+            raise HelperError(f"{field} contains a non-string address")
+        address = ipaddress.ip_address(raw_address)
+        if address.version != 4 or not address.is_global:
+            raise HelperError(f"{field} contains a non-public IPv4 address")
+        addresses.append(str(address))
+    return tuple(sorted(set(addresses)))
+
+
+def inspect_container(container_name: str, task_id: int) -> dict[str, str]:
+    docker = command_path("docker")
+    result = run([docker, "inspect", container_name])
+    payload = json.loads(result.stdout)
+    if not isinstance(payload, list) or len(payload) != 1 or not isinstance(payload[0], dict):
+        raise HelperError("Docker returned an invalid container inspection result")
+    container = payload[0]
+    labels = ((container.get("Config") or {}).get("Labels") or {})
+    if labels.get(RESOURCE_LABEL) != EXPECTED_RESOURCE or labels.get(TASK_LABEL) != str(task_id):
+        raise HelperError("container is not owned by the requested AI4SEC reproduction task")
+    if labels.get(PROFILE_LABEL) not in EXPECTED_PROFILES:
+        raise HelperError("container has an invalid AI4SEC execution profile")
+    networks = ((container.get("NetworkSettings") or {}).get("Networks") or {})
+    bridge = networks.get("bridge") if isinstance(networks, dict) else None
+    container_ip = str((bridge or {}).get("IPAddress") or "")
+    address = ipaddress.ip_address(container_ip)
+    if address.version != 4 or address.is_global or address.is_loopback or address.is_link_local:
+        raise HelperError("container does not have an isolated Docker bridge IPv4 address")
+    return {"container_ip": str(address)}
+
+
+def bridge_gateway() -> str:
+    docker = command_path("docker")
+    result = run([docker, "network", "inspect", "bridge"])
+    payload = json.loads(result.stdout)
+    gateway = str(payload[0]["IPAM"]["Config"][0]["Gateway"])
+    address = ipaddress.ip_address(gateway)
+    if address.version != 4 or address.is_global or address.is_loopback or address.is_link_local:
+        raise HelperError("Docker bridge has an invalid gateway address")
+    return str(address)
+
+
+def chain_exists(chain: str) -> bool:
+    iptables = command_path("iptables")
+    return subprocess.run([iptables, "-w", "5", "-S", chain], capture_output=True, text=True, check=False).returncode == 0
+
+
+def read_counters(chain: str) -> str:
+    iptables = command_path("iptables")
+    result = run([iptables, "-w", "5", "-L", chain, "-n", "-v", "-x"])
+    return result.stdout[:5000]
+
+
+def remove_chain(chain: str) -> None:
+    iptables = command_path("iptables")
+    rules = subprocess.run([iptables, "-w", "5", "-S", "DOCKER-USER"], capture_output=True, text=True, check=False)
+    for line in str(rules.stdout or "").splitlines():
+        fields = shlex.split(line)
+        if len(fields) >= 4 and fields[:2] == ["-A", "DOCKER-USER"] and fields[-2:] == ["-j", chain]:
+            subprocess.run([iptables, "-w", "5", "-D", *fields[1:]], capture_output=True, text=True, check=False)
+    subprocess.run([iptables, "-w", "5", "-F", chain], capture_output=True, text=True, check=False)
+    subprocess.run([iptables, "-w", "5", "-X", chain], capture_output=True, text=True, check=False)
+
+
+def response_payload(chain: str, container_ip: str, gateway_ip: str) -> dict[str, Any]:
+    return {"chain": chain, "container_ip": container_ip, "gateway_ip": gateway_ip}
+
+
+def command_path(name: str) -> str:
+    path = shutil.which(name)
+    if not path or not Path(path).is_absolute():
+        raise HelperError(f"required command is unavailable: {name}")
+    file_stat = Path(path).stat()
+    if file_stat.st_uid != 0 or file_stat.st_mode & 0o022:
+        raise HelperError(f"required command is not root-owned and protected: {path}")
+    return path
+
+
+def run(command: list[str]) -> subprocess.CompletedProcess[str]:
+    try:
+        result = subprocess.run(command, capture_output=True, text=True, check=False, timeout=30)
+    except subprocess.TimeoutExpired as exc:
+        raise HelperError(f"privileged operation timed out: {Path(command[0]).name}") from exc
+    if result.returncode != 0:
+        detail = str(result.stderr or result.stdout or "command failed").strip()[:500]
+        raise HelperError(f"privileged operation failed: {Path(command[0]).name}: {detail}")
+    return result
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

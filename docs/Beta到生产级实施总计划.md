@@ -2131,3 +2131,12 @@ Python full test suite: 199 passed
 - 当前环境未配置 `REPRO_LLM_BASE_URL`；使用一次性本地 Gateway 地址进行无任务预检后，nested_docker Profile 在出口防火墙预检失败：当前用户与 `sudo -n` 均不能读取/管理 `DOCKER-USER`。这是预期的 fail-closed 行为，未创建任务、容器或网络规则。
 - 真实 10–20 项回归的前置条件为：配置 `REPRO_LLM_BASE_URL=http://host.docker.internal:8000/api/model-gateway/v1`（或部署环境的等价地址）、由宿主机管理员授予 AI4SEC 专用最小 `iptables`/nftables 规则管理能力，并人工确认独立样本数据库、仓库清单和允许的依赖域名。完成前，第 917 项保持未勾选，不以单元测试替代真实运行验收。
 - 具体样本矩阵、固定提交要求、分波停止条件和记录模板见 `docs/能力洞察多技术栈回归验收方案.md`；该文档只列候选，不代表已执行或已批准的仓库。
+
+### 2026-08-03：实现受限能力复现防火墙助手
+
+- 用户确认采用受限防火墙助手，不授予 Repro Worker 任意 root shell 或通用 `iptables` sudo 权限。
+- Worker 删除直接执行 `iptables` 的路径，改为无参数调用固定 root-owned helper，并通过标准输入发送有大小上限的 JSON。协议只包含 `preflight/install/counters/remove`，不接受命令、可执行文件路径或任意规则参数。
+- helper 独立验证 sudo 调用 UID、AI4SEC 资源/任务/Profile 容器标签、Docker bridge 私网 IPv4、最多 256 个公网 IPv4、root 配置允许的 Model Gateway 端口和按任务确定性生成的 `A4R_*` chain。安装只允许公网 TCP 80/443、指定 Gateway 端口和最终 REJECT；删除只匹配跳转到本任务 chain 的 `DOCKER-USER` 规则。
+- helper、配置和 sudoers 都由一次性安装器复制为 root-owned 文件；sudoers 只允许指定用户执行 `/usr/local/libexec/ai4sec-repro-egress-helper` 且不带参数，并由 `visudo -cf` 校验。Gateway 端口变化必须由管理员重装配置，Worker 无权自行扩大。
+- 回归覆盖 Worker JSON 契约、helper 缺失失败关闭、私网/超量地址拒绝、错误容器归属拒绝、Gateway 端口白名单、固定规则形状、无参数 sudoers 和调用 UID；受限出口及能力 Runner 专项测试 95 passed，全仓 Python 测试 368 passed，helper `py_compile`、安装脚本 `bash -n`、sudoers `visudo -cf`、`compileall`、`git diff --check` 和敏感信息扫描通过。
+- 代码完成不等于宿主机权限已经生效。用户仍需人工审阅并执行 `sudo bash configs/repro-egress-helper/install.sh "$USER" 8000`，随后运行 nested_docker `--check-config`；预检通过后才能开始第 917 项真实样本。
