@@ -1046,28 +1046,28 @@
 /* === 浅色主题: 覆盖 ai4sec dark 变量(匹配 ASIS :root.light) === */
 :root.light {
   color-scheme: light;
-  --bg: #f7f8fb;
-  --bg-soft: #eef2f6;
-  --bg-2: #eef2f6;
-  --panel: #ffffff;
-  --panel-2: #f7f9fc;
-  --panel-3: #eef3f8;
-  --line: rgba(40, 53, 75, 0.14);
-  --line-strong: rgba(40, 53, 75, 0.24);
-  --text: #111827;
-  --muted: #69758a;
-  --muted-2: #8995a8;
-  --accent: #0496a6;
-  --accent-2: #0da36c;
-  --warning: #b47800;
-  --danger: #c83348;
-  --shadow: 0 14px 42px rgba(21, 30, 46, 0.12);
-  --sky: #0496a6;
-  --green: #0da36c;
-  --violet: #0496a6;
-  --amber: #b47800;
-  --red: #c83348;
-  --radius: 8px;
+    --bg: #f7f8fb !important;
+    --bg-soft: #eef2f6 !important;
+    --bg-2: #eef2f6 !important;
+    --panel: #ffffff !important;
+    --panel-2: #f7f9fc !important;
+    --panel-3: #eef3f8 !important;
+    --line: rgba(40, 53, 75, 0.14) !important;
+    --line-strong: rgba(40, 53, 75, 0.24) !important;
+    --text: #111827 !important;
+    --muted: #69758a !important;
+    --muted-2: #8995a8 !important;
+    --accent: #0496a6 !important;
+    --accent-2: #0da36c !important;
+    --warning: #b47800 !important;
+    --danger: #c83348 !important;
+    --shadow: 0 14px 42px rgba(21, 30, 46, 0.12) !important;
+    --sky: #0496a6 !important;
+    --green: #0da36c !important;
+    --violet: #0496a6 !important;
+    --amber: #b47800 !important;
+    --red: #c83348 !important;
+    --radius: 8px !important;
 }
 
 /* === 浅色模式: 覆盖 ai4sec 硬编码暗色(不用 CSS 变量的) === */
