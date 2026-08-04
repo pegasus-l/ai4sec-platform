@@ -10,13 +10,6 @@ from ai4sec_platform.pipelines.steps.threat_raw import BuildHuaweiThreatItemsSte
 from ai4sec_platform.pipelines.steps.threat_risk import ReasonThreatRiskStep, SelectThreatRiskCandidatesStep
 
 
-def huawei_raw_pipeline() -> PipelineDefinition:
-    return PipelineDefinition(
-        name="threats.huawei_raw_pipeline",
-        domain="threats",
-        steps=[ImportHuaweiRawStep(), NormalizeHuaweiRawStep(), BuildHuaweiThreatItemsStep()],
-    )
-
 
 def huawei_collect_sources_pipeline() -> PipelineDefinition:
     return PipelineDefinition(name="threats.huawei_collect_sources_pipeline", domain="threats", steps=[CollectHuaweiSourcesStep()])

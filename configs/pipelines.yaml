@@ -8,27 +8,3 @@ pipelines:
   news.daily_pipeline:
     domain: news
     description: 资讯采集和日报生成主流程
-  threats.huawei_raw_pipeline:
-    domain: threats
-    description: 威胁 connector 获取 repo/issue/security 文件/固件/镜像数据，并生成威胁目标
-  vulnerabilities.material_local_raw_import:
-    domain: vulnerabilities
-    description: 漏洞素材 report 本地 raw JSON 导入和素材构建
-  vulnerabilities.external_material_discovery_pipeline:
-    domain: vulnerabilities
-    description: AnySearch 检索候选 URL、crawl4ai/回退抓取、规则审核并构建优质漏洞素材
-  vulnerabilities.full_knowledge_discovery_pipeline:
-    domain: vulnerabilities
-    description: AnySearch 检索、抓取、素材审核、CVE 事件聚合和知识抽取完整 shadow 链路
-  vulnerabilities.batched_full_knowledge_discovery_pipeline:
-    domain: vulnerabilities
-    description: 按关键词批次运行完整漏洞知识链路，支持 checkpoint 和跨批次 URL 去重
-  capabilities.from_news_pipeline:
-    domain: capabilities
-    description: 从资讯候选生成能力候选并进行本地规则评估
-  threats.risk_reasoning_pipeline:
-    domain: threats
-    description: 对威胁目标进行本地规则风险研判并进入跟踪队列
-  vulnerabilities.knowledge_extraction_pipeline:
-    domain: vulnerabilities
-    description: 对漏洞素材进行本地规则知识抽取并进入迁移复核队列
