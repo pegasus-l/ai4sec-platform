@@ -73,12 +73,14 @@ REPRO_DOCKER_LABEL_PROFILE = "com.ai4sec.execution-profile"
 REPRO_DOCKER_RESOURCE = "capability-repro"
 
 
-def _repo_archive_url(repo_url: str) -> str:
+def _repo_archive_url(repo_url: str, repo_commit: str = "") -> str:
     match = re.match(r"https?://github\.com/([^/]+)/([^/#?]+)", repo_url)
     if match:
         owner, name = match.groups()
-        return f"https://codeload.github.com/{owner}/{name.removesuffix('.git')}/zip/refs/heads/main"
-    return repo_url.removesuffix(".git").rstrip("/") + "/archive/refs/heads/main.zip"
+        archive_ref = repo_commit or "refs/heads/main"
+        return f"https://codeload.github.com/{owner}/{name.removesuffix('.git')}/zip/{archive_ref}"
+    archive_ref = repo_commit or "refs/heads/main"
+    return repo_url.removesuffix(".git").rstrip("/") + f"/archive/{archive_ref}.zip"
 
 
 # ============================================================================
@@ -626,6 +628,7 @@ class ReproRunner:
         self,
         task_id: int,
         repo_url: str,
+        repo_commit: str = "",
         on_log: Callable[[str], None] | None = None,
         on_status: Callable[..., None] | None = None,
         web_port: int | None = None,
@@ -640,6 +643,9 @@ class ReproRunner:
     ):
         self.task_id = task_id
         self.repo_url = repo_url
+        if repo_commit and not re.fullmatch(r"[0-9a-fA-F]{40}", repo_commit):
+            raise ValueError("repo_commit must be an empty value or a 40-character Git commit SHA")
+        self.repo_commit = repo_commit.casefold()
         raw_on_log = on_log or (lambda line: None)
         self._raw_on_log = raw_on_log
         self._secret_values = _task_secret_values()
@@ -742,6 +748,17 @@ class ReproRunner:
             if self.web_port
             else _build_repro_prompt(self.execution_profile)
         )
+        if self.repo_commit:
+            clone_command = (
+                "rm -rf /workspace/repo; mkdir -p /workspace/repo; "
+                "git -C /workspace/repo init -q; "
+                f"git -C /workspace/repo remote add origin {shlex.quote(self.repo_url)}; "
+                f"timeout 120 git -C /workspace/repo fetch --depth 1 origin {self.repo_commit} 2>&1 && "
+                "git -C /workspace/repo checkout --detach -q FETCH_HEAD 2>&1"
+            )
+        else:
+            clone_command = f"timeout 120 git clone --depth 1 {shlex.quote(self.repo_url)} /workspace/repo 2>&1"
+        zip_url = _repo_archive_url(self.repo_url, self.repo_commit)
 
         inner = (
             "export LANG=C.UTF-8 LC_ALL=C.UTF-8 PYTHONIOENCODING=utf-8; "
@@ -758,15 +775,14 @@ class ReproRunner:
             "if [ -n \"$(ls -A /workspace/repo 2>/dev/null)\" ]; then "
             "  echo '✓ 宿主机已预下载 repo,跳过 clone'; "
             "else "
-            "rm -rf /workspace/repo; mkdir -p /workspace/repo; "
             "n=0; until [ $n -ge 3 ]; do "
-            f"  timeout 120 git clone --depth 1 {shlex.quote(self.repo_url)} /workspace/repo 2>&1 && break; "
+            f"  {clone_command} && break; "
             "  n=$((n+1)); echo \"⚠ clone 失败(第 $n 次),5 秒后重试…\"; "
             "  rm -rf /workspace/repo; mkdir -p /workspace/repo; sleep 5; "
             "done; "
             "if [ -z \"$(ls -A /workspace/repo 2>/dev/null)\" ]; then "
             "  echo '⚠ git clone 三次均失败,尝试 zip 下载…'; "
-            f"  ZIP_URL={shlex.quote(self.repo_url.rstrip('.git').rstrip('/') + '/archive/refs/heads/main.zip')}; "
+            f"  ZIP_URL={shlex.quote(zip_url)}; "
             "  curl -fsSL --http1.1 --connect-timeout 30 --max-time 300 -o /tmp/repo.zip \"$ZIP_URL\" 2>&1 && "
             "  unzip -q /tmp/repo.zip -d /tmp/repo_unzip && "
             "  mv /tmp/repo_unzip/*/* /workspace/repo/ 2>/dev/null; mv /tmp/repo_unzip/*/.* /workspace/repo/ 2>/dev/null; "
@@ -776,6 +792,11 @@ class ReproRunner:
             "fi; "
             "fi; "
             "cd /workspace/repo; "
+            + (
+                f"if [ -d .git ]; then test \"$(git rev-parse HEAD)\" = {self.repo_commit}; "
+                f"else echo '✓ 已使用固定 commit archive: {self.repo_commit}'; fi; "
+                if self.repo_commit else ""
+            ) +
             "echo \"✓ 已 clone: $(git -C /workspace/repo remote get-url origin 2>/dev/null)\"; "
             "echo \"✓ pip 源: $(pip config get global.index-url 2>/dev/null || echo 默认)\"; "
             f"stdbuf -oL -eL opencode run --pure --agent build {shlex.quote(prompt)} 2>&1"
@@ -902,10 +923,28 @@ class ReproRunner:
                 self.on_log("• 宿主机侧 clone 仓库…")
                 clone_ok = False
                 for attempt in range(2):
-                    cr = _safe_run(
-                        ["timeout", "90", "git", "clone", "--depth", "1", self.repo_url, str(host_repo)],
-                        capture_output=True, text=True,
-                    )
+                    if self.repo_commit:
+                        init_result = _safe_run(["git", "-C", str(host_repo), "init", "-q"], capture_output=True, text=True)
+                        remote_result = _safe_run(
+                            ["git", "-C", str(host_repo), "remote", "add", "origin", self.repo_url],
+                            capture_output=True,
+                            text=True,
+                        )
+                        fetch_result = _safe_run(
+                            ["timeout", "90", "git", "-C", str(host_repo), "fetch", "--depth", "1", "origin", self.repo_commit],
+                            capture_output=True,
+                            text=True,
+                        )
+                        cr = _safe_run(
+                            ["git", "-C", str(host_repo), "checkout", "--detach", "-q", "FETCH_HEAD"],
+                            capture_output=True,
+                            text=True,
+                        ) if init_result.returncode == remote_result.returncode == fetch_result.returncode == 0 else fetch_result
+                    else:
+                        cr = _safe_run(
+                            ["timeout", "90", "git", "clone", "--depth", "1", self.repo_url, str(host_repo)],
+                            capture_output=True, text=True,
+                        )
                     if cr.returncode == 0:
                         clone_ok = True
                         self.on_log("✓ 宿主机 clone 成功")
@@ -916,7 +955,7 @@ class ReproRunner:
                         host_repo.mkdir(parents=True, exist_ok=True)
                 if not clone_ok:
                     self.on_log("• 尝试宿主机 zip 下载…")
-                    zip_url = _repo_archive_url(self.repo_url)
+                    zip_url = _repo_archive_url(self.repo_url, self.repo_commit)
                     zr = _safe_run(
                         ["curl", "-fsSL", "--http1.1", "--connect-timeout", "30", "--max-time", "600",
                          "-o", "/tmp/_repro_repo.zip", zip_url],

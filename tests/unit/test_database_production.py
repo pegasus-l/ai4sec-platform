@@ -231,7 +231,7 @@ def test_new_database_records_all_schema_migrations() -> None:
         repro_columns = {row["name"] for row in conn.execute("PRAGMA table_info(capability_repro_tasks)").fetchall()}
 
     assert [(row["version"], row["name"]) for row in rows] == [(migration.version, migration.name) for migration in MIGRATIONS]
-    assert {"container_id", "runtime_owner_id", "proxy_pid", "repro_strategy"} <= repro_columns
+    assert {"container_id", "runtime_owner_id", "proxy_pid", "repro_strategy", "repo_commit"} <= repro_columns
 
 
 def test_legacy_database_is_upgraded_without_losing_rows(tmp_path: Path) -> None:

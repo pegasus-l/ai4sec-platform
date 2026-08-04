@@ -394,6 +394,9 @@ def test_github_archive_uses_codeload_fallback() -> None:
     assert _repo_archive_url("https://github.com/example/tool.git") == (
         "https://codeload.github.com/example/tool/zip/refs/heads/main"
     )
+    assert _repo_archive_url("https://github.com/example/tool.git", "a" * 40) == (
+        f"https://codeload.github.com/example/tool/zip/{'a' * 40}"
+    )
 
 
 def test_repro_prompt_never_contains_model_secret(monkeypatch) -> None:
@@ -496,12 +499,16 @@ def test_opencode_config_references_secret_file_and_not_image_auth(monkeypatch, 
     monkeypatch.setattr(repro_runner, "REPRO_MODEL_TOKEN_FILE", str(token_file))
     monkeypatch.setattr(repro_runner, "REPRO_LLM_BASE_URL", "https://gateway.internal/api/model-gateway/v1")
 
-    command = ReproRunner(4, "https://github.com/example/repo").build_exec_command()
+    repo_commit = "a" * 40
+    command = ReproRunner(4, "https://github.com/example/repo", repo_commit=repo_commit).build_exec_command()
     shell_command = command[-1]
 
     assert "auth.json" not in shell_command
     assert "managed-task-token" not in shell_command
     assert repro_runner.CONTAINER_MODEL_TOKEN_FILE in shell_command
+    assert f"fetch --depth 1 origin {repo_commit}" in shell_command
+    assert f"test \"$(git rev-parse HEAD)\" = {repo_commit}" in shell_command
+    assert f"https://codeload.github.com/example/repo/zip/{repo_commit}" in shell_command
     encoded = shell_command.split("echo '", 1)[1].split("' | base64 -d", 1)[0]
     config = json.loads(base64.b64decode(encoded).decode())
     options = config["provider"]["ai4sec-managed"]["options"]

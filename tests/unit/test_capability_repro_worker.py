@@ -161,6 +161,7 @@ def test_worker_executes_claimed_task_without_api_thread(monkeypatch, tmp_path: 
     settings = _settings(tmp_path)
     task_id = _create_task(settings)
     with connect(settings) as conn:
+        repo.update_repro_task(conn, task_id=task_id, repo_commit="b" * 40)
         now = "2026-01-01T00:00:00Z"
         conn.execute(
             """
@@ -181,6 +182,7 @@ def test_worker_executes_claimed_task_without_api_thread(monkeypatch, tmp_path: 
             self,
             task_id,
             repo_url,
+            repo_commit,
             on_log,
             on_status,
             web_port,
@@ -194,6 +196,7 @@ def test_worker_executes_claimed_task_without_api_thread(monkeypatch, tmp_path: 
             on_runtime,
         ):
             self.task_id = task_id
+            assert repo_commit == "b" * 40
             self.model_token_path = model_token_path
             self.on_log = on_log
             self.on_status = on_status

@@ -89,6 +89,7 @@ class ReproTaskResponse(BaseModel):
     id: int
     item_id: int
     repo_url: str
+    repo_commit: str = ""
     status: str  # queued|running|success|partial|failed|stopped|timeout|cleaned
     container_name: str = ""
     workspace_path: str = ""
@@ -127,6 +128,7 @@ class ReproTaskResponse(BaseModel):
             id=row["id"],
             item_id=row["item_id"],
             repo_url=row["repo_url"],
+            repo_commit=row.get("repo_commit", ""),
             status=row["status"],
             container_name=row.get("container_name", ""),
             workspace_path=row.get("workspace_path", ""),

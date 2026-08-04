@@ -242,6 +242,7 @@ class CapabilityReproWorker:
             runner = ReproRunner(
                 task_id=task_id,
                 repo_url=str(task["repo_url"]),
+                repo_commit=str(task.get("repo_commit") or ""),
                 on_log=on_log,
                 on_status=on_status,
                 web_port=task.get("web_port"),

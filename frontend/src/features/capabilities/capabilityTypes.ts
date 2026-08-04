@@ -93,6 +93,7 @@ export interface ReproTask {
   item_id: number;
   title?: string;
   repo_url: string;
+  repo_commit?: string;
   status: string;
   trigger: string;
   repro_strategy?: 'local_web' | 'cli';

@@ -129,6 +129,7 @@ class StartReproRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     strategy: Literal["auto", "local_web", "cli"] = "auto"
+    repo_commit: str = Field(default="", pattern=r"^(?:[0-9a-fA-F]{40})?$")
     execution_profile: str = Field(default="standard", max_length=30)
     external_domains: list[str] = Field(default_factory=list, max_length=20)
     egress_purpose: str = Field(default="", max_length=500)
@@ -184,6 +185,7 @@ def start_repro(item_id: int, body: StartReproRequest = StartReproRequest(), con
             conn,
             item_id=item_id,
             repo_url=repo_url,
+            repo_commit=body.repo_commit.casefold(),
             trigger="manual",
             initial_status=initial_status,
             execution_profile=execution_profile,
@@ -216,6 +218,7 @@ def start_repro(item_id: int, body: StartReproRequest = StartReproRequest(), con
         "ok": True,
         "task_id": task_id,
         "repo_url": repo_url,
+        "repo_commit": body.repo_commit.casefold(),
         "web_port": web_port,
         "status": initial_status,
         "execution_profile": execution_profile,

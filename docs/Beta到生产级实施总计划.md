@@ -2148,3 +2148,11 @@ Python full test suite: 199 passed
 - 先在系统分配的空闲回环端口旁路启动生产化 API，验证 `/api/health` 返回 200、OpenAPI 包含 `/api/model-gateway/v1/chat/completions`，且无任务令牌调用返回预期 401 后，才优雅停止旧 Uvicorn。
 - 新 API 从当前 `ai4sec-platform-production` 目录绑定 `0.0.0.0:8000`。切换后 readiness 返回 `status=ok`，SQLite 为 WAL、Schema v18、写探针成功；正式前端返回 200，Model Gateway 上游为 GLM-5.2，nested_docker Worker 完整预检返回 `ok=true` 和 `token_mode=task_managed`。
 - 当前通过 `nohup` 启动，PID 和日志保存在忽略版本控制的 `output/runtime/`。这满足本机开发验收，不替代后续 Compose/systemd 的开机自启、健康重启和日志轮转。
+
+### 2026-08-03：能力复现固定 Git commit 契约
+
+- 为真实多技术栈回归增加 migration v19 `capability_repro_tasks.repo_commit`。旧任务迁移后保持空值，不伪造历史提交；新回归任务必须明确提供 40 位 commit SHA。
+- 手动启动 API 增加严格 `repo_commit` 字段，只接受空值或 40 位十六进制 SHA，并统一保存为小写；任务列表、详情和能力前端展示短 SHA，确保运营页面能定位实际测试版本。
+- Worker 将持久 SHA 传给 Runner。固定提交任务不再执行普通默认分支 shallow clone，而是 `git init → fetch --depth 1 origin <SHA> → checkout --detach FETCH_HEAD`，并在进入 OpenCode 前校验 `git rev-parse HEAD`；codeload/zip fallback 同样使用该 SHA 的 archive URL。
+- 普通历史/Beta 任务暂时允许空 commit 以保持兼容，但第 917 项验收清单、独立回归入口和后续生产复现必须固定 SHA。不能仅在报告中写 commit、实际仍运行变化中的默认分支。
+- migration、API 拒绝非法 ref、任务列表契约、Worker 透传、Runner fetch/checkout/archive 和前端构建完成；固定提交相关专项测试 120 passed，前端生产构建通过，仍只有既有的动态/静态 import 与大 chunk 警告。

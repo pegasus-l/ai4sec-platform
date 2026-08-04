@@ -94,19 +94,37 @@ def test_start_repro_persists_local_web_strategy_and_reserved_port(monkeypatch, 
     client, item_id = _client(settings, {"code_url": "https://github.com/example/repo", "is_web": True})
     monkeypatch.setattr(capability_api, "_alloc_web_port", lambda _conn: 18123)
 
-    response = client.post(f"/api/capabilities/items/{item_id}/start-repro", json={"strategy": "auto"})
+    repo_commit = "A" * 40
+    response = client.post(
+        f"/api/capabilities/items/{item_id}/start-repro",
+        json={"strategy": "auto", "repo_commit": repo_commit},
+    )
 
     assert response.status_code == 200
     assert response.json()["strategy"] == "local_web"
     with connect(settings) as conn:
         task = repo.list_repro_tasks(conn, item_id=item_id)[0]
     assert task["repro_strategy"] == "local_web"
+    assert task["repo_commit"] == repo_commit.casefold()
     assert task["web_port"] == 18123
     listed = client.get("/api/capabilities/repro-runs")
     assert listed.status_code == 200
     assert listed.json()["items"][0]["id"] == task["id"]
     assert listed.json()["items"][0]["item_id"] == item_id
     assert listed.json()["items"][0]["repro_strategy"] == "local_web"
+    assert listed.json()["items"][0]["repo_commit"] == repo_commit.casefold()
+
+
+def test_start_repro_rejects_non_commit_ref(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    client, item_id = _client(settings, {"code_url": "https://github.com/example/repo"})
+
+    response = client.post(
+        f"/api/capabilities/items/{item_id}/start-repro",
+        json={"strategy": "cli", "repo_commit": "main"},
+    )
+
+    assert response.status_code == 422
 
 
 def test_start_repro_rejects_removed_web_boolean(tmp_path: Path) -> None:

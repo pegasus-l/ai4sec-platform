@@ -314,6 +314,8 @@ OpenCode 权限按 Profile 生成，未知工具、外部目录、子代理、Sk
 
 能力复现由后端统一选择 `official_demo`、`local_web`、`cli` 或 `unsupported` 策略。只有分类阶段已真实探测并持久化 `demo_verified=true` 的官方 Demo 才跳过本地部署；Web 项目必须先保留 loopback 端口再入队，CLI 项目不得携带 Web 端口；明确无真实实现的项目返回可解释的跳过结果。操作者可显式选择 `local_web` 或 `cli` 覆盖自动分类，旧 `web: true/false` 请求字段已删除并返回 422，避免前端布尔值与后端任务语义再次漂移。
 
+需要可重复验收时，启动请求应提供 40 位 `repo_commit`。Worker 会从任务表读取 SHA，执行 detached fetch/checkout，并让 archive fallback 使用同一 SHA；任务详情展示短 SHA。历史任务可保留空值，但生产验收不得只记录仓库 URL 而运行变化中的默认分支。
+
 成功判定不是容器启动、进程退出或首页 HTTP 200：Web 必须有真实核心业务闭环、非 mock 模式、通过步骤、结果证据和结果说明；CLI 必须有真实运行命令、所有关键步骤通过、真实输出摘要和结果说明；L3 只做环境评估，最多标记 `partial`。不满足门槛的模型 `success` 会被 Runner 自动降级并写入 `acceptance_issues`/`blockers`。
 
 结构化报告统一带 `schema_version`，并保留 `evidence`、`limitations`、`blockers`、`usage`、实际步骤和完整 `repro_report`；能力卡回写同时更新 `repro_status`、摘要、证据、限制和环境信息，不用一组摘要字段替代原始报告。

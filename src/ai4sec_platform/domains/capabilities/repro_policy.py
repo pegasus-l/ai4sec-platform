@@ -47,6 +47,7 @@ def enqueue_repro_task(
     *,
     item_id: int,
     repo_url: str,
+    repo_commit: str = "",
     trigger: str,
     initial_status: str = "queued",
     execution_profile: str = "standard",
@@ -64,8 +65,8 @@ def enqueue_repro_task(
     cursor = conn.execute(
         """
         INSERT INTO capability_repro_tasks
-            (item_id, repo_url, status, created_at, updated_at, trigger, execution_profile, profile_approval_status, repro_strategy)
-        SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?
+            (item_id, repo_url, repo_commit, status, created_at, updated_at, trigger, execution_profile, profile_approval_status, repro_strategy)
+        SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
         WHERE NOT EXISTS (
             SELECT 1 FROM capability_repro_tasks
             WHERE item_id = ? AND status IN ('awaiting_profile_approval', 'awaiting_egress_approval', 'queued', 'running')
@@ -81,6 +82,7 @@ def enqueue_repro_task(
         (
             item_id,
             repo_url,
+            repo_commit,
             initial_status,
             now,
             now,

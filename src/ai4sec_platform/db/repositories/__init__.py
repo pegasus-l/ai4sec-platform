@@ -447,6 +447,7 @@ _REPRO_UPDATABLE_FIELDS = {
     "cancel_requested",
     "cleanup_requested",
     "repro_strategy",
+    "repo_commit",
 }
 
 
@@ -455,13 +456,14 @@ def create_repro_task(
     *,
     item_id: int,
     repo_url: str,
+    repo_commit: str = "",
     trigger: str = "manual",
 ) -> int:
     """创建复现任务，返回 task_id"""
     cur = conn.execute(
-        "INSERT INTO capability_repro_tasks (item_id, repo_url, status, created_at, updated_at, trigger) "
-        "VALUES (?, ?, 'queued', ?, ?, ?)",
-        (item_id, repo_url, utc_now(), utc_now(), trigger),
+        "INSERT INTO capability_repro_tasks (item_id, repo_url, repo_commit, status, created_at, updated_at, trigger) "
+        "VALUES (?, ?, ?, 'queued', ?, ?, ?)",
+        (item_id, repo_url, repo_commit, utc_now(), utc_now(), trigger),
     )
     return int(cur.lastrowid)
 

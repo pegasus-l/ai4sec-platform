@@ -329,6 +329,7 @@ CREATE TABLE IF NOT EXISTS capability_repro_tasks (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     item_id INTEGER NOT NULL,
     repo_url TEXT NOT NULL,
+    repo_commit TEXT NOT NULL DEFAULT '',
     status TEXT NOT NULL DEFAULT 'queued',
     container_name TEXT NOT NULL DEFAULT '',
     container_id TEXT NOT NULL DEFAULT '',

@@ -178,6 +178,14 @@ MIGRATIONS: tuple[Migration, ...] = (
         ),
         checksum_source="capability_repro_tasks.repro_strategy TEXT NOT NULL DEFAULT 'cli'",
     ),
+    Migration(
+        version=19,
+        name="add_capability_repro_commit",
+        apply=lambda conn: _add_column_if_missing(
+            conn, "capability_repro_tasks", "repo_commit", "TEXT NOT NULL DEFAULT ''"
+        ),
+        checksum_source="capability_repro_tasks.repo_commit TEXT NOT NULL DEFAULT ''",
+    ),
 )
 
 

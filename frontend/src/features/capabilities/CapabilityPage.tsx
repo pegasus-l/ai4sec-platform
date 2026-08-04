@@ -403,7 +403,7 @@ function ReproDetailContent({ task, capabilityItem, openDetail }: { task: ReproT
   return <div className="repro-console">
     <div className="repro-console-head">
       <div><span className={`repro-status status-${liveStatus}`}>{reproStatusLabel(liveStatus)}</span><strong>{currentTask.repo_url?.split('/').filter(Boolean).slice(-1)[0]}</strong></div>
-      <div className="repro-meta">任务 #{currentTask.id} · {reproStrategyLabel(currentTask.repro_strategy)}{currentTask.web_port ? ` · Web ${currentTask.web_port}` : ''}</div>
+      <div className="repro-meta">任务 #{currentTask.id} · {reproStrategyLabel(currentTask.repro_strategy)}{currentTask.repo_commit ? ` · commit ${currentTask.repo_commit.slice(0, 12)}` : ''}{currentTask.web_port ? ` · Web ${currentTask.web_port}` : ''}</div>
     </div>
     <div className="repro-actions">
       {p.demo_url && <a className="btn primary" href={p.demo_url} target="_blank" rel="noreferrer">打开官方 Demo ↗</a>}
