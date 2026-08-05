@@ -204,7 +204,6 @@ class EnrichCapabilityCandidatesStep:
             model_profile="configured_model",
             min_decision="all",
         )
-        )
 
         # 更新候选: 把 review 结果写到 payload 里
         updated = 0
