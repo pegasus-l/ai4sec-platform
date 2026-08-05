@@ -178,7 +178,7 @@ class EnrichCapabilityCandidatesStep:
             raw = payload.get(source_news_item) or {}
             merged = {
                 **c_item,
-                item_key: str(c_item.get(id) or ),
+                item_key: str(c_item.get("id") or ""),
                 title: c_item.get(title) or raw.get(title) or ,
                 summary: raw.get(summary) or c_item.get(summary) or ,
                 url: raw.get(url) or c_item.get(source_url) or ,
