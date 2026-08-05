@@ -67,7 +67,7 @@ class BuildCapabilitiesFromNewsStep:
                 created.append(capability_id)
             selected = created
         context.outputs["capability_candidate_ids"] = selected
-        artifact = context.artifact_store.write_json(run_id=context.run_id, artifact_type="capability_candidates", name="capabilities/candidates.json", data={"candidate_ids": selected, "created_ids": created})
+        artifact = context.artifact_store.write_json(context.conn, run_id=context.run_id, artifact_type="capability_candidates", name="capabilities/candidates.json", data={"candidate_ids": selected, "created_ids": created})
         return StepResult(metrics={"candidates": len(selected), "created": len(created), "reused_existing": len(selected) - len(created)}, artifacts=[artifact])
 
 
@@ -156,8 +156,8 @@ class AssessCapabilitiesStep:
             # 评估完成后将 item_type 从 capability_candidate 改为 capability
             context.conn.execute("UPDATE domain_items SET item_type='capability' WHERE id=?", (item_id,))
             assessed += 1
-        artifact = context.artifact_store.write_json(run_id=context.run_id, artifact_type="capability_assessments", name="capabilities/assessments.json", data={"assessed": assessed, "failed": failed, "model_profile": self.model_profile})
-        repo.create_quality_audit(domain="capabilities", audit_type="capability_assessment", status="pass" if assessed else "warn", score=0.8 if assessed else 0.2, summary=f"能力评估 {assessed} 条成功，{failed} 条失败。", details={"run_id": context.run_id})
+        artifact = context.artifact_store.write_json(context.conn, run_id=context.run_id, artifact_type="capability_assessments", name="capabilities/assessments.json", data={"assessed": assessed, "failed": failed, "model_profile": self.model_profile})
+        repo.create_quality_audit(context.conn, domain="capabilities", audit_type="capability_assessment", status="pass" if assessed else "warn", score=0.8 if assessed else 0.2, summary=f"能力评估 {assessed} 条成功，{failed} 条失败。", details={"run_id": context.run_id})
         return StepResult(metrics={"assessed": assessed, "failed": failed, "model_profile": self.model_profile}, artifacts=[artifact])
 
 
