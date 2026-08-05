@@ -8,6 +8,9 @@ ARG OPENCODE_VERSION=1.15.12
 ARG UBUNTU_ARCHIVE_MIRROR=http://archive.ubuntu.com/ubuntu
 ARG UBUNTU_SECURITY_MIRROR=http://security.ubuntu.com/ubuntu
 ARG DOCKER_APT_BASE=https://download.docker.com/linux/ubuntu
+ARG RUST_VERSION=1.85.1
+ARG RUST_DIST_BASE=https://static.rust-lang.org/dist
+ARG RUST_DIST_SHA256=912c76f602f5f630138fca2388b2688c2c1aabcf823d71890b2b9155f743792e
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -19,7 +22,6 @@ RUN sed -i \
     && apt-get install -y --no-install-recommends \
         build-essential \
         ca-certificates \
-        cargo \
         curl \
         git \
         golang-go \
@@ -28,12 +30,22 @@ RUN sed -i \
         python3 \
         python3-pip \
         python3-venv \
-        rustc \
         systemd \
         systemd-sysv \
         unzip \
+        xz-utils \
     && rm -rf /var/lib/apt/lists/* \
     && ln -sf /usr/bin/python3 /usr/bin/python
+
+RUN archive="rust-${RUST_VERSION}-x86_64-unknown-linux-gnu.tar.xz" \
+    && curl -fsSL --retry 5 --retry-delay 3 "${RUST_DIST_BASE}/${archive}" -o "/tmp/${archive}" \
+    && echo "${RUST_DIST_SHA256}  /tmp/${archive}" | sha256sum --check --strict \
+    && tar -xJf "/tmp/${archive}" -C /tmp \
+    && "/tmp/rust-${RUST_VERSION}-x86_64-unknown-linux-gnu/install.sh" \
+        --prefix=/usr/local \
+        --without=rust-docs \
+        --without=rust-docs-json \
+    && rm -rf "/tmp/${archive}" "/tmp/rust-${RUST_VERSION}-x86_64-unknown-linux-gnu"
 
 RUN install -m 0755 -d /etc/apt/keyrings \
     && curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key \

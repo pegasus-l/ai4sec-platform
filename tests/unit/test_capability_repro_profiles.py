@@ -132,6 +132,9 @@ def test_standard_profile_command_drops_privileges(monkeypatch, tmp_path: Path) 
     assert command[command.index("--cap-drop") + 1] == "ALL"
     assert "--user" not in command
     assert "--runtime" not in command
+    assert command[command.index("--env") + 1] == f"GOPROXY={repro_runner.REPRO_GO_PROXY}"
+    assert f"CARGO_REGISTRIES_CRATES_IO_PROTOCOL={repro_runner.REPRO_CARGO_REGISTRY_PROTOCOL}" in command
+    assert f"CARGO_HTTP_MULTIPLEXING={repro_runner.REPRO_CARGO_HTTP_MULTIPLEXING}" in command
     assert f"{repro_runner.REPRO_DOCKER_LABEL_RESOURCE}={repro_runner.REPRO_DOCKER_RESOURCE}" in command
     assert f"{repro_runner.REPRO_DOCKER_LABEL_OWNER}={'a' * 24}" in command
     assert f"{repro_runner.REPRO_DOCKER_LABEL_TASK}=1" in command
@@ -160,6 +163,9 @@ def test_nested_profile_command_uses_sysbox(monkeypatch, tmp_path: Path) -> None
     command = runner.build_run_command()
 
     assert command[command.index("--runtime") + 1] == "sysbox-runc"
+    assert command[command.index("--env") + 1] == f"GOPROXY={repro_runner.REPRO_GO_PROXY}"
+    assert f"CARGO_REGISTRIES_CRATES_IO_PROTOCOL={repro_runner.REPRO_CARGO_REGISTRY_PROTOCOL}" in command
+    assert f"CARGO_HTTP_MULTIPLEXING={repro_runner.REPRO_CARGO_HTTP_MULTIPLEXING}" in command
     assert "--read-only" not in command
     assert command[-1] == "nested:test"
 

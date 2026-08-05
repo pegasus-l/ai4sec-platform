@@ -36,9 +36,9 @@ load_env_file()
 # ============================================================================
 # 配置（集中在这里，方便调整。从 .env 读，去硬编码）
 # ============================================================================
-REPRO_IMAGE = os.environ.get("REPRO_IMAGE", "repro-runner:v5")
+REPRO_IMAGE = os.environ.get("REPRO_IMAGE", "repro-runner:v6")
 REPRO_RUNTIME = os.environ.get("REPRO_RUNTIME", "sysbox-runc")
-REPRO_STANDARD_IMAGE = os.environ.get("REPRO_STANDARD_IMAGE", "repro-runner-standard:v2")
+REPRO_STANDARD_IMAGE = os.environ.get("REPRO_STANDARD_IMAGE", "repro-runner-standard:v3")
 WORKSPACE_ROOT = Path(os.environ.get("REPRO_WORKSPACE_ROOT", str(Path.home() / "repro_workspaces")))
 CONTAINER_TIMEOUT = int(os.environ.get("REPRO_CONTAINER_TIMEOUT", str(30 * 60)))  # 30 分钟
 WEB_CONTAINER_TIMEOUT = int(os.environ.get("REPRO_WEB_CONTAINER_TIMEOUT", str(50 * 60)))  # 50 分钟
@@ -63,6 +63,9 @@ DASHSCOPE_PROXY_URL = os.environ.get("DASHSCOPE_PROXY_URL", "")
 # 复现任务内 LLM 配置。真实凭据不得进入 Prompt。
 REPRO_LLM_BASE_URL = os.environ.get("REPRO_LLM_BASE_URL", DASHSCOPE_PROXY_URL or "")
 REPRO_LLM_MODEL = os.environ.get("REPRO_LLM_MODEL", "glm-5.2")
+REPRO_GO_PROXY = os.environ.get("REPRO_GO_PROXY", "https://proxy.golang.org,direct")
+REPRO_CARGO_REGISTRY_PROTOCOL = os.environ.get("REPRO_CARGO_REGISTRY_PROTOCOL", "sparse")
+REPRO_CARGO_HTTP_MULTIPLEXING = os.environ.get("REPRO_CARGO_HTTP_MULTIPLEXING", "false")
 REPRO_MODEL_TOKEN_FILE = os.environ.get("REPRO_MODEL_TOKEN_FILE", "")
 CONTAINER_MODEL_TOKEN_FILE = "/run/secrets/repro_model_token"
 CONTAINER_MANAGED_OPENCODE_CONFIG = "/etc/opencode/opencode.json"
@@ -699,6 +702,9 @@ class ReproRunner:
             "--dns", "127.0.0.1",
             "--sysctl", "net.ipv6.conf.all.disable_ipv6=1",
             "--add-host", "host.docker.internal:host-gateway",
+            "--env", f"GOPROXY={REPRO_GO_PROXY}",
+            "--env", f"CARGO_REGISTRIES_CRATES_IO_PROTOCOL={REPRO_CARGO_REGISTRY_PROTOCOL}",
+            "--env", f"CARGO_HTTP_MULTIPLEXING={REPRO_CARGO_HTTP_MULTIPLEXING}",
             "-v", f"{self.workspace}:/workspace",
         ]
         if self.execution_profile == "nested_docker":

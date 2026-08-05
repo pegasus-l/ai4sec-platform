@@ -2206,3 +2206,11 @@ Python full test suite: 199 passed
 - Cobra 的 task 3（旧镜像缺 Go）、task 5/6（模型配额）和 task 7（依赖出口）均保留为独立尝试，不将平台故障混同为项目能力失败。所有尝试均核对令牌撤销、秘密文件为 0、容器退出和 helper 幂等清理。
 - 修复 `repro-regression report`：回归重跑通过正式 API 后 trigger 可能为 `manual`，报告现在按 `regression_sample_id` 聚合全部尝试并选择最大 task ID 的最新结果，同时输出 `attempt_count`；专项测试 4 passed。
 - 917 的下一步不是盲目增加样本，而是完成 Go 模块代理/静态依赖缓存策略、Rust 工具链版本矩阵和单任务模型预算治理，再重新运行 Cobra/clap；首波通过样本可继续作为平台安全链路基线。
+
+### 2026-08-04：Cobra 与 clap 重跑通过，首波四栈闭环
+
+- `repro-runner:v6` 与 `repro-runner-standard:v3` 将 Rust 从 Ubuntu 包的 1.75 升级为固定 SHA256 校验的 1.85.1，满足 clap 固定提交 `rust-version = 1.85`；离线审计与 Sysbox Docker daemon 烟测均通过。镜像 ID 为 nested `sha256:794b928d8f06d0d661d566c0e732efadfc6c8bb7f06c30759c6960fa33864a49`、standard `sha256:bcaf705d5b2b30eab84b10713f8ecc87eb5c06ae9c8ea2752d5417d5783d3e1b`。
+- Runner 明确向容器注入 `GOPROXY`；当前回归由管理员显式配置 `https://goproxy.cn,direct` 并把 `goproxy.cn` 加入一次性 egress 域名。Cobra task 8 完成模块下载、独立 CLI 编译、flag/子命令/help/拼写建议验证，236 秒、13 次模型调用、137616 实际 token。
+- Gateway 改为先预留预算、再按供应商 `usage.total_tokens` 原子结算；流式请求要求 `include_usage`，上游错误释放预留。Cobra 的最终 token 计账由先前的近百万预留下降为 137616，避免请求的 `max_tokens` 被误当实际消耗。
+- Cargo 默认使用 sparse registry 并关闭 HTTP/2 multiplexing，解决 curl 可达而 Cargo index 卡死的受限网络兼容问题。clap task 10 完成 derive/builder 两类真实示例、help/version/参数/子命令验证，1356 秒、12 次模型调用、175772 实际 token。
+- 首波四个固定 SHA 样本最新结果为 `4 success`。task 9 因外部 CLI 超时中断后，恢复 Worker 曾只清理容器/Workspace、未删运行期 token/config；统一 cleanup 现会撤销 token 并只删除安全目录下匹配 task 前缀的秘密文件，task 9 已通过正式 cleanup 队列验证为 `cleaned` 且秘密文件数为 0。

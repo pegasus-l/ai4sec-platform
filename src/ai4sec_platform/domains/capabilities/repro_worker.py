@@ -394,6 +394,12 @@ class CapabilityReproWorker:
         }
 
     def _cleanup_resources(self, task: dict[str, Any]) -> None:
+        task_id = int(task["id"])
+        with connect(self.settings) as conn:
+            init_db(conn)
+            revoke_task_model_tokens(conn, task_id=task_id)
+            conn.commit()
+        self._remove_task_runtime_secrets(task_id)
         self._stop_persisted_proxy(task)
         container_name = str(task.get("container_name") or "")
         container_id = str(task.get("container_id") or "")
@@ -408,6 +414,27 @@ class CapabilityReproWorker:
             workspace_root = WORKSPACE_ROOT.expanduser().resolve()
             if workspace != workspace_root and workspace.is_relative_to(workspace_root) and workspace.exists():
                 shutil.rmtree(workspace, ignore_errors=True)
+
+    @staticmethod
+    def _remove_task_runtime_secrets(task_id: int) -> None:
+        secret_dir = repro_runtime_secret_dir() / "repro"
+        try:
+            directory_stat = secret_dir.lstat()
+        except FileNotFoundError:
+            return
+        if stat.S_ISLNK(directory_stat.st_mode) or not stat.S_ISDIR(directory_stat.st_mode):
+            raise RuntimeError("AI4SEC repro secret directory must be a regular non-symlink directory")
+        if directory_stat.st_uid != os.getuid() or directory_stat.st_mode & 0o077:
+            raise RuntimeError("AI4SEC repro secret directory must be owned by the Worker and mode 0700")
+        prefix = f"task-{task_id}-"
+        for path in secret_dir.iterdir():
+            if not path.name.startswith(prefix) or not path.name.endswith((".token", ".opencode.json")):
+                continue
+            file_stat = path.lstat()
+            if file_stat.st_uid != os.getuid():
+                continue
+            if stat.S_ISREG(file_stat.st_mode) or stat.S_ISLNK(file_stat.st_mode):
+                path.unlink(missing_ok=True)
 
     def _reconcile_managed_orphans(self) -> list[str]:
         listed = _safe_run(

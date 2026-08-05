@@ -384,6 +384,28 @@ def test_cleanup_refuses_unlabelled_container_and_workspace_outside_root(monkeyp
     outside_workspace.rmdir()
 
 
+def test_cleanup_revokes_task_token_and_removes_only_matching_runtime_secrets(monkeypatch, tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    task_id = _create_task(settings, status="failed")
+    other_task_id = _create_task(settings, status="failed")
+    runtime_root = tmp_path / "runtime-secrets"
+    monkeypatch.setenv("AI4SEC_RUNTIME_SECRET_DIR", str(runtime_root))
+    worker = CapabilityReproWorker(settings)
+    task_token = worker._issue_model_token(task_id)
+    task_config = task_token.with_suffix(".opencode.json")
+    worker._write_managed_config(task_config)
+    other_token = worker._issue_model_token(other_task_id)
+
+    worker._cleanup_resources({"id": task_id, "container_name": "", "container_id": "", "workspace_path": "", "proxy_pid": 0})
+
+    assert not task_token.exists()
+    assert not task_config.exists()
+    assert other_token.exists()
+    with connect(settings) as conn:
+        token = conn.execute("SELECT revoked_at FROM repro_model_tokens WHERE task_id = ?", (task_id,)).fetchone()
+    assert token and token["revoked_at"]
+
+
 def test_recovery_removes_only_unknown_container_for_current_runtime_owner(monkeypatch, tmp_path: Path) -> None:
     settings = _settings(tmp_path)
     task_id = _create_task(settings, status="failed")

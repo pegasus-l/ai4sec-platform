@@ -62,6 +62,25 @@ def record_task_model_usage(conn: sqlite3.Connection, *, token_id: int, addition
     )
 
 
+def reconcile_task_model_usage(
+    conn: sqlite3.Connection,
+    *,
+    token_id: int,
+    reserved_tokens: int,
+    actual_tokens: int,
+) -> None:
+    reserved_tokens = max(0, reserved_tokens)
+    actual_tokens = max(0, actual_tokens)
+    conn.execute(
+        """
+        UPDATE repro_model_tokens
+        SET tokens_used = MIN(max_tokens, MAX(0, tokens_used - ? + ?)), updated_at = ?
+        WHERE id = ?
+        """,
+        (reserved_tokens, actual_tokens, utc_now(), token_id),
+    )
+
+
 def revoke_task_model_tokens(conn: sqlite3.Connection, *, task_id: int) -> None:
     now = utc_now()
     conn.execute("UPDATE repro_model_tokens SET revoked_at = ?, updated_at = ? WHERE task_id = ? AND revoked_at = ''", (now, now, task_id))
