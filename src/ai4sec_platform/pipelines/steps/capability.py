@@ -119,7 +119,7 @@ class AssessCapabilitiesStep:
                 input_payload={"item": item_data, "prompt": prompt},
                 output_payload=output,
             )
-            repo.update_domain_item(
+            repo.update_domain_item(context.conn, 
                 
                 item_id=item_id,
                 status=recommended_status,
@@ -211,7 +211,7 @@ class EnrichCapabilityCandidatesStep:
             review = item.get("review") or {}
             if not review:
                 continue
-            existing = repo.get_domain_item(item["id"])
+            existing = repo.get_domain_item(context.conn, item["id"])
             if not existing:
                 continue
             existing_payload = existing.get("payload") or {}
@@ -229,7 +229,7 @@ class EnrichCapabilityCandidatesStep:
             if review.get("highlight_line"):
                 existing_payload["highlight_line"] = review["highlight_line"]
             existing_payload["review_status"] = "enriched"
-            repo.update_domain_item(item_id=item["id"], payload=existing_payload)
+            repo.update_domain_item(context.conn, item_id=item["id"], payload=existing_payload)
             updated += 1
         context.conn.commit()
         return StepResult(metrics={"enriched": updated, "selected": metrics.get("selected", 0), "failed": metrics.get("failed", 0)})
