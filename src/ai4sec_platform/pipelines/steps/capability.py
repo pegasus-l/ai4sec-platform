@@ -37,7 +37,7 @@ class BuildCapabilitiesFromNewsStep:
                 highlight = np.get("highlight", "")
                 news_summary = np.get("summary", "") or sni.get("summary", "")
                 tech_points = np.get("technical_points", [])
-                capability_id = repo.create_domain_item(
+                capability_id = repo.create_domain_item(context.conn, 
                     
                     domain="capabilities",
                     item_type="capability_candidate",
