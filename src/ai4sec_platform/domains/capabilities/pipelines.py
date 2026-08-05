@@ -16,7 +16,7 @@ from ai4sec_platform.domains.capabilities.builders import build_conversion_recor
 from ai4sec_platform.pipelines.base import PipelineDefinition
 from ai4sec_platform.pipelines.context import PipelineContext
 from ai4sec_platform.pipelines.results import StepResult
-from ai4sec_platform.pipelines.steps.capability import AssessCapabilitiesStep, BuildCapabilitiesFromNewsStep, EnrichCapabilityCandidatesStep
+from ai4sec_platform.pipelines.steps.capability import AssessCapabilitiesStep, BuildCapabilitiesFromNewsStep
 from ai4sec_platform.pipelines.steps.repro import (
     ExtractReproReportsStep,
     SelectReproCandidatesStep,

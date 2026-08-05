@@ -33,7 +33,6 @@ def gate_candidates(
     run_id: str,
     project_root: Path,
     model_profile: str = "configured_model",
-    min_decision: str = "selected",
 ) -> tuple[list[dict[str, Any]], dict[str, int]]:
     tech_map = AgentTechMap.load(project_root)
     router = LLMRouter()
@@ -94,7 +93,6 @@ def enrich_candidates(
     run_id: str,
     project_root: Path,
     model_profile: str = "configured_model",
-    min_decision: str = "selected",
 ) -> tuple[list[dict[str, Any]], dict[str, int]]:
     tech_map = AgentTechMap.load(project_root)
     router = LLMRouter()
@@ -150,8 +148,7 @@ def enrich_candidates(
             continue
         decision = enriched["review"]["decision"]
         metrics[decision] += 1
-        _r = {"rejected": 0, "watch": 1, "selected": 2}
-        if _r.get(decision, 0) >= _r.get(min_decision, 2):
+        if decision == "selected":
             selected.append(enriched)
     conn.commit()
     return selected, metrics
