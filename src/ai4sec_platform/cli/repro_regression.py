@@ -11,6 +11,7 @@ from ai4sec_platform.db import repositories as repo
 from ai4sec_platform.db.models import init_db
 from ai4sec_platform.db.session import connect
 from ai4sec_platform.domains.capabilities.repro_policy import enqueue_repro_task
+from ai4sec_platform.domains.capabilities.repro_ports import allocate_repro_web_port
 from ai4sec_platform.domains.capabilities.repro_profiles import review_nested_docker_profile
 
 
@@ -60,6 +61,11 @@ def prepare(manifest_path: Path) -> dict[str, Any]:
                 execution_profile="nested_docker",
                 repro_strategy=sample.get("strategy", "cli"),
             )
+            if sample.get("strategy") == "local_web":
+                web_port = allocate_repro_web_port(conn)
+                if web_port is None:
+                    raise RuntimeError("no loopback Web port is available for isolated regression task")
+                repo.update_repro_task(conn, task_id=task_id, web_port=web_port)
             review_nested_docker_profile(
                 conn,
                 task_id=task_id,

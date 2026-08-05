@@ -1,0 +1,42 @@
+{
+  "name": "capability-repro-web-wave-2",
+  "resolved_at": "2026-08-04",
+  "samples": [
+    {
+      "sample_id": "python-web-fastapi",
+      "technology": "Python",
+      "repository_url": "https://github.com/tiangolo/fastapi",
+      "commit_sha": "42a41db11f6882807ac3c057b942178d53b97438",
+      "license_expected": "MIT",
+      "strategy": "local_web",
+      "expected_capability": "start a local FastAPI application and verify a real HTTP route response through the loopback proxy"
+    },
+    {
+      "sample_id": "node-web-express",
+      "technology": "Node.js",
+      "repository_url": "https://github.com/expressjs/express",
+      "commit_sha": "a3714473feb3d2908add734d340e7755fd85e0a3",
+      "license_expected": "MIT",
+      "strategy": "local_web",
+      "expected_capability": "start an Express application and verify a real HTTP request-response path through the loopback proxy"
+    },
+    {
+      "sample_id": "go-web-gin",
+      "technology": "Go",
+      "repository_url": "https://github.com/gin-gonic/gin",
+      "commit_sha": "34dac209ffb6ef85cc78c5d217bbb7ad001d68fd",
+      "license_expected": "MIT",
+      "strategy": "local_web",
+      "expected_capability": "build and start a minimal Gin HTTP service and verify a local route through the loopback proxy"
+    },
+    {
+      "sample_id": "rust-web-axum",
+      "technology": "Rust",
+      "repository_url": "https://github.com/tokio-rs/axum",
+      "commit_sha": "40ede29be6a4b5adbb76a1423463937fed6c695c",
+      "license_expected": "MIT",
+      "strategy": "local_web",
+      "expected_capability": "build and start a minimal Axum HTTP service and verify a local route through the loopback proxy"
+    }
+  ]
+}

@@ -20,7 +20,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import socket
 import sqlite3
 from typing import Literal
 
@@ -47,6 +46,7 @@ from ai4sec_platform.domains.capabilities.repro_policy import (
     repro_limits_payload,
     repro_worker_status_payload,
 )
+from ai4sec_platform.domains.capabilities.repro_ports import allocate_repro_web_port
 from ai4sec_platform.domains.capabilities.repro_profiles import (
     ReproProfileApprovalError,
     normalize_execution_profile,
@@ -167,7 +167,7 @@ def start_repro(item_id: int, body: StartReproRequest = StartReproRequest(), con
     repo_url = _resolve_repo_url(item)
     if not repo_url:
         raise HTTPException(status_code=400, detail="no repo URL found in item")
-    web_port = _alloc_web_port(conn) if decision.strategy == "local_web" else None
+    web_port = allocate_repro_web_port(conn) if decision.strategy == "local_web" else None
     if decision.strategy == "local_web" and web_port is None:
         raise HTTPException(status_code=503, detail={"code": "web_port_unavailable", "message": "no loopback Web port is available"})
 
@@ -564,30 +564,3 @@ def ops_repro_failures(conn: sqlite3.Connection = Depends(get_db)) -> dict:
 def ops_missing_fields(conn: sqlite3.Connection = Depends(get_db)) -> dict:
     return audit_missing_fields(conn)
 
-
-# ============================================================================
-# 辅助函数
-# ============================================================================
-def _alloc_web_port(conn) -> int | None:
-    """分配 Web 端口（18000-18999，跳过已用）"""
-    import os
-    base = int(os.environ.get("REPRO_WEB_PORT_BASE", "18000"))
-    max_port = int(os.environ.get("REPRO_WEB_PORT_MAX", "18999"))
-    rows = conn.execute(
-        "SELECT DISTINCT web_port FROM capability_repro_tasks WHERE web_port IS NOT NULL AND status IN ('queued', 'running')"
-    ).fetchall()
-    used = {row["web_port"] for row in rows}
-    for port in range(base, max_port + 1):
-        if port not in used and _port_is_available(port):
-            return port
-    return None
-
-
-def _port_is_available(port: int) -> bool:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
-        probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        try:
-            probe.bind(("127.0.0.1", port))
-        except OSError:
-            return False
-    return True

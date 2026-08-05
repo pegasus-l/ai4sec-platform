@@ -103,3 +103,21 @@ def test_report_uses_latest_attempt_regardless_of_trigger(monkeypatch, tmp_path:
     assert result["items"][0]["task_id"] == latest_task_id
     assert result["items"][0]["attempt_count"] == 2
     assert result["items"][0]["result"] == "latest result"
+
+
+def test_prepare_allocates_port_for_local_web_sample(monkeypatch, tmp_path: Path) -> None:
+    output_dir = tmp_path / "repro-regression"
+    settings = Settings(project_root=tmp_path, output_dir=output_dir, database_path=output_dir / "ai4sec_platform.db")
+    manifest = _manifest(tmp_path)
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+    payload["samples"][0]["strategy"] = "local_web"
+    manifest.write_text(json.dumps(payload), encoding="utf-8")
+    monkeypatch.setenv("AI4SEC_REPRO_REGRESSION_CONFIRM", "isolated-regression")
+    monkeypatch.setattr(repro_regression, "load_settings", lambda: settings)
+    monkeypatch.setattr(repro_regression, "allocate_repro_web_port", lambda _conn: 18123)
+
+    prepared = repro_regression.prepare(manifest)
+
+    with connect(settings) as conn:
+        task = repo.get_repro_task(conn, prepared["task_ids"][0])
+    assert task and task["web_port"] == 18123

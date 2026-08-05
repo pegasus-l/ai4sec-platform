@@ -460,6 +460,12 @@ def _build_repro_prompt(execution_profile: str = "nested_docker") -> str:
 - L3 重型:需要 GPU / 大数据集 / 大模型权重 / 必须的外部 API key 才能真正运行。
   → 只做"环境就绪":装好依赖、确认入口存在,然后明确报告"需要什么才能实际运行",不要硬跑(会超时白费)。
 
+# 探索预算（必须遵守）
+- 最多使用 6 次定位命令了解仓库；优先只读根目录 README、主依赖清单和明确的 examples/ 入口。
+- 禁止递归 `ls`/`find`/`rg` 扫描 `docs`、`.git`、`node_modules`、`target`、测试夹具或生成目录；不要为了“了解项目”列举整棵目录树。
+- 框架或库项目应在 `/tmp` 写最小调用程序，引用 `/workspace/repo` 的固定源码；Web 项目优先启动最小路由并用 loopback HTTP 请求验证，不要先阅读完整文档站。
+- 任一网络下载或命令连续两次失败时停止重试，记录 blocker 并进入报告；不得耗尽任务时限。
+
 # 第二步:按难度复现
 1. 装依赖(venv 或直接装都行,你是 root)。
    ⚠️ 重要:不要试图装全部依赖。先看哪些是"导入主模块/跑最小示例"必需的核心依赖,只装核心。
@@ -548,6 +554,9 @@ def _build_web_repro_prompt(execution_profile: str = "nested_docker") -> str:
 - ❌ 如果项目【本身没有】Web 界面(它是 CLI 工具、Python 库、研究代码、prompt/数据集合集等),
   你【绝对不要】自己造一个网页(比如写个 Flask 把一堆 .md 文件列出来)。那样毫无价值。
   这种情况直接如实报告:is_web=false、web_started=false,在 summary 说清"该项目本身没有 Web 界面,它是 XX 类型"。
+- 例外仅适用于本轮明确标为 Web 框架库的 FastAPI、Express、Gin、Axum：仓库没有独立应用入口时，
+  必须在 `/tmp` 用 `/workspace/repo` 的固定源码写一个最小真实路由应用，启动到 0.0.0.0:8080，
+  再以 HTTP 请求验证框架路由/参数/响应。该最小应用是框架能力证据，不是伪造网页；报告要明确它位于 `/tmp`。
 
 # 如果确认项目自带 Web 界面,才执行下面的启动流程
 - 服务必须监听 0.0.0.0:8080(容器已把主机端口映射到容器内 8080)。
