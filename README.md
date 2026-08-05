@@ -297,7 +297,7 @@ REPRO_LLM_BASE_URL=http://host.docker.internal:8000/api/model-gateway/v1 \
 
 固定扩展依赖域名可由管理员通过 `REPRO_EGRESS_EXTRA_DOMAINS` 配置。任务需要额外业务 API 时，在启动请求中提交精确域名、用途和申请人；任务进入 `awaiting_egress_approval`，不会被 Worker 领取。操作员通过 `/api/capabilities/repro/{task_id}/egress` 查看请求，并使用对应 `approve` 或 `reject` 端点记录复核人和理由。所有域名批准且再次通过公网 DNS 校验后任务才进入 `queued`，任一拒绝则任务停止。通配符、URL、端口、IP、localhost 和解析到私网的域名均被拒绝；运行时批准域名到实际 IP 的映射写入持久任务日志，未知域名仍不可解析且不可连接。
 
-能力复现提供两个镜像。`nested_docker` 使用包含内部 Docker daemon 的 `repro-runner:v7`；`standard` 使用不含 Docker daemon、systemd 和 Docker CLI 的 `repro-runner-standard:v4`。两个镜像都预装 Python、Node.js、Go、固定校验的 Rust 1.85.1、OpenJDK 17、Maven 和基础编译工具，避免受限运行阶段为获取编译器而临时扩大网络权限：
+能力复现提供两个镜像。`nested_docker` 使用包含内部 Docker daemon 的 `repro-runner:v7`；`standard` 使用不含 Docker daemon、systemd 和 Docker CLI 的 `repro-runner-standard:v4`。两个镜像都预装 Python、Node.js、Go、固定校验的 Rust 1.85.1、OpenJDK 17、Maven 3.9.11 和基础编译工具，避免受限运行阶段为获取编译器而临时扩大网络权限：
 
 ```bash
 docker build --tag repro-runner:v7 configs/repro-runner

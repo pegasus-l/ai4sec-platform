@@ -54,11 +54,21 @@ RUN archive="rust-${RUST_VERSION}-x86_64-unknown-linux-gnu.tar.xz" \
         --without=rust-docs-json \
     && rm -rf "/tmp/${archive}" "/tmp/rust-${RUST_VERSION}-x86_64-unknown-linux-gnu"
 
+ARG MAVEN_VERSION=3.9.11
+ARG MAVEN_DIST_BASE=https://archive.apache.org/dist/maven/maven-3
+ARG MAVEN_DIST_SHA512=bcfe4fe305c962ace56ac7b5fc7a08b87d5abd8b7e89027ab251069faebee516b0ded8961445d6d91ec1985dfe30f8153268843c89aa392733d1a3ec956c9978
+
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
-        maven \
         openjdk-17-jdk-headless \
     && rm -rf /var/lib/apt/lists/* \
+    && archive="apache-maven-${MAVEN_VERSION}-bin.tar.gz" \
+    && curl -fsSL --retry 5 --retry-delay 3 "${MAVEN_DIST_BASE}/${MAVEN_VERSION}/binaries/${archive}" -o "/tmp/${archive}" \
+    && echo "${MAVEN_DIST_SHA512}  /tmp/${archive}" | sha512sum --check --strict \
+    && tar -xzf "/tmp/${archive}" -C /opt \
+    && ln -s "/opt/apache-maven-${MAVEN_VERSION}" /opt/maven \
+    && ln -s /opt/maven/bin/mvn /usr/local/bin/mvn \
+    && rm -f "/tmp/${archive}" \
     && ln -sf /usr/bin/python3 /usr/bin/python
 
 RUN install -d /etc/opencode

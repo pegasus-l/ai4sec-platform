@@ -914,7 +914,7 @@ D11 暂缓的是公网入口和完整公网暴露治理，不代表复现容器�
 - [x] 完成结构化报告与能力卡回写。
 - [x] 完成正式能力洞察前端页面。
 - [x] 补齐 API、SSE、停止、清理、超时和回写测试。
-- [ ] 使用 10 至 20 个不同技术栈项目回归。
+- [x] 使用 10 至 20 个不同技术栈项目回归。
 
 验收指标至少包含：成功率、部分成功率、失败阶段分布、平均耗时、超时率、资源峰值、报告完整率和模型 Token。
 
@@ -2221,3 +2221,11 @@ Python full test suite: 199 passed
 - FastAPI 最终 task 16、Express task 12、Gin task 13、Axum task 14 均为 `success`；执行后通过正式 cleanup 队列关闭容器、回环代理、任务令牌和运行期秘密，最终生命周期均为 `cleaned`。先前 FastAPI task 11 的外部 CLI 超时和 task 15 的错误框架分类保留为可追溯尝试，不计入最新成功结果。
 - `repro-regression report` 现按所提供 manifest 在 SQL 层过滤样本；已清理任务从结构化报告恢复最终结果，并额外输出 `lifecycle_status`。这样第二波报告准确为 `4 success`，不会把首波 CLI 或资源收尾状态混入统计；专项测试 6 passed。
 - 前两波现累计八个固定 SHA 样本成功。第 917 项仍保持未完成：下一波需在 Java、Docker Compose 或真实 AI 安全项目中再完成至少两个经审批样本，达到计划的 10–20 个范围后再汇总生产验收结论。
+
+### 2026-08-05：第三波 Java 回归完成十项验收
+
+- `repro-runner:v7` 与 `repro-runner-standard:v4` 增加 OpenJDK 17 和固定 SHA512 校验的 Maven 3.9.11，同时保留 Python 3.10.12、Node.js 20.20.2、Go 1.18.1、Rust/Cargo 1.85.1；两个镜像均无 OpenCode 长期认证文件。最终镜像 ID 为 nested `sha256:9987109ad8a04ffa3346915b862477c3d94daf3bc609742d990fb5e9fc52660c`、standard `sha256:05c8455df6e151128e6e0874c30d1de2edc3ba04c1e2964d9dd4bf065eb4c2a9`，nested Sysbox Docker daemon 烟测通过。
+- Commons CLI 固定 Apache-2.0 提交 `2d90efabcc1b1b5fddfe4c5f0c8de95c1b8ab957`。task 17 虽以 `javac` 完成真实解析器验证，但暴露 Maven 3.6 低于项目 3.9 要求；没有把绕过构建工具当作最终闭环。升级镜像后 task 19 通过 `mvn compile`、帮助输出、长短选项、组合选项和非法参数验证，582 秒、11 次模型调用、148568 实际 token，正式 cleanup 后为 `status=success/lifecycle_status=cleaned`。
+- Spring PetClinic 固定 Apache-2.0 提交 `88e37c15cf6fc8490b01bc3e8e2c800cec1ac272`。task 18 完成 Maven 构建、Spring Boot/H2 启动、主人列表和详情、新增主人、重定向后详情验证及按姓氏检索，核心工作流为 `mode=real/verified=true`；1540 秒、32 次模型调用、947939 实际 token，正式 cleanup 后无容器、代理、活动令牌或运行秘密残留。
+- 三波共 10 个固定 SHA 样本，最新结果 `10 success / 0 partial / 0 failed / 0 timeout`，结构化报告完整率 100%，最新任务平均耗时约 985 秒，最新结果累计 205 次模型调用、4,642,247 实际 token；历史共 19 次尝试，平台环境、依赖出口、工具链和中断恢复问题均保留原记录。任务资源硬上限为 1.5 CPU、3 GiB 内存和 768 PIDs，但当前未持久化实际峰值，后续统一可观测性仍需补该指标，不能用配置上限冒充实测峰值。
+- 第 917 项完成。该结论证明当前 single-host `nested_docker` 能在受控出口、短任务令牌和持久任务状态下覆盖 Python、Node.js、Go、Rust、Java 的 CLI/Web 复现；不代表尚未实现的 standard rootless Profile 已完成，也不代表整个平台已达到最终生产部署验收。
