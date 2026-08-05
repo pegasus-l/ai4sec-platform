@@ -17,7 +17,7 @@ class BuildCapabilitiesFromNewsStep:
 
     def run(self, context: PipelineContext) -> StepResult:
         limit = int(context.params.get("limit", 100000))
-        existing = repo.list_domain_items(context.conn, min_decision="all", "capabilities", limit=limit, status="待能力评估")
+        existing = repo.list_domain_items(context.conn, "capabilities", limit=limit, status="待能力评估")
         selected = [item["id"] for item in existing[:limit]]
         created: list[int] = []
         if not selected:
@@ -197,11 +197,13 @@ class EnrichCapabilityCandidatesStep:
             enriched_items.append(merged)
 
         selected, metrics = enrich_candidates(
-            context.conn, min_decision="all",
+            context.conn,
             enriched_items,
             run_id=context.run_id,
             project_root=context.settings.project_root,
             model_profile="configured_model",
+            min_decision="all",
+        )
         )
 
         # 更新候选: 把 review 结果写到 payload 里
