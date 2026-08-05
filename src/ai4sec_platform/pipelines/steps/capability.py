@@ -171,7 +171,7 @@ class EnrichCapabilityCandidatesStep:
         from pathlib import Path
 
         # 取所有待评估的候选(status=待能力评估)
-        candidates = repo.list_domain_items(context.conn, min_decision="all", "capabilities", limit=100000, status="待能力评估")
+        candidates = repo.list_domain_items(context.conn, "capabilities", limit=100000, status="待能力评估")
         if not candidates:
             return StepResult(metrics={"enriched": 0, "failed": 0})
 
