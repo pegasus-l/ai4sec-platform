@@ -196,7 +196,7 @@ class EnrichCapabilityCandidatesStep:
             }
             enriched_items.append(merged)
 
-        selected, metrics = enrich_candidates(
+        selected, metrics = enrich_candidates(min_decision="all",
             context.conn,
             enriched_items,
             run_id=context.run_id,
