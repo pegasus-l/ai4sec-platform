@@ -71,6 +71,12 @@ RUN npm install --global "opencode-ai@${OPENCODE_VERSION}" \
         --fetch-retries 5 \
         --fetch-timeout 600000
 
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        maven \
+        openjdk-17-jdk-headless \
+    && rm -rf /var/lib/apt/lists/*
+
 RUN useradd --create-home --uid 1000 repro \
     && usermod --append --groups docker repro \
     && install -d -o repro -g repro /workspace \

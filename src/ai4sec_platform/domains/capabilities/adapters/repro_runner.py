@@ -36,9 +36,9 @@ load_env_file()
 # ============================================================================
 # 配置（集中在这里，方便调整。从 .env 读，去硬编码）
 # ============================================================================
-REPRO_IMAGE = os.environ.get("REPRO_IMAGE", "repro-runner:v6")
+REPRO_IMAGE = os.environ.get("REPRO_IMAGE", "repro-runner:v7")
 REPRO_RUNTIME = os.environ.get("REPRO_RUNTIME", "sysbox-runc")
-REPRO_STANDARD_IMAGE = os.environ.get("REPRO_STANDARD_IMAGE", "repro-runner-standard:v3")
+REPRO_STANDARD_IMAGE = os.environ.get("REPRO_STANDARD_IMAGE", "repro-runner-standard:v4")
 WORKSPACE_ROOT = Path(os.environ.get("REPRO_WORKSPACE_ROOT", str(Path.home() / "repro_workspaces")))
 CONTAINER_TIMEOUT = int(os.environ.get("REPRO_CONTAINER_TIMEOUT", str(30 * 60)))  # 30 分钟
 WEB_CONTAINER_TIMEOUT = int(os.environ.get("REPRO_WEB_CONTAINER_TIMEOUT", str(50 * 60)))  # 50 分钟

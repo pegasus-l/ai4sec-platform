@@ -297,16 +297,18 @@ REPRO_LLM_BASE_URL=http://host.docker.internal:8000/api/model-gateway/v1 \
 
 固定扩展依赖域名可由管理员通过 `REPRO_EGRESS_EXTRA_DOMAINS` 配置。任务需要额外业务 API 时，在启动请求中提交精确域名、用途和申请人；任务进入 `awaiting_egress_approval`，不会被 Worker 领取。操作员通过 `/api/capabilities/repro/{task_id}/egress` 查看请求，并使用对应 `approve` 或 `reject` 端点记录复核人和理由。所有域名批准且再次通过公网 DNS 校验后任务才进入 `queued`，任一拒绝则任务停止。通配符、URL、端口、IP、localhost 和解析到私网的域名均被拒绝；运行时批准域名到实际 IP 的映射写入持久任务日志，未知域名仍不可解析且不可连接。
 
-能力复现提供两个镜像。`nested_docker` 使用包含内部 Docker daemon 的 `repro-runner:v6`；`standard` 使用不含 Docker daemon、systemd 和 Docker CLI 的 `repro-runner-standard:v3`。两个镜像都预装 Python、Node.js、Go、固定校验的 Rust 1.85.1 和基础编译工具，避免受限运行阶段为获取编译器而临时扩大网络权限：
+能力复现提供两个镜像。`nested_docker` 使用包含内部 Docker daemon 的 `repro-runner:v7`；`standard` 使用不含 Docker daemon、systemd 和 Docker CLI 的 `repro-runner-standard:v4`。两个镜像都预装 Python、Node.js、Go、固定校验的 Rust 1.85.1、OpenJDK 17、Maven 和基础编译工具，避免受限运行阶段为获取编译器而临时扩大网络权限：
 
 ```bash
-docker build --tag repro-runner:v6 configs/repro-runner
-docker build --file configs/repro-runner/Dockerfile.standard --tag repro-runner-standard:v3 configs/repro-runner
+docker build --tag repro-runner:v7 configs/repro-runner
+docker build --file configs/repro-runner/Dockerfile.standard --tag repro-runner-standard:v4 configs/repro-runner
 # 当前网络无法稳定访问 npm 官方仓时，可显式使用镜像仓
-docker build --build-arg NPM_REGISTRY=https://registry.npmmirror.com --tag repro-runner:v6 configs/repro-runner
+docker build --build-arg NPM_REGISTRY=https://registry.npmmirror.com --tag repro-runner:v7 configs/repro-runner
 ```
 
 构建网络无法稳定访问官方 Ubuntu/Docker 源时，可以通过 `UBUNTU_ARCHIVE_MIRROR`、`UBUNTU_SECURITY_MIRROR` 和 nested 镜像的 `DOCKER_APT_BASE` 指向受信任镜像站；包版本约束和基础 Ubuntu digest不因此改变。生产构建应记录实际参数和镜像 ID。
+
+固定 Rust 归档下载不稳定时，可以通过 `RUST_DIST_BASE` 指向受信任的内容镜像；构建仍使用 `RUST_DIST_SHA256` 做严格校验，镜像地址不能替代版本和哈希固定。
 
 Go 依赖默认使用 `REPRO_GO_PROXY=https://proxy.golang.org,direct`；网络无法访问官方代理时，管理员可以改为受信任的显式代理，并把其精确主机名加入 `REPRO_EGRESS_EXTRA_DOMAINS`。Cargo 默认使用 sparse index 且 `REPRO_CARGO_HTTP_MULTIPLEXING=false`，用于避免部分受限网络中的 HTTP/2 index 卡死；不需要扩大默认允许域名。
 

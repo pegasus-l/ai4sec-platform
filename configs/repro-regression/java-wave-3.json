@@ -1,0 +1,20 @@
+{
+  "samples": [
+    {
+      "sample_id": "java-cli-commons-cli",
+      "repository_url": "https://github.com/apache/commons-cli",
+      "commit_sha": "2d90efabcc1b1b5fddfe4c5f0c8de95c1b8ab957",
+      "strategy": "cli",
+      "expected_capability": "build Apache Commons CLI from the fixed source and execute a real command-line parser workflow with options, required arguments, help output, and invalid-input handling",
+      "license_expected": "Apache-2.0"
+    },
+    {
+      "sample_id": "java-web-spring-petclinic",
+      "repository_url": "https://github.com/spring-projects/spring-petclinic",
+      "commit_sha": "88e37c15cf6fc8490b01bc3e8e2c800cec1ac272",
+      "strategy": "local_web",
+      "expected_capability": "build and start Spring PetClinic and verify a real owner search and detail workflow through the loopback proxy",
+      "license_expected": "Apache-2.0"
+    }
+  ]
+}
