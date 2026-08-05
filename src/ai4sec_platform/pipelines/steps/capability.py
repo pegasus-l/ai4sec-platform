@@ -38,7 +38,7 @@ class BuildCapabilitiesFromNewsStep:
                 news_summary = np.get("summary", "") or sni.get("summary", "")
                 tech_points = np.get("technical_points", [])
                 capability_id = repo.create_domain_item(
-                    context.conn, min_decision="all",
+                    
                     domain="capabilities",
                     item_type="capability_candidate",
                     title=display_theme or item.get("title") or "未命名能力候选",
@@ -67,7 +67,7 @@ class BuildCapabilitiesFromNewsStep:
                 created.append(capability_id)
             selected = created
         context.outputs["capability_candidate_ids"] = selected
-        artifact = context.artifact_store.write_json(context.conn, min_decision="all", run_id=context.run_id, artifact_type="capability_candidates", name="capabilities/candidates.json", data={"candidate_ids": selected, "created_ids": created})
+        artifact = context.artifact_store.write_json(run_id=context.run_id, artifact_type="capability_candidates", name="capabilities/candidates.json", data={"candidate_ids": selected, "created_ids": created})
         return StepResult(metrics={"candidates": len(selected), "created": len(created), "reused_existing": len(selected) - len(created)}, artifacts=[artifact])
 
 
@@ -95,7 +95,7 @@ class AssessCapabilitiesStep:
                 # 单个候选超时/失败，跳过继续评估下一个
                 failed += 1
                 repo.create_model_call(
-                    context.conn, min_decision="all",
+                    
                     run_id=context.run_id,
                     agent_name="capability_assess",
                     model_profile=self.model_profile,
@@ -110,7 +110,7 @@ class AssessCapabilitiesStep:
             model_result = output.get("result") or output.get("parsed") or {}
             recommended_status = model_result.get("recommended_status") or ("待复现验证" if scoring.priority in {"high", "medium"} else "待资料补齐")
             repo.create_model_call(
-                context.conn, min_decision="all",
+                
                 run_id=context.run_id,
                 agent_name="capability_assess",
                 model_profile=self.model_profile,
@@ -120,7 +120,7 @@ class AssessCapabilitiesStep:
                 output_payload=output,
             )
             repo.update_domain_item(
-                context.conn, min_decision="all",
+                
                 item_id=item_id,
                 status=recommended_status,
                 score=float(model_result.get("recommended_score") or scoring.score),
@@ -156,8 +156,8 @@ class AssessCapabilitiesStep:
             # 评估完成后将 item_type 从 capability_candidate 改为 capability
             context.conn.execute("UPDATE domain_items SET item_type='capability' WHERE id=?", (item_id,))
             assessed += 1
-        artifact = context.artifact_store.write_json(context.conn, min_decision="all", run_id=context.run_id, artifact_type="capability_assessments", name="capabilities/assessments.json", data={"assessed": assessed, "failed": failed, "model_profile": self.model_profile})
-        repo.create_quality_audit(context.conn, min_decision="all", domain="capabilities", audit_type="capability_assessment", status="pass" if assessed else "warn", score=0.8 if assessed else 0.2, summary=f"能力评估 {assessed} 条成功，{failed} 条失败。", details={"run_id": context.run_id})
+        artifact = context.artifact_store.write_json(run_id=context.run_id, artifact_type="capability_assessments", name="capabilities/assessments.json", data={"assessed": assessed, "failed": failed, "model_profile": self.model_profile})
+        repo.create_quality_audit(domain="capabilities", audit_type="capability_assessment", status="pass" if assessed else "warn", score=0.8 if assessed else 0.2, summary=f"能力评估 {assessed} 条成功，{failed} 条失败。", details={"run_id": context.run_id})
         return StepResult(metrics={"assessed": assessed, "failed": failed, "model_profile": self.model_profile}, artifacts=[artifact])
 
 
@@ -211,7 +211,7 @@ class EnrichCapabilityCandidatesStep:
             review = item.get("review") or {}
             if not review:
                 continue
-            existing = repo.get_domain_item(context.conn, min_decision="all", item["id"])
+            existing = repo.get_domain_item(item["id"])
             if not existing:
                 continue
             existing_payload = existing.get("payload") or {}
@@ -229,7 +229,7 @@ class EnrichCapabilityCandidatesStep:
             if review.get("highlight_line"):
                 existing_payload["highlight_line"] = review["highlight_line"]
             existing_payload["review_status"] = "enriched"
-            repo.update_domain_item(context.conn, min_decision="all", item_id=item["id"], payload=existing_payload)
+            repo.update_domain_item(item_id=item["id"], payload=existing_payload)
             updated += 1
         context.conn.commit()
         return StepResult(metrics={"enriched": updated, "selected": metrics.get("selected", 0), "failed": metrics.get("failed", 0)})
