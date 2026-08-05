@@ -162,31 +162,31 @@ class AssessCapabilitiesStep:
 
 
 class EnrichCapabilityCandidatesStep:
-    name = enrich_capability_candidates
-    step_type = llm_enrich
+    name = "enrich_capability_candidates"
+    step_type = "llm_enrich"
 
     def run(self, context):
         from ai4sec_platform.domains.news.reviewer import enrich_candidates
 
-        candidates = repo.list_domain_items(context.conn, capabilities, limit=100000, status=待能力评估)
+        candidates = repo.list_domain_items(context.conn, "capabilities", limit=100000, status="待能力评估")
         if not candidates:
-            return StepResult(metrics={enriched: 0, failed: 0})
+            return StepResult(metrics={"enriched": 0, "failed": 0})
 
         enriched_items = []
         for c_item in candidates:
-            payload = c_item.get(payload) or {}
-            raw = payload.get(source_news_item) or {}
+            payload = c_item.get("payload") or {}
+            raw = payload.get("source_news_item") or {}
             merged = {
                 **c_item,
-                item_key: str(c_item.get("id") or ""),
-                title: c_item.get(title) or raw.get(title) or ,
-                summary: raw.get(summary) or c_item.get(summary) or ,
-                url: raw.get(url) or c_item.get(source_url) or ,
-                code_url: raw.get(code_url) or ,
-                source_type: raw.get(source_type) or project,
-                primary_date: raw.get(primary_date) or c_item.get(primary_date) or ,
-                stars: raw.get(stars) or 0,
-                raw: {description: raw.get(summary) or },
+                "item_key": str(c_item.get("id") or ""),
+                "title": c_item.get("title") or raw.get("title") or "",
+                "summary": raw.get("summary") or c_item.get("summary") or "",
+                "url": raw.get("url") or c_item.get("source_url") or "",
+                "code_url": raw.get("code_url") or "",
+                "source_type": raw.get("source_type") or "project",
+                "primary_date": raw.get("primary_date") or c_item.get("primary_date") or "",
+                "stars": raw.get("stars") or 0,
+                "raw": {"description": raw.get("summary") or ""},
             }
             enriched_items.append(merged)
 
@@ -195,31 +195,31 @@ class EnrichCapabilityCandidatesStep:
             enriched_items,
             run_id=context.run_id,
             project_root=context.settings.project_root,
-            model_profile=configured_model,
-            min_decision=all,
+            model_profile="configured_model",
+            min_decision="all",
         )
 
         updated = 0
         for item in selected:
-            review = item.get(review) or {}
+            review = item.get("review") or {}
             if not review:
                 continue
-            existing = repo.get_domain_item(context.conn, domain=capabilities, item_id=item[id])
+            existing = repo.get_domain_item(context.conn, domain="capabilities", item_id=item["id"])
             if not existing:
                 continue
-            existing_payload = existing.get(payload) or {}
-            existing_payload[review] = review
-            theme = review.get(theme) or 
+            existing_payload = existing.get("payload") or {}
+            existing_payload["review"] = review
+            theme = review.get("theme") or ""
             if theme:
-                existing_payload[display_title] = theme
-            if review.get(summary_zh):
-                existing_payload[display_summary] = review[summary_zh]
-            if review.get(promo_line):
-                existing_payload[promo_line] = review[promo_line]
-            if review.get(highlight_line):
-                existing_payload[highlight_line] = review[highlight_line]
-            existing_payload[review_status] = enriched
-            repo.update_domain_item(context.conn, item_id=item[id], payload=existing_payload)
+                existing_payload["display_title"] = theme
+            if review.get("summary_zh"):
+                existing_payload["display_summary"] = review["summary_zh"]
+            if review.get("promo_line"):
+                existing_payload["promo_line"] = review["promo_line"]
+            if review.get("highlight_line"):
+                existing_payload["highlight_line"] = review["highlight_line"]
+            existing_payload["review_status"] = "enriched"
+            repo.update_domain_item(context.conn, item_id=item["id"], payload=existing_payload)
             updated += 1
         context.conn.commit()
-        return StepResult(metrics={enriched: updated, selected: metrics.get(selected, 0), failed: metrics.get(failed, 0)})
+        return StepResult(metrics={"enriched": updated, "selected": metrics.get("selected", 0), "failed": metrics.get("failed", 0)})
