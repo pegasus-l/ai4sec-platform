@@ -2214,3 +2214,10 @@ Python full test suite: 199 passed
 - Gateway 改为先预留预算、再按供应商 `usage.total_tokens` 原子结算；流式请求要求 `include_usage`，上游错误释放预留。Cobra 的最终 token 计账由先前的近百万预留下降为 137616，避免请求的 `max_tokens` 被误当实际消耗。
 - Cargo 默认使用 sparse registry 并关闭 HTTP/2 multiplexing，解决 curl 可达而 Cargo index 卡死的受限网络兼容问题。clap task 10 完成 derive/builder 两类真实示例、help/version/参数/子命令验证，1356 秒、12 次模型调用、175772 实际 token。
 - 首波四个固定 SHA 样本最新结果为 `4 success`。task 9 因外部 CLI 超时中断后，恢复 Worker 曾只清理容器/Workspace、未删运行期 token/config；统一 cleanup 现会撤销 token 并只删除安全目录下匹配 task 前缀的秘密文件，task 9 已通过正式 cleanup 队列验证为 `cleaned` 且秘密文件数为 0。
+
+### 2026-08-05：第二波 Web 多技术栈回归通过
+
+- 固定清单 `configs/repro-regression/web-wave-2.json` 的 FastAPI、Express、Gin 和 Axum 均通过真实 `local_web` 回环代理验证；每项都使用框架源码构建最小应用并验证至少一条非首页 HTTP 业务路径，未以仅首页 `200` 或单纯服务启动标记成功。
+- FastAPI 最终 task 16、Express task 12、Gin task 13、Axum task 14 均为 `success`；执行后通过正式 cleanup 队列关闭容器、回环代理、任务令牌和运行期秘密，最终生命周期均为 `cleaned`。先前 FastAPI task 11 的外部 CLI 超时和 task 15 的错误框架分类保留为可追溯尝试，不计入最新成功结果。
+- `repro-regression report` 现按所提供 manifest 在 SQL 层过滤样本；已清理任务从结构化报告恢复最终结果，并额外输出 `lifecycle_status`。这样第二波报告准确为 `4 success`，不会把首波 CLI 或资源收尾状态混入统计；专项测试 6 passed。
+- 前两波现累计八个固定 SHA 样本成功。第 917 项仍保持未完成：下一波需在 Java、Docker Compose 或真实 AI 安全项目中再完成至少两个经审批样本，达到计划的 10–20 个范围后再汇总生产验收结论。

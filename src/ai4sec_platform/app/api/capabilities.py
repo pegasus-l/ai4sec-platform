@@ -64,6 +64,10 @@ router = APIRouter(prefix="/capabilities", tags=["capabilities"])
 DOMAIN = "capabilities"
 
 
+def _alloc_web_port(conn: sqlite3.Connection) -> int | None:
+    return allocate_repro_web_port(conn)
+
+
 # ============================================================================
 # 已有端点（保留）
 # ============================================================================
@@ -167,7 +171,7 @@ def start_repro(item_id: int, body: StartReproRequest = StartReproRequest(), con
     repo_url = _resolve_repo_url(item)
     if not repo_url:
         raise HTTPException(status_code=400, detail="no repo URL found in item")
-    web_port = allocate_repro_web_port(conn) if decision.strategy == "local_web" else None
+    web_port = _alloc_web_port(conn) if decision.strategy == "local_web" else None
     if decision.strategy == "local_web" and web_port is None:
         raise HTTPException(status_code=503, detail={"code": "web_port_unavailable", "message": "no loopback Web port is available"})
 
@@ -563,4 +567,3 @@ def ops_repro_failures(conn: sqlite3.Connection = Depends(get_db)) -> dict:
 @router.get("/ops/missing-fields")
 def ops_missing_fields(conn: sqlite3.Connection = Depends(get_db)) -> dict:
     return audit_missing_fields(conn)
-

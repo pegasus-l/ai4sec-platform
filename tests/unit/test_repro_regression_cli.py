@@ -105,6 +105,64 @@ def test_report_uses_latest_attempt_regardless_of_trigger(monkeypatch, tmp_path:
     assert result["items"][0]["result"] == "latest result"
 
 
+def test_report_filters_other_manifests_and_preserves_cleaned_outcome(monkeypatch, tmp_path: Path) -> None:
+    output_dir = tmp_path / "repro-regression"
+    settings = Settings(
+        project_root=tmp_path,
+        output_dir=output_dir,
+        database_path=output_dir / "ai4sec_platform.db",
+    )
+    monkeypatch.setenv("AI4SEC_REPRO_REGRESSION_CONFIRM", "isolated-regression")
+    monkeypatch.setattr(repro_regression, "load_settings", lambda: settings)
+    prepared = repro_regression.prepare(_manifest(tmp_path))
+
+    with connect(settings) as conn:
+        task_id = prepared["task_ids"][0]
+        repo.update_repro_task(
+            conn,
+            task_id=task_id,
+            status="cleaned",
+            report_json=json.dumps({"status": "success"}),
+        )
+        other_item_id = repo.create_domain_item(
+            conn,
+            domain="capabilities",
+            item_type="capability",
+            title="Regression: excluded-sample",
+            summary="Other manifest sample",
+            source="capability_repro_regression",
+            payload={"regression_sample_id": "excluded-sample"},
+        )
+        other_task_id = enqueue_repro_task(
+            conn,
+            item_id=other_item_id,
+            repo_url="https://github.com/example/excluded",
+            repo_commit="b" * 40,
+            trigger="capability_repro_regression",
+            initial_status="queued",
+            execution_profile="nested_docker",
+            repro_strategy="cli",
+        )
+        repo.update_repro_task(conn, task_id=other_task_id, status="failed")
+        conn.commit()
+
+    result = repro_regression.report(_manifest(tmp_path))
+
+    assert result["counts"] == {"success": 1}
+    assert result["items"] == [
+        {
+            "sample_id": "python-cli-click",
+            "task_id": prepared["task_ids"][0],
+            "attempt_count": 1,
+            "repo_commit": "a" * 40,
+            "status": "success",
+            "lifecycle_status": "cleaned",
+            "result": "",
+            "expected_capability": "execute a minimal Click command",
+        }
+    ]
+
+
 def test_prepare_allocates_port_for_local_web_sample(monkeypatch, tmp_path: Path) -> None:
     output_dir = tmp_path / "repro-regression"
     settings = Settings(project_root=tmp_path, output_dir=output_dir, database_path=output_dir / "ai4sec_platform.db")

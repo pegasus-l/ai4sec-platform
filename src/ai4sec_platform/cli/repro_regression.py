@@ -83,10 +83,11 @@ def report(manifest_path: Path) -> dict[str, Any]:
     expected = {sample["sample_id"]: sample for sample in manifest}
     settings = load_settings()
     validate_regression_settings(settings)
+    placeholders = ", ".join("?" for _ in expected)
     with connect(settings) as conn:
         init_db(conn)
         rows = conn.execute(
-            """
+            f"""
             WITH ranked_attempts AS (
                 SELECT
                     t.*,
@@ -100,23 +101,26 @@ def report(manifest_path: Path) -> dict[str, Any]:
                     ) AS attempt_rank
                 FROM capability_repro_tasks t
                 JOIN domain_items i ON i.id = t.item_id
-                WHERE json_extract(i.payload_json, '$.regression_sample_id') <> ''
+                WHERE json_extract(i.payload_json, '$.regression_sample_id') IN ({placeholders})
             )
             SELECT * FROM ranked_attempts
             WHERE attempt_rank = 1
             ORDER BY id
-            """
+            """,
+            tuple(expected),
         ).fetchall()
     items = []
     for row in rows:
         item = dict(row)
         sample_id = str(item.get("sample_id") or "")
+        lifecycle_status = str(item["status"])
         items.append({
             "sample_id": sample_id,
             "task_id": item["id"],
             "attempt_count": item["attempt_count"],
             "repo_commit": item.get("repo_commit", ""),
-            "status": item["status"],
+            "status": report_outcome_status(lifecycle_status, item.get("report_json")),
+            "lifecycle_status": lifecycle_status,
             "result": item.get("result", "")[-1000:],
             "expected_capability": expected.get(sample_id, {}).get("expected_capability", ""),
         })
@@ -124,6 +128,17 @@ def report(manifest_path: Path) -> dict[str, Any]:
     for item in items:
         counts[item["status"]] = counts.get(item["status"], 0) + 1
     return {"database": str(settings.database_path), "sample_count": len(expected), "counts": counts, "items": items}
+
+
+def report_outcome_status(lifecycle_status: str, report_json: Any) -> str:
+    if lifecycle_status != "cleaned" or not report_json:
+        return lifecycle_status
+    try:
+        payload = json.loads(report_json) if isinstance(report_json, str) else report_json
+    except json.JSONDecodeError:
+        return lifecycle_status
+    outcome = payload.get("status") if isinstance(payload, dict) else None
+    return str(outcome) if outcome else lifecycle_status
 
 
 def load_manifest(path: Path) -> list[dict[str, Any]]:
