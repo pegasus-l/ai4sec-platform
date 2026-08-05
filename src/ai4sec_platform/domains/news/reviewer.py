@@ -151,8 +151,8 @@ def enrich_candidates(
         decision = enriched["review"]["decision"]
         metrics[decision] += 1
         _r = {"rejected": 0, "watch": 1, "selected": 2}
-            if _r.get(decision, 0) >= _r.get(min_decision, 2):
-                selected.append(enriched)
+        if _r.get(decision, 0) >= _r.get(min_decision, 2):
+            selected.append(enriched)
     conn.commit()
     return selected, metrics
 
