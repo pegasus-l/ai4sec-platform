@@ -2,7 +2,7 @@ import { useMemo, useState, useEffect, useRef, type ComponentType } from 'react'
 import { ThemeToggle } from '../../components/ThemeToggle';
 import { Star, Github, LayoutGrid, Database, Share2, ListChecks, Activity, RefreshCw, ShieldCheck, BrainCircuit, type LucideIcon } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
-import { fetchTargets, fetchAssets, fetchTrackingQueue, fetchSurfaceStats, trackAsset, postJson, getJson, type AiAssociationResult } from '../../api/client';
+import { fetchTargets, fetchAssets, fetchTrackingQueue, fetchSurfaceStats, trackTarget, trackAsset, postJson, getJson, type AiAssociationResult } from '../../api/client';
 import { Card, Drawer, EmptyState, MetricCard } from '../../components/ui';
 import type { ThreatAsset, ThreatRepo } from '../../types/threat';
 import { assetFromItem } from './threatAdapters';
@@ -180,7 +180,7 @@ function ThreatToday({ repos, openRepo, setView, setFilters }: { repos: ThreatRe
         <h3>{item.repo.org}/{item.repo.name}</h3>
         <p>{item.why}</p>
         <div className="split"><span className={`badge ${item.repo.grade || 'C'}`}>Grade {item.repo.grade}</span><span className="badge">{item.repo.surface}</span><span className="badge">score {Math.round(item.repo.score)}</span></div>
-        <div className="split"><button className="btn primary" onClick={(event) => { event.stopPropagation(); openRepo(item.repo); }}>查看详情</button><button className="btn" onClick={(event) => { event.stopPropagation(); import('../../api/client').then(m => m.trackTarget(item.repo.id).then(() => toast(`已加入跟踪: ${item.repo.org}/${item.repo.name}`, 'success')).catch(e => toast(`跟踪失败: ${e}`, 'error'))); }}>加入跟踪</button></div>
+        <div className="split"><button className="btn primary" onClick={(event) => { event.stopPropagation(); openRepo(item.repo); }}>查看详情</button><button className="btn" onClick={(event) => { event.stopPropagation(); trackTarget(item.repo.id).then(() => toast(`已加入跟踪: ${item.repo.org}/${item.repo.name}`, 'success')).catch(e => toast(`跟踪失败: ${e}`, 'error')); }}>加入跟踪</button></div>
       </div>)}
     </div>
   </div>;
@@ -391,13 +391,14 @@ function ThreatQueue() {
 }
 
 function RepoTable({ repos, openRepo }: { repos: ThreatRepo[]; openRepo: (repo: ThreatRepo) => void }) {
+  const { toast } = useToast();
   return <table><thead><tr><th>目标</th><th>风险</th><th>攻击面</th><th>安全线索</th><th>评分拆解</th><th>操作</th></tr></thead><tbody>{repos.map(repo => <tr className="clickable" key={repo.id} onClick={() => openRepo(repo)}>
     <td style={{ maxWidth: 320 }}><div className="repo-name">{repo.org}/{repo.name}</div><div className="repo-url">{repo.url}</div><div className="muted small" style={{ maxHeight: '2.6em', overflow: 'hidden' }}>{repo.summary}</div></td>
     <td><span className={`badge ${repo.grade || 'C'}`}>Grade {repo.grade || '?'}</span>{repo.aiCalibrated && <span className="badge badge-sky" style={{ marginLeft: 4 }}>AI</span>}<div style={{ height: 7 }} /><div className="score-bar"><i style={{ width: `${Math.min(100, repo.score)}%` }} /></div><div className="small muted">{Math.round(repo.score)}</div></td>
     <td><span className="badge">{repo.surface}</span></td>
     <td>CVE {repo.cve}<br />SA {repo.sa}<br />Sec items {repo.sec}<div style={{ height: 7 }} />{(repo.cve + repo.sa + repo.sec) > 0 ? <button className="btn" onClick={(event) => { event.stopPropagation(); openRepo(repo); }}>{repo.cve + repo.sa + repo.sec} 条详情</button> : <span className="muted small">暂无详情</span>}</td>
     <td style={{ minWidth: 150 }}><ScoreBreakdown breakdown={repo.breakdown} mini /></td>
-    <td><button className="btn primary" onClick={(event) => { event.stopPropagation(); openRepo(repo); }}>详情</button><button className="btn" onClick={(event) => event.stopPropagation()}>跟踪</button></td>
+    <td><button className="btn primary" onClick={(event) => { event.stopPropagation(); openRepo(repo); }}>详情</button><button className="btn" onClick={(event) => { event.stopPropagation(); trackTarget(repo.id).then(() => toast(`已加入跟踪: ${repo.org}/${repo.name}`, 'success')).catch(e => toast(`跟踪失败: ${e}`, 'error')); }}>跟踪</button></td>
   </tr>)}</tbody></table>;
 }
 

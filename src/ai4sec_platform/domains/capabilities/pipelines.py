@@ -31,7 +31,7 @@ def capability_from_news_pipeline() -> PipelineDefinition:
     return PipelineDefinition(
         name="capabilities.from_news_pipeline",
         domain="capabilities",
-        steps=[BuildCapabilitiesFromNewsStep(), EnrichCapabilityCandidatesStep(), AssessCapabilitiesStep()],
+        steps=[BuildCapabilitiesFromNewsStep(), EnrichCapabilityCandidatesStep(), AssessCapabilitiesStep(), SelectUnclassifiedWebCandidatesStep(), ClassifyWebCapabilityStep()],
     )
 
 

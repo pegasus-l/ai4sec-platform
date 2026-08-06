@@ -33,6 +33,7 @@ def gate_candidates(
     run_id: str,
     project_root: Path,
     model_profile: str = "configured_model",
+    min_decision: str = "selected",
 ) -> tuple[list[dict[str, Any]], dict[str, int]]:
     tech_map = AgentTechMap.load(project_root)
     router = LLMRouter()
@@ -93,6 +94,7 @@ def enrich_candidates(
     run_id: str,
     project_root: Path,
     model_profile: str = "configured_model",
+    min_decision: str = "selected",
 ) -> tuple[list[dict[str, Any]], dict[str, int]]:
     tech_map = AgentTechMap.load(project_root)
     router = LLMRouter()
@@ -140,6 +142,8 @@ def enrich_candidates(
             resolved[r["index"]] = {**r["item"], "review": review}
             if idx % PROGRESS_LOG_INTERVAL == 0 or idx == len(pending):
                 print(f"[enrich] {idx}/{len(items)} calls={metrics['model_calls']} selected={metrics['selected']} watch={metrics['watch']} reject={metrics['rejected']} failed={metrics['failed']}", flush=True)
+    _decision_rank = {"selected": 3, "watch": 2, "rejected": 1}
+    min_rank = 0 if min_decision == "all" else _decision_rank.get(min_decision, 3)
     selected: list[dict[str, Any]] = []
     for index in range(len(items)):
         enriched = resolved[index]
@@ -148,7 +152,7 @@ def enrich_candidates(
             continue
         decision = enriched["review"]["decision"]
         metrics[decision] += 1
-        if decision == "selected":
+        if _decision_rank.get(decision, 0) >= min_rank:
             selected.append(enriched)
     conn.commit()
     return selected, metrics

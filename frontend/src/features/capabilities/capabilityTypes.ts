@@ -46,6 +46,8 @@ export interface CapabilityItem {
     display_topic?: string;
     display_theme?: string;
     display_work_name?: string;
+    display_title?: string;
+    display_summary?: string;
     one_liner?: string;
     usage?: Record<string, string>;
     blockers?: string[];
