@@ -2248,3 +2248,5 @@ Python full test suite: 199 passed
 - 冻结基线最终得到 8065 个目标、311 个带安全线索项目、148 个带 CVE 项目、1429 条 CVE 引用和 2660 条总安全线索，完整复现旧报告总量。该结论只验证迁移和聚合正确性，不替代当前连接器的真实 full scan；第 923、925 项仍保持未完成。
 - 新增 `threat_item_dimensions` 投影表及迁移回填，结构化攻击面、等级、CVE、SA、广义安全线索和组织字段；同一 8065 目标库上 `/api/threats/surface-stats` 五次采样平均耗时由约 1949 ms 降至约 50 ms。Graph 页面改用专用接口，默认各返回最多 100 个目标/资产，并支持目标/资产分页、攻击面和等级过滤及最大 500 条硬上限。
 - 第 928、929 项完成。下一步按 AscendHub、Firmware、Mirror、OpenX、repos/CVE 分源执行当前连接器 `full` Profile，记录真实采集量、错误、耗时和与冻结基线差异，再决定扫描阈值与连接器策略。
+- AscendHub 首次真实 `full` Profile 实测配置 86 个唯一 hub，返回 170 条 detail/tag 记录，耗时约 154 秒、传输错误为 0；但 `qwen2.5-1.5b-instruct` 的 detail 和 tags 均为空。修复后该来源写入 `missing_targets`、`returned_targets=85/86` 并标记 `exists=false`，因此 AscendHub full profile 当前只能判定为部分通过，第 925 项继续保持未完成。
+- Mirror 真实 `full` Profile 返回 141 条、耗时约 0.5 秒、无错误，覆盖冻结基线 135 条以上；OpenX 首次暴露 adapter 与 connector 重复递归导致的 0 条假成功，修复递归职责后真实 full 返回 51 条、耗时约 11 秒，并透传空结果为错误。Firmware full 返回 274 条明细、耗时约 247 秒、无错误，包含 6 个 product ID；该数量是明细层，不能直接与旧的 52 条聚合结果相加比较，后续需按产品/型号/包层级建立统一口径。

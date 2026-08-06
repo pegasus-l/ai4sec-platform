@@ -107,6 +107,8 @@ class OpenXHuaweiConnector(LiveJsonConnector):
     def fetch(self, request: SourceFetchRequest) -> SourceFetchResult:
         url = self.build_url(request)
         timeout = int(request.params.get("timeout_seconds") or 30)
+        max_depth = int(request.params.get("max_depth") or 5)
+        max_files = int(request.params.get("max_files") or 500)
         try:
             root_html = self.get_text(url, timeout=timeout)
             root_entries = _parse_apache_index(root_html)
@@ -119,6 +121,7 @@ class OpenXHuaweiConnector(LiveJsonConnector):
             )
 
         all_items = []
+        errors = []
         # Root page lists category directories (OLTs, Routers, Switches, ONUs)
         for name, href, date, size, is_dir in root_entries:
             if not is_dir or not href:
@@ -126,17 +129,19 @@ class OpenXHuaweiConnector(LiveJsonConnector):
             category = name.rstrip("/")
             category_url = urljoin(url, href)
             try:
-                sub_items = self._crawl_directory(category_url, category, "", 0, 5, timeout)
-                all_items.extend(sub_items)
+                sub_items = self._crawl_directory(category_url, category, "", 0, max_depth, timeout)
+                all_items.extend(sub_items[: max_files - len(all_items)])
             except Exception as exc:
-                # Log error but continue with other categories
-                pass
+                errors.append(f"{category_url}: {exc}")
+            if len(all_items) >= max_files:
+                break
 
         return SourceFetchResult(
             source_name=request.source_name,
             connector_name=self.connector_name,
             items=all_items,
-            metadata={"url": url, "categories_scraped": len({i.get("category") for i in all_items})},
+            metadata={"url": url, "categories_scraped": len({i.get("category") for i in all_items}), "max_depth": max_depth, "max_files": max_files},
+            errors=errors,
         )
 
     def _crawl_directory(

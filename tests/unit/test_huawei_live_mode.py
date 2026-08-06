@@ -172,6 +172,29 @@ def test_full_scan_repo_collection_delegates_pagination_to_connector() -> None:
     assert requested_pages == [1]
 
 
+def test_ascendhub_empty_target_is_reported_as_source_gap() -> None:
+    class EmptyConnector:
+        def fetch(self, request):
+            return type("Result", (), {"errors": [], "items": []})()
+
+    class FakeRegistry:
+        def get(self, name):
+            assert name == "hiascend"
+            return EmptyConnector()
+
+    record = huawei_sources._collect_ascendhub_assets(
+        FakeRegistry(),
+        {
+            "scan_profile": "full",
+            "ascendhub_targets": [{"hub_id": "missing", "name": "missing-model"}],
+            "ascendhub_tag_pages": 1,
+        },
+    )
+
+    assert record["exists"] is False
+    assert record["raw"]["missing_targets"] == [{"hub_id": "missing", "name": "missing-model", "reason": "detail_and_tags_empty"}]
+
+
 def test_security_materials_are_org_level_not_project_copies(monkeypatch) -> None:
     fetches = []
 

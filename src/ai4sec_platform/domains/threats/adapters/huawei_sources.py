@@ -546,10 +546,12 @@ def _collect_ascendhub_assets(registry: SourceRegistry, params: dict[str, Any]) 
     limit = int(params.get("ascendhub_limit", len(targets) if _full_scan(params) else min(2, len(targets))))
     items = []
     errors = []
+    missing_targets = []
     for target in targets[:limit]:
         hub_id = target.get("hub_id") or target.get("id")
         if not hub_id:
             continue
+        target_item_start = len(items)
         detail = connector.fetch(SourceFetchRequest(source_name=f"hiascend:ascendhub:{hub_id}", params={"endpoint": "ascendHub/repositories/detail", "id": hub_id, "lang": "zh", "timeout_seconds": params.get("timeout_seconds", 20)}))
         errors.extend(detail.errors)
         if detail.items:
@@ -564,7 +566,18 @@ def _collect_ascendhub_assets(registry: SourceRegistry, params: dict[str, Any]) 
                 items.append({**tag, "hub_id": hub_id, "hub_name": target.get("name"), "source_type": "ascendhub_tag"})
             if len(tags.items) < tag_page_size:
                 break
-    return {"source": "ascendhub", "path": "connector:hiascend", "exists": not bool(errors), "items": items, "raw": {"errors": errors, "mode": "live"}, "mode": "live"}
+        if len(items) == target_item_start:
+            missing_targets.append({"hub_id": hub_id, "name": target.get("name"), "reason": "detail_and_tags_empty"})
+    if missing_targets:
+        errors.extend(f"AscendHub target returned no detail or tags: {item['hub_id']} ({item['name']})" for item in missing_targets)
+    return {
+        "source": "ascendhub",
+        "path": "connector:hiascend",
+        "exists": not bool(errors),
+        "items": items,
+        "raw": {"errors": errors, "missing_targets": missing_targets, "target_count": min(limit, len(targets)), "returned_targets": min(limit, len(targets)) - len(missing_targets), "mode": "live"},
+        "mode": "live",
+    }
 
 
 def _collect_single_asset_source(registry: SourceRegistry, source: str, connector_name: str, connector_params: dict[str, Any]) -> dict[str, Any]:
@@ -575,30 +588,25 @@ def _collect_single_asset_source(registry: SourceRegistry, source: str, connecto
 
 def _collect_openx_huawei_assets(registry: SourceRegistry, params: dict[str, Any]) -> dict[str, Any]:
     connector = registry.get("openx_huawei")
-    root = connector.fetch(SourceFetchRequest(source_name="openx_huawei:root", params={"timeout_seconds": params.get("timeout_seconds", 20)}))
-    errors = list(root.errors)
-    items: list[dict[str, Any]] = []
     max_depth = int(params.get("openx_depth", 4 if _full_scan(params) else 1))
-    max_dirs = int(params.get("openx_dir_limit", 200 if _full_scan(params) else 8))
     max_files = int(params.get("openx_file_limit", 500 if _full_scan(params) else 30))
-    queue = [(item, 0, item.get("name") or "") for item in root.items if item.get("is_dir")]
-    visited = 0
-    while queue and visited < max_dirs and len(items) < max_files:
-        node, depth, category = queue.pop(0)
-        if depth >= max_depth:
-            continue
-        visited += 1
-        result = connector.fetch(SourceFetchRequest(source_name=f"openx_huawei:{node.get('url')}", params={"url": node.get("url"), "timeout_seconds": params.get("timeout_seconds", 20)}))
-        errors.extend(result.errors)
-        for child in result.items:
-            child = {**child, "category": category, "source_type": "openx_huawei"}
-            if child.get("is_dir"):
-                queue.append((child, depth + 1, category))
-            else:
-                items.append(child)
-                if len(items) >= max_files:
-                    break
-    return {"source": "openx_huawei", "path": "connector:openx_huawei", "exists": not bool(errors), "items": items, "raw": {"metadata": root.metadata, "errors": errors, "mode": "live", "visited_dirs": visited}, "mode": "live"}
+    result = connector.fetch(
+        SourceFetchRequest(
+            source_name="openx_huawei:root",
+            params={"timeout_seconds": params.get("timeout_seconds", 20), "max_depth": max_depth, "max_files": max_files},
+        )
+    )
+    errors = list(result.errors)
+    if not result.items and not errors:
+        errors.append("OpenX Huawei returned no firmware files")
+    return {
+        "source": "openx_huawei",
+        "path": "connector:openx_huawei",
+        "exists": not bool(errors),
+        "items": result.items,
+        "raw": {"metadata": result.metadata, "errors": errors, "mode": "live"},
+        "mode": "live",
+    }
 
 
 def _full_scan(params: dict[str, Any]) -> bool:
