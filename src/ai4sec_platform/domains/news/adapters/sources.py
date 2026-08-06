@@ -109,10 +109,11 @@ def load_news_source_configs(project_root: Path) -> dict[str, dict[str, Any]]:
 
 
 def _arxiv_requests(config: dict[str, Any], params: dict[str, Any]) -> list[dict[str, Any]]:
-    requests = [{"category": category, "_delay_seconds": config.get("category_delay_seconds", 1)} for category in config.get("categories") or []]
+    category_max_results = int(params.get("arxiv_max_results_per_category") or params.get("max_results") or config.get("max_results_per_category", 100))
+    requests = [{"category": category, "max_results": category_max_results, "_delay_seconds": config.get("category_delay_seconds", 1)} for category in config.get("categories") or []]
     backfill_days = int(params.get("arxiv_backfill_days") or config.get("category_backfill_days", 2))
     backfill_cutoff = (datetime.now(timezone.utc) - timedelta(days=backfill_days)).date().isoformat()
-    backfill_max_results = min(int(config.get("max_results_per_category", 100)) * max(backfill_days, 1), 500)
+    backfill_max_results = min(category_max_results * max(backfill_days, 1), 500)
     requests.extend({"query": f"cat:{category}", "category_backfill": category, "max_results": backfill_max_results, "published_after": backfill_cutoff, "_delay_seconds": config.get("keyword_delay_seconds", 3)} for category in config.get("categories") or [])
     keyword_max_results = int(params.get("max_results") or config.get("keyword_max_results", 50))
     keyword_cutoff = (datetime.now(timezone.utc) - timedelta(days=int(config.get("keyword_lookback_days", 30)))).date().isoformat()

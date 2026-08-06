@@ -23,7 +23,12 @@ class PipelineRegistry:
         self._pipelines[definition.name] = definition
 
     def register_alias(self, alias: str, definition: PipelineDefinition) -> None:
-        self.register(PipelineDefinition(name=alias, domain=definition.domain, steps=definition.steps))
+        self.register(PipelineDefinition(
+            name=alias,
+            domain=definition.domain,
+            steps=definition.steps,
+            idempotency_param=definition.idempotency_param,
+        ))
 
     def get(self, name: str) -> PipelineDefinition:
         try:

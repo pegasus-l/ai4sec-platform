@@ -4,10 +4,11 @@ from ai4sec_platform.pipelines.base import PipelineDefinition
 from ai4sec_platform.pipelines.steps.news import AuditNewsStep, BuildNewsDailyReportStep, BuildNewsItemsStep, CollectNewsSourcesStep, DeduplicateNewsStep, EnrichNewsCandidatesStep, ExtractNewsReferencesStep, GateNewsCandidatesStep, NormalizeNewsStep, ResolveNewsLinksStep
 
 
-def news_pipeline(name: str) -> PipelineDefinition:
+def news_pipeline(name: str, *, idempotency_param: str = "") -> PipelineDefinition:
     return PipelineDefinition(
         name=name,
         domain="news",
+        idempotency_param=idempotency_param,
         steps=[
             CollectNewsSourcesStep(),
             ExtractNewsReferencesStep(),
@@ -28,4 +29,4 @@ def news_shadow_collect_pipeline() -> PipelineDefinition:
 
 
 def news_daily_pipeline() -> PipelineDefinition:
-    return news_pipeline("news.daily_pipeline")
+    return news_pipeline("news.daily_pipeline", idempotency_param="date")

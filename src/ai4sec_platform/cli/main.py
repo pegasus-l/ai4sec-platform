@@ -5,14 +5,14 @@ import argparse
 from ai4sec_platform.cli import audit_run, database, init_db, inspect_run, news_acceptance, news_health, pipeline_control, pipeline_worker, repro_regression, repro_worker, run_pipeline, scheduler
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="AI4SEC Platform CLI")
     parser.add_argument("command", choices=["init-db", "run-pipeline", "inspect-run", "audit-run", "news-health", "news-acceptance", "database", "pipeline-worker", "repro-regression", "repro-worker", "scheduler", "pipeline-control"])
-    args, rest = parser.parse_known_args()
+    args, rest = parser.parse_known_args(argv)
     if args.command == "init-db":
         return init_db.main()
     if args.command == "run-pipeline":
-        return run_pipeline.main()
+        return run_pipeline.main(rest)
     if args.command == "inspect-run":
         return inspect_run.main(rest)
     if args.command == "audit-run":

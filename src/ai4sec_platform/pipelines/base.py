@@ -20,3 +20,4 @@ class PipelineDefinition:
     name: str
     domain: str
     steps: list[PipelineStep]
+    idempotency_param: str = ""

@@ -36,9 +36,14 @@ class PipelineRunner:
         run_id: str | None = None,
         should_cancel: Callable[[], bool] | None = None,
     ) -> dict[str, Any]:
-        params = params or {}
+        params = dict(params or {})
         definition = self.registry.get(pipeline_name)
         run_id = run_id or new_id("run")
+        if definition.idempotency_param and not params.get(definition.idempotency_param):
+            if definition.idempotency_param == "date":
+                params[definition.idempotency_param] = utc_now()[:10]
+            else:
+                raise ValueError(f"Missing pipeline idempotency parameter: {definition.idempotency_param}")
         resume_from_run_id = str(params.get("_resume_from_run_id") or "")
         if resume_from_run_id and params.get("reset"):
             raise ValueError("A resumed pipeline run cannot also reset its domain")
@@ -57,6 +62,9 @@ class PipelineRunner:
                 reset_domain(conn, definition.domain, preserve_run_id=run_id)
             else:
                 init_db(conn)
+            reused = self._reuse_idempotent_run(conn, definition, params, run_id, started_at)
+            if reused:
+                return reused
             context = PipelineContext(
                 run_id=run_id,
                 pipeline_name=definition.name,
@@ -207,6 +215,59 @@ class PipelineRunner:
             )
             conn.commit()
         return {"run_id": run_id, "pipeline_name": definition.name, "domain": definition.domain, "status": status, "summary": summary}
+
+    def _reuse_idempotent_run(self, conn, definition, params: dict[str, Any], run_id: str, started_at: str) -> dict[str, Any] | None:
+        idempotency_param = definition.idempotency_param
+        if not idempotency_param or params.get("force_rerun") or params.get("reset") or params.get("_resume_from_run_id"):
+            return None
+        idempotency_value = str(params[idempotency_param])
+        existing = conn.execute(
+            """
+            SELECT * FROM pipeline_runs
+            WHERE pipeline_name = ? AND status = 'success' AND run_id <> ?
+              AND json_extract(summary_json, ?) = ?
+            ORDER BY id DESC LIMIT 1
+            """,
+            (definition.name, run_id, f"$.params.{idempotency_param}", idempotency_value),
+        ).fetchone()
+        if not existing:
+            return None
+        parent_run_id = str(existing["run_id"])
+        task_rows = conn.execute(
+            "SELECT step_name, metrics_json FROM task_runs WHERE run_id = ? ORDER BY id",
+            (parent_run_id,),
+        ).fetchall()
+        steps = []
+        for task in task_rows:
+            metrics = repo.loads(task["metrics_json"], {})
+            steps.append({"name": task["step_name"], "status": "restored", "transaction_mode": "idempotent", "message": "", "metrics": metrics})
+        summary = {
+            "params": params,
+            "steps": steps,
+            "current_step": "",
+            "completed_steps": len(steps),
+            "total_steps": len(definition.steps),
+            "resumed_from_run_id": parent_run_id,
+            "idempotent_reuse": True,
+            "status": "success",
+            "error_message": "",
+        }
+        finished_at = utc_now()
+        repo.create_pipeline_run(
+            conn,
+            run_id=run_id,
+            domain=definition.domain,
+            pipeline_name=definition.name,
+            status="success",
+            started_at=started_at,
+            finished_at=finished_at,
+            production_writes=False,
+            summary=summary,
+        )
+        for step in steps:
+            repo.create_task_run(conn, run_id=run_id, step_name=step["name"], status="restored", metrics=step["metrics"])
+        conn.commit()
+        return {"run_id": run_id, "pipeline_name": definition.name, "domain": definition.domain, "status": "success", "summary": summary}
 
     def _write_checkpoint(
         self,
@@ -390,7 +451,7 @@ class _AtomicStepConnection:
 
 
 def _input_checksum(pipeline_name: str, domain: str, steps: list[Any], params: dict[str, Any]) -> str:
-    semantic_params = {key: value for key, value in params.items() if key not in {"reset", "_resume_from_run_id"}}
+    semantic_params = {key: value for key, value in params.items() if key not in {"reset", "force_rerun", "_resume_from_run_id"}}
     payload = {
         "pipeline_name": pipeline_name,
         "domain": domain,

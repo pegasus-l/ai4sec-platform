@@ -380,6 +380,7 @@ PYTHONPATH=src python3 -m ai4sec_platform.cli.run_pipeline --pipeline vulnerabil
 
 - `news.shadow_collect_pipeline` 从 arXiv/GitHub/RSS 获取最新资讯并走同一套处理链路。
 - `news.daily_pipeline` 是资讯正式日更入口；默认使用 `daily` 轮换 Profile、每查询 1 页/30 条、论文和项目各评审 20 条。GitHub 基础查询按业务日期分块轮换，连续三天覆盖完整查询集合；需要旧规模深扫时显式传 `collection_profile=full_legacy`、`max_pages`、`max_results` 和评审限额。历史 raw 迁移不属于 Pipeline Registry。
+- `news.daily_pipeline` 以业务 `date` 为幂等键；同一日期已有成功 Run 时，再次触发只创建可审计的复用 Run，不重复采集、模型调用或生成日报。确需重新执行完整链路时显式传 `{"date":"YYYY-MM-DD","force_rerun":true}`。
 - `threats.huawei_raw_pipeline` 通过威胁 connector 获取华为 repo、issue/security 文件、固件和镜像数据并生成威胁目标。
 - `vulnerabilities.material_local_raw_import` 从漏洞素材 report 本地 JSON 导入。
 - `vulnerabilities.external_material_discovery_pipeline` 通过 AnySearch 获取候选 URL，经 crawl4ai/urllib 抓取、规则审核后构建优质漏洞素材；未配置 `ANYSEARCH_API_KEY` 时可通过 `seed_candidates` 参数做 shadow/测试运行。

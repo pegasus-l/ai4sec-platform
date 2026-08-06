@@ -127,6 +127,15 @@ def test_legacy_arxiv_and_github_channels_are_expanded() -> None:
     assert any(request["channel"] == "high_star" and "stars:>5000" in request["query"] for request in github_requests)
 
 
+def test_arxiv_runtime_limit_bounds_category_backfill_and_keyword_requests() -> None:
+    config = yaml.safe_load((PROJECT_ROOT / "configs" / "news.yaml").read_text(encoding="utf-8"))["sources"]["arxiv"]
+
+    requests = _arxiv_requests(config, {"max_results": 2, "arxiv_backfill_days": 1})
+
+    assert requests
+    assert all(request["max_results"] == 2 for request in requests)
+
+
 def test_github_daily_profile_rotates_full_query_breadth() -> None:
     config = yaml.safe_load((PROJECT_ROOT / "configs" / "news.yaml").read_text(encoding="utf-8"))["sources"]["github"]
     first = _github_requests(config, {"collection_profile": "daily", "date": "2026-07-30", "max_pages": 1, "max_results": 30})

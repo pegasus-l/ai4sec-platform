@@ -474,6 +474,62 @@ def test_runner_resumes_from_verified_checkpoint_without_replaying_completed_ste
     assert restored == "restored"
 
 
+def test_runner_reuses_successful_business_key_without_replaying_steps(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    calls: list[str] = []
+
+    @dataclass
+    class CountingStep:
+        name: str = "counting_step"
+        step_type: str = "test"
+
+        def run(self, _context) -> StepResult:
+            calls.append("run")
+            return StepResult(metrics={"items": 1})
+
+    registry = PipelineRegistry()
+    registry.register(PipelineDefinition(name="test.daily", domain="news", steps=[CountingStep()], idempotency_param="date"))
+    runner = PipelineRunner(settings=settings, registry=registry)
+
+    first = runner.run("test.daily", {"date": "2026-08-07"}, run_id="run_first")
+    reused = runner.run("test.daily", {"date": "2026-08-07"}, run_id="run_reused")
+
+    assert first["status"] == "success"
+    assert reused["status"] == "success"
+    assert reused["summary"]["idempotent_reuse"] is True
+    assert reused["summary"]["resumed_from_run_id"] == "run_first"
+    assert calls == ["run"]
+    with connect(settings) as conn:
+        task = conn.execute("SELECT status, metrics_json FROM task_runs WHERE run_id = 'run_reused'").fetchone()
+    assert task["status"] == "restored"
+    assert '"items": 1' in task["metrics_json"]
+
+
+def test_runner_force_rerun_bypasses_business_key_reuse(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    calls: list[str] = []
+
+    @dataclass
+    class CountingStep:
+        name: str = "counting_step"
+        step_type: str = "test"
+
+        def run(self, _context) -> StepResult:
+            calls.append("run")
+            return StepResult(metrics={"items": 1})
+
+    registry = PipelineRegistry()
+    registry.register(PipelineDefinition(name="test.daily", domain="news", steps=[CountingStep()], idempotency_param="date"))
+    runner = PipelineRunner(settings=settings, registry=registry)
+
+    runner.run("test.daily", {"date": "2026-08-07"}, run_id="run_first")
+    forced = runner.run("test.daily", {"date": "2026-08-07", "force_rerun": True}, run_id="run_forced")
+
+    assert forced["status"] == "success"
+    assert "idempotent_reuse" not in forced["summary"]
+    assert calls == ["run", "run"]
+
+
 def test_runner_rejects_checkpoint_when_semantic_inputs_change(tmp_path: Path) -> None:
     settings = _settings(tmp_path)
     calls: list[str] = []
