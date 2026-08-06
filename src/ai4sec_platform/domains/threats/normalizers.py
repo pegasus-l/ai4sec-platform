@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from typing import Any
 
 
@@ -162,9 +163,10 @@ def _parse_filename_metadata(filename: str) -> tuple[str, str, str]:
 
 
 def normalize_asset(source: str, item: dict[str, Any]) -> dict[str, Any]:
-    title = item.get("title") or item.get("displayName") or item.get("name") or item.get("repoName") or item.get("productModel") or source
+    title = item.get("title") or item.get("displayName") or item.get("name") or item.get("hub_name") or item.get("filename") or item.get("repoName") or item.get("productModel") or source
+    identity = _asset_identity(source, item)
     result = {
-        "item_key": f"asset:{source}:{hashlib.sha1(repr(item).encode('utf-8')).hexdigest()[:16]}",
+        "item_key": f"asset:{source}:{hashlib.sha1(identity.encode('utf-8')).hexdigest()[:20]}",
         "source": source,
         "source_type": "asset",
         "title": title,
@@ -174,7 +176,7 @@ def normalize_asset(source: str, item: dict[str, Any]) -> dict[str, Any]:
         "raw": item,
     }
     if source == "openx_huawei":
-        filename = item.get("name") or ""
+        filename = item.get("name") or item.get("filename") or ""
         device_model, software_version, version_variant = _parse_filename_metadata(filename)
         result["device_model"] = device_model
         result["software_version"] = software_version
@@ -210,6 +212,22 @@ def normalize_asset(source: str, item: dict[str, Any]) -> dict[str, Any]:
             # Detail response — add hub_id for frontend merging
             result["hub_id"] = item.get("hub_id", "")
     return result
+
+
+def _asset_identity(source: str, item: dict[str, Any]) -> str:
+    if source == "firmware":
+        fields = [item.get("productTypes"), item.get("productSeries"), item.get("productModel"), item.get("source_type")]
+    elif source == "ascendhub":
+        fields = [item.get("hub_id"), item.get("hub_name"), item.get("name")]
+    elif source == "mirrors":
+        fields = [item.get("mirrorPath"), item.get("name"), item.get("url")]
+    elif source == "openx_huawei":
+        fields = [item.get("download_url"), item.get("filename"), item.get("name")]
+    else:
+        fields = [item.get("id"), item.get("url"), item.get("name"), item.get("title"), item.get("productModel")]
+    if any(value not in (None, "", [], {}) for value in fields):
+        return json.dumps(fields, ensure_ascii=False, sort_keys=True, default=str)
+    return json.dumps(item, ensure_ascii=False, sort_keys=True, default=str)
 
 
 def _infer_os_from_catalog(catalog: list[str], msg: str = "") -> str:

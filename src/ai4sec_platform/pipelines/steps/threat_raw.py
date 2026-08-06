@@ -77,7 +77,7 @@ class NormalizeHuaweiRawStep:
                     raw_artifact_id=raw["id"],
                 )
                 normalized_count += 1
-        items = repo.list_normalized_items(context.conn, run_id=context.run_id, domain="threats", limit=10000)
+        items = _all_normalized_threat_items(context.conn, context.run_id)
         artifact = context.artifact_store.write_json(context.conn, run_id=context.run_id, artifact_type="normalized_threat_items", name="normalized/threat_items.json", data=items)
         context.outputs["normalized_threat_items"] = items
         return StepResult(metrics={"normalized_items": normalized_count, "per_source_limit": limit, "sources": sorted(TARGET_SOURCES)}, artifacts=[artifact])
@@ -89,7 +89,7 @@ class BuildHuaweiThreatItemsStep:
     step_type: str = "build_domain_item"
 
     def run(self, context: PipelineContext) -> StepResult:
-        items = context.outputs.get("normalized_threat_items") or repo.list_normalized_items(context.conn, run_id=context.run_id, domain="threats", limit=10000)
+        items = context.outputs.get("normalized_threat_items") or _all_normalized_threat_items(context.conn, context.run_id)
         counts = build_threat_items(
             context.conn,
             items,
@@ -101,3 +101,15 @@ class BuildHuaweiThreatItemsStep:
         artifact = context.artifact_store.write_json(context.conn, run_id=context.run_id, artifact_type="built_threat_items", name="built/threat_items.json", data={"counts": counts})
         repo.create_quality_audit(context.conn, domain="threats", audit_type="huawei_raw_pipeline", status="pass" if counts["items"] else "warn", score=1.0 if counts["items"] else 0.2, summary=f"Huawei raw pipeline 构造威胁对象 {counts['items']} 个。", details={"run_id": context.run_id})
         return StepResult(metrics=counts, artifacts=[artifact])
+
+
+def _all_normalized_threat_items(conn, run_id: str) -> list[dict]:
+    count = int(
+        conn.execute(
+            "SELECT COUNT(*) FROM normalized_items WHERE run_id = ? AND domain = 'threats'",
+            (run_id,),
+        ).fetchone()[0]
+    )
+    if not count:
+        return []
+    return repo.list_normalized_items(conn, run_id=run_id, domain="threats", limit=count)

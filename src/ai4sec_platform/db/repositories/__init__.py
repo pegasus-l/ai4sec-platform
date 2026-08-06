@@ -113,6 +113,38 @@ def create_domain_item(
     return int(cur.lastrowid)
 
 
+def upsert_threat_item_dimensions(
+    conn: sqlite3.Connection,
+    *,
+    domain_item_id: int,
+    attack_surface: str = "",
+    attack_surface_grade: str = "",
+    cve_count: int = 0,
+    sa_count: int = 0,
+    broad_sec_count: int = 0,
+    total_sec_count: int = 0,
+    org: str = "",
+) -> None:
+    conn.execute(
+        """
+        INSERT INTO threat_item_dimensions (
+            domain_item_id, attack_surface, attack_surface_grade,
+            cve_count, sa_count, broad_sec_count, total_sec_count, org, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(domain_item_id) DO UPDATE SET
+            attack_surface = excluded.attack_surface,
+            attack_surface_grade = excluded.attack_surface_grade,
+            cve_count = excluded.cve_count,
+            sa_count = excluded.sa_count,
+            broad_sec_count = excluded.broad_sec_count,
+            total_sec_count = excluded.total_sec_count,
+            org = excluded.org,
+            updated_at = excluded.updated_at
+        """,
+        (domain_item_id, attack_surface, attack_surface_grade, cve_count, sa_count, broad_sec_count, total_sec_count, org, utc_now()),
+    )
+
+
 def create_evidence(
     conn: sqlite3.Connection,
     *,

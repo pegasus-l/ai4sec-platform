@@ -39,10 +39,10 @@ def targets(
     where_clauses = ["domain = ?", "item_type = ?"]
     params = [DOMAIN, "target"]
     if surface:
-        where_clauses.append("json_extract(payload_json, '$.attack_surface.signals.primary_attack_surface') = ?")
+        where_clauses.append("EXISTS (SELECT 1 FROM threat_item_dimensions tid WHERE tid.domain_item_id = domain_items.id AND tid.attack_surface = ?)")
         params.append(surface)
     if grade:
-        where_clauses.append("json_extract(payload_json, '$.attack_surface.grade') = ?")
+        where_clauses.append("EXISTS (SELECT 1 FROM threat_item_dimensions tid WHERE tid.domain_item_id = domain_items.id AND tid.attack_surface_grade = ?)")
         params.append(grade)
     if search:
         where_clauses.append("(title LIKE ? OR source LIKE ?)")
@@ -220,34 +220,44 @@ def reports(conn: sqlite3.Connection = Depends(get_db)) -> dict:
 
 @router.get("/graph")
 def graph(
-    target_limit: int = Query(300, ge=1, le=500),
-    asset_limit: int = Query(300, ge=1, le=500),
+    target_limit: int = Query(100, ge=1, le=500),
+    asset_limit: int = Query(100, ge=1, le=500),
+    target_page: int = Query(1, ge=1),
+    asset_page: int = Query(1, ge=1),
+    surface: str = Query(""),
+    grade: str = Query(""),
     conn: sqlite3.Connection = Depends(get_db),
 ) -> dict:
-    targets_data = _bounded_graph_items(conn, item_type="target", limit=target_limit)
-    assets_data = _bounded_graph_items(conn, item_type="asset", limit=asset_limit)
+    targets_data = _bounded_graph_items(conn, item_type="target", limit=target_limit, page=target_page, surface=surface, grade=grade)
+    assets_data = _bounded_graph_items(conn, item_type="asset", limit=asset_limit, page=asset_page)
     truncated = targets_data["truncated"] or assets_data["truncated"]
     return {
         "domain": DOMAIN,
         "targets": targets_data,
         "assets": assets_data,
         "status": "partial" if truncated else "complete",
+        "filters": {"surface": surface, "grade": grade},
         "note": "图谱按风险分数返回有界数据；结果已截断。" if truncated else "图谱数据完整。",
     }
 
 
-def _bounded_graph_items(conn: sqlite3.Connection, *, item_type: str, limit: int) -> dict:
-    total = int(
-        conn.execute(
-            "SELECT COUNT(*) FROM domain_items WHERE domain = ? AND item_type = ?",
-            (DOMAIN, item_type),
-        ).fetchone()[0]
-    )
+def _bounded_graph_items(conn, *, item_type: str, limit: int, page: int = 1, surface: str = "", grade: str = "") -> dict:
+    where = ["di.domain = ?", "di.item_type = ?"]
+    params: list[object] = [DOMAIN, item_type]
+    if surface and item_type == "target":
+        where.append("tid.attack_surface = ?")
+        params.append(surface)
+    if grade and item_type == "target":
+        where.append("tid.attack_surface_grade = ?")
+        params.append(grade)
+    where_sql = " AND ".join(where)
+    join_sql = " LEFT JOIN threat_item_dimensions tid ON tid.domain_item_id = di.id" if item_type == "target" else ""
+    total = int(conn.execute(f"SELECT COUNT(*) FROM domain_items di{join_sql} WHERE {where_sql}", params).fetchone()[0])
     rows = conn.execute(
-        "SELECT * FROM domain_items WHERE domain = ? AND item_type = ? ORDER BY score DESC, id DESC LIMIT ?",
-        (DOMAIN, item_type, limit),
+        f"SELECT di.* FROM domain_items di{join_sql} WHERE {where_sql} ORDER BY di.score DESC, di.id DESC LIMIT ? OFFSET ?",
+        [*params, limit, (page - 1) * limit],
     ).fetchall()
-    return {"items": [repo.row_to_dict(row) for row in rows], "total": total, "limit": limit, "truncated": total > limit}
+    return {"items": [repo.row_to_dict(row) for row in rows], "total": total, "page": page, "pages": (total + limit - 1) // limit, "limit": limit, "truncated": total > limit}
 
 
 @router.post("/{item_id}/ai-review")
@@ -494,20 +504,13 @@ def surface_stats(conn: sqlite3.Connection = Depends(get_db)) -> dict:
     rows = conn.execute(
         """
         SELECT
-            COALESCE(
-                json_extract(payload_json, '$.attack_surface.signals.primary_attack_surface'),
-                json_extract(payload_json, '$.attack_surface.primary_attack_surface'),
-                'unknown'
-            ) as surface,
-            COUNT(*) as count,
-            COALESCE(SUM(
-                COALESCE(json_extract(payload_json, '$.vulnerability_signals.cve_count'), 0)
-            ), 0) as cves,
-            COALESCE(SUM(
-                COALESCE(json_extract(payload_json, '$.vulnerability_signals.broad_sec_count'), 0)
-            ), 0) as sec
-        FROM domain_items
-        WHERE domain = ? AND item_type = 'target'
+            COALESCE(NULLIF(tid.attack_surface, ''), 'unknown') AS surface,
+            COUNT(*) AS count,
+            COALESCE(SUM(tid.cve_count), 0) AS cves,
+            COALESCE(SUM(tid.total_sec_count), 0) AS sec
+        FROM domain_items di
+        LEFT JOIN threat_item_dimensions tid ON tid.domain_item_id = di.id
+        WHERE di.domain = ? AND di.item_type = 'target'
         GROUP BY surface
         """,
         (DOMAIN,),

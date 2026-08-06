@@ -925,8 +925,8 @@ D11 暂缓的是公网入口和完整公网暴露治理，不代表复现容器�
 - [ ] 完成 AscendHub、Firmware、OpenX full profile 验收。
 - [ ] 优化 AI 研判候选分层和覆盖目标。
 - [ ] 降低攻击面空值并记录 unknown reason。
-- [ ] 将常用统计字段结构化并建立索引或预聚合。
-- [ ] Graph API 增加分页、过滤和节点上限。
+- [x] 将常用统计字段结构化并建立索引或预聚合：新增威胁维度投影表和迁移回填，攻击面、等级、CVE/SA/安全线索计数不再依赖 payload JSON 全表聚合。
+- [x] Graph API 增加分页、过滤和节点上限；图页面改用专用有界接口，不再绕过接口拉取 9999 条完整目标和全部资产。
 - [ ] 修复 RepoDrawer 资产关联和前端错误边界。
 - [ ] 清理 unused 代码。
 - [ ] 补齐威胁 API、connector、数据质量和前端测试。
@@ -2238,3 +2238,13 @@ Python full test suite: 199 passed
 - 首次同日全流程重复运行暴露“数据库不重复但仍重复模型调用”的触发级幂等缺口：日报仍为 1 份，但模型调用由 140 增至 152。修复后 `PipelineDefinition` 可声明业务幂等参数，`news.daily_pipeline` 以 `date` 为键；已有成功日期再次触发时创建可审计的 `restored/idempotent` Run，并通过 `force_rerun=true` 保留显式强制重跑入口。
 - 修复后使用统一 CLI 对 `2026-08-07` 再次触发，`run_20260806022535_42fc4c8838` 在约 1.7 秒内成功复用 `run_20260805115951_fe198f7f7d`；模型调用保持 152、当日日报保持 1，采集和所有 Step 均未重放。专项测试 `64 passed`，同时修复统一 CLI 未转发子命令参数和 arXiv `daily` Profile 未正确限制分类/补采请求规模的问题。
 - 第 895 项完成。该结论表示资讯模块的真实采集、增量、失败恢复、人工处置、日报与触发级幂等业务闭环达到当前 Production Ready 验收门槛；仍需在真实运营中持续进行内容质量人工抽检，并依赖平台阶段的认证、备份、统一告警与部署保障后，才能宣称整个平台 Production Deployable。
+
+### 2026-08-06：威胁冻结基线揭示截断、资产身份和统计性能根因
+
+- 先澄清旧报告口径：旧 `huawei_repos_cves.json` 中 `260` 是直接扫描仓库数，`1429` 是 CVE 引用总数，二者不是同一覆盖率指标；旧实现的 `star_scan_threshold` 同样为 10，因此不能用 `260 vs 1429` 推导“直接降低星标阈值”。冻结旧数据包含 8065 个 repo、8065 个项目级 CVE 聚合记录、52 条 Firmware、86 条 AscendHub、135 条 Mirror 和 51 条 OpenX。
+- 在隔离库 `output/threat-regression/frozen-baseline.db` 重建时发现，Normalize 正确产生 16130 条 repo/CVE 记录，但旧构建链固定只读回前 10000 条，后半 CVE 合并会被静默截断；修复为按当前 Run 的实际记录数完整读取，并用 10001 条回归样本覆盖旧上限。
+- 第二个根因是 `build_threat_items` 按 `LOWER(title)` 逐条查询和 upsert：8065 个目标形成近似 O(n²) 扫描，构建超过 10 分钟仍未完成；改为一次加载已有 canonical `item_key` 映射后，同一冻结基线 `16130 → 8065` 的合并构建约 10 秒完成。
+- 资产此前同样按标题合并，且旧 AscendHub/OpenX 字段未进入标题，导致 324 条输入最终只剩 166 条，具体为 AscendHub `86 → 1`、OpenX `51 → 1`。现按各源稳定业务标识生成 asset key 并以 canonical key upsert；冻结基线恢复为 324 个资产，二次运行仍保持 324，不产生重复对象。
+- 冻结基线最终得到 8065 个目标、311 个带安全线索项目、148 个带 CVE 项目、1429 条 CVE 引用和 2660 条总安全线索，完整复现旧报告总量。该结论只验证迁移和聚合正确性，不替代当前连接器的真实 full scan；第 923、925 项仍保持未完成。
+- 新增 `threat_item_dimensions` 投影表及迁移回填，结构化攻击面、等级、CVE、SA、广义安全线索和组织字段；同一 8065 目标库上 `/api/threats/surface-stats` 五次采样平均耗时由约 1949 ms 降至约 50 ms。Graph 页面改用专用接口，默认各返回最多 100 个目标/资产，并支持目标/资产分页、攻击面和等级过滤及最大 500 条硬上限。
+- 第 928、929 项完成。下一步按 AscendHub、Firmware、Mirror、OpenX、repos/CVE 分源执行当前连接器 `full` Profile，记录真实采集量、错误、耗时和与冻结基线差异，再决定扫描阈值与连接器策略。

@@ -25,6 +25,21 @@ CREATE INDEX IF NOT EXISTS idx_domain_items_domain ON domain_items(domain);
 CREATE INDEX IF NOT EXISTS idx_domain_items_type ON domain_items(domain, item_type);
 CREATE INDEX IF NOT EXISTS idx_domain_items_score ON domain_items(domain, score DESC);
 
+CREATE TABLE IF NOT EXISTS threat_item_dimensions (
+    domain_item_id INTEGER PRIMARY KEY,
+    attack_surface TEXT NOT NULL DEFAULT '',
+    attack_surface_grade TEXT NOT NULL DEFAULT '',
+    cve_count INTEGER NOT NULL DEFAULT 0,
+    sa_count INTEGER NOT NULL DEFAULT 0,
+    broad_sec_count INTEGER NOT NULL DEFAULT 0,
+    total_sec_count INTEGER NOT NULL DEFAULT 0,
+    org TEXT NOT NULL DEFAULT '',
+    updated_at TEXT NOT NULL,
+    FOREIGN KEY(domain_item_id) REFERENCES domain_items(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_threat_dimensions_surface ON threat_item_dimensions(attack_surface);
+CREATE INDEX IF NOT EXISTS idx_threat_dimensions_grade ON threat_item_dimensions(attack_surface_grade);
+
 
 CREATE TABLE IF NOT EXISTS raw_artifacts (
     id INTEGER PRIMARY KEY AUTOINCREMENT,

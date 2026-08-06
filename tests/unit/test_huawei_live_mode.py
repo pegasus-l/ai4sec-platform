@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from ai4sec_platform.domains.threats.adapters import huawei_sources
-from ai4sec_platform.pipelines.steps.threat_raw import ImportHuaweiRawStep, NormalizeHuaweiRawStep, BuildHuaweiThreatItemsStep
+from ai4sec_platform.pipelines.steps.threat_raw import ImportHuaweiRawStep, NormalizeHuaweiRawStep, BuildHuaweiThreatItemsStep, _all_normalized_threat_items
 from ai4sec_platform.pipelines.context import PipelineContext
 from ai4sec_platform.artifacts.store import ArtifactStore
 from ai4sec_platform.core.config import load_settings
@@ -17,6 +17,28 @@ def test_threat_connectors_build_live_requests() -> None:
     url = connector.build_url(SourceFetchRequest(source_name="gitcode:test", params={"resource": "repos", "org": "openharmony", "page": 1, "per_page": 10}))
     assert "orgs/openharmony/repos" in url
     assert "per_page=10" in url
+
+
+def test_all_normalized_threat_items_are_loaded_beyond_legacy_cap() -> None:
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys = ON")
+    init_db(conn)
+    repo.create_pipeline_run(conn, run_id="large_threat_run", domain="threats", pipeline_name="test.large")
+    conn.executemany(
+        """
+        INSERT INTO normalized_items (
+            run_id, domain, item_key, source, source_type, title, url,
+            primary_date, normalized_json, raw_artifact_id, created_at
+        ) VALUES ('large_threat_run', 'threats', ?, 'repos', 'repo', ?, '', '', '{}', NULL, '')
+        """,
+        ((f"repo:{index}", f"repo-{index}") for index in range(10_001)),
+    )
+
+    items = _all_normalized_threat_items(conn, "large_threat_run")
+
+    assert len(items) == 10_001
+    assert items[-1]["item_key"] == "repo:10000"
 
 
 def test_huawei_sources_live_mode_can_feed_existing_pipeline(monkeypatch, tmp_path) -> None:

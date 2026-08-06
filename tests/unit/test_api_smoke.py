@@ -265,8 +265,12 @@ def test_huawei_full_migration_pipeline_runs_and_exposes_reports(monkeypatch) ->
     graph = client.get("/api/threats/graph?target_limit=1&asset_limit=1").json()
     assert graph["targets"]["limit"] == 1
     assert graph["assets"]["limit"] == 1
+    assert graph["targets"]["page"] == 1
     assert graph["targets"]["items"]
     assert graph["assets"]["items"]
     assert graph["status"] == "partial"
+    filtered_graph = client.get("/api/threats/graph?surface=missing-surface").json()
+    assert filtered_graph["filters"]["surface"] == "missing-surface"
+    assert filtered_graph["targets"]["items"] == []
     assert client.get("/api/threats/targets?limit=201").status_code == 422
     assert client.get("/api/threats/graph?target_limit=501").status_code == 422

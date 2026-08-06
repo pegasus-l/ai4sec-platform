@@ -53,8 +53,9 @@ export async function fetchTargetDetail(itemId: string | number): Promise<Record
 
 export interface ThreatGraphResponse {
   domain: 'threats';
-  targets: { items: Record<string, unknown>[]; total: number; limit: number; truncated: boolean };
-  assets: { items: Record<string, unknown>[]; total: number; limit: number; truncated: boolean };
+  targets: { items: Record<string, unknown>[]; total: number; page: number; pages: number; limit: number; truncated: boolean };
+  assets: { items: Record<string, unknown>[]; total: number; page: number; pages: number; limit: number; truncated: boolean };
+  filters: { surface: string; grade: string };
   status: 'complete' | 'partial';
   note: string;
 }

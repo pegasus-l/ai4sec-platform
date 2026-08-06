@@ -32,6 +32,7 @@ def build_threat_items(
         scoring = score_threat_item(payload)
         scored_payloads.append((payload, item_type, scoring))
     enriched_keys = _summary_enrichment_keys(scored_payloads, repo_summary_limit) if enrich_repo_summaries else set()
+    existing_by_key, legacy_by_title = _existing_threat_item_ids(conn)
     for payload, item_type, scoring in scored_payloads:
         if payload.get("item_key") in enriched_keys:
             enrichment = enrich_repo_summary(payload, enabled=True, cache_dir=repo_summary_cache_dir)
@@ -43,17 +44,13 @@ def build_threat_items(
         payload = _finalize_summary(payload)
         payload = {**payload, "scoring": scoring.as_payload(), "vulnerability_signals": scoring.signals, "attack_surface": scoring.signals.get("attack_surface")}
         filtered = bool(scoring.signals.get("filtered"))
-        # Upsert: check if item with same item_key + domain already exists
         item_key = str(payload.get("item_key") or payload.get("title") or "").lower()
-        existing = conn.execute(
-            "SELECT id FROM domain_items WHERE domain='threats' AND item_type=? AND LOWER(title)=? LIMIT 1",
-            (item_type, (payload.get("title") or "未命名威胁对象").lower()),
-        ).fetchone() if item_key else None
-        if existing:
-            # Update existing item
+        title_key = (item_type, str(payload.get("title") or "未命名威胁对象").lower())
+        existing_id = existing_by_key.get((item_type, item_key)) if item_key else legacy_by_title.get(title_key)
+        if existing_id:
             repo.update_domain_item(
                 conn,
-                item_id=existing[0],
+                item_id=existing_id,
                 title=payload.get("title") or "未命名威胁对象",
                 summary=payload.get("summary") or "来自威胁 raw pipeline，待风险研判。",
                 score=scoring.score,
@@ -65,9 +62,8 @@ def build_threat_items(
                 metrics={"pipeline_run": run_id, "risk_score": scoring.score, "score_breakdown": scoring.breakdown, "filtered": filtered, "filtered_reason": scoring.signals.get("filtered_reason")},
                 payload=payload,
             )
-            domain_id = existing[0]
+            domain_id = existing_id
         else:
-            # Create new item
             domain_id = repo.create_domain_item(
                 conn,
                 domain="threats",
@@ -83,6 +79,25 @@ def build_threat_items(
                 metrics={"pipeline_run": run_id, "risk_score": scoring.score, "score_breakdown": scoring.breakdown, "filtered": filtered, "filtered_reason": scoring.signals.get("filtered_reason")},
                 payload=payload,
             )
+            if item_key:
+                existing_by_key[(item_type, item_key)] = domain_id
+        signals = payload.get("vulnerability_signals") or {}
+        attack_surface = payload.get("attack_surface") or {}
+        surface_signals = attack_surface.get("signals") if isinstance(attack_surface, dict) else {}
+        if not isinstance(surface_signals, dict):
+            surface_signals = {}
+        raw = payload.get("raw") or {}
+        repo.upsert_threat_item_dimensions(
+            conn,
+            domain_item_id=domain_id,
+            attack_surface=surface_signals.get("primary_attack_surface") or attack_surface.get("primary_attack_surface") or "",
+            attack_surface_grade=attack_surface.get("grade") or "",
+            cve_count=int(signals.get("cve_count") or 0),
+            sa_count=int(signals.get("sa_count") or 0),
+            broad_sec_count=int(signals.get("broad_sec_count") or 0),
+            total_sec_count=int(signals.get("total_sec_items") or 0),
+            org=str(raw.get("org") or payload.get("org") or ""),
+        )
         targets += 1
         repo.create_evidence(
             conn,
@@ -107,6 +122,22 @@ def build_threat_items(
                 payload={"run_id": run_id, "item_key": payload.get("item_key")},
             )
     return {"items": targets, "evidence": evidence, "merged_inputs": len(items), "enriched_summaries": enriched_summaries}
+
+
+def _existing_threat_item_ids(conn: sqlite3.Connection) -> tuple[dict[tuple[str, str], int], dict[tuple[str, str], int]]:
+    by_key: dict[tuple[str, str], int] = {}
+    legacy_by_title: dict[tuple[str, str], int] = {}
+    rows = conn.execute(
+        "SELECT id, item_type, title, payload_json FROM domain_items WHERE domain = 'threats'"
+    ).fetchall()
+    for row in rows:
+        payload = repo.loads(row["payload_json"], {})
+        item_key = str(payload.get("item_key") or "").lower() if isinstance(payload, dict) else ""
+        if item_key:
+            by_key[(str(row["item_type"]), item_key)] = int(row["id"])
+        else:
+            legacy_by_title[(str(row["item_type"]), str(row["title"] or "").lower())] = int(row["id"])
+    return by_key, legacy_by_title
 
 
 def _merge_canonical_payloads(items: list[dict]) -> list[dict[str, Any]]:

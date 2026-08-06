@@ -113,6 +113,27 @@ def test_threat_repo_and_cve_findings_merge_to_single_target(tmp_path) -> None:
     assert payload["summary_source"] in {"model_translation", "local_rule_summary", "repo_description"}
 
 
+def test_threat_assets_use_stable_source_identity_for_upsert() -> None:
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    init_db(conn)
+    assets = [
+        normalize_huawei_item("ascendhub", {"hub_name": "mindie", "hub_downloads": 10}),
+        normalize_huawei_item("ascendhub", {"hub_name": "mindformers", "hub_downloads": 20}),
+        normalize_huawei_item("openx_huawei", {"filename": "NE40E_V800R023.zip", "download_url": "https://example.test/ne40e.zip"}),
+        normalize_huawei_item("openx_huawei", {"filename": "AR_V300R022.zip", "download_url": "https://example.test/ar.zip"}),
+    ]
+
+    build_threat_items(conn, assets, run_id="asset_first")
+    build_threat_items(conn, assets, run_id="asset_second")
+
+    rows = conn.execute("SELECT title, payload_json FROM domain_items WHERE domain = 'threats' AND item_type = 'asset' ORDER BY title").fetchall()
+    item_keys = {repo.loads(row["payload_json"], {})["item_key"] for row in rows}
+    assert len(rows) == 4
+    assert len(item_keys) == 4
+    assert {row["title"] for row in rows} == {"mindie", "mindformers", "NE40E", "AR"}
+
+
 def test_vulnerability_material_processing_judges_valid_material() -> None:
     item = {
         "title": "CVE-2025-1111 RCE PoC 复现",

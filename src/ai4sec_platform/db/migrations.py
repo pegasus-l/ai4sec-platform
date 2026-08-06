@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 import hashlib
+import json
 import sqlite3
 
 from ai4sec_platform.core.time import utc_now
@@ -186,6 +187,12 @@ MIGRATIONS: tuple[Migration, ...] = (
         ),
         checksum_source="capability_repro_tasks.repo_commit TEXT NOT NULL DEFAULT ''",
     ),
+    Migration(
+        version=20,
+        name="add_threat_item_dimensions",
+        apply=lambda conn: _add_threat_item_dimensions(conn),
+        checksum_source="threat_item_dimensions.v1",
+    ),
 )
 
 
@@ -262,6 +269,69 @@ def _add_repro_worker_fields(conn: sqlite3.Connection) -> None:
         ("cleanup_requested", "INTEGER NOT NULL DEFAULT 0"),
     ):
         _add_column_if_missing(conn, "capability_repro_tasks", column, definition)
+
+
+def _add_threat_item_dimensions(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS threat_item_dimensions (
+            domain_item_id INTEGER PRIMARY KEY,
+            attack_surface TEXT NOT NULL DEFAULT '',
+            attack_surface_grade TEXT NOT NULL DEFAULT '',
+            cve_count INTEGER NOT NULL DEFAULT 0,
+            sa_count INTEGER NOT NULL DEFAULT 0,
+            broad_sec_count INTEGER NOT NULL DEFAULT 0,
+            total_sec_count INTEGER NOT NULL DEFAULT 0,
+            org TEXT NOT NULL DEFAULT '',
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY(domain_item_id) REFERENCES domain_items(id) ON DELETE CASCADE
+        )
+        """
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_threat_dimensions_surface ON threat_item_dimensions(attack_surface)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_threat_dimensions_grade ON threat_item_dimensions(attack_surface_grade)")
+    rows = conn.execute(
+        "SELECT id, payload_json FROM domain_items WHERE domain = 'threats'"
+    ).fetchall()
+    for row in rows:
+        try:
+            payload = json.loads(row["payload_json"] or "{}")
+        except (TypeError, ValueError):
+            payload = {}
+        signals = payload.get("vulnerability_signals") or {}
+        attack_surface = payload.get("attack_surface") or {}
+        surface_signals = attack_surface.get("signals") if isinstance(attack_surface, dict) else {}
+        if not isinstance(surface_signals, dict):
+            surface_signals = {}
+        raw = payload.get("raw") or {}
+        conn.execute(
+            """
+            INSERT INTO threat_item_dimensions (
+                domain_item_id, attack_surface, attack_surface_grade,
+                cve_count, sa_count, broad_sec_count, total_sec_count, org, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(domain_item_id) DO UPDATE SET
+                attack_surface = excluded.attack_surface,
+                attack_surface_grade = excluded.attack_surface_grade,
+                cve_count = excluded.cve_count,
+                sa_count = excluded.sa_count,
+                broad_sec_count = excluded.broad_sec_count,
+                total_sec_count = excluded.total_sec_count,
+                org = excluded.org,
+                updated_at = excluded.updated_at
+            """,
+            (
+                row["id"],
+                surface_signals.get("primary_attack_surface") or attack_surface.get("primary_attack_surface") or "",
+                attack_surface.get("grade") or "",
+                int(signals.get("cve_count") or 0),
+                int(signals.get("sa_count") or 0),
+                int(signals.get("broad_sec_count") or 0),
+                int(signals.get("total_sec_items") or 0),
+                raw.get("org") or payload.get("org") or "",
+                utc_now(),
+            ),
+        )
 
 
 def _add_capability_repro_workers(conn: sqlite3.Connection) -> None:
