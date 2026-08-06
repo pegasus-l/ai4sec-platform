@@ -220,7 +220,7 @@ def test_security_materials_are_org_level_not_project_copies(monkeypatch) -> Non
         {"platform": "gitcode", "org": "openharmony", "name": "security", "url": "https://gitcode.com/openharmony/security", "description": "security", "star_count": 10},
         {"platform": "gitcode", "org": "openharmony", "name": "telephony_sms_mms", "url": "https://gitcode.com/openharmony/telephony_sms_mms", "description": "telephony", "star_count": 20},
     ]
-    monkeypatch.setattr(huawei_sources, "_collect_live_repos", lambda registry, params: repos)
+    monkeypatch.setattr(huawei_sources, "_collect_live_repos_with_errors", lambda registry, params: (repos, []))
     monkeypatch.setattr(huawei_sources, "_enrich_project_issues", lambda registry, repos, params: repos)
 
     records = huawei_sources._collect_repo_records(FakeRegistry(), {"security_file_limit": 5})

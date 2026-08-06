@@ -2250,3 +2250,5 @@ Python full test suite: 199 passed
 - 第 928、929 项完成。下一步按 AscendHub、Firmware、Mirror、OpenX、repos/CVE 分源执行当前连接器 `full` Profile，记录真实采集量、错误、耗时和与冻结基线差异，再决定扫描阈值与连接器策略。
 - AscendHub 首次真实 `full` Profile 实测配置 86 个唯一 hub，返回 170 条 detail/tag 记录，耗时约 154 秒、传输错误为 0；但 `qwen2.5-1.5b-instruct` 的 detail 和 tags 均为空。修复后该来源写入 `missing_targets`、`returned_targets=85/86` 并标记 `exists=false`，因此 AscendHub full profile 当前只能判定为部分通过，第 925 项继续保持未完成。
 - Mirror 真实 `full` Profile 返回 141 条、耗时约 0.5 秒、无错误，覆盖冻结基线 135 条以上；OpenX 首次暴露 adapter 与 connector 重复递归导致的 0 条假成功，修复递归职责后真实 full 返回 51 条、耗时约 11 秒，并透传空结果为错误。Firmware full 返回 274 条明细、耗时约 247 秒、无错误，包含 6 个 product ID；该数量是明细层，不能直接与旧的 52 条聚合结果相加比较，后续需按产品/型号/包层级建立统一口径。
+- repos/CVE 两组织批次（OpenHarmony、OpenEuler）在 20 页范围内完成真实采集：1647 个项目、12320 条组织安全材料，耗时约 661 秒；CVE scout 产出 165 个带安全数据项目、3262 个唯一 CVE、102 个唯一 SA、2814 个 broad security。按组织对照旧数据：OpenHarmony 当前 796 项目/76 个带安全数据/116 CVE 引用，旧为 788/92/445；OpenEuler 当前 851/89/3161，旧为 823/9/21。OpenEuler 的大幅提升主要来自当前 security repo 与 issue 深挖，需继续做人工样本校准，不能直接宣布质量提升。
+- GitCode/AtomGit 连接器现按 `repo_page_limit` 显式控制页数：默认 Profile 不再隐式扫 200 页，full 才默认允许扩展；分页失败会停止并写入 repos source 的 `errors`、`exists=false`，不再跳过失败页后伪装为完整成功。

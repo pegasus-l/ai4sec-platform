@@ -225,10 +225,10 @@ def _load_huawei_sources_with_source_cache(settings, params: dict[str, Any]) -> 
 
 
 def _collect_repo_records(registry: SourceRegistry, params: dict[str, Any]) -> list[dict[str, Any]]:
-    repos = _collect_live_repos(registry, params)
+    repos, repo_errors = _collect_live_repos_with_errors(registry, params)
     repos, org_security_materials = _enrich_security_repos(registry, repos, params)
     repos = _enrich_project_issues(registry, repos, params)
-    records = [{"source": "repos", "path": "connector:repos", "exists": True, "items": repos, "raw": {"projects": repos, "mode": "live"}, "mode": "live"}]
+    records = [{"source": "repos", "path": "connector:repos", "exists": not bool(repo_errors), "items": repos, "raw": {"projects": repos, "errors": repo_errors, "mode": "live"}, "mode": "live"}]
     if org_security_materials:
         records.append({"source": "org_security_materials", "path": "connector:security_repos", "exists": True, "items": org_security_materials, "raw": {"mode": "live", "orgs": sorted({str(item.get("org") or "") for item in org_security_materials if item.get("org")})}, "mode": "live"})
     return records
@@ -252,33 +252,41 @@ def _as_source_set(value: Any) -> set[str]:
 
 
 def _collect_live_repos(registry: SourceRegistry, params: dict[str, Any]) -> list[dict[str, Any]]:
+    repos, _ = _collect_live_repos_with_errors(registry, params)
+    return repos
+
+
+def _collect_live_repos_with_errors(registry: SourceRegistry, params: dict[str, Any]) -> tuple[list[dict[str, Any]], list[str]]:
     orgs = params.get("orgs") or DEFAULT_LIVE_ORGS
-    # page_limit=1 always — GitCodeConnector/AtomGitConnector.fetch() does its own full pagination internally.
-    # Setting page_limit>1 would call the connector multiple times, each fetching ALL pages again = N× duplication.
-    page_limit = 1
+    # The connector owns pagination; the adapter makes one call per organization.
+    connector_max_pages = int(params.get("repo_page_limit", 200 if _full_scan(params) else 1))
     per_page = int(params.get("per_page", 100 if _full_scan(params) else 50))
     max_workers = int(params.get("max_workers", 6 if _full_scan(params) else 4))
-    chunks = bounded_map(orgs, lambda entry: _collect_org_repos(registry, entry, params, page_limit=page_limit, per_page=per_page), max_workers=max_workers)
-    return [repo for chunk in chunks for repo in chunk]
+    chunks = bounded_map(orgs, lambda entry: _collect_org_repos(registry, entry, params, connector_max_pages=connector_max_pages, per_page=per_page), max_workers=max_workers)
+    repos = [repo for chunk, _ in chunks for repo in chunk]
+    errors = [error for _, chunk_errors in chunks for error in chunk_errors]
+    return repos, errors
 
 
-def _collect_org_repos(registry: SourceRegistry, entry: Any, params: dict[str, Any], *, page_limit: int, per_page: int) -> list[dict[str, Any]]:
+def _collect_org_repos(registry: SourceRegistry, entry: Any, params: dict[str, Any], *, connector_max_pages: int, per_page: int) -> tuple[list[dict[str, Any]], list[str]]:
     repos: list[dict[str, Any]] = []
+    errors: list[str] = []
     if isinstance(entry, str):
         platform, org = _split_platform_org(entry)
     else:
         platform = str(entry.get("platform") or "gitcode")
         org = str(entry.get("org") or "")
     connector = registry.get(platform)
-    for page in range(1, page_limit + 1):
-        result = connector.fetch(SourceFetchRequest(source_name=f"{platform}:{org}:repos", params={"resource": "repos", "org": org, "page": page, "per_page": per_page, "timeout_seconds": params.get("timeout_seconds", 60)}))
+    for page in range(1, 2):
+        result = connector.fetch(SourceFetchRequest(source_name=f"{platform}:{org}:repos", params={"resource": "repos", "org": org, "page": page, "per_page": per_page, "max_pages": connector_max_pages, "timeout_seconds": params.get("timeout_seconds", 60)}))
         if result.errors:
+            errors.extend(f"{platform}:{org}: {error}" for error in result.errors)
             break
         batch = [_normalize_repo_item(item, org=org, platform=platform) for item in result.items]
         repos.extend(batch)
         if len(batch) < per_page:
             break
-    return repos
+    return repos, errors
 
 
 def _enrich_project_issues(registry: SourceRegistry, repos: list[dict[str, Any]], params: dict[str, Any]) -> list[dict[str, Any]]:

@@ -46,7 +46,7 @@ class GitCodeConnector(LiveJsonConnector):
         org = request.params.get("org") or request.config.get("org") or "openharmony"
         per_page = int(request.params.get("per_page") or 100)
         timeout = int(request.params.get("timeout_seconds") or 60)
-        max_pages = 200
+        max_pages = int(request.params.get("max_pages") or 1)
         max_retries = 3
         rate_limit_sleep = 30
         page_delay = 1  # sleep between successful pages to avoid triggering rate limits
@@ -85,9 +85,8 @@ class GitCodeConnector(LiveJsonConnector):
                         break
 
             if not success:
-                # Skip this page and continue to next — don't abandon remaining pages
-                errors.append(f"page {page} skipped after {max_retries} retries, continuing to next page")
-                continue
+                errors.append(f"page {page} stopped after {max_retries} retries")
+                break
 
             items = self.extract_items(data) if 'data' in dir() else []
             if not items:
