@@ -24,7 +24,7 @@ def today(limit: int = Query(30, ge=1, le=100), conn: sqlite3.Connection = Depen
 
 @router.get("/targets")
 def targets(
-    limit: int = Query(50, ge=1, le=99999),
+    limit: int = Query(50, ge=1, le=200),
     page: int = Query(1, ge=1),
     fields: str = Query("summary", description="summary=lightweight, full=complete payload"),
     surface: str = Query("", description="filter by attack surface"),
@@ -199,7 +199,7 @@ def risk_assessments(limit: int = Query(50, ge=1, le=200), conn: sqlite3.Connect
 
 
 @router.get("/assets")
-def assets(limit: int = Query(9999, ge=1, le=99999), conn: sqlite3.Connection = Depends(get_db)) -> dict:
+def assets(limit: int = Query(200, ge=1, le=500), conn: sqlite3.Connection = Depends(get_db)) -> dict:
     return domain_items.list_items(conn, DOMAIN, item_type="asset", limit=limit)
 
 
@@ -219,13 +219,35 @@ def reports(conn: sqlite3.Connection = Depends(get_db)) -> dict:
 
 
 @router.get("/graph")
-def graph(conn: sqlite3.Connection = Depends(get_db)) -> dict:
-    targets_data = domain_items.list_items(conn, DOMAIN, item_type="target", limit=100)
-    nodes = [
-        {"id": f"target:{item['id']}", "label": item["title"], "type": "target", "score": item.get("score")}
-        for item in targets_data["items"]
-    ]
-    return {"domain": DOMAIN, "nodes": nodes, "edges": [], "status": "partial", "note": "第一阶段仅返回目标节点，CVE/固件/镜像关系待后续 threat raw pipeline 补齐。"}
+def graph(
+    target_limit: int = Query(300, ge=1, le=500),
+    asset_limit: int = Query(300, ge=1, le=500),
+    conn: sqlite3.Connection = Depends(get_db),
+) -> dict:
+    targets_data = _bounded_graph_items(conn, item_type="target", limit=target_limit)
+    assets_data = _bounded_graph_items(conn, item_type="asset", limit=asset_limit)
+    truncated = targets_data["truncated"] or assets_data["truncated"]
+    return {
+        "domain": DOMAIN,
+        "targets": targets_data,
+        "assets": assets_data,
+        "status": "partial" if truncated else "complete",
+        "note": "图谱按风险分数返回有界数据；结果已截断。" if truncated else "图谱数据完整。",
+    }
+
+
+def _bounded_graph_items(conn: sqlite3.Connection, *, item_type: str, limit: int) -> dict:
+    total = int(
+        conn.execute(
+            "SELECT COUNT(*) FROM domain_items WHERE domain = ? AND item_type = ?",
+            (DOMAIN, item_type),
+        ).fetchone()[0]
+    )
+    rows = conn.execute(
+        "SELECT * FROM domain_items WHERE domain = ? AND item_type = ? ORDER BY score DESC, id DESC LIMIT ?",
+        (DOMAIN, item_type, limit),
+    ).fetchall()
+    return {"items": [repo.row_to_dict(row) for row in rows], "total": total, "limit": limit, "truncated": total > limit}
 
 
 @router.post("/{item_id}/ai-review")

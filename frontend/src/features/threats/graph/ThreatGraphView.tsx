@@ -15,7 +15,7 @@ import dagre from '@dagrejs/dagre';
 import { graphNodeTypes } from './GraphNodeTypes';
 import { buildDualTreeGraph } from './buildDualTreeGraph';
 import { useQuery } from '@tanstack/react-query';
-import { fetchAssets, getJson } from '../../../api/client';
+import { fetchGraph } from '../../../api/client';
 import { assetFromItem, repoFromItem } from '../threatAdapters';
 import type { ThreatGraphData, ThreatRepo, ThreatAsset, ThreatReactFlowNode, ThreatReactFlowEdge } from '../../../types/threat';
 
@@ -75,17 +75,13 @@ export function ThreatGraphView({ openRepo, openAsset }: ThreatGraphViewProps) {
   const [activeNodeId, setActiveNodeId] = useState<string | null>(null);
   const [expandedNodes, setExpandedNodes] = useState<Set<string>>(new Set());
 
-  // Graph needs ALL repos with full payload — fetch independently
-  const { data: allTargetsData } = useQuery({
-    queryKey: ['threats-targets-all'],
-    queryFn: () => getJson<{ items: Record<string, unknown>[] }>('/api/threats/targets?limit=9999&fields=full'),
+  const { data: graphData } = useQuery({
+    queryKey: ['threats-graph'],
+    queryFn: fetchGraph,
     staleTime: 300_000,
   });
-  const repos = useMemo(() => (allTargetsData?.items ?? []).map(repoFromItem).sort((a, b) => b.score - a.score), [allTargetsData]);
-
-  // Fetch assets separately
-  const { data: assetsData } = useQuery({ queryKey: ['threats-assets'], queryFn: fetchAssets });
-  const assets = useMemo(() => (assetsData?.items ?? []).map(assetFromItem), [assetsData]);
+  const repos = useMemo(() => (graphData?.targets.items ?? []).map(repoFromItem).sort((a, b) => b.score - a.score), [graphData]);
+  const assets = useMemo(() => (graphData?.assets.items ?? []).map(assetFromItem), [graphData]);
 
   // Build vulnDetails from repos' payload
   const vulnDetails = useMemo(() => {
@@ -246,6 +242,7 @@ export function ThreatGraphView({ openRepo, openAsset }: ThreatGraphViewProps) {
         <p className="muted small">
           点击节点展开/折叠，展开/折叠后自动回到内容区域。拖拽平移，滚轮缩放。
         </p>
+        {graphData?.status === 'partial' && <p className="muted small">当前图谱按风险分数展示前 {graphData.targets.limit} 个代码仓和 {graphData.assets.limit} 个资产，共 {graphData.targets.total} 个代码仓、{graphData.assets.total} 个资产；可到列表页分页查看完整数据。</p>}
         <div className="graph-wrap">
           <ReactFlow
             nodes={enhancedNodes}

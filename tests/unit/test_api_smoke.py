@@ -148,7 +148,7 @@ def test_one_time_news_import_builds_from_source_raw_files(tmp_path) -> None:
     assert news["kpis"]["new_count"] > 0
 
 
-def test_v9_contract_endpoint_aliases_exist() -> None:
+def test_current_page_and_operations_endpoints_exist() -> None:
     client = TestClient(app)
     paths = [
         "/api/news/page",
@@ -262,3 +262,11 @@ def test_huawei_full_migration_pipeline_runs_and_exposes_reports(monkeypatch) ->
     assert client.get("/api/threats/attack-surface").json()["status"] == "ok"
     assert client.get("/api/threats/attack-surface-compare").status_code == 404
     assert client.get("/api/threats/reports").json()["status"] == "ok"
+    graph = client.get("/api/threats/graph?target_limit=1&asset_limit=1").json()
+    assert graph["targets"]["limit"] == 1
+    assert graph["assets"]["limit"] == 1
+    assert graph["targets"]["items"]
+    assert graph["assets"]["items"]
+    assert graph["status"] == "partial"
+    assert client.get("/api/threats/targets?limit=201").status_code == 422
+    assert client.get("/api/threats/graph?target_limit=501").status_code == 422

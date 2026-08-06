@@ -20,7 +20,7 @@ export async function postJson<T>(path: string, body?: unknown): Promise<T> {
 }
 
 export async function fetchAssets(): Promise<{ items: Record<string, unknown>[]; count: number }> {
-  return getJson('/api/threats/assets?limit=9999');
+  return getJson('/api/threats/assets?limit=200');
 }
 
 export async function fetchToday(): Promise<{ items: Record<string, unknown>[] }> {
@@ -28,7 +28,7 @@ export async function fetchToday(): Promise<{ items: Record<string, unknown>[] }
 }
 
 export async function fetchTargets(page: number = 1, perPage: number = 50, surface: string = '', grade: string = '', search: string = ''): Promise<{ items: Record<string, unknown>[]; total: number; page: number; per_page: number; pages: number }> {
-  const params = new URLSearchParams({ page: String(page), per_page: String(perPage), fields: 'summary' });
+  const params = new URLSearchParams({ page: String(page), limit: String(perPage), fields: 'summary' });
   if (surface) params.set('surface', surface);
   if (grade) params.set('grade', grade);
   if (search) params.set('search', search);
@@ -51,7 +51,15 @@ export async function fetchTargetDetail(itemId: string | number): Promise<Record
   return getJson(`/api/threats/targets/${itemId}`);
 }
 
-export async function fetchGraph(): Promise<{ nodes: unknown[]; edges: unknown[] }> {
+export interface ThreatGraphResponse {
+  domain: 'threats';
+  targets: { items: Record<string, unknown>[]; total: number; limit: number; truncated: boolean };
+  assets: { items: Record<string, unknown>[]; total: number; limit: number; truncated: boolean };
+  status: 'complete' | 'partial';
+  note: string;
+}
+
+export async function fetchGraph(): Promise<ThreatGraphResponse> {
   return getJson('/api/threats/graph');
 }
 
