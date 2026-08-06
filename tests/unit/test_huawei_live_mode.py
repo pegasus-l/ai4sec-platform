@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 from ai4sec_platform.domains.threats.adapters import huawei_sources
 from ai4sec_platform.pipelines.steps.threat_raw import ImportHuaweiRawStep, NormalizeHuaweiRawStep, BuildHuaweiThreatItemsStep, _all_normalized_threat_items
 from ai4sec_platform.pipelines.context import PipelineContext
@@ -170,6 +172,27 @@ def test_full_scan_repo_collection_delegates_pagination_to_connector() -> None:
 
     assert len(repos) == 100
     assert requested_pages == [1]
+
+
+def test_gitcode_connector_marks_full_last_page_as_truncated(monkeypatch) -> None:
+    class FakeResponse:
+        def read(self):
+            return json.dumps([{"name": "repo", "web_url": "https://gitcode.com/org/repo"}]).encode()
+
+    monkeypatch.setattr("ai4sec_platform.sources.connectors.threats.gitcode.urllib.request.urlopen", lambda request, timeout: FakeResponse())
+    monkeypatch.setattr("ai4sec_platform.sources.connectors.threats.gitcode.time.sleep", lambda seconds: None)
+    connector = SourceRegistry().get("gitcode")
+
+    result = connector.fetch(
+        SourceFetchRequest(
+            source_name="gitcode:test",
+            params={"resource": "repos", "org": "test", "per_page": 1, "max_pages": 2},
+        )
+    )
+
+    assert len(result.items) == 2
+    assert result.metadata["truncated"] is True
+    assert result.errors == ["pagination limit reached at page 2 with a full page of 1 items"]
 
 
 def test_ascendhub_empty_target_is_reported_as_source_gap() -> None:

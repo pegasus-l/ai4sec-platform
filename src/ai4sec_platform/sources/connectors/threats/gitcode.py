@@ -53,6 +53,7 @@ class GitCodeConnector(LiveJsonConnector):
 
         all_items: list[dict[str, Any]] = []
         errors: list[str] = []
+        truncated = False
 
         for page in range(1, max_pages + 1):
             url = with_query(f"{self.api_base}/orgs/{org}/repos", {"type": "all", "page": page, "per_page": per_page})
@@ -95,6 +96,10 @@ class GitCodeConnector(LiveJsonConnector):
             all_items.extend(items)
             if len(items) < per_page:
                 break  # last page
+            if page == max_pages:
+                truncated = True
+                errors.append(f"pagination limit reached at page {max_pages} with a full page of {per_page} items")
+                break
 
             time.sleep(page_delay)  # small delay between pages to avoid rate limiting
 
@@ -102,6 +107,6 @@ class GitCodeConnector(LiveJsonConnector):
             source_name=request.source_name,
             connector_name=self.connector_name,
             items=all_items,
-            metadata={"url": f"{self.api_base}/orgs/{org}/repos", "org": org, "pages": page, "total": len(all_items)},
+            metadata={"url": f"{self.api_base}/orgs/{org}/repos", "org": org, "pages": page, "total": len(all_items), "truncated": truncated},
             errors=errors,
         )
