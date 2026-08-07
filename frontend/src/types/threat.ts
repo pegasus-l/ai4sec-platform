@@ -18,6 +18,8 @@ export interface ThreatRepo {
   surface: string;
   stars: number;
   cve: number;
+  coordinationCve?: number;
+  coordinationProjects?: string[];
   sa: number;
   sec: number;
   filtered: boolean;

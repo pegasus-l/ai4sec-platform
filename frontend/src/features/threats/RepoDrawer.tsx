@@ -124,6 +124,9 @@ export function RepoDrawerContent({ repo: initialRepo, onViewGraph, onOpenAsset 
         <p className="muted small" style={{ marginTop: 10 }}>
           {repo.summary}
         </p>
+        {(repo.coordinationCve ?? 0) > 0 && <p className="muted small" style={{ marginTop: 8 }}>
+          组织发布协调记录：{repo.coordinationCve} 条；目标仓库：{repo.coordinationProjects?.length ? repo.coordinationProjects.join('、') : '待分配'}。这些记录不等同于当前仓库自身漏洞。
+        </p>}
       </Card>
 
       {/* 2. Vuln / security线索 — inline timeline like demo v12 renderVulnList */}

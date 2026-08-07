@@ -64,9 +64,9 @@ function vulnDetailFromCve(entry: Record<string, unknown>): ThreatVulnDetail {
     severity: asString(entry.severity, 'unknown'),
     title: cveId,
     description,
-    source_type: 'security_repo_issue',
-    source_url: '',
-    source_path: '',
+    source_type: asString(entry.source_type, 'security_repo_issue'),
+    source_url: asString(entry.source_url),
+    source_path: asString(entry.source_path),
     published_date: asString(entry.published_date),
     matched_keywords: asArray<string>(entry.matched_keywords),
     patch_refs: asArray<string>(entry.patch_refs),
@@ -153,6 +153,7 @@ export function repoFromItem(item: Record<string, unknown>): ThreatRepo {
   const cve = asNumber(payload.cve_count);
   const sa = asNumber(payload.sa_count);
   const broad = asNumber(payload.broad_sec_count);
+  const coordination = asRecord(payload.coordination_summary ?? item.coordination_summary);
   // AI calibration overrides original rule scores if present
   // Fallback: pipeline writes to risk_assessment.semantic_review, API writes to ai_calibration
   const aiCal = asRecord(payload.ai_calibration);
@@ -192,6 +193,8 @@ export function repoFromItem(item: Record<string, unknown>): ThreatRepo {
     surface: calibratedSurface || (asString(attackSurface.primary_attack_surface) || asString(asRecord(attackSurface.signals).primary_attack_surface)) || inferSurface(inferredOrg, inferredName, asString(item.summary ?? payload.summary)),
     stars: asNumber(raw.star_count ?? raw.stargazers_count ?? payload.stars),
     cve,
+    coordinationCve: asNumber(coordination.cve_count),
+    coordinationProjects: asArray<string>(coordination.target_projects),
     sa,
     sec: cve + sa + broad,
     filtered: Boolean(asRecord(attackSurface.signals).filtered ?? payload.filtered),

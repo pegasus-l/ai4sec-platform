@@ -72,6 +72,17 @@ def targets(
                     "sa_count": signals.get("sa_count") or payload.get("sa_count") or 0,
                     "broad_sec_count": signals.get("broad_sec_count") or payload.get("broad_sec_count") or 0,
                 }
+                coordination = payload.get("coordination_summary") or {}
+                item["coordination_summary"] = {
+                    "cve_count": coordination.get("cve_count") or sum(
+                        1 for cve in payload.get("cves") or []
+                        if isinstance(cve, dict) and cve.get("association_scope") == "organization_coordination"
+                    ),
+                    "target_projects": coordination.get("target_projects") or sorted({
+                        str(cve.get("target_project")) for cve in payload.get("cves") or []
+                        if isinstance(cve, dict) and cve.get("target_project")
+                    }),
+                }
                 # AI calibration takes priority over rule-based surface
                 ai_cal = payload.get("ai_calibration") or {}
                 risk_assessment = payload.get("risk_assessment") or {}
