@@ -214,6 +214,46 @@ def test_cve_scout_reads_project_issue_items() -> None:
     assert kernel["cves"][0]["source_type"] == "project_issue"
 
 
+def test_cve_scout_parses_release_manifest_rows_as_coordination_findings() -> None:
+    projects = [
+        {
+            "org": "openeuler",
+            "name": "release-management",
+            "url": "https://atomgit.com/openeuler/release-management",
+            "star_count": 20,
+            "issues": [
+                {
+                    "title": "openEuler-22.03-LTS-SP4_update20260413 release",
+                    "body": """
+                    <table>
+                      <tr><td>序号</td><td>CVE</td><td>仓库</td><td>status</td><td>score</td><td>abi是否变化</td></tr>
+                      <tr><td>1</td><td><a href=https://atomgit.com/src-openeuler/libarchive/issues/65>65:CVE-2026-5121</a></td><td>libarchive</td><td>已完成</td><td><b>9.8</b></td><td>否</td></tr>
+                      <tr><td>2</td><td><a href=https://atomgit.com/src-openeuler/kernel/issues/14027>14027:CVE-2026-31788</a></td><td>kernel</td><td>已挂起</td><td><b>8.2</b></td><td>是</td></tr>
+                    </table>
+                    """,
+                    "html_url": "https://atomgit.com/openeuler/release-management/issues/2436",
+                    "created_at": "2026-04-13T09:17:51+08:00",
+                }
+            ],
+        }
+    ]
+
+    result = build_cve_scout_from_local_records(projects, None)
+    findings = result["orgs"]["openeuler"]["projects"]["release-management"]["cves"]
+    by_cve = {finding["cve_id"]: finding for finding in findings}
+    kernel_finding = by_cve["CVE-2026-31788"]
+
+    assert len(findings) == 2
+    assert kernel_finding["source_type"] == "release_manifest"
+    assert kernel_finding["association_scope"] == "organization_coordination"
+    assert kernel_finding["target_project"] == "kernel"
+    assert kernel_finding["release_status"] == "已挂起"
+    assert kernel_finding["cvss_score"] == 8.2
+    assert kernel_finding["severity"] == "high"
+    assert kernel_finding["abi_changed"] == "是"
+    assert kernel_finding["target_issue_url"] == "https://atomgit.com/src-openeuler/kernel/issues/14027"
+
+
 def test_cve_coverage_audit_warns_when_security_repo_has_no_cve() -> None:
     audit = _coverage_audit({"meta": {"total_projects_in": 100, "total_sec_items": 0, "total_cve_ids": 0, "orgs_with_security_repo": ["openharmony"]}})
     assert audit["status"] == "warn"

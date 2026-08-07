@@ -141,10 +141,21 @@ def _dedupe_key(item: dict[str, Any]) -> str:
 
 
 def _merge_duplicate_security_item(target: dict[str, Any], incoming: dict[str, Any]) -> None:
-    for key in ["project_hints", "matched_keywords"]:
+    for key in ["project_hints", "matched_keywords", "target_projects"]:
         merged = [*target.get(key, []), *incoming.get(key, [])]
         if merged:
             target[key] = sorted({str(item) for item in merged if item})
+    target_projects = [target.get("target_project"), incoming.get("target_project")]
+    if any(target_projects):
+        target["target_projects"] = sorted({str(item) for item in [*target.get("target_projects", []), *target_projects] if item})
+    for key, merged_key in [
+        ("release_name", "release_names"),
+        ("release_status", "release_statuses"),
+        ("target_issue_url", "target_issue_urls"),
+    ]:
+        values = [target.get(key), incoming.get(key), *target.get(merged_key, []), *incoming.get(merged_key, [])]
+        if any(values):
+            target[merged_key] = sorted({str(item) for item in values if item})
     for key, merged_key in [("source_url", "source_urls"), ("source_path", "source_paths")]:
         values = [target.get(key), incoming.get(key), *target.get(merged_key, []), *incoming.get(merged_key, [])]
         unique_values = [str(item) for item in values if item]
