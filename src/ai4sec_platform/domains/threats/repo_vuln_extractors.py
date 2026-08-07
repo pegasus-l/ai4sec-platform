@@ -14,26 +14,38 @@ def extract_repo_vulnerability_signals(item: dict[str, Any]) -> dict[str, Any]:
     cve_items = _merge_security_items(item.get("cves"), raw.get("cves"))
     sa_items = _merge_security_items(item.get("sa_items"), raw.get("sa_items"))
     broad_items = _merge_security_items(item.get("broad_sec_items"), raw.get("broad_sec_items"))
-    cves = _extract_cves(item, raw, cve_items)
+    coordination_items = [entry for entry in cve_items if entry.get("association_scope") == "organization_coordination"]
+    direct_items = [entry for entry in cve_items if entry.get("association_scope") != "organization_coordination"]
+    cves = _extract_cves(cve_items) or _extract_cves(item, raw)
+    direct_cves = _extract_cves(direct_items)
+    if not cve_items:
+        direct_cves = cves
+    coordination_cves = _extract_cves(coordination_items)
     text = _flatten_text(item, raw).lower()
+    direct_text = (text if not coordination_items else _flatten_text(direct_items, sa_items, broad_items)).lower()
     security_hits = [term for term in SECURITY_TERMS if term.lower() in text]
     severity_counts = _severity_counts([*cve_items, *sa_items, *broad_items])
+    direct_severity_counts = _severity_counts([*direct_items, *sa_items, *broad_items])
     source_types = sorted({str(entry.get("source_type") or "") for entry in [*cve_items, *sa_items, *broad_items] if entry.get("source_type")})
-    valid_like_items = [entry for entry in [*cve_items, *sa_items, *broad_items] if _looks_security_relevant(entry)]
+    valid_like_items = [entry for entry in [*direct_items, *sa_items, *broad_items] if _looks_security_relevant(entry)]
     return {
         "cve_ids": cves,
         "cve_count": len(cves) or _safe_int(item.get("cve_count") or raw.get("cve_count")),
+        "direct_cve_count": len(direct_cves),
+        "coordination_cve_count": len(coordination_cves),
         "sa_count": len(sa_items) or _safe_int(item.get("sa_count") or raw.get("sa_count")),
         "broad_sec_count": len(broad_items) or _safe_int(item.get("broad_sec_count") or raw.get("broad_sec_count")),
         "total_sec_items": len(cve_items) + len(sa_items) + len(broad_items) or _safe_int(item.get("total_sec_items") or raw.get("total_sec_items")),
         "security_hits": security_hits,
         "severity_counts": severity_counts,
         "max_severity": _max_severity(severity_counts),
+        "direct_severity_counts": direct_severity_counts,
+        "direct_max_severity": _max_severity(direct_severity_counts),
         "source_types": source_types,
         "scan_mode": item.get("scan_mode") or raw.get("scan_mode") or "",
         "has_security_repo_source": any(source.startswith("security_repo") for source in source_types),
         "has_project_issue_source": any(source.startswith("project_issue") for source in source_types),
-        "has_exploit_signal": any(term in text for term in ["exploit", "poc", "rce", "利用", "复现"]),
+        "has_exploit_signal": any(term in direct_text for term in ["exploit", "poc", "rce", "利用", "复现"]),
         "valid_like_security_items": len(valid_like_items),
         "sample_security_items": _sample_items([*cve_items, *sa_items, *broad_items]),
     }

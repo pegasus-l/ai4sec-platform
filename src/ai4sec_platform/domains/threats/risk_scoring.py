@@ -19,10 +19,10 @@ def score_threat_item(item: dict[str, Any]) -> ScoreResult:
     attack_surface = score_attack_surface(payload)
     raw_score = _safe_float(payload.get("risk_score") or item.get("score"), 0.0)
     signals = extract_repo_vulnerability_signals(payload)
-    cve_score = min(30.0, float(signals["cve_count"]) * 6.0)
+    cve_score = min(30.0, float(signals["direct_cve_count"]) * 6.0)
     sa_score = min(10.0, float(signals["sa_count"]) * 3.0)
     broad_score = min(12.0, float(signals["valid_like_security_items"]) * 1.5)
-    severity_score = SEVERITY_BONUS.get(str(signals.get("max_severity") or "unknown").lower(), 0.0)
+    severity_score = SEVERITY_BONUS.get(str(signals.get("direct_max_severity") or "unknown").lower(), 0.0)
     exploit_score = 20.0 if signals["has_exploit_signal"] else 0.0
     exposure_score = _exposure_score(payload, source_type)
     inherited_score = min(20.0, raw_score * 0.2 if raw_score > 1 else raw_score * 20)
@@ -38,12 +38,16 @@ def score_threat_item(item: dict[str, Any]) -> ScoreResult:
     priority = "critical" if total >= 90 else "high" if total >= 75 else "medium" if total >= 45 else "low"
     grade = "严重" if total >= 90 else "高" if total >= 75 else "中" if total >= 45 else "低"
     reasons = [*attack_surface.reasons]
-    if signals["cve_count"]:
-        reasons.append(f"关联历史 CVE {signals['cve_count']} 个")
+    if signals["direct_cve_count"]:
+        reasons.append(f"关联项目自身 CVE {signals['direct_cve_count']} 个")
+    if signals["coordination_cve_count"]:
+        reasons.append(f"组织发布协调 CVE {signals['coordination_cve_count']} 个（不计入项目自身风险）")
     if signals["sa_count"]:
         reasons.append(f"关联安全公告 {signals['sa_count']} 个")
-    if signals.get("max_severity") not in {"", "unknown"}:
-        reasons.append(f"最高严重性 {signals['max_severity']}")
+    if signals.get("direct_max_severity") not in {"", "unknown"}:
+        reasons.append(f"项目自身证据最高严重性 {signals['direct_max_severity']}")
+    elif signals.get("coordination_cve_count") and signals.get("max_severity") not in {"", "unknown"}:
+        reasons.append(f"组织协调证据最高严重性 {signals['max_severity']}（不计入项目自身风险）")
     if signals["has_security_repo_source"]:
         reasons.append("证据来自 security 子项目，可信度较高")
     if signals["has_project_issue_source"]:

@@ -265,6 +265,10 @@ def _collect_live_repos_with_errors(registry: SourceRegistry, params: dict[str, 
     chunks = bounded_map(orgs, lambda entry: _collect_org_repos(registry, entry, params, connector_max_pages=connector_max_pages, per_page=per_page), max_workers=max_workers)
     repos = [repo for chunk, _ in chunks for repo in chunk]
     errors = [error for _, chunk_errors in chunks for error in chunk_errors]
+    requested_projects = _as_source_set(params.get("project_names"))
+    if requested_projects:
+        requested_lower = {name.lower() for name in requested_projects}
+        repos = [repo for repo in repos if str(repo.get("name") or "").lower() in requested_lower]
     return repos, errors
 
 

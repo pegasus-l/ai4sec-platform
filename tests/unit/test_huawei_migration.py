@@ -153,6 +153,28 @@ def test_cve_scout_deduped_cve_keeps_multiple_source_repo_hints() -> None:
     assert "component_b" in project["cves"][0].get("source_repos", [])
 
 
+def test_cve_scout_prefers_issue_url_project_hint_over_description_match() -> None:
+    projects = [
+        {"org": "openharmony", "name": "security", "url": "https://gitcode.com/openharmony/security", "star_count": 10, "is_security_repo": True},
+        {"org": "openharmony", "name": "kernel_linux_4.19", "url": "https://gitcode.com/openharmony/kernel_linux_4.19", "star_count": 10},
+    ]
+    materials = [
+        {
+            "org": "openharmony",
+            "repo": "security",
+            "material_type": "security_repo_issue",
+            "title": "kernel linux vulnerability",
+            "description": "CVE-2026-99991 security issue for linux-4.19",
+            "html_url": "https://gitcode.com/openharmony/kernel_linux_4.19/issues/149",
+        }
+    ]
+
+    result = build_cve_scout_from_local_records(projects, None, materials)
+
+    assert result["orgs"]["openharmony"]["projects"]["kernel_linux_4.19"]["cve_count"] == 1
+    assert result["orgs"]["openharmony"]["projects"]["security"]["cve_count"] == 0
+
+
 def test_cve_scout_skips_security_repo_reparse_when_org_materials_present() -> None:
     projects = [
         {

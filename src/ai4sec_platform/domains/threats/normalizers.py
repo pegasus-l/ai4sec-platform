@@ -47,6 +47,7 @@ def normalize_cve_project(source: str, item: dict[str, Any]) -> dict[str, Any]:
     name = item.get("name") or item.get("repo") or "unknown"
     cves = item.get("cves") or []
     coordination_cves = [cve for cve in cves if cve.get("association_scope") == "organization_coordination"]
+    direct_cves = [cve for cve in cves if cve.get("association_scope") != "organization_coordination"]
     target_projects = sorted({str(cve.get("target_project")) for cve in coordination_cves if cve.get("target_project")})
     cve_count = item.get("cve_count") or len(cves)
     sa_count = item.get("sa_count") or len(item.get("sa_items") or [])
@@ -66,7 +67,7 @@ def normalize_cve_project(source: str, item: dict[str, Any]) -> dict[str, Any]:
         "summary": "",
         "security_summary": security_summary,
         "summary_source": "security_summary",
-        "risk_score": cve_count or sa_count or broad_sec_count,
+        "risk_score": len(direct_cves) or sa_count or broad_sec_count,
         "cve_count": cve_count,
         "sa_count": sa_count,
         "broad_sec_count": broad_sec_count,
@@ -74,6 +75,8 @@ def normalize_cve_project(source: str, item: dict[str, Any]) -> dict[str, Any]:
         "scan_mode": item.get("scan_mode") or "",
         "security_items": item.get("total_sec_items") or 0,
         "cves": cves,
+        "direct_cve_count": len(direct_cves),
+        "coordination_cve_count": len(coordination_cves),
         "coordination_summary": {
             "cve_count": len(coordination_cves),
             "target_projects": target_projects,

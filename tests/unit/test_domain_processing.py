@@ -55,6 +55,8 @@ def test_threat_processing_extracts_history_cves_and_scores_risk() -> None:
     attack_surface = score_attack_surface({"name": "kernel_parser", "summary": "kernel parser security permission", "stars": 80, "cve_count": 5})
     scoring = score_threat_item(item)
     assert signals["cve_count"] == 2
+    assert signals["direct_cve_count"] == 2
+    assert signals["coordination_cve_count"] == 0
     assert signals["sa_count"] == 1
     assert signals["broad_sec_count"] == 1
     assert attack_surface.grade == "A"

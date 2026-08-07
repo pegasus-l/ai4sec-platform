@@ -38,7 +38,11 @@ def score_attack_surface(item: dict[str, Any]) -> ScoreResult:
     name = _repo_name(payload, raw)
     desc = str(payload.get("summary") or payload.get("description") or raw.get("description") or "")
     stars = _int(payload.get("stars") or raw.get("star_count") or raw.get("stars") or 0)
-    cve_count = _int(payload.get("cve_count") or len(payload.get("cves") or []) or raw.get("cve_count") or 0)
+    cve_count = _int(
+        payload["direct_cve_count"]
+        if "direct_cve_count" in payload
+        else payload.get("cve_count") or len(payload.get("cves") or []) or raw.get("cve_count") or 0
+    )
     language = _lang_score(name, desc)
     input_surface, primary_surface = _input_score(name, desc)
     historical_cve = _cve_score(name, cve_count)

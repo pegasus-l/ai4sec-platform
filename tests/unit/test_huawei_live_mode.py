@@ -174,6 +174,29 @@ def test_full_scan_repo_collection_delegates_pagination_to_connector() -> None:
     assert requested_pages == [1]
 
 
+def test_repo_collection_can_filter_to_requested_projects() -> None:
+    class FakeConnector:
+        def fetch(self, request):
+            return type("Result", (), {
+                "errors": [],
+                "items": [
+                    {"name": "release-management", "web_url": "https://atomgit.com/openeuler/release-management"},
+                    {"name": "kernel", "web_url": "https://atomgit.com/openeuler/kernel"},
+                ],
+            })()
+
+    class FakeRegistry:
+        def get(self, platform):
+            return FakeConnector()
+
+    repos = huawei_sources._collect_live_repos(
+        FakeRegistry(),
+        {"orgs": ["atomgit:openeuler"], "project_names": ["release-management"], "max_workers": 1},
+    )
+
+    assert [repo["name"] for repo in repos] == ["release-management"]
+
+
 def test_gitcode_connector_marks_full_last_page_as_truncated(monkeypatch) -> None:
     class FakeResponse:
         def read(self):

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import Counter
+import re
 from typing import Any
 
 from ai4sec_platform.domains.threats.issue_extractors import extract_security_items_from_issues, extract_security_items_from_pull_requests
@@ -146,6 +147,10 @@ def _with_material_metadata(items: list[dict[str, Any]], material: dict[str, Any
                 "source_org": item.get("source_org") or material.get("org") or material.get("owner") or "",
                 "source_security_repo": item.get("source_security_repo") or material.get("repo") or material.get("repo_name") or "",
                 "source_platform": item.get("source_platform") or material.get("platform") or "",
+                "project_hints": sorted({
+                    *[str(value) for value in item.get("project_hints") or [] if value],
+                    *([_project_from_issue_url(str(item.get("source_url") or ""))] if _project_from_issue_url(str(item.get("source_url") or "")) else []),
+                }),
             }
         )
     return enriched
@@ -228,7 +233,8 @@ def _match_pool(project_name: str, pool: list[dict[str, Any]]) -> list[dict[str,
         hints = [str(hint).lower() for hint in item.get("project_hints") or []]
         description = str(item.get("description") or "").lower()
         source_repos = [str(item.get("source_repo") or "").lower(), *[str(value).lower() for value in item.get("source_repos") or []]]
-        if lowered in hints or (lowered and lowered in description) or any(_source_repo_matches(lowered, source_repo) for source_repo in source_repos):
+        has_explicit_hints = bool(hints or any(source_repos))
+        if lowered in hints or any(_source_repo_matches(lowered, source_repo) for source_repo in source_repos) or (not has_explicit_hints and lowered and lowered in description):
             matched.append(item)
     return dedupe_security_items(matched)
 
@@ -238,6 +244,11 @@ def _source_repo_matches(project_name: str, source_repo: str) -> bool:
         return False
     normalized_source = source_repo.replace("/", " ").replace("|", " ").strip()
     return project_name == normalized_source or project_name in normalized_source.split() or project_name in normalized_source
+
+
+def _project_from_issue_url(source_url: str) -> str:
+    match = re.search(r"/(?:repos/)?[^/]+/([^/]+)/(?:issues|pull_requests)/", source_url or "", re.I)
+    return match.group(1) if match else ""
 
 
 def _normalize_existing_project_cve(project: dict[str, Any], existing: dict[str, Any]) -> dict[str, Any]:

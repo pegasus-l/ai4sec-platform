@@ -71,6 +71,8 @@ def targets(
                     "cve_count": signals.get("cve_count") or payload.get("cve_count") or 0,
                     "sa_count": signals.get("sa_count") or payload.get("sa_count") or 0,
                     "broad_sec_count": signals.get("broad_sec_count") or payload.get("broad_sec_count") or 0,
+                    "direct_cve_count": signals.get("direct_cve_count") if signals.get("direct_cve_count") is not None else payload.get("direct_cve_count", 0),
+                    "coordination_cve_count": signals.get("coordination_cve_count") if signals.get("coordination_cve_count") is not None else payload.get("coordination_cve_count", 0),
                 }
                 coordination = payload.get("coordination_summary") or {}
                 item["coordination_summary"] = {
