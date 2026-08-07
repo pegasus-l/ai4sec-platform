@@ -73,6 +73,24 @@ def test_threat_cve_finding_title_does_not_claim_cve_when_none_found() -> None:
     assert "CVE 线索" not in normalized["security_title"]
 
 
+def test_release_management_legacy_cves_are_normalized_as_coordination() -> None:
+    normalized = normalize_huawei_item(
+        "cve_findings",
+        {
+            "org": "openeuler",
+            "name": "release-management",
+            "cves": [{"cve_id": "CVE-2026-12345", "source_type": "project_issue"}],
+            "cve_count": 1,
+            "total_sec_items": 1,
+        },
+    )
+
+    assert normalized["cves"][0]["association_scope"] == "organization_coordination"
+    assert normalized["direct_cve_count"] == 0
+    assert normalized["coordination_cve_count"] == 1
+    assert normalized["coordination_summary"]["target_projects"] == []
+
+
 def test_threat_repo_and_cve_findings_merge_to_single_target(tmp_path) -> None:
     conn = sqlite3.connect(":memory:")
     conn.row_factory = sqlite3.Row

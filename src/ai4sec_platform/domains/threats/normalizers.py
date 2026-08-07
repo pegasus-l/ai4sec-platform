@@ -45,7 +45,17 @@ def normalize_repo(source: str, item: dict[str, Any]) -> dict[str, Any]:
 def normalize_cve_project(source: str, item: dict[str, Any]) -> dict[str, Any]:
     org = item.get("org") or _org_from_url(item.get("url", ""))
     name = item.get("name") or item.get("repo") or "unknown"
-    cves = item.get("cves") or []
+    coordination_project = str(name).lower() == "release-management"
+    cves = [
+        {
+            **cve,
+            "association_scope": "organization_coordination",
+            "association_reason": "release_management_manifest",
+        }
+        if coordination_project and isinstance(cve, dict) and not cve.get("association_scope")
+        else cve
+        for cve in item.get("cves") or []
+    ]
     coordination_cves = [cve for cve in cves if cve.get("association_scope") == "organization_coordination"]
     direct_cves = [cve for cve in cves if cve.get("association_scope") != "organization_coordination"]
     target_projects = sorted({str(cve.get("target_project")) for cve in coordination_cves if cve.get("target_project")})
