@@ -91,6 +91,30 @@ def test_release_management_legacy_cves_are_normalized_as_coordination() -> None
     assert normalized["coordination_summary"]["target_projects"] == []
 
 
+def test_release_management_security_materials_do_not_raise_project_risk() -> None:
+    normalized = normalize_huawei_item(
+        "cve_findings",
+        {
+            "org": "openeuler",
+            "name": "release-management",
+            "sa_items": [{"sa_id": "openEuler-SA-2026-0001", "severity": "critical", "source_type": "project_issue"}],
+            "broad_sec_items": [{"description": "RCE exploit release note", "severity": "critical", "source_type": "project_issue"}],
+            "sa_count": 1,
+            "broad_sec_count": 1,
+            "total_sec_items": 2,
+        },
+    )
+    scoring = score_threat_item(normalized)
+
+    assert normalized["direct_sa_count"] == 0
+    assert normalized["coordination_sa_count"] == 1
+    assert normalized["direct_broad_sec_count"] == 0
+    assert normalized["coordination_broad_sec_count"] == 1
+    assert scoring.breakdown["security_advisory"] == 0
+    assert scoring.breakdown["broad_security"] == 0
+    assert scoring.breakdown["exploit"] == 0
+
+
 def test_threat_repo_and_cve_findings_merge_to_single_target(tmp_path) -> None:
     conn = sqlite3.connect(":memory:")
     conn.row_factory = sqlite3.Row

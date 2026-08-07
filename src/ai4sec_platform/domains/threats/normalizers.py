@@ -60,8 +60,12 @@ def normalize_cve_project(source: str, item: dict[str, Any]) -> dict[str, Any]:
     direct_cves = [cve for cve in cves if cve.get("association_scope") != "organization_coordination"]
     target_projects = sorted({str(cve.get("target_project")) for cve in coordination_cves if cve.get("target_project")})
     cve_count = item.get("cve_count") or len(cves)
-    sa_count = item.get("sa_count") or len(item.get("sa_items") or [])
-    broad_sec_count = item.get("broad_sec_count") or len(item.get("broad_sec_items") or [])
+    sa_items = [_coordination_item(value) if coordination_project else value for value in item.get("sa_items") or []]
+    broad_sec_items = [_coordination_item(value) if coordination_project else value for value in item.get("broad_sec_items") or []]
+    direct_sa_items = [value for value in sa_items if value.get("association_scope") != "organization_coordination"]
+    direct_broad_items = [value for value in broad_sec_items if value.get("association_scope") != "organization_coordination"]
+    sa_count = item.get("sa_count") or len(sa_items)
+    broad_sec_count = item.get("broad_sec_count") or len(broad_sec_items)
     total_sec_items = item.get("total_sec_items") or cve_count + sa_count + broad_sec_count
     key = f"repo:{org}/{name}".lower()
     security_summary = _security_finding_summary(cve_count=cve_count, sa_count=sa_count, broad_sec_count=broad_sec_count, total_sec_items=total_sec_items)
@@ -77,7 +81,7 @@ def normalize_cve_project(source: str, item: dict[str, Any]) -> dict[str, Any]:
         "summary": "",
         "security_summary": security_summary,
         "summary_source": "security_summary",
-        "risk_score": len(direct_cves) or sa_count or broad_sec_count,
+        "risk_score": len(direct_cves) or len(direct_sa_items) or len(direct_broad_items),
         "cve_count": cve_count,
         "sa_count": sa_count,
         "broad_sec_count": broad_sec_count,
@@ -87,14 +91,24 @@ def normalize_cve_project(source: str, item: dict[str, Any]) -> dict[str, Any]:
         "cves": cves,
         "direct_cve_count": len(direct_cves),
         "coordination_cve_count": len(coordination_cves),
+        "direct_sa_count": len(direct_sa_items),
+        "coordination_sa_count": len(sa_items) - len(direct_sa_items),
+        "direct_broad_sec_count": len(direct_broad_items),
+        "coordination_broad_sec_count": len(broad_sec_items) - len(direct_broad_items),
         "coordination_summary": {
             "cve_count": len(coordination_cves),
             "target_projects": target_projects,
         },
-        "sa_items": item.get("sa_items") or [],
-        "broad_sec_items": item.get("broad_sec_items") or [],
+        "sa_items": sa_items,
+        "broad_sec_items": broad_sec_items,
         "raw": item,
     }
+
+
+def _coordination_item(value: Any) -> Any:
+    if not isinstance(value, dict) or value.get("association_scope"):
+        return value
+    return {**value, "association_scope": "organization_coordination", "association_reason": "release_management_manifest"}
 
 
 def normalize_firmware(source: str, item: dict[str, Any]) -> dict[str, Any]:
