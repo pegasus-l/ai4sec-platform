@@ -15,7 +15,12 @@ def extract_repo_vulnerability_signals(item: dict[str, Any]) -> dict[str, Any]:
     sa_items = _merge_security_items(item.get("sa_items"), raw.get("sa_items"))
     broad_items = _merge_security_items(item.get("broad_sec_items"), raw.get("broad_sec_items"))
     coordination_items = [entry for entry in cve_items if entry.get("association_scope") == "organization_coordination"]
-    direct_items = [entry for entry in cve_items if entry.get("association_scope") != "organization_coordination"]
+    direct_items = [
+        entry
+        for entry in cve_items
+        if entry.get("association_scope") != "organization_coordination" and entry.get("risk_eligible") is not False
+    ]
+    review_items = [entry for entry in cve_items if entry.get("risk_eligible") is False]
     coordination_sa_items = [entry for entry in sa_items if entry.get("association_scope") == "organization_coordination"]
     direct_sa_items = [entry for entry in sa_items if entry.get("association_scope") != "organization_coordination"]
     coordination_broad_items = [entry for entry in broad_items if entry.get("association_scope") == "organization_coordination"]
@@ -39,6 +44,7 @@ def extract_repo_vulnerability_signals(item: dict[str, Any]) -> dict[str, Any]:
         "cve_count": len(cves) or _safe_int(item.get("cve_count") or raw.get("cve_count")),
         "direct_cve_count": len(direct_cves),
         "coordination_cve_count": len(coordination_cves),
+        "review_cve_count": len(_extract_cves(review_items)),
         "sa_count": len(sa_items) or _safe_int(item.get("sa_count") or raw.get("sa_count")),
         "broad_sec_count": len(broad_items) or _safe_int(item.get("broad_sec_count") or raw.get("broad_sec_count")),
         "direct_sa_count": len(direct_sa_items),

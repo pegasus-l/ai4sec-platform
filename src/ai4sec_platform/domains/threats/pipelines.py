@@ -3,6 +3,7 @@ from __future__ import annotations
 from ai4sec_platform.pipelines.base import PipelineDefinition
 from ai4sec_platform.pipelines.steps.threat_asset_import import ImportHuaweiThreatAssetsStep
 from ai4sec_platform.pipelines.steps.threat_cve_scout import HuaweiCveScoutStep
+from ai4sec_platform.pipelines.steps.threat_cve_authority import ValidateThreatCveAuthorityStep
 from ai4sec_platform.pipelines.steps.threat_report import BuildHuaweiThreatReportStep
 from ai4sec_platform.pipelines.steps.threat_score_filter import HuaweiAttackSurfaceScoreStep
 from ai4sec_platform.pipelines.steps.threat_sources import CollectHuaweiSourcesStep
@@ -31,7 +32,7 @@ def threat_risk_pipeline() -> PipelineDefinition:
 
 
 def huawei_cve_scout_pipeline() -> PipelineDefinition:
-    return PipelineDefinition(name="threats.huawei_cve_scout_pipeline", domain="threats", steps=[HuaweiCveScoutStep()])
+    return PipelineDefinition(name="threats.huawei_cve_scout_pipeline", domain="threats", steps=[HuaweiCveScoutStep(), ValidateThreatCveAuthorityStep()])
 
 
 def huawei_attack_surface_pipeline() -> PipelineDefinition:
@@ -49,6 +50,7 @@ def huawei_full_migration_pipeline() -> PipelineDefinition:
         steps=[
             CollectHuaweiSourcesStep(),
             HuaweiCveScoutStep(),
+            ValidateThreatCveAuthorityStep(),
             HuaweiAttackSurfaceScoreStep(),
             ImportHuaweiRawStep(),
             NormalizeHuaweiRawStep(),

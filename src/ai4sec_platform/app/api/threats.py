@@ -73,6 +73,7 @@ def targets(
                     "broad_sec_count": signals.get("broad_sec_count") or payload.get("broad_sec_count") or 0,
                     "direct_cve_count": signals.get("direct_cve_count") if signals.get("direct_cve_count") is not None else payload.get("direct_cve_count", 0),
                     "coordination_cve_count": signals.get("coordination_cve_count") if signals.get("coordination_cve_count") is not None else payload.get("coordination_cve_count", 0),
+                    "review_cve_count": signals.get("review_cve_count") if signals.get("review_cve_count") is not None else payload.get("review_cve_count", 0),
                     "direct_sa_count": signals.get("direct_sa_count") if signals.get("direct_sa_count") is not None else payload.get("direct_sa_count", 0),
                     "coordination_sa_count": signals.get("coordination_sa_count") if signals.get("coordination_sa_count") is not None else payload.get("coordination_sa_count", 0),
                     "direct_broad_sec_count": signals.get("direct_broad_sec_count") if signals.get("direct_broad_sec_count") is not None else payload.get("direct_broad_sec_count", 0),

@@ -194,6 +194,7 @@ export function repoFromItem(item: Record<string, unknown>): ThreatRepo {
     stars: asNumber(raw.star_count ?? raw.stargazers_count ?? payload.stars),
     cve,
     coordinationCve: asNumber(coordination.cve_count),
+    reviewCve: asNumber(payload.review_cve_count),
     coordinationProjects: asArray<string>(coordination.target_projects),
     sa,
     sec: cve + sa + broad,

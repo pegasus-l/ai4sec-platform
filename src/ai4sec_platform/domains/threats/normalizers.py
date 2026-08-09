@@ -57,7 +57,12 @@ def normalize_cve_project(source: str, item: dict[str, Any]) -> dict[str, Any]:
         for cve in item.get("cves") or []
     ]
     coordination_cves = [cve for cve in cves if cve.get("association_scope") == "organization_coordination"]
-    direct_cves = [cve for cve in cves if cve.get("association_scope") != "organization_coordination"]
+    direct_cves = [
+        cve
+        for cve in cves
+        if cve.get("association_scope") != "organization_coordination" and cve.get("risk_eligible") is not False
+    ]
+    review_cves = [cve for cve in cves if cve.get("risk_eligible") is False]
     target_projects = sorted({str(cve.get("target_project")) for cve in coordination_cves if cve.get("target_project")})
     cve_count = item.get("cve_count") or len(cves)
     sa_items = [_coordination_item(value) if coordination_project else value for value in item.get("sa_items") or []]
@@ -90,6 +95,7 @@ def normalize_cve_project(source: str, item: dict[str, Any]) -> dict[str, Any]:
         "security_items": item.get("total_sec_items") or 0,
         "cves": cves,
         "direct_cve_count": len(direct_cves),
+        "review_cve_count": len(review_cves),
         "coordination_cve_count": len(coordination_cves),
         "direct_sa_count": len(direct_sa_items),
         "coordination_sa_count": len(sa_items) - len(direct_sa_items),
