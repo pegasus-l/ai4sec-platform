@@ -157,6 +157,46 @@ def test_threat_repo_and_cve_findings_merge_to_single_target(tmp_path) -> None:
     assert payload["summary_source"] in {"model_translation", "local_rule_summary", "repo_description"}
 
 
+def test_threat_high_risk_queue_resolves_when_score_drops(tmp_path) -> None:
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    init_db(conn)
+    high_risk = normalize_huawei_item(
+        "cve_findings",
+        {
+            "org": "test",
+            "name": "kernel-parser",
+            "url": "https://example.test/test/kernel-parser",
+            "star_count": 100,
+            "cves": [
+                {"cve_id": f"CVE-2026-{99990 + index}", "severity": "critical", "description": "RCE exploit PoC", "source_type": "project_issue"}
+                for index in range(5)
+            ],
+        },
+    )
+    build_threat_items(conn, [high_risk], run_id="high", repo_summary_cache_dir=tmp_path)
+    pending = conn.execute("SELECT * FROM human_queue_items WHERE domain = 'threats'").fetchone()
+    assert pending["status"] == "pending"
+    assert pending["dedupe_key"]
+    build_threat_items(conn, [high_risk], run_id="high-again", repo_summary_cache_dir=tmp_path)
+    assert conn.execute("SELECT COUNT(*) FROM human_queue_items WHERE domain = 'threats'").fetchone()[0] == 1
+
+    low_risk = normalize_huawei_item(
+        "cve_findings",
+        {
+            "org": "test",
+            "name": "kernel-parser",
+            "url": "https://example.test/test/kernel-parser",
+            "star_count": 100,
+            "cves": [{"cve_id": "CVE-2026-99999", "severity": "critical", "association_scope": "organization_coordination"}],
+        },
+    )
+    build_threat_items(conn, [low_risk], run_id="low", repo_summary_cache_dir=tmp_path)
+
+    resolved = conn.execute("SELECT * FROM human_queue_items WHERE domain = 'threats'").fetchone()
+    assert resolved["status"] == "resolved"
+
+
 def test_threat_assets_use_stable_source_identity_for_upsert() -> None:
     conn = sqlite3.connect(":memory:")
     conn.row_factory = sqlite3.Row

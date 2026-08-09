@@ -111,17 +111,40 @@ def build_threat_items(
             payload={"run_id": run_id, "item_key": payload.get("item_key"), "scoring": scoring.as_payload()},
         )
         evidence += 1
-        if scoring.score >= 80 and not filtered:
-            repo.create_human_queue_item(
-                conn,
-                domain="threats",
-                item_id=domain_id,
-                queue_type="high_risk_target_review",
-                priority=1,
-                reason="Raw pipeline 识别到高风险目标，建议人工确认是否加入跟踪队列。",
-                payload={"run_id": run_id, "item_key": payload.get("item_key")},
-            )
+        _sync_high_risk_queue(
+            conn,
+            domain_id=domain_id,
+            run_id=run_id,
+            item_key=str(payload.get("item_key") or ""),
+            high_risk=scoring.score >= 80 and not filtered,
+        )
     return {"items": targets, "evidence": evidence, "merged_inputs": len(items), "enriched_summaries": enriched_summaries}
+
+
+def _sync_high_risk_queue(
+    conn: sqlite3.Connection,
+    *,
+    domain_id: int,
+    run_id: str,
+    item_key: str,
+    high_risk: bool,
+) -> None:
+    if high_risk:
+        repo.create_human_queue_item(
+            conn,
+            domain="threats",
+            item_id=domain_id,
+            queue_type="high_risk_target_review",
+            priority=1,
+            reason="Raw pipeline 识别到高风险目标，建议人工确认是否加入跟踪队列。",
+            payload={"run_id": run_id, "item_key": item_key},
+            dedupe_key=f"threat-target:{domain_id}:high-risk",
+        )
+        return
+    conn.execute(
+        "UPDATE human_queue_items SET status = 'resolved', updated_at = ? WHERE domain = 'threats' AND item_id = ? AND queue_type = 'high_risk_target_review' AND status = 'pending'",
+        (repo.utc_now(), domain_id),
+    )
 
 
 def _existing_threat_item_ids(conn: sqlite3.Connection) -> tuple[dict[tuple[str, str], int], dict[tuple[str, str], int]]:
