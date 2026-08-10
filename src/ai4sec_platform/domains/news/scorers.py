@@ -149,7 +149,14 @@ def _resolve_source_authority(item: dict[str, Any], project_root: Path) -> float
 
     # 直接匹配 source_type
     if source_type in sources:
-        return float(sources[source_type])
+        val = sources[source_type]
+        if isinstance(val, (int, float)):
+            return float(val)
+        if isinstance(val, str):
+            try:
+                return float(val)
+            except ValueError:
+                pass
 
     # RSS: 查 overrides
     if source_type in ("rss", "feed"):

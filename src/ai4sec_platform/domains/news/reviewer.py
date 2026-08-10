@@ -252,10 +252,10 @@ def _fallback_review(item: dict[str, Any], tech_map: AgentTechMap, reason: str) 
 def _weighted_score(item_type: str, breakdown: dict[str, float]) -> float:
     if not breakdown:
         return 0.0
-    from ai4sec_platform.pipelines.steps.code_link import _load_scoring_config
+    from ai4sec_platform.domains.news.scorers import _load_scoring_config
     # 尝试从配置读权重，读不到用默认
     try:
-        cfg = _load_scoring_config(Path("."))
+        cfg = _load_scoring_config(Path("/opt/ai-security-fusion-v2/ai4sec"))
         key = "llm_paper_weights" if item_type in ("paper", "arxiv") else "llm_project_weights"
         weights = cfg.get(key, cfg.get("llm_project_weights", {}))
     except Exception:
