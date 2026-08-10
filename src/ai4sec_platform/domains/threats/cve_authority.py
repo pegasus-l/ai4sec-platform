@@ -10,6 +10,7 @@ from urllib.request import Request, urlopen
 
 
 CVE_API = "https://cveawg.mitre.org/api/cve/{cve_id}"
+CVE_RE = re.compile(r"CVE-\d{4}-\d{4,7}", re.IGNORECASE)
 COMPONENT_RE = re.compile(
     r"漏洞归属组件[:：]\s*(.*?)(?:漏洞归属的版本|漏洞归属分支|CVSS)",
     re.IGNORECASE,
@@ -38,6 +39,22 @@ def validate_high_fanout_cves(
     cache_hits = 0
     live_requests = 0
     cache_dir.mkdir(parents=True, exist_ok=True)
+    for associations in findings.values():
+        for association in associations:
+            finding = association["finding"]
+            cve_id = str(finding.get("cve_id") or "").upper()
+            description_cves = extract_description_cve_ids(str(finding.get("description") or ""))
+            if description_cves and cve_id not in description_cves:
+                finding["authority_validation"] = {
+                    "status": "identifier_mismatch",
+                    "declared_cve_ids": description_cves,
+                    "authoritative_products": [],
+                    "authority_state": "",
+                    "authority_source": "local",
+                }
+                finding["risk_eligible"] = False
+                finding["risk_exclusion_reason"] = "cve_identifier_description_mismatch"
+                status_counts["identifier_mismatch"] += 1
     for cve_id in selected:
         authority, source = _load_authority(cve_id, cache_dir, mode=mode, refresh=refresh)
         cache_hits += source == "cache"
@@ -46,6 +63,8 @@ def validate_high_fanout_cves(
         authority_state = str((authority.get("cveMetadata") or {}).get("state") or "")
         for association in findings[cve_id]:
             finding = association["finding"]
+            if (finding.get("authority_validation") or {}).get("status") == "identifier_mismatch":
+                continue
             declared = extract_declared_component(str(finding.get("description") or ""))
             status = compare_component(declared, products)
             finding["authority_validation"] = {
@@ -75,6 +94,10 @@ def extract_declared_component(description: str) -> str:
     if not match:
         return ""
     return URL_RE.sub("", match.group(1)).strip(" ,:：[]()")[:160]
+
+
+def extract_description_cve_ids(description: str) -> list[str]:
+    return sorted({match.upper() for match in CVE_RE.findall(description or "")})
 
 
 def authoritative_products(payload: dict[str, Any]) -> list[str]:

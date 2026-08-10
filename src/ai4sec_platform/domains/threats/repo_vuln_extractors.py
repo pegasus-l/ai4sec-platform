@@ -87,13 +87,31 @@ def _merge_security_items(*values: Any) -> list[dict[str, Any]]:
 def _extract_cves(*values: Any) -> list[str]:
     found: list[str] = []
     seen = set()
-    for value in values:
-        for match in CVE_RE.findall(repr(value)):
+
+    def collect(value: Any) -> None:
+        if isinstance(value, dict):
+            explicit = str(value.get("cve_id") or "")
+            if explicit:
+                add_matches(explicit)
+                return
+            for nested in value.values():
+                collect(nested)
+            return
+        if isinstance(value, (list, tuple, set)):
+            for nested in value:
+                collect(nested)
+            return
+        add_matches(str(value))
+
+    def add_matches(text: str) -> None:
+        for match in CVE_RE.findall(text):
             cve = match.upper()
-            if cve in seen:
-                continue
-            seen.add(cve)
-            found.append(cve)
+            if cve not in seen:
+                seen.add(cve)
+                found.append(cve)
+
+    for value in values:
+        collect(value)
     return found
 
 

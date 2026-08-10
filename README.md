@@ -462,7 +462,7 @@ timeout_seconds=15     # 单请求超时
 
 默认威胁扫描覆盖旧实现同一批 25 个组织，但为了避免一次运行阻塞，默认每个组织抓取 1 页、每页 50 个 repo，security 深挖限制为少量仓库/文件，风险语义复核默认 Top 5。需要放大时通过 API/CLI 参数传 `scan_profile=full` 或显式设置 `page_limit`、`per_page`、`security_repo_limit`、`security_file_limit`、`risk_review_limit`。
 
-CVE 权威组件校验默认关闭，避免每次扫描额外请求外部服务。可通过 `cve_authority_mode=cache` 只读本地缓存，或通过 `cve_authority_mode=live` 在缓存缺失时查询 CVE.org；默认只校验项目扇出大于等于 5 的前 25 个 CVE，可用 `cve_authority_min_fanout` 和 `cve_authority_limit` 调整。只有明确的组件冲突会被标记为人工复核并排除项目自身风险，查询失败、缓存缺失或损坏不会自动判为误收。
+CVE 权威组件校验默认关闭，避免每次扫描额外请求外部服务。可通过 `cve_authority_mode=cache` 只读本地缓存，或通过 `cve_authority_mode=live` 在缓存缺失时查询 CVE.org；默认只校验项目扇出大于等于 5 的前 25 个 CVE，可用 `cve_authority_min_fanout` 和 `cve_authority_limit` 调整。结构化 CVE ID 与正文 ID 冲突可在本地直接识别；明确的 ID 或组件冲突会被标记为人工复核并排除项目自身风险，查询失败、缓存缺失或损坏不会自动判为误收。
 
 示例：
 

@@ -102,6 +102,54 @@ def test_invalid_cache_does_not_mark_association_as_mismatch(tmp_path) -> None:
             assert project["cves"][0].get("risk_eligible", True) is True
 
 
+def test_identifier_mismatch_is_local_and_does_not_require_fanout(tmp_path) -> None:
+    scout = {
+        "orgs": {
+            "cann": {
+                "projects": {
+                    "ge": {
+                        "cves": [
+                            {
+                                "cve_id": "CVE-2026-42040",
+                                "description": "漏洞编号：CVE-2026-42033 漏洞归属组件：boost CVSS分值：7.5",
+                            }
+                        ]
+                    }
+                }
+            }
+        }
+    }
+
+    metrics = validate_high_fanout_cves(scout, cache_dir=tmp_path, mode="cache", min_fanout=5)
+
+    finding = scout["orgs"]["cann"]["projects"]["ge"]["cves"][0]
+    assert metrics["selected_cves"] == 0
+    assert metrics["status_counts"] == {"identifier_mismatch": 1}
+    assert finding["risk_eligible"] is False
+    assert finding["authority_validation"]["declared_cve_ids"] == ["CVE-2026-42033"]
+
+
+def test_explicit_cve_id_prevents_description_cross_counting() -> None:
+    normalized = normalize_huawei_item(
+        "cve_findings",
+        {
+            "org": "cann",
+            "name": "ge",
+            "cves": [
+                {
+                    "cve_id": "CVE-2026-42040",
+                    "description": "正文错误引用 CVE-2026-42033",
+                }
+            ],
+        },
+    )
+
+    scoring = score_threat_item(normalized)
+
+    assert scoring.signals["cve_ids"] == ["CVE-2026-42040"]
+    assert scoring.signals["direct_cve_count"] == 1
+
+
 def test_authority_step_follows_scout_and_defaults_to_off() -> None:
     scout_steps = [step.name for step in huawei_cve_scout_pipeline().steps]
     full_steps = [step.name for step in huawei_full_migration_pipeline().steps]

@@ -139,20 +139,23 @@ function inferSurface(org: string, name: string, summary: string): string {
 
 export function repoFromItem(item: Record<string, unknown>): ThreatRepo {
   const payload = payloadOf(item);
+  const signalsSummary = asRecord(item.signals_summary);
   const scoring = scoringOf(payload);
-  const attackSurface = attackSurfaceOf(payload);
+  const attackSurface = Object.keys(attackSurfaceOf(payload)).length
+    ? attackSurfaceOf(payload)
+    : asRecord(item.attack_surface_summary);
   const raw = asRecord(payload.raw);
   const title = asString(item.title ?? payload.title, '未命名目标');
   const sourceUrl = asString(item.source_url ?? payload.url);
   const urlParts = sourceUrl.split('/').filter(Boolean);
-  const inferredOrg = asString(payload.org ?? raw.org ?? urlParts.at(-2), 'unknown');
+  const inferredOrg = asString(payload.org ?? raw.org ?? item.raw_org ?? urlParts.at(-2), 'unknown');
   const inferredName = asString(
-    raw.name ?? payload.name ?? title.split('/').pop() ?? urlParts.at(-1),
+    raw.name ?? payload.name ?? item.raw_name ?? title.split('/').pop() ?? urlParts.at(-1),
     title,
   );
-  const cve = asNumber(payload.cve_count);
-  const sa = asNumber(payload.sa_count);
-  const broad = asNumber(payload.broad_sec_count);
+  const cve = asNumber(payload.cve_count ?? signalsSummary.cve_count);
+  const sa = asNumber(payload.sa_count ?? signalsSummary.sa_count);
+  const broad = asNumber(payload.broad_sec_count ?? signalsSummary.broad_sec_count);
   const coordination = asRecord(payload.coordination_summary ?? item.coordination_summary);
   // AI calibration overrides original rule scores if present
   // Fallback: pipeline writes to risk_assessment.semantic_review, API writes to ai_calibration
@@ -194,7 +197,7 @@ export function repoFromItem(item: Record<string, unknown>): ThreatRepo {
     stars: asNumber(raw.star_count ?? raw.stargazers_count ?? payload.stars),
     cve,
     coordinationCve: asNumber(coordination.cve_count),
-    reviewCve: asNumber(payload.review_cve_count),
+    reviewCve: asNumber(payload.review_cve_count ?? signalsSummary.review_cve_count),
     coordinationProjects: asArray<string>(coordination.target_projects),
     sa,
     sec: cve + sa + broad,
@@ -203,8 +206,8 @@ export function repoFromItem(item: Record<string, unknown>): ThreatRepo {
       asRecord(attackSurface.signals).filtered_reason ?? payload.filtered_reason,
     ),
     // Prefer attack_surface.breakdown (v12 nested), fall back to scoring.breakdown
-    breakdown: asRecord(attackSurface.breakdown ?? scoring.breakdown) as Record<string, number>,
-    reasons,
+    breakdown: asRecord(attackSurface.breakdown ?? scoring.breakdown ?? item.breakdown) as Record<string, number>,
+    reasons: reasons.length ? reasons : asArray<string>(item.reasons).slice(0, 8),
     evidence,
     assets: asArray<string>(payload.assets),
     riskAssessment: asRecord(payload.risk_assessment),
