@@ -1,0 +1,77 @@
+# 评分权重配置（借鉴 ASIS scoring.yml 可配设计）
+
+# 能力候选规则预筛权重（7维，不含security维度）
+# security 只做标记(security_flag)，不参与总分计算
+project_weights:
+  relevance: 0.25
+  code_clue: 0.15
+  reproducibility: 0.15
+  influence: 0.10
+  freshness: 0.10
+  source_authority: 0.15
+  completeness: 0.10
+
+paper_weights:
+  relevance: 0.30
+  code_clue: 0.10
+  reproducibility: 0.10
+  influence: 0.05
+  freshness: 0.10
+  source_authority: 0.20
+  completeness: 0.15
+
+# 规则预筛阈值
+rule_thresholds:
+  skip: 40              # <40 直接丢弃，不调LLM
+  news_only: 55          # 40-55 或 无code_url → 存资讯不进能力洞察
+  enter_llm: 55          # ≥55 且 有code_url → 进LLM评审
+
+# LLM 7维评分权重（论文/项目不同）
+llm_paper_weights:
+  map_relevance: 0.25
+  novelty: 0.25
+  technical_depth: 0.20
+  engineering_value: 0.10
+  reproducibility: 0.05
+  influence: 0.05
+  freshness: 0.10
+
+llm_project_weights:
+  map_relevance: 0.25
+  novelty: 0.10
+  technical_depth: 0.15
+  engineering_value: 0.20
+  reproducibility: 0.15
+  influence: 0.05
+  freshness: 0.10
+
+# LLM 评审决策阈值
+llm_thresholds:
+  selected: 70            # 加权分≥70 → selected
+  watch: 55               # ≥55 → watch
+  # <55 → rejected
+
+# 状态判定（基于 recommended_score + decision）
+status_rules:
+  待复现验证:
+    min_recommended_score: 4
+    require_decision: ["selected", "watch"]
+  待资料补齐:
+    min_recommended_score: 3
+    require_decision: ["selected", "watch"]
+  # 其余 → 已淘汰
+
+# 时效性评分（借鉴 ASIS，按小时计算）
+freshness_score:
+  - max_hours: 24        # ≤24h → 100
+    score: 100
+  - max_hours: 72        # ≤72h → 80
+    score: 80
+  - max_hours: 168       # ≤7天 → 62
+    score: 62
+  - max_hours: 720       # ≤30天 → 40
+    score: 40
+  - max_hours: null      # 更早 → 20
+    score: 20
+  - no_date: true        # 无日期 → 10
+    score: 10

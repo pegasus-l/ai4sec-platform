@@ -1,0 +1,44 @@
+# 来源权威性映射表
+# 用于规则评分的 source_authority 维度
+# 每个来源类型映射到一个 0-100 的权威分
+
+sources:
+  # 学术论文来源
+  arxiv: 90
+  huggingface_papers: 85
+  semantic_scholar: 80
+
+  # 代码仓库来源
+  github: 75
+  gitlab: 70
+
+  # 官方技术博客（高权威）
+  official_blogs:
+    - url: "https://openai.com/blog"
+      score: 90
+    - url: "https://www.anthropic.com/news"
+      score: 88
+    - url: "https://ai.googleblog.com"
+      score: 85
+    - url: "https://research.facebook.com/blog"
+      score: 82
+    - url: "https://huggingface.co/blog"
+      score: 80
+
+  # 技术社区（中等权威）
+  hackernews: 55
+  reddit_r_mlsecurity: 50
+  reddit_r_machinelearning: 45
+
+  # RSS 订阅源（默认中等，可覆盖）
+  rss:
+    default: 40
+    overrides:
+      "https://blogs.microsoft.com/ai": 85
+      "https://www.deepmind.com/blog": 88
+      "https://nakedsecurity.sophos.com": 60
+      "https://krebsonsecurity.com": 65
+      "https://www.bleepingcomputer.com": 55
+
+  # 其他/未知来源
+  unknown: 50
