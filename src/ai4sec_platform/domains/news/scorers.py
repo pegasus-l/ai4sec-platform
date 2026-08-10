@@ -36,7 +36,7 @@ def score_candidate(item: dict[str, Any], project_root: Path) -> ScoreResult:
     """对原始item做7维规则评分。不调LLM，纯规则+元数据。"""
     config = _load_scoring_config(project_root)
     classification = item.get("classification") or classify_item(item)
-    if isinstance(classification, ClassificationResult):
+    if hasattr(classification, "as_payload"):
         classification = classification.as_payload()
 
     payload = item.get("payload") or item.get("normalized") or item
@@ -52,7 +52,13 @@ def score_candidate(item: dict[str, Any], project_root: Path) -> ScoreResult:
     code_clue = has_code * 100
 
     # 3. reproducibility: 0.5×has_code + 0.3×stars_factor + 0.2×has_readme, 归一化100
-    stars = float(payload.get("stars") or item.get("stars") or 0)
+    stars = payload.get("stars") or item.get("stars") or 0
+    if isinstance(stars, dict):
+        stars = stars.get("stargazers_count", 0)
+    try:
+        stars = float(stars)
+    except (TypeError, ValueError):
+        stars = 0.0
     stars_factor = min(1.0, math.log10(stars + 1) / 4.0)  # 10000 stars → 1.0
     has_readme = 1.0 if (payload.get("summary") or item.get("summary") or payload.get("description")) else 0.0
     reproducibility = (0.5 * has_code + 0.3 * stars_factor + 0.2 * has_readme) * 100
@@ -164,8 +170,7 @@ def _resolve_source_authority(item: dict[str, Any], project_root: Path) -> float
     return float(sources.get("unknown", 50))
 
 
-# 避免循环导入——延迟导入 ClassificationResult
-from ai4sec_platform.schemas.classification import ClassificationResult as _CR  # noqa: E402
+from ai4sec_platform.domains.news.classifiers import classify_item
 def score_news_item(item):
     from pathlib import Path
     return score_candidate(item, Path("/opt/ai-security-fusion-v2/ai4sec"))
