@@ -26,7 +26,7 @@ def extract_security_items_from_issues(issues: list[dict[str, Any]], *, source_t
         for cve in cves:
             if cve in release_cves:
                 continue
-            items.append({"cve_id": cve, "severity": severity, "description": _compact(text), "source_type": source_type, "source_url": source_url, "published_date": issue.get("created_at") or issue.get("updated_at") or ""})
+            items.append({"cve_id": cve, "source_cve_ids": cves, "severity": severity, "description": _compact(text), "source_type": source_type, "source_url": source_url, "published_date": issue.get("created_at") or issue.get("updated_at") or ""})
         for sa in sas:
             items.append({"sa_id": sa, "is_sa": True, "severity": severity, "description": _compact(text), "source_type": source_type, "source_url": source_url, "published_date": issue.get("created_at") or issue.get("updated_at") or ""})
         if not cves and not sas and _is_security_issue(text, issue):

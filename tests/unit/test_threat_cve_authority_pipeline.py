@@ -2,6 +2,7 @@ import json
 from types import SimpleNamespace
 
 from ai4sec_platform.domains.threats.cve_authority import validate_high_fanout_cves
+from ai4sec_platform.domains.threats.issue_extractors import extract_security_items_from_issues
 from ai4sec_platform.domains.threats.normalizers import normalize_huawei_item
 from ai4sec_platform.domains.threats.pipelines import huawei_cve_scout_pipeline, huawei_full_migration_pipeline
 from ai4sec_platform.domains.threats.risk_scoring import score_threat_item
@@ -127,6 +128,27 @@ def test_identifier_mismatch_is_local_and_does_not_require_fanout(tmp_path) -> N
     assert metrics["status_counts"] == {"identifier_mismatch": 1}
     assert finding["risk_eligible"] is False
     assert finding["authority_validation"]["declared_cve_ids"] == ["CVE-2026-42033"]
+
+
+def test_full_source_cve_ids_prevent_truncated_description_false_positive(tmp_path) -> None:
+    findings = extract_security_items_from_issues(
+        [
+            {
+                "title": "CVE-2026-42033",
+                "body": f"CVE-2026-42033 {'x' * 600} CVE-2026-42040",
+                "html_url": "https://gitcode.com/cann/ge/issues/359",
+            }
+        ]
+    )
+    second = next(finding for finding in findings if finding["cve_id"] == "CVE-2026-42040")
+    assert "CVE-2026-42040" not in second["description"]
+    assert second["source_cve_ids"] == ["CVE-2026-42033", "CVE-2026-42040"]
+    scout = {"orgs": {"cann": {"projects": {"ge": {"cves": findings}}}}}
+
+    metrics = validate_high_fanout_cves(scout, cache_dir=tmp_path, mode="cache", min_fanout=5)
+
+    assert metrics["status_counts"] == {}
+    assert second.get("risk_eligible", True) is True
 
 
 def test_explicit_cve_id_prevents_description_cross_counting() -> None:

@@ -43,11 +43,12 @@ def validate_high_fanout_cves(
         for association in associations:
             finding = association["finding"]
             cve_id = str(finding.get("cve_id") or "").upper()
-            description_cves = extract_description_cve_ids(str(finding.get("description") or ""))
-            if description_cves and cve_id not in description_cves:
+            source_cves = sorted({str(value).upper() for value in finding.get("source_cve_ids") or [] if value})
+            declared_cves = source_cves or extract_description_cve_ids(str(finding.get("description") or ""))
+            if declared_cves and cve_id not in declared_cves:
                 finding["authority_validation"] = {
                     "status": "identifier_mismatch",
-                    "declared_cve_ids": description_cves,
+                    "declared_cve_ids": declared_cves,
                     "authoritative_products": [],
                     "authority_state": "",
                     "authority_source": "local",

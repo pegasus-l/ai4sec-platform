@@ -177,7 +177,7 @@ def _items_from_text(text: str, *, source_path: str, source_url: str, repo_names
     source_repo = _source_repo_hint(text, repo_names or [], row)
     items = []
     for cve in cves:
-        items.append({"cve_id": cve, "severity": severity, "description": _compact(text), "source_type": source_type, "source_url": source_url, "source_path": source_path, "source_repo": source_repo, "project_hints": projects, "raw_row": row})
+        items.append({"cve_id": cve, "source_cve_ids": cves, "severity": severity, "description": _compact(text), "source_type": source_type, "source_url": source_url, "source_path": source_path, "source_repo": source_repo, "project_hints": projects, "raw_row": row})
     for sa in sas:
         items.append({"sa_id": sa, "is_sa": True, "severity": severity, "description": _compact(text), "source_type": source_type, "source_url": source_url, "source_path": source_path, "source_repo": source_repo, "project_hints": projects, "raw_row": row})
     if not cves and not sas and _is_broad_security(text):
