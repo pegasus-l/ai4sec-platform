@@ -166,3 +166,6 @@ def _resolve_source_authority(item: dict[str, Any], project_root: Path) -> float
 
 # 避免循环导入——延迟导入 ClassificationResult
 from ai4sec_platform.schemas.classification import ClassificationResult as _CR  # noqa: E402
+def score_news_item(item):
+    from pathlib import Path
+    return score_candidate(item, Path("/opt/ai-security-fusion-v2/ai4sec"))

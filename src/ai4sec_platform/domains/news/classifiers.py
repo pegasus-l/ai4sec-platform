@@ -122,3 +122,5 @@ def _text(item: dict[str, Any]) -> str:
     raw = payload.get("raw") if isinstance(payload.get("raw"), dict) else {}
     values.extend([raw.get("title"), raw.get("summary"), raw.get("description")])
     return " ".join(str(v or "") for v in values)
+def classify_news_item(item):
+    return classify_item(item)
