@@ -94,21 +94,7 @@ class ClassifyWebCapabilityStep:
         candidates = context.outputs.get("web_classify_candidates") or []
         if not candidates:
             return StepResult(metrics={"classified": 0})
-        results = classify_batch(context.conn, candidates, run_id=context.run_id)
-        from datetime import datetime, timezone
-        ts = datetime.now(timezone.utc).isoformat()
-        for r in results:
-            item_id = r.get("id")
-            if not item_id:
-                continue
-            item = repo.get_domain_item(context.conn, domain="capabilities", item_id=item_id)
-            if not item:
-                continue
-            payload = item.get("payload") or {}
-            payload["is_web"] = r.get("is_web", False)
-            payload["web_framework"] = r.get("framework", "")
-            payload["web_classify_ts"] = ts
-            repo.update_domain_item(context.conn, item_id=item_id, payload=payload)
+        results = classify_batch(context.conn, candidates)
         return StepResult(metrics={"classified": len(results)})
 
 
