@@ -213,27 +213,42 @@ class StoreCapabilitiesStep:
             display_summary = review.get("summary_zh", "")
 
             payload = {
+                # review (LLM 完整输出)
                 "review": review,
+                # display fields (V1 兼容)
                 "display_title": display_title,
                 "display_summary": display_summary,
+                "display_theme": review.get("theme_descriptor", ""),
+                "display_topic": review.get("topic", ""),
+                "display_work_name": review.get("work_name", ""),
                 "promo_line": review.get("promo_line", ""),
                 "highlight_line": review.get("highlight_line", ""),
+                "one_liner": review.get("promo_line", ""),
+                "highlight": review.get("highlight_line", ""),
+                "overview": review.get("summary_zh", ""),
+                "summary": review.get("summary_zh", ""),
+                # review status
                 "review_status": "enriched",
+                # rule scoring
                 "rule_score": item.get("rule_score", 0),
                 "rule_breakdown": item.get("rule_breakdown", {}),
                 "security_flag": item.get("security_flag", False),
                 "security_topics": item.get("security_topics", []),
-                "code_url": item.get("code_url", ""),
+                "source_news_score": item.get("rule_score", 0),
+                # assessment (V1 顶层字段)
+                "security_value": review.get("security_value", ""),
+                "reproducibility_assessment": review.get("reproducibility_assessment", ""),
+                "application_advice": review.get("application_advice", ""),
                 "code_quality": review.get("code_quality", ""),
+                "score_reason": review.get("score_reason", ""),
+                "capability_type": review.get("capability_type", ""),
+                "application_scenarios": review.get("application_scenarios", []),
+                "tech_points": [p.get("point", "") for p in review.get("tech_paths", [])],
+                # source info
+                "code_url": item.get("code_url", ""),
                 "source_type": item.get("source_type", ""),
-                "source_news_item": {
-                    "title": item.get("title"),
-                    "summary": item.get("summary"),
-                    "url": item.get("url"),
-                    "code_url": item.get("code_url"),
-                    "stars": item.get("stars"),
-                    "published_at": item.get("published_at"),
-                },
+                "capability_scoring": item.get("rule_breakdown", {}),
+                # assessment (嵌套，V1 兼容)
                 "assessment": {
                     "overview": review.get("summary_zh", ""),
                     "security_value": review.get("security_value", ""),
@@ -243,6 +258,25 @@ class StoreCapabilitiesStep:
                     "capability_type": review.get("capability_type", ""),
                     "application_scenarios": review.get("application_scenarios", []),
                     "score_reason": review.get("score_reason", ""),
+                },
+                "implementation_depth": {
+                    "has_real_code": bool(item.get("code_url")),
+                    "has_tests": False,
+                    "has_eval": False,
+                    "is_prompt_wrapper": False,
+                    "is_thin_mcp_wrapper": False,
+                },
+                "repro_status": "candidate",
+                "conversion_status": "待评估",
+                # source news item
+                "source_news_item": {
+                    "title": item.get("title"),
+                    "summary": item.get("summary"),
+                    "url": item.get("url"),
+                    "code_url": item.get("code_url"),
+                    "stars": item.get("stars"),
+                    "published_at": item.get("published_at"),
+                    "source_type": item.get("source_type", ""),
                 },
             }
 

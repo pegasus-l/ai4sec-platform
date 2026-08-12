@@ -401,3 +401,7 @@ def _is_retryable(exc: Exception) -> bool:
 def _record_attempts(conn: sqlite3.Connection, *, run_id: str, agent_name: str, model_profile: str, provider: str, input_payload: dict[str, Any], attempts: list[dict[str, Any]]) -> None:
     for a in attempts:
         repo.create_model_call(conn, run_id=run_id, agent_name=agent_name, model_profile=model_profile, provider=provider, status=a["status"], input_payload=input_payload, output_payload=a["output"], latency_ms=int(a["latency_ms"]), error_message=str(a["error_message"]))
+def enrich_candidates(*args, **kwargs):
+    return review_candidates(*args, **kwargs)
+def gate_candidates(*args, **kwargs):
+    return review_candidates(*args, **kwargs)
