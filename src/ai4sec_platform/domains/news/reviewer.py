@@ -271,8 +271,12 @@ def _call_model_api(router: LLMRouter, *, model_profile: str, prompt: str, input
     attempts: list[dict] = []
     for attempt in range(1, MODEL_MAX_ATTEMPTS + 1):
         attempt_started = time.monotonic()
+        # 重试时换 prompt：强调纯JSON输出
+        current_prompt = prompt
+        if attempt > 1:
+            current_prompt = "请严格输出纯JSON，不要加任何markdown标记（如```json）或注释文字，直接以{开头、}结尾。\n\n" + prompt
         try:
-            output = router.complete_json(profile=model_profile, prompt=prompt, payload=input_payload)
+            output = router.complete_json(profile=model_profile, prompt=current_prompt, payload=input_payload)
             output = {**output, "retry_count": attempt - 1, "total_latency_ms": int((time.monotonic() - started) * 1000)}
             result = output.get("result") or output.get("parsed") or {}
             latency = int((time.monotonic() - attempt_started) * 1000)
@@ -293,7 +297,33 @@ def _call_model_api(router: LLMRouter, *, model_profile: str, prompt: str, input
 # ─────────────────── helpers ───────────────────
 
 def _unwrap(value: Any) -> Any:
-    return value.get("result") if isinstance(value, dict) and isinstance(value.get("result"), dict) else value
+    result = value.get("result") if isinstance(value, dict) and isinstance(value.get("result"), dict) else value
+    return _extract_json(result)
+
+def _extract_json(value: Any) -> Any:
+    """容错解析：从 LLM 输出里提取 JSON，去掉 markdown 标记和前后多余文字。"""
+    if not isinstance(value, str):
+        return value
+    text = value.strip()
+    # 去掉 markdown 代码块标记 ```json ... ``` 或 ``` ... ```
+    if text.startswith("```"):
+        lines = text.split("\n")
+        # 去掉第一行（```json 或 ```）和最后一行（```）
+        if lines[0].strip().startswith("```"):
+            lines = lines[1:]
+        if lines and lines[-1].strip() == "```":
+            lines = lines[:-1]
+        text = "\n".join(lines).strip()
+    # 如果还是不是合法 JSON，尝试提取第一个 { 到最后一个 }
+    if not text.startswith("{"):
+        start = text.find("{")
+        end = text.rfind("}")
+        if start != -1 and end != -1 and end > start:
+            text = text[start:end+1]
+    try:
+        return json.loads(text)
+    except (json.JSONDecodeError, TypeError):
+        return value
 
 def _percentage(value: Any) -> float:
     try:
@@ -371,7 +401,3 @@ def _is_retryable(exc: Exception) -> bool:
 def _record_attempts(conn: sqlite3.Connection, *, run_id: str, agent_name: str, model_profile: str, provider: str, input_payload: dict[str, Any], attempts: list[dict[str, Any]]) -> None:
     for a in attempts:
         repo.create_model_call(conn, run_id=run_id, agent_name=agent_name, model_profile=model_profile, provider=provider, status=a["status"], input_payload=input_payload, output_payload=a["output"], latency_ms=int(a["latency_ms"]), error_message=str(a["error_message"]))
-def gate_candidates(*args, **kwargs):
-    return review_candidates(*args, **kwargs)
-def enrich_candidates(*args, **kwargs):
-    return review_candidates(*args, **kwargs)
