@@ -73,10 +73,10 @@ class RawItemsSource:
         mapped = [self._map_item(raw) for raw in items]
         mapped = [m for m in mapped if m]
 
-        # 更新游标（用最后一条的 published_at 或 fetched_at）
+        # 更新游标（用第一条的 fetched_at，因为 ASIS 按 fetched_at DESC 返回最新在前）
         if items:
-            last = items[-1]
-            new_cursor = last.get("published_at") or last.get("fetched_at") or datetime.now(timezone.utc).isoformat()
+            first = items[0]
+            new_cursor = first.get("fetched_at") or first.get("published_at") or datetime.now(timezone.utc).isoformat()
             self.update_cursor(new_cursor, len(mapped))
 
         print(f"[raw-source] fetched {len(items)} raw items, mapped {len(mapped)}")
