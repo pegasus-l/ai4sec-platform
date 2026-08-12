@@ -20,7 +20,16 @@ def extract_repo_vulnerability_signals(item: dict[str, Any]) -> dict[str, Any]:
         for entry in cve_items
         if entry.get("association_scope") != "organization_coordination" and entry.get("risk_eligible") is not False
     ]
-    review_items = [entry for entry in cve_items if entry.get("risk_eligible") is False]
+    source_metadata_mismatch_items = [
+        entry
+        for entry in cve_items
+        if (entry.get("authority_validation") or {}).get("status") == "source_metadata_mismatch"
+    ]
+    review_items = [
+        entry
+        for entry in cve_items
+        if entry.get("risk_eligible") is False and entry not in source_metadata_mismatch_items
+    ]
     coordination_sa_items = [entry for entry in sa_items if entry.get("association_scope") == "organization_coordination"]
     direct_sa_items = [entry for entry in sa_items if entry.get("association_scope") != "organization_coordination"]
     coordination_broad_items = [entry for entry in broad_items if entry.get("association_scope") == "organization_coordination"]
@@ -45,6 +54,7 @@ def extract_repo_vulnerability_signals(item: dict[str, Any]) -> dict[str, Any]:
         "direct_cve_count": len(direct_cves),
         "coordination_cve_count": len(coordination_cves),
         "review_cve_count": len(_extract_cves(review_items)),
+        "source_metadata_mismatch_cve_count": len(_extract_cves(source_metadata_mismatch_items)),
         "sa_count": len(sa_items) or _safe_int(item.get("sa_count") or raw.get("sa_count")),
         "broad_sec_count": len(broad_items) or _safe_int(item.get("broad_sec_count") or raw.get("broad_sec_count")),
         "direct_sa_count": len(direct_sa_items),

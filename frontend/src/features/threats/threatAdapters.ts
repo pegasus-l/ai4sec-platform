@@ -198,6 +198,7 @@ export function repoFromItem(item: Record<string, unknown>): ThreatRepo {
     cve,
     coordinationCve: asNumber(coordination.cve_count),
     reviewCve: asNumber(payload.review_cve_count ?? signalsSummary.review_cve_count),
+    sourceMetadataMismatchCve: asNumber(payload.source_metadata_mismatch_cve_count ?? signalsSummary.source_metadata_mismatch_cve_count),
     coordinationProjects: asArray<string>(coordination.target_projects),
     sa,
     sec: cve + sa + broad,

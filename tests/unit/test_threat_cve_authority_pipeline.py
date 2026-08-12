@@ -89,6 +89,28 @@ def test_component_mismatch_is_retained_but_excluded_from_risk() -> None:
     assert any("待复核 CVE 1 个" in reason for reason in scoring.reasons)
 
 
+def test_authoritative_product_in_description_confirms_source_metadata_mismatch(tmp_path) -> None:
+    cache_dir = tmp_path / "authority"
+    cache_dir.mkdir()
+    (cache_dir / "CVE-2026-42033.json").write_text(
+        json.dumps({"cveMetadata": {"state": "PUBLISHED"}, "containers": {"cna": {"affected": [{"product": "axios"}]}}}),
+        encoding="utf-8",
+    )
+    scout = _scout()
+    description = "漏洞归属组件：boost 漏洞归属的版本：1.87.0 漏洞简述：Axios is an HTTP client for Node.js."
+    scout["orgs"]["cann"]["projects"]["ge"]["cves"][0]["description"] = description
+    scout["orgs"]["openUBMC"]["projects"]["webui"]["cves"][0]["description"] = description
+
+    metrics = validate_high_fanout_cves(scout, cache_dir=cache_dir, mode="cache", min_fanout=2)
+
+    assert metrics["status_counts"] == {"source_metadata_mismatch": 2}
+    normalized = normalize_huawei_item("cve_findings", next(iter(scout["orgs"]["cann"]["projects"].values())))
+    scoring = score_threat_item(normalized)
+    assert scoring.signals["review_cve_count"] == 0
+    assert scoring.signals["source_metadata_mismatch_cve_count"] == 1
+    assert any("来源组件字段误标 CVE 1 个" in reason for reason in scoring.reasons)
+
+
 def test_invalid_cache_does_not_mark_association_as_mismatch(tmp_path) -> None:
     cache_dir = tmp_path / "authority"
     cache_dir.mkdir()

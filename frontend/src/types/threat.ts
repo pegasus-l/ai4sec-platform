@@ -20,6 +20,7 @@ export interface ThreatRepo {
   cve: number;
   coordinationCve?: number;
   reviewCve?: number;
+  sourceMetadataMismatchCve?: number;
   coordinationProjects?: string[];
   sa: number;
   sec: number;

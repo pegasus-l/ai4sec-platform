@@ -44,6 +44,8 @@ def score_threat_item(item: dict[str, Any]) -> ScoreResult:
         reasons.append(f"组织发布协调 CVE {signals['coordination_cve_count']} 个（不计入项目自身风险）")
     if signals["review_cve_count"]:
         reasons.append(f"权威组件冲突或待复核 CVE {signals['review_cve_count']} 个（暂不计入项目自身风险）")
+    if signals["source_metadata_mismatch_cve_count"]:
+        reasons.append(f"来源组件字段误标 CVE {signals['source_metadata_mismatch_cve_count']} 个（已确认，不计入项目自身风险）")
     if signals["direct_sa_count"]:
         reasons.append(f"关联项目自身安全公告 {signals['direct_sa_count']} 个")
     coordination_other = signals["coordination_sa_count"] + signals["coordination_broad_sec_count"]

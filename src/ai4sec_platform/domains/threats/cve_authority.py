@@ -68,6 +68,10 @@ def validate_high_fanout_cves(
                 continue
             declared = extract_declared_component(str(finding.get("description") or ""))
             status = compare_component(declared, products)
+            if status == "component_mismatch" and authoritative_product_mentioned(
+                str(finding.get("description") or ""), products
+            ):
+                status = "source_metadata_mismatch"
             finding["authority_validation"] = {
                 "status": status,
                 "declared_component": declared,
@@ -75,9 +79,13 @@ def validate_high_fanout_cves(
                 "authority_state": authority_state,
                 "authority_source": source,
             }
-            if status == "component_mismatch":
+            if status in {"component_mismatch", "source_metadata_mismatch"}:
                 finding["risk_eligible"] = False
-                finding["risk_exclusion_reason"] = "cve_authority_component_mismatch"
+                finding["risk_exclusion_reason"] = (
+                    "cve_source_component_metadata_mismatch"
+                    if status == "source_metadata_mismatch"
+                    else "cve_authority_component_mismatch"
+                )
             status_counts[status] += 1
     return {
         "mode": mode,
@@ -99,6 +107,11 @@ def extract_declared_component(description: str) -> str:
 
 def extract_description_cve_ids(description: str) -> list[str]:
     return sorted({match.upper() for match in CVE_RE.findall(description or "")})
+
+
+def authoritative_product_mentioned(description: str, products: list[str]) -> bool:
+    normalized = _compact(description)
+    return any(_compact(product) in normalized for product in products if _compact(product))
 
 
 def authoritative_products(payload: dict[str, Any]) -> list[str]:

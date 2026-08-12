@@ -130,6 +130,9 @@ export function RepoDrawerContent({ repo: initialRepo, onViewGraph, onOpenAsset 
         {(repo.reviewCve ?? 0) > 0 && <p className="muted small" style={{ marginTop: 8 }}>
           权威组件冲突或待复核 CVE：{repo.reviewCve} 条。这些证据仍保留在详情中，但暂不计入项目自身风险。
         </p>}
+        {(repo.sourceMetadataMismatchCve ?? 0) > 0 && <p className="muted small" style={{ marginTop: 8 }}>
+          已确认来源组件字段误标：{repo.sourceMetadataMismatchCve} 条。权威产品已在漏洞简述中明确出现，证据保留但不计入项目自身风险。
+        </p>}
       </Card>
 
       {/* 2. Vuln / security线索 — inline timeline like demo v12 renderVulnList */}
