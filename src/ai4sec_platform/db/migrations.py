@@ -214,6 +214,15 @@ MIGRATIONS: tuple[Migration, ...] = (
             "idx_domain_items_graph_order(domain,item_type,score desc,id desc);backfill top 5 cves"
         ),
     ),
+    Migration(
+        version=23,
+        name="add_threat_asset_associations",
+        apply=lambda conn: _add_threat_asset_associations(conn),
+        checksum_source=(
+            "threat_asset_associations(asset_item_id,target_item_id,confidence,reason,source,updated_at);"
+            "primary asset/target;index target/confidence/asset;backfill ai_association"
+        ),
+    ),
 )
 
 
@@ -384,6 +393,54 @@ def _add_threat_graph_summary(conn: sqlite3.Connection) -> None:
             "UPDATE threat_item_dimensions SET cve_sample_json = ? WHERE domain_item_id = ?",
             (json.dumps(sample, ensure_ascii=False), row["id"]),
         )
+
+
+def _add_threat_asset_associations(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS threat_asset_associations (
+            asset_item_id INTEGER NOT NULL,
+            target_item_id INTEGER NOT NULL,
+            confidence TEXT NOT NULL DEFAULT 'unknown',
+            reason TEXT NOT NULL DEFAULT '',
+            source TEXT NOT NULL DEFAULT 'ai_association',
+            updated_at TEXT NOT NULL,
+            PRIMARY KEY(asset_item_id, target_item_id),
+            FOREIGN KEY(asset_item_id) REFERENCES domain_items(id) ON DELETE CASCADE,
+            FOREIGN KEY(target_item_id) REFERENCES domain_items(id) ON DELETE CASCADE
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_threat_asset_assoc_target "
+        "ON threat_asset_associations(target_item_id, confidence, asset_item_id)"
+    )
+    rows = conn.execute(
+        "SELECT id, payload_json FROM domain_items WHERE domain = 'threats' AND item_type = 'asset'"
+    ).fetchall()
+    for row in rows:
+        try:
+            payload = json.loads(row["payload_json"] or "{}")
+        except (TypeError, ValueError):
+            payload = {}
+        for association in ((payload.get("ai_association") or {}).get("associations") or []):
+            if not isinstance(association, dict):
+                continue
+            try:
+                target_item_id = int(association.get("repo_id"))
+            except (TypeError, ValueError):
+                continue
+            conn.execute(
+                """
+                INSERT INTO threat_asset_associations(asset_item_id, target_item_id, confidence, reason, source, updated_at)
+                VALUES (?, ?, ?, ?, 'ai_association', ?)
+                ON CONFLICT(asset_item_id, target_item_id) DO UPDATE SET
+                    confidence = excluded.confidence,
+                    reason = excluded.reason,
+                    updated_at = excluded.updated_at
+                """,
+                (row["id"], target_item_id, str(association.get("confidence") or "unknown"), str(association.get("reason") or ""), utc_now()),
+            )
 
 
 def _add_capability_repro_workers(conn: sqlite3.Connection) -> None:

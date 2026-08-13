@@ -147,6 +147,37 @@ def upsert_threat_item_dimensions(
     )
 
 
+def replace_threat_asset_associations(
+    conn: sqlite3.Connection,
+    *,
+    asset_item_id: int,
+    associations: list[dict[str, Any]],
+) -> None:
+    conn.execute("DELETE FROM threat_asset_associations WHERE asset_item_id = ?", (asset_item_id,))
+    for association in associations:
+        try:
+            target_item_id = int(association.get("repo_id"))
+        except (AttributeError, TypeError, ValueError):
+            continue
+        conn.execute(
+            """
+            INSERT INTO threat_asset_associations(asset_item_id, target_item_id, confidence, reason, source, updated_at)
+            VALUES (?, ?, ?, ?, 'ai_association', ?)
+            ON CONFLICT(asset_item_id, target_item_id) DO UPDATE SET
+                confidence = excluded.confidence,
+                reason = excluded.reason,
+                updated_at = excluded.updated_at
+            """,
+            (
+                asset_item_id,
+                target_item_id,
+                str(association.get("confidence") or "unknown"),
+                str(association.get("reason") or ""),
+                utc_now(),
+            ),
+        )
+
+
 def create_evidence(
     conn: sqlite3.Connection,
     *,

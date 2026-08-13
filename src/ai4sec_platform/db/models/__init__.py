@@ -45,6 +45,19 @@ CREATE INDEX IF NOT EXISTS idx_threat_dimensions_surface_aggregate ON threat_ite
 );
 CREATE INDEX IF NOT EXISTS idx_domain_items_graph_order ON domain_items(domain, item_type, score DESC, id DESC);
 
+CREATE TABLE IF NOT EXISTS threat_asset_associations (
+    asset_item_id INTEGER NOT NULL,
+    target_item_id INTEGER NOT NULL,
+    confidence TEXT NOT NULL DEFAULT 'unknown',
+    reason TEXT NOT NULL DEFAULT '',
+    source TEXT NOT NULL DEFAULT 'ai_association',
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY(asset_item_id, target_item_id),
+    FOREIGN KEY(asset_item_id) REFERENCES domain_items(id) ON DELETE CASCADE,
+    FOREIGN KEY(target_item_id) REFERENCES domain_items(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_threat_asset_assoc_target ON threat_asset_associations(target_item_id, confidence, asset_item_id);
+
 
 CREATE TABLE IF NOT EXISTS raw_artifacts (
     id INTEGER PRIMARY KEY AUTOINCREMENT,

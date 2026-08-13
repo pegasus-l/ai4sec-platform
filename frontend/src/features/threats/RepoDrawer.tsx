@@ -21,8 +21,8 @@ import { severityBadgeClass } from './severityBadge';
 import { Card } from '../../components/ui';
 import { useState, useEffect, useMemo } from 'react';
 import { useQueryClient, useQuery } from '@tanstack/react-query';
-import { postJson, getJson, trackTarget, fetchTargetDetail, type AiReviewResult } from '../../api/client';
-import { repoFromItem, vulnDetailsFromItem } from './threatAdapters';
+import { postJson, getJson, trackTarget, fetchTargetAssets, fetchTargetDetail, type AiReviewResult } from '../../api/client';
+import { assetFromItem, repoFromItem, vulnDetailsFromItem } from './threatAdapters';
 import { useToast } from '../../components/Toast';
 
 interface RepoDrawerContentProps {
@@ -38,6 +38,10 @@ export function RepoDrawerContent({ repo: initialRepo, onViewGraph, onOpenAsset 
   const { toast } = useToast();
   // Fetch single target detail (full payload) — replaces fetchFrontendContract
   const { data: detailData } = useQuery({ queryKey: ['threats-target-detail', initialRepo.id], queryFn: () => fetchTargetDetail(initialRepo.id) });
+  const { data: linkedAssetData, isLoading: linkedAssetsLoading, isError: linkedAssetsError } = useQuery({
+    queryKey: ['threats-target-assets', initialRepo.id],
+    queryFn: () => fetchTargetAssets(initialRepo.id),
+  });
   // Build local model from the single item (repos + vulnDetails only)
   const model = useMemo<ThreatViewModel | null>(() => {
     if (!detailData) return null;
@@ -47,7 +51,7 @@ export function RepoDrawerContent({ repo: initialRepo, onViewGraph, onOpenAsset 
       summary: { totalRepos: 0, highRisk: 0, withCve: 0, totalCve: 0, uniqueCve: 0, totalSa: 0, broadSecurity: 0, assets: 0, grades: {}, scanModes: {}, sourceStats: {} },
       repos: [r],
       today: [r],
-      assets: [],
+      assets: (linkedAssetData?.items ?? []).map(assetFromItem),
       queue: [],
       cveScout: {},
       attackSurface: {},
@@ -55,7 +59,7 @@ export function RepoDrawerContent({ repo: initialRepo, onViewGraph, onOpenAsset 
       graph: { nodes: [], edges: [] },
       vulnDetails: { [r.id]: v },
     };
-  }, [detailData]);
+  }, [detailData, linkedAssetData]);
   // Always use latest repo from model (updates after AI calibration)
   const repo = model?.repos.find(r => r.id === initialRepo.id) ?? initialRepo;
   const vulns = model?.vulnDetails?.[repo.id] ?? [];
@@ -104,10 +108,7 @@ export function RepoDrawerContent({ repo: initialRepo, onViewGraph, onOpenAsset 
     });
   };
 
-  // Find linked assets by repo.id in asset.repos array
-  const linkedAssets = (model?.assets ?? []).filter(
-    (a) => a.repos?.includes(repo.id) || a.repos?.includes(repo.name),
-  );
+  const linkedAssets = model?.assets ?? [];
 
   return (
     <div className="drawer-grid">
@@ -190,7 +191,11 @@ export function RepoDrawerContent({ repo: initialRepo, onViewGraph, onOpenAsset 
         {/* 4. Linked assets */}
         <Card className="detail-card">
           <h3>关联资产</h3>
-          {linkedAssets.length > 0 ? (
+          {linkedAssetsLoading ? (
+            <p className="muted">正在加载关联资产...</p>
+          ) : linkedAssetsError ? (
+            <p className="muted">关联资产加载失败，请稍后重试。</p>
+          ) : linkedAssets.length > 0 ? (
             <div className="timeline">
               {linkedAssets.map((asset) => (
                 <div

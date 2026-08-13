@@ -51,6 +51,10 @@ export async function fetchTargetDetail(itemId: string | number): Promise<Record
   return getJson(`/api/threats/targets/${itemId}`);
 }
 
+export async function fetchTargetAssets(itemId: string | number): Promise<{ items: Record<string, unknown>[]; count: number; target_item_id: number }> {
+  return getJson(`/api/threats/targets/${itemId}/assets`);
+}
+
 export interface ThreatGraphResponse {
   domain: 'threats';
   targets: { items: Record<string, unknown>[]; total: number; page: number; pages: number; limit: number; truncated: boolean };

@@ -240,6 +240,7 @@ function inferAssetConfidence(raw: Record<string, unknown>): 'direct' | 'inferre
 
 export function assetFromItem(item: Record<string, unknown>): ThreatAsset {
   const payload = payloadOf(item);
+  const association = asRecord(item.association);
   const raw = asRecord(payload.raw);
   const source = asString(item.source ?? payload.source, 'asset');
   const inferredType = inferAssetType(source, raw);
@@ -296,7 +297,7 @@ export function assetFromItem(item: Record<string, unknown>): ThreatAsset {
     latest: asString(latestField) || '-',
     meta: asString(raw.msg ?? raw.description),
     link: asString(raw.mirrorPath ?? raw.webUrl ?? raw.url),
-    confidence: inferAssetConfidence(raw),
+    confidence: inferAssetConfidence({ confidence: association.confidence ?? raw.confidence }),
     repos: (() => {
       // If AI association was done, use those repo_ids
       const aiAssoc = asRecord(payload.ai_association);

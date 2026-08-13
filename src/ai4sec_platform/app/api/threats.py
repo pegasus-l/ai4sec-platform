@@ -126,6 +126,37 @@ def target_detail(item_id: int, conn: sqlite3.Connection = Depends(get_db)) -> d
     return item
 
 
+@router.get("/targets/{item_id}/assets")
+def target_assets(item_id: int, limit: int = Query(50, ge=1, le=200), conn: sqlite3.Connection = Depends(get_db)) -> dict:
+    exists = conn.execute(
+        "SELECT 1 FROM domain_items WHERE id = ? AND domain = ? AND item_type = 'target'",
+        (item_id, DOMAIN),
+    ).fetchone()
+    if not exists:
+        raise HTTPException(status_code=404, detail="target not found")
+    rows = conn.execute(
+        """
+        SELECT di.*, taa.confidence AS association_confidence, taa.reason AS association_reason
+        FROM threat_asset_associations AS taa INDEXED BY idx_threat_asset_assoc_target
+        JOIN domain_items di ON di.id = taa.asset_item_id
+        WHERE taa.target_item_id = ? AND di.domain = ? AND di.item_type = 'asset'
+        ORDER BY CASE taa.confidence WHEN 'direct' THEN 0 WHEN 'inferred' THEN 1 WHEN 'weak' THEN 2 ELSE 3 END,
+                 di.score DESC, di.id DESC
+        LIMIT ?
+        """,
+        (item_id, DOMAIN, limit),
+    ).fetchall()
+    items = []
+    for row in rows:
+        item = repo.row_to_dict(row)
+        item["association"] = {
+            "confidence": row["association_confidence"] or "unknown",
+            "reason": row["association_reason"] or "",
+        }
+        items.append(item)
+    return {"items": items, "count": len(items), "target_item_id": item_id}
+
+
 @router.get("/tracking-queue")
 def tracking_queue(conn: sqlite3.Connection = Depends(get_db)) -> dict:
     """User-initiated tracking items only (queue_source='user')."""
@@ -538,6 +569,7 @@ def ai_associate(item_id: int, conn: sqlite3.Connection = Depends(get_db)) -> di
         payload = _json.loads(payload)
     payload["ai_association"] = association_data
     repo.update_domain_item(conn, item_id=item_id, payload=payload)
+    repo.replace_threat_asset_associations(conn, asset_item_id=item_id, associations=associations)
     conn.commit()
 
     return {"item_id": item_id, "status": "success", "associations": association_data}
