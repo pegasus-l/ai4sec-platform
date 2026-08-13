@@ -124,13 +124,14 @@ def upsert_threat_item_dimensions(
     broad_sec_count: int = 0,
     total_sec_count: int = 0,
     org: str = "",
+    cve_sample: list[dict[str, Any]] | None = None,
 ) -> None:
     conn.execute(
         """
         INSERT INTO threat_item_dimensions (
             domain_item_id, attack_surface, attack_surface_grade,
-            cve_count, sa_count, broad_sec_count, total_sec_count, org, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            cve_count, sa_count, broad_sec_count, total_sec_count, org, cve_sample_json, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(domain_item_id) DO UPDATE SET
             attack_surface = excluded.attack_surface,
             attack_surface_grade = excluded.attack_surface_grade,
@@ -139,9 +140,10 @@ def upsert_threat_item_dimensions(
             broad_sec_count = excluded.broad_sec_count,
             total_sec_count = excluded.total_sec_count,
             org = excluded.org,
+            cve_sample_json = excluded.cve_sample_json,
             updated_at = excluded.updated_at
         """,
-        (domain_item_id, attack_surface, attack_surface_grade, cve_count, sa_count, broad_sec_count, total_sec_count, org, utc_now()),
+        (domain_item_id, attack_surface, attack_surface_grade, cve_count, sa_count, broad_sec_count, total_sec_count, org, dumps(cve_sample or []), utc_now()),
     )
 
 

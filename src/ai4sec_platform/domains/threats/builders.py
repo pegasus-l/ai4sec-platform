@@ -97,6 +97,15 @@ def build_threat_items(
             broad_sec_count=int(signals.get("broad_sec_count") or 0),
             total_sec_count=int(signals.get("total_sec_items") or 0),
             org=str(raw.get("org") or payload.get("org") or ""),
+            cve_sample=[
+                {
+                    key: cve.get(key)
+                    for key in ("cve_id", "severity", "source_type", "source_url")
+                    if cve.get(key) is not None
+                }
+                for cve in (payload.get("cves") or [])[:5]
+                if isinstance(cve, dict)
+            ],
         )
         targets += 1
         repo.create_evidence(

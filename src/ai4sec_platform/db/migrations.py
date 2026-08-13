@@ -205,6 +205,15 @@ MIGRATIONS: tuple[Migration, ...] = (
             "threat_item_dimensions(coalesce(nullif(attack_surface,''),'unknown'),cve_count,total_sec_count)"
         ),
     ),
+    Migration(
+        version=22,
+        name="add_threat_graph_summary",
+        apply=lambda conn: _add_threat_graph_summary(conn),
+        checksum_source=(
+            "threat_item_dimensions.cve_sample_json TEXT NOT NULL DEFAULT '[]';"
+            "idx_domain_items_graph_order(domain,item_type,score desc,id desc);backfill top 5 cves"
+        ),
+    ),
 )
 
 
@@ -343,6 +352,37 @@ def _add_threat_item_dimensions(conn: sqlite3.Connection) -> None:
                 raw.get("org") or payload.get("org") or "",
                 utc_now(),
             ),
+        )
+
+
+def _add_threat_graph_summary(conn: sqlite3.Connection) -> None:
+    _add_column_if_missing(conn, "threat_item_dimensions", "cve_sample_json", "TEXT NOT NULL DEFAULT '[]'")
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_domain_items_graph_order "
+        "ON domain_items(domain, item_type, score DESC, id DESC)"
+    )
+    rows = conn.execute(
+        "SELECT di.id, di.payload_json FROM domain_items di "
+        "JOIN threat_item_dimensions tid ON tid.domain_item_id = di.id "
+        "WHERE di.domain = 'threats' AND di.item_type = 'target' AND tid.cve_sample_json = '[]'"
+    ).fetchall()
+    for row in rows:
+        try:
+            payload = json.loads(row["payload_json"] or "{}")
+        except (TypeError, ValueError):
+            payload = {}
+        sample = [
+            {
+                key: cve.get(key)
+                for key in ("cve_id", "severity", "source_type", "source_url")
+                if cve.get(key) is not None
+            }
+            for cve in (payload.get("cves") or [])[:5]
+            if isinstance(cve, dict)
+        ]
+        conn.execute(
+            "UPDATE threat_item_dimensions SET cve_sample_json = ? WHERE domain_item_id = ?",
+            (json.dumps(sample, ensure_ascii=False), row["id"]),
         )
 
 

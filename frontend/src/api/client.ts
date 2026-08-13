@@ -55,7 +55,7 @@ export interface ThreatGraphResponse {
   domain: 'threats';
   targets: { items: Record<string, unknown>[]; total: number; page: number; pages: number; limit: number; truncated: boolean };
   assets: { items: Record<string, unknown>[]; total: number; page: number; pages: number; limit: number; truncated: boolean };
-  filters: { surface: string; grade: string };
+  filters: { surface: string; grade: string; fields: 'summary' | 'full' };
   status: 'complete' | 'partial';
   note: string;
 }

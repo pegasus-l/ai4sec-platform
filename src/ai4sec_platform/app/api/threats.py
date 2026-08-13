@@ -239,28 +239,29 @@ def reports(conn: sqlite3.Connection = Depends(get_db)) -> dict:
 
 @router.get("/graph")
 def graph(
-    target_limit: int = Query(100, ge=1, le=500),
+    target_limit: int = Query(50, ge=1, le=500),
     asset_limit: int = Query(100, ge=1, le=500),
     target_page: int = Query(1, ge=1),
     asset_page: int = Query(1, ge=1),
     surface: str = Query(""),
     grade: str = Query(""),
+    fields: str = Query("summary", pattern="^(summary|full)$"),
     conn: sqlite3.Connection = Depends(get_db),
 ) -> dict:
-    targets_data = _bounded_graph_items(conn, item_type="target", limit=target_limit, page=target_page, surface=surface, grade=grade)
-    assets_data = _bounded_graph_items(conn, item_type="asset", limit=asset_limit, page=asset_page)
+    targets_data = _bounded_graph_items(conn, item_type="target", limit=target_limit, page=target_page, surface=surface, grade=grade, fields=fields)
+    assets_data = _bounded_graph_items(conn, item_type="asset", limit=asset_limit, page=asset_page, fields=fields)
     truncated = targets_data["truncated"] or assets_data["truncated"]
     return {
         "domain": DOMAIN,
         "targets": targets_data,
         "assets": assets_data,
         "status": "partial" if truncated else "complete",
-        "filters": {"surface": surface, "grade": grade},
+        "filters": {"surface": surface, "grade": grade, "fields": fields},
         "note": "图谱按风险分数返回有界数据；结果已截断。" if truncated else "图谱数据完整。",
     }
 
 
-def _bounded_graph_items(conn, *, item_type: str, limit: int, page: int = 1, surface: str = "", grade: str = "") -> dict:
+def _bounded_graph_items(conn, *, item_type: str, limit: int, page: int = 1, surface: str = "", grade: str = "", fields: str = "summary") -> dict:
     where = ["di.domain = ?", "di.item_type = ?"]
     params: list[object] = [DOMAIN, item_type]
     if surface and item_type == "target":
@@ -272,11 +273,53 @@ def _bounded_graph_items(conn, *, item_type: str, limit: int, page: int = 1, sur
     where_sql = " AND ".join(where)
     join_sql = " LEFT JOIN threat_item_dimensions tid ON tid.domain_item_id = di.id" if item_type == "target" else ""
     total = int(conn.execute(f"SELECT COUNT(*) FROM domain_items di{join_sql} WHERE {where_sql}", params).fetchone()[0])
+    select_sql = "di.*"
+    if fields == "summary" and item_type == "target":
+        select_sql = (
+            "di.id, di.title, di.summary, di.score, di.status, di.source, di.source_url, di.tags_json, "
+            "tid.attack_surface, tid.attack_surface_grade, tid.cve_count, tid.sa_count, "
+            "tid.broad_sec_count, tid.total_sec_count, tid.org, tid.cve_sample_json"
+        )
+    elif fields == "summary":
+        select_sql = "di.id, di.title, di.summary, di.score, di.status, di.source, di.source_url, di.tags_json"
     rows = conn.execute(
-        f"SELECT di.* FROM domain_items di{join_sql} WHERE {where_sql} ORDER BY di.score DESC, di.id DESC LIMIT ? OFFSET ?",
+        f"SELECT {select_sql} FROM domain_items di{join_sql} WHERE {where_sql} ORDER BY di.score DESC, di.id DESC LIMIT ? OFFSET ?",
         [*params, limit, (page - 1) * limit],
     ).fetchall()
-    return {"items": [repo.row_to_dict(row) for row in rows], "total": total, "page": page, "pages": (total + limit - 1) // limit, "limit": limit, "truncated": total > limit}
+    items = [repo.row_to_dict(row) for row in rows] if fields == "full" else [_graph_summary_item(row, item_type=item_type) for row in rows]
+    return {"items": items, "total": total, "page": page, "pages": (total + limit - 1) // limit, "limit": limit, "truncated": page * limit < total}
+
+
+def _graph_summary_item(row: sqlite3.Row, *, item_type: str) -> dict:
+    item = {
+        "id": row["id"],
+        "title": row["title"],
+        "summary": row["summary"],
+        "score": row["score"],
+        "status": row["status"],
+        "source": row["source"],
+        "source_url": row["source_url"],
+        "tags": repo.loads(row["tags_json"], []),
+    }
+    if item_type == "target":
+        item.update(
+            {
+                "raw_org": row["org"],
+                "raw_name": str(row["title"] or "").split("/", 1)[-1],
+                "signals_summary": {
+                    "cve_count": row["cve_count"],
+                    "sa_count": row["sa_count"],
+                    "broad_sec_count": row["broad_sec_count"],
+                },
+                "attack_surface_summary": {
+                    "surface": row["attack_surface"] or "unknown",
+                    "grade": row["attack_surface_grade"],
+                    "score": row["score"],
+                },
+                "payload": {"cves": repo.loads(row["cve_sample_json"], [])},
+            }
+        )
+    return item
 
 
 @router.post("/{item_id}/ai-review")

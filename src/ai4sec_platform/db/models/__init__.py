@@ -34,6 +34,7 @@ CREATE TABLE IF NOT EXISTS threat_item_dimensions (
     broad_sec_count INTEGER NOT NULL DEFAULT 0,
     total_sec_count INTEGER NOT NULL DEFAULT 0,
     org TEXT NOT NULL DEFAULT '',
+    cve_sample_json TEXT NOT NULL DEFAULT '[]',
     updated_at TEXT NOT NULL,
     FOREIGN KEY(domain_item_id) REFERENCES domain_items(id) ON DELETE CASCADE
 );
@@ -42,6 +43,7 @@ CREATE INDEX IF NOT EXISTS idx_threat_dimensions_grade ON threat_item_dimensions
 CREATE INDEX IF NOT EXISTS idx_threat_dimensions_surface_aggregate ON threat_item_dimensions(
     COALESCE(NULLIF(attack_surface, ''), 'unknown'), cve_count, total_sec_count
 );
+CREATE INDEX IF NOT EXISTS idx_domain_items_graph_order ON domain_items(domain, item_type, score DESC, id DESC);
 
 
 CREATE TABLE IF NOT EXISTS raw_artifacts (
