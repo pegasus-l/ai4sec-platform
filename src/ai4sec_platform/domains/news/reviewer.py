@@ -32,6 +32,60 @@ def _load_scoring(project_root: Path) -> dict[str, Any]:
     return _scoring_cfg
 
 
+
+def _store_incremental(conn: sqlite3.Connection, item: dict[str, Any], review: dict[str, Any], run_id: str) -> None:
+    """Store a single reviewed item to DB immediately (incremental, crash-safe)."""
+    from ai4sec_platform.db import repositories as repo
+
+    item_key = str(item.get("item_key") or "")
+    title = str(item.get("title") or "未命名条目")
+    score = float(review.get("score") or 0)
+    decision = review.get("decision", "rejected")
+    recommended = int(review.get("recommended_score") or 0)
+    display_title = review.get("theme") or f"{review.get('work_name', '')}：{review.get('theme_descriptor', '')}"
+    display_summary = review.get("summary_zh", "")
+
+    if decision in ("selected", "watch") and recommended >= 4:
+        status = "待复现验证"
+    elif decision in ("selected", "watch"):
+        status = "待资料补齐"
+    else:
+        status = "已淘汰"
+
+    payload = {
+        "review": review,
+        "display_title": display_title,
+        "display_summary": display_summary,
+        "review_status": "enriched",
+        "code_url": item.get("code_url", ""),
+        "source_type": item.get("source_type", ""),
+        "rule_score": item.get("rule_score", 0),
+        "rule_breakdown": item.get("rule_breakdown", {}),
+        "security_flag": item.get("security_flag", False),
+        "security_topics": item.get("security_topics", []),
+    }
+
+    # Check if item already exists (avoid duplicates across pipeline runs)
+    existing = conn.execute("SELECT id FROM domain_items WHERE domain='capabilities' AND item_key=?", (item_key,)).fetchone()
+    if existing:
+        repo.update_domain_item(conn, item_id=existing[0], status=status, score=score, payload=payload)
+    else:
+        repo.create_domain_item(
+            conn,
+            domain="capabilities",
+            item_type="capability",
+            item_key=item_key,
+            title=title,
+            summary=display_summary,
+            score=score,
+            status=status,
+            source="asis_raw",
+            source_url=item.get("url", ""),
+            tags=[item.get("source_type", ""), review.get("topic", ""), review.get("capability_type", "")],
+            payload=payload,
+        )
+
+
 def review_candidates(
     conn: sqlite3.Connection,
     items: list[dict[str, Any]],
@@ -80,19 +134,22 @@ def review_candidates(
             resolved[r["index"]] = {**r["item"], "review": review}
             decision = review.get("decision", "rejected")
             metrics[decision] = metrics.get(decision, 0) + 1
+            # Incremental DB write: store each item as soon as its review completes
+            if decision in ("selected", "watch"):
+                try:
+                    _store_incremental(conn, r["item"], review, run_id)
+                    conn.commit()
+                except Exception:
+                    pass
             if i % PROGRESS_LOG_INTERVAL == 0 or i == len(pending):
                 print(f"[review] {i}/{len(items)} calls={metrics['model_calls']} sel={metrics['selected']} watch={metrics['watch']} rej={metrics['rejected']} fail={metrics['failed']}", flush=True)
 
     _rank = {"selected": 3, "watch": 2, "rejected": 1}
     _min_rank = _rank.get(min_decision, 3)
-    selected: list[dict[str, Any]] = []
-    for index in range(len(items)):
-        if index not in resolved:
-            continue
-        enriched = resolved[index]
-        decision = enriched["review"].get("decision", "rejected")
-        if _rank.get(decision, 0) >= _min_rank:
-            selected.append(enriched)
+    # Items already stored incrementally during review, just return for metrics
+    _rank = {"selected": 3, "watch": 2, "rejected": 1}
+    _min_rank = _rank.get(min_decision, 3)
+    selected = [resolved[i] for i in range(len(items)) if i in resolved and _rank.get(resolved[i]["review"].get("decision","rejected"), 0) >= _min_rank]
     return selected, metrics
 
 
