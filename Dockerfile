@@ -14,7 +14,7 @@ RUN pip install --no-cache-dir -e .
 COPY --from=frontend-builder /app/frontend/dist ./frontend/dist
 COPY src ./src
 COPY configs ./configs
-COPY run-pipeline.sh start-api.sh crontab ./
+COPY run-pipeline.sh start-api.sh crontab run-cron.sh ./
 RUN chmod +x run-pipeline.sh start-api.sh && chmod 0644 crontab && crontab crontab
 EXPOSE 8100
 CMD ["bash", "start-api.sh"]

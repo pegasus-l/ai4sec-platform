@@ -1,7 +1,6 @@
-# ai4sec pipeline 定时任务（env vars 已由 docker-compose env_file 注入）
-# 能力洞察: 每15分钟
-*/15 * * * * cd /app && PYTHONPATH=/app/src python -m ai4sec_platform.pipelines.runner capabilities.from_news_pipeline >> /var/log/ai4sec-pipeline.log 2>&1
-# 威胁洞察: 每天02:00
-0 2 * * * cd /app && PYTHONPATH=/app/src python -m ai4sec_platform.pipelines.runner threats.huawei_full_migration_pipeline >> /var/log/ai4sec-pipeline.log 2>&1
-# 漏洞洞察: 每天22:00
-0 22 * * * cd /app && PYTHONPATH=/app/src python -m ai4sec_platform.pipelines.runner vulnerabilities.full_knowledge_discovery_pipeline >> /var/log/ai4sec-pipeline.log 2>&1
+SHELL=/bin/bash
+PATH=/usr/local/bin:/usr/bin:/bin
+
+*/15 * * * * /app/run-cron.sh capabilities.from_news_pipeline >> /var/log/ai4sec-pipeline.log 2>&1
+0 2 * * * /app/run-cron.sh threats.huawei_full_migration_pipeline >> /var/log/ai4sec-pipeline.log 2>&1
+0 22 * * * /app/run-cron.sh vulnerabilities.full_knowledge_discovery_pipeline >> /var/log/ai4sec-pipeline.log 2>&1
