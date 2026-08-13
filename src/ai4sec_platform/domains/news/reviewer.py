@@ -190,7 +190,8 @@ def _normalize_review(value: Any, item: dict[str, Any], tech_map: AgentTechMap) 
     breakdown = _normalize_breakdown(result.get("score_breakdown"))
     item_type = str(item.get("source_type") or "")
     score = _weighted_score(item_type, breakdown)
-    decision = "selected" if paths and score >= 70 else "watch" if paths and score >= 55 else "rejected"
+    map_rel = breakdown.get("map_relevance", 0)
+    decision = "selected" if paths and score >= 70 and map_rel >= 70 else "watch" if paths and score >= 55 else "rejected"
     work_name = _work_name(result.get("work_name"), item)
     theme_descriptor = _theme_descriptor(result.get("theme_descriptor") or result.get("theme"), work_name, item)
     return {
