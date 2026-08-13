@@ -518,21 +518,18 @@ def surface_stats(conn: sqlite3.Connection = Depends(get_db)) -> dict:
     """Aggregate stats per attack surface — used by attack-surface view KPIs.
 
     Returns total_repos, total_cves, total_sec, and per_surface breakdown.
-    Queries payload_json via json_extract — one pass over domain_items.
+    Reads the compact threat dimension table maintained by the target builder.
     """
     rows = conn.execute(
         """
         SELECT
-            COALESCE(NULLIF(tid.attack_surface, ''), 'unknown') AS surface,
+            COALESCE(NULLIF(attack_surface, ''), 'unknown') AS surface,
             COUNT(*) AS count,
-            COALESCE(SUM(tid.cve_count), 0) AS cves,
-            COALESCE(SUM(tid.total_sec_count), 0) AS sec
-        FROM domain_items di
-        LEFT JOIN threat_item_dimensions tid ON tid.domain_item_id = di.id
-        WHERE di.domain = ? AND di.item_type = 'target'
+            COALESCE(SUM(cve_count), 0) AS cves,
+            COALESCE(SUM(total_sec_count), 0) AS sec
+        FROM threat_item_dimensions
         GROUP BY surface
-        """,
-        (DOMAIN,),
+        """
     ).fetchall()
 
     per_surface = {}

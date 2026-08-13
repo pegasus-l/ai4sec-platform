@@ -193,6 +193,18 @@ MIGRATIONS: tuple[Migration, ...] = (
         apply=lambda conn: _add_threat_item_dimensions(conn),
         checksum_source="threat_item_dimensions.v1",
     ),
+    Migration(
+        version=21,
+        name="add_threat_surface_aggregate_index",
+        apply=lambda conn: conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_threat_dimensions_surface_aggregate "
+            "ON threat_item_dimensions(COALESCE(NULLIF(attack_surface, ''), 'unknown'), cve_count, total_sec_count)"
+        ),
+        checksum_source=(
+            "idx_threat_dimensions_surface_aggregate on "
+            "threat_item_dimensions(coalesce(nullif(attack_surface,''),'unknown'),cve_count,total_sec_count)"
+        ),
+    ),
 )
 
 

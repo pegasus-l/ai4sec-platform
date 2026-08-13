@@ -39,6 +39,9 @@ CREATE TABLE IF NOT EXISTS threat_item_dimensions (
 );
 CREATE INDEX IF NOT EXISTS idx_threat_dimensions_surface ON threat_item_dimensions(attack_surface);
 CREATE INDEX IF NOT EXISTS idx_threat_dimensions_grade ON threat_item_dimensions(attack_surface_grade);
+CREATE INDEX IF NOT EXISTS idx_threat_dimensions_surface_aggregate ON threat_item_dimensions(
+    COALESCE(NULLIF(attack_surface, ''), 'unknown'), cve_count, total_sec_count
+);
 
 
 CREATE TABLE IF NOT EXISTS raw_artifacts (
