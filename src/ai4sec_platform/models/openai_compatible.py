@@ -39,8 +39,15 @@ class OpenAICompatibleProvider:
             data = self._post(retry_body)
             content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
         content = str(content).strip()
+        # 去掉 markdown 代码块标记
         if content.startswith("```"):
             content = content.removeprefix("```json").removeprefix("```").removesuffix("```").strip()
+        # 如果还不是JSON开头，提取第一个{到最后一个}之间的内容
+        if not content.startswith("{"):
+            start = content.find("{")
+            end = content.rfind("}")
+            if start != -1 and end != -1 and end > start:
+                content = content[start:end+1]
         if not content:
             raise RuntimeError("model returned empty content")
         try:
