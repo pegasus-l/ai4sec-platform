@@ -50,7 +50,7 @@ export function CapabilityPage() {
   const qc = useQueryClient();
 
   const { data: todayData, isLoading: todayLoading } = useQuery({ queryKey: ['cap-today'], queryFn: fetchToday, staleTime: 300_000 });
-  const { data: libraryData } = useQuery({ queryKey: ['cap-library'], queryFn: () => fetchLibrary(50), staleTime: 300_000 });
+  const { data: libraryData } = useQuery({ queryKey: ['cap-library'], queryFn: () => fetchLibrary(500), staleTime: 300_000 });
   const { data: reproData } = useQuery({ queryKey: ['cap-repro'], queryFn: fetchReproRuns, staleTime: 1_000, refetchInterval: 5_000 });
   const { data: convData } = useQuery({ queryKey: ['cap-conversions'], queryFn: fetchConversions, staleTime: 300_000 });
   const { data: statsData } = useQuery({ queryKey: ['cap-classify-stats'], queryFn: fetchClassifyStats, staleTime: 300_000 });

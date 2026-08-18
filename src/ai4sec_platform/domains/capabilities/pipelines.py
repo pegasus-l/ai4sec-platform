@@ -68,17 +68,18 @@ class SelectUnclassifiedWebCandidatesStep:
     step_type: str = "select"
 
     def run(self, context: PipelineContext) -> StepResult:
-        ids = context.outputs.get("capability_ids") or []
+        # 扫全表:所有尚未 web 分类的 capability 条目都进候选(不仅当次 run 新建的),
+        # 避免新条目因当次 run 错过 select 窗口而永久漏分类
         limit = int(context.params.get("classify_limit", 50))
         candidates: list[dict[str, Any]] = []
-        for item_id in ids:
-            item = repo.get_domain_item(context.conn, domain="capabilities", item_id=item_id)
-            if not item:
-                continue
+        items = repo.list_domain_items(context.conn, "capabilities", item_type="capability", limit=10000)
+        for item in items:
             payload = item.get("payload") or {}
             if not payload.get("web_classify_ts"):
-                candidates.append({"id": item_id, "code_url": payload.get("code_url", ""),
-                                   "title": item.get("title", ""), "payload": payload})
+                candidates.append({"id": item["id"], "code_url": payload.get("code_url", ""),
+                                   "title": item.get("title", ""), "payload": payload,
+                                   "source_url": item.get("source_url", ""),
+                                   "source_type": item.get("source", "")})
             if len(candidates) >= limit:
                 break
         context.outputs["web_classify_candidates"] = candidates
@@ -94,8 +95,11 @@ class ClassifyWebCapabilityStep:
         candidates = context.outputs.get("web_classify_candidates") or []
         if not candidates:
             return StepResult(metrics={"classified": 0})
-        results = classify_batch(context.conn, candidates)
-        return StepResult(metrics={"classified": len(results)})
+        result = classify_batch(context.conn, candidates)
+        return StepResult(metrics={
+            "classified": result.get("classified", 0),
+            "demoted": result.get("demoted", 0),
+        })
 
 
 # ─────────────────── Repro + Conversion 兼容函数 ───────────────────

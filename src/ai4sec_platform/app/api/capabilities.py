@@ -45,12 +45,12 @@ DOMAIN = "capabilities"
 # 已有端点（保留）
 # ============================================================================
 @router.get("/today")
-def today(limit: int = Query(12, ge=1, le=100), conn: sqlite3.Connection = Depends(get_db)) -> dict:
+def today(limit: int = Query(200, ge=1, le=500), conn: sqlite3.Connection = Depends(get_db)) -> dict:
     return domain_items.today(conn, DOMAIN, limit=limit)
 
 
 @router.get("/items")
-def items(limit: int = Query(50, ge=1, le=200), conn: sqlite3.Connection = Depends(get_db)) -> dict:
+def items(limit: int = Query(200, ge=1, le=500), conn: sqlite3.Connection = Depends(get_db)) -> dict:
     return domain_items.list_items(conn, DOMAIN, limit=limit)
 
 
@@ -400,7 +400,7 @@ def classify_batch_endpoint(limit: int = 50, conn: sqlite3.Connection = Depends(
 @router.get("/classify/stats")
 def classify_stats(conn: sqlite3.Connection = Depends(get_db)) -> dict:
     """Web 分类统计（迁自旧 /api/classify/stats）"""
-    items = repo.list_domain_items(conn, DOMAIN, item_type="capability", limit=10000)
+    items = repo.list_domain_items(conn, DOMAIN, item_type="capability", limit=10000, exclude_status="已淘汰")
     all_items = items
     repo_filter = [
         it for it in all_items

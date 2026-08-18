@@ -84,11 +84,14 @@ def extract_demo_urls(readme: str) -> list[str]:
         r'(?:demo|live demo|try it|在线体验|online demo|playground)[:\s]*\n?\s*(https?://[^\s\)>\]]+)',
         r'\[(?:demo|live demo|try[^\]]*|在线[^\]]*|playground[^\]]*)\]\((https?://[^\)]+)\)',
         r'(https?://(?:[\w-]+\.)?(?:hf\.space|gradio\.app|streamlit\.app|vercel\.app|netlify\.app|herokuapp\.com|railway\.app|render\.com)[/\w.-]*)',
+        # 独立域名 demo（app/live/try/visit 关键词附近，排除 github/docs/arxiv）
+        r'(?:app|live at|try (?:it|here|now)|visit|在线体验|playground)[:\s]*(https?://(?!github\.com|raw\.githubusercontent|api\.|docs\.|arxiv)[^\s\)>\]]+)',
     ]
     blacklist = [
         '/datasets/', '/docs/', '/wiki/', '/blob/', '/tree/',
         'arxiv.org', 'paper', 'install', 'setup', 'tutorial',
         'huggingface.co/docs', 'huggingface.co/datasets',
+        'github.io',
         '.md', '.pdf', '.txt', 'badge', 'shield',
     ]
     for pat in patterns:
@@ -111,6 +114,7 @@ def verify_demo_url(url: str, timeout: int = 8) -> bool:
     url_blacklist = [
         '/docs', '/doc/', '-docs.', 'documentation',
         'huggingface.co/',
+        'github.io',
         '/wiki', '/about', '/pricing', '/blog',
     ]
     if any(b in url_lower for b in url_blacklist):
@@ -171,7 +175,7 @@ def fetch_languages(owner: str, repo: str) -> dict:
     return r.json()
 
 
-def fetch_readme(owner: str, repo: str, max_chars: int = 3000) -> str:
+def fetch_readme(owner: str, repo: str, max_chars: int = 8000) -> str:
     r = requests.get(f"https://api.github.com/repos/{owner}/{repo}/readme",
                      headers=GITHUB_HEADERS, timeout=10)
     if r.status_code != 200:
@@ -273,7 +277,7 @@ def llm_classify_web(
     输出 schema: {is_web, framework, confidence, reason, demo_url}
     """
     file_tree_str = "\n".join(file_tree[:80])
-    readme_short = readme[:2000]
+    readme_short = readme[:4000]
     if rule_result["signals"]:
         rule_hint = "规则预筛得分: {} (信号: {})".format(
             rule_result["score"], ", ".join(rule_result["signals"][:8]))
@@ -290,10 +294,10 @@ def llm_classify_web(
 
 注意：
 - "自带 Web" 指项目本身就是一个 Web 应用（有前端页面或可通过浏览器访问的界面/dashboard）
-- 纯 API 库、CLI 工具、研究论文代码、数据集、prompt 合集 → 不算 Web
-- 只提供 REST API 但没有前端页面的纯后端服务 → 不算 Web
+- 纯数据集、prompt 合集 → 不算 Web
+- 如果项目有 Web 界面/dashboard/前端页面，即使也提供 CLI 或 API 库，也算 Web
 - 浏览器扩展/插件、IDE 插件 → 不算 Web
-- 必须是可以通过浏览器看到界面的才算
+- 宁可多判不要漏判：有 web 界面迹象的都算 Web
 
 项目信息：
 - 名称: {repo_name}
@@ -421,6 +425,7 @@ def classify_batch(
     from ai4sec_platform.db import repositories as repo
 
     results: list[dict] = []
+    demoted = 0  # web 把关:非 web 无 demo / 不可分类 而降级的条数
     for item in items[:limit]:
         item_id = item.get('id')
         try:
@@ -432,44 +437,96 @@ def classify_batch(
         if "error" not in result:
             llm = result.get("llm", {})
             if "error" not in llm:
-                is_web = 1 if llm.get("is_web") else 0
-                framework = llm.get("framework", "") or ""
+                # === 规则/demo 兜底覆盖（宁误不漏）===
+                rule_score = result.get("rule_score", 0)
+                rule_signals = result.get("rule_signals", [])
+                has_dep_signal = any(s.startswith("dep:") for s in rule_signals)
+
+                # 快速路径 1: demo URL 验证通过 → 强制 is_web=True + 标记已复现
+                demo_urls_found = result.get("demo_urls", [])
+                verified_demo = ""
+                for u in demo_urls_found:
+                    if verify_demo_url(u):
+                        verified_demo = u
+                        break
+
+                # 快速路径 2: rule_score >= 6 且有 dep 框架命中 → 强制 is_web=True
+                rule_high = rule_score >= 6 and has_dep_signal
+
+                # 最终决策：LLM 说了算，但 demo/rule 可覆盖
+                final_is_web = bool(llm.get("is_web"))
+                final_framework = llm.get("framework", "") or ""
+                repro_status = ""
+
+                if verified_demo:
+                    final_is_web = True
+                    repro_status = "demo_verified"
+                    if not final_framework:
+                        final_framework = "demo-detected"
+                elif rule_high:
+                    final_is_web = True
+                    if not final_framework:
+                        dep_signals = [s for s in rule_signals if s.startswith("dep:")]
+                        if dep_signals:
+                            final_framework = dep_signals[0].replace("dep:", "")
+
+                is_web = 1 if final_is_web else 0
+                framework = final_framework
                 classify_ts = datetime.now().isoformat()
-                demo_url = llm.get("demo_url", "") or ""
+                demo_url = verified_demo or (llm.get("demo_url", "") or "")
                 if not demo_url and result.get("demo_urls"):
                     demo_url = result["demo_urls"][0]
                 if demo_url and not verify_demo_url(demo_url):
                     demo_url = ""
-                # 写回 domain_items payload（替代旧 db.update_item_web_class）
-                repo.update_domain_item(
-                    conn,
-                    item_id=item_id,
-                    payload={
-                        "is_web": bool(is_web),
-                        "web_framework": framework,
-                        "web_classify_ts": classify_ts,
-                        "demo_url": demo_url,
-                    },
-                    metrics={"web_classify_score": result.get("rule_score", 0)},
-                )
+
+                # 写回 domain_items payload
+                # repro_status 只在 demo_verified 时才写，避免覆盖 Store 步骤设的 "candidate"
+                web_payload = {
+                    "is_web": bool(is_web),
+                    "web_framework": framework,
+                    "web_classify_ts": classify_ts,
+                    "demo_url": demo_url,
+                }
+                if repro_status:
+                    web_payload["repro_status"] = repro_status
+                # web/demo 把关:LLM 判非 web 且无 demo 兜底 → 降为已淘汰,不进复现队列
+                if not final_is_web:
+                    demoted += 1
+                    repo.update_domain_item(
+                        conn,
+                        item_id=item_id,
+                        payload=web_payload,
+                        status="已淘汰",
+                        metrics={"web_classify_score": rule_score},
+                    )
+                else:
+                    repo.update_domain_item(
+                        conn,
+                        item_id=item_id,
+                        payload=web_payload,
+                        metrics={"web_classify_score": rule_score},
+                    )
             else:
-                # LLM error: 标记避免重复重试
+                # LLM error: 标记避免重复重试;分类未定 → 降到待资料补齐(不进复现队列、不判死)
                 repo.update_domain_item(
                     conn, item_id=item_id,
                     payload={"is_web": False, "web_framework": "ERROR", "web_classify_ts": datetime.now().isoformat()},
+                    status="待资料补齐",
                 )
         else:
-            # 无有效 repo: 标记为不可分类
+            # 无有效 repo: 标记为不可分类;无 web 依据 → 降为已淘汰,不进复现队列
+            demoted += 1
             repo.update_domain_item(
                 conn, item_id=item_id,
                 payload={"is_web": False, "web_framework": "SKIP", "web_classify_ts": datetime.now().isoformat()},
+                status="已淘汰",
             )
 
         time.sleep(1)  # GitHub API 限流
 
     classified = sum(1 for r in results if "error" not in r and "error" not in r.get("llm", {}))
     failed = len(results) - classified
-    return {"classified": classified, "failed": failed, "results": results}
+    return {"classified": classified, "failed": failed, "demoted": demoted, "results": results}
 
 
 # ============================================================================

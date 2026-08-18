@@ -21,7 +21,7 @@ TODAY_ITEM_TYPES = {
 
 
 def list_items(conn: sqlite3.Connection, domain: str, *, item_type: str | None = None, limit: int = 50) -> dict[str, Any]:
-    items = repo.list_domain_items(conn, domain, item_type=item_type, limit=limit)
+    items = repo.list_domain_items(conn, domain, item_type=item_type, limit=limit, exclude_status="已淘汰")
     return {"domain": domain, "label": DOMAIN_LABELS.get(domain, domain), "count": len(items), "items": items}
 
 

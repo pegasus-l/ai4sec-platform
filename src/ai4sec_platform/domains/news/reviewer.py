@@ -15,7 +15,7 @@ from ai4sec_platform.domains.news.tech_map import AgentTechMap
 from ai4sec_platform.models.router import LLMRouter
 import yaml
 
-REVIEW_PROMPT_VERSION = "unified-review-v2"
+REVIEW_PROMPT_VERSION = "unified-review-v3"
 MODEL_MAX_ATTEMPTS = 3
 MODEL_RETRY_BASE_SECONDS = 1.0
 MODEL_RETRY_JITTER_SECONDS = 0.5
@@ -176,6 +176,15 @@ def _review_prompt() -> str:
 11. recommended_score 给1到5的整数，评估是否值得复现和能力转化。
 12. score_reason 用自然语言段落说明给这个分的理由。
 13. 不需要计算 final_score，平台按权重加权。
+14. 对于纯教学/书籍/教程类项目（如开源书籍、入门教程、学习资源），即使覆盖主题广且有配套代码，engineering_value 和 reproducibility 应降低评分——能力洞察关注的是可部署、可集成的工具和框架，不是学习资源。这类项目 recommended_score 不超过 3。
+15. 评分锚点（严格执行，大部分项目应在 40-70 区间，不要默认给高分）：
+    - 90-100：颠覆性技术或明星项目，有大规模社区采用（10K+ stars），工程价值极高，可直接集成到生产环境。极少项目能达到此区间。
+    - 75-89：有实际工程价值的成熟工具/框架，有文档有测试，社区活跃，解决真实痛点。少数优秀项目可达此区间。
+    - 55-74：有一定价值但实用性有限——如概念验证、早期阶段项目、有代码但工程化不足、或同类竞品已很多。大多数项目应落在此区间。
+    - 35-54：有参考价值但不成熟——如学术论文代码、实验性项目、缺少文档或测试、难以复现。
+    - 0-34：无关、无价值或无法判断——如纯数据集、prompt 合集、已废弃项目。
+16. map_relevance 评分标准：只有项目核心技术直接命中技术地图路径时才给 70+；泛泛相关给 40-60；勉强沾边给 20-40。不要因为项目涉及 AI/Agent 就给高分。
+17. novelty 评分标准：同类项目已有多个则 novelty 不超过 50；真正创新的架构、方法或场景才给 70+。
 
 输出：
 {
