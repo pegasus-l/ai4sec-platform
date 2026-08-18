@@ -64,7 +64,10 @@ class TriggerReproStep:
                 payload["repro_status"] = "succeeded" if result.get("build_success") else "failed"
                 repo.update_domain_item(context.conn, item_id=item_id, status="已复现" if result.get("build_success") else "复现失败", payload=payload)
                 triggered += 1
-                succeeded += int(result.get("build_success", False))
+                if result.get("build_success"):
+                    succeeded += 1
+                else:
+                    failed += 1
             except Exception as e:
                 payload["repro_result"] = {"error": str(e)}
                 payload["repro_status"] = "error"
@@ -96,7 +99,10 @@ def _trigger_repro(base_url: str, password: str, code_url: str, title: str, time
         f"Please clone the repository at {code_url}, read the README, "
         f"install dependencies, run the build, and execute tests. "
         f"Report: 1) build success/failure 2) test results 3) key issues or caveats. "
-        f"Be concise."
+        f"Be concise.\n"
+        f"At the very end output exactly one line: FINAL_VERDICT: SUCCESS, PARTIAL, or FAILURE. "
+        f"(SUCCESS = clean build and tests pass; PARTIAL = builds/tests only after manual fixes "
+        f"like creating missing stub files; FAILURE = cannot build or run.)"
     )
     req = urllib.request.Request(
         f"{base_url}/session/{session_id}/message", method="POST", headers=headers,
@@ -121,6 +127,17 @@ def _trigger_repro(base_url: str, password: str, code_url: str, title: str, time
 
 def _detect_build_success(text: str) -> bool:
     text_lower = text.lower()
+    # 结构化判定优先:agent 按要求输出 FINAL_VERDICT 行(SUCCESS/PARTIAL/FAILURE)
+    for line in text_lower.splitlines():
+        if "final_verdict" not in line:
+            continue
+        if "partial" in line:
+            return False  # 需人工补文件才能跑,按未成功处理(原因保留在 summary)
+        if "failure" in line:
+            return False
+        if "success" in line:
+            return True
+    # 关键词兜底(旧报告/agent 未遵循格式时)
     success_markers = ["build succeeded", "build successful", "build complete", "build success", "successfully built", "build passed", "✓ build", "✓ all tests"]
     failure_markers = ["build failed", "build error", "compilation failed", "build failure", "❌", "error: build"]
     has_success = any(m in text_lower for m in success_markers)
