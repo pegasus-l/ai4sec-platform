@@ -23,24 +23,35 @@ class TriggerReproStep:
     step_type: str = "repro"
 
     def run(self, context: PipelineContext) -> StepResult:
-        repro_url = _env("REPRO_API_URL", "http://127.0.0.1:4096")
+        repro_url = _env("REPRO_API_URL", "http://repro:4096")
         repro_password = _env("REPRO_PASSWORD", "")
         timeout = int(context.params.get("repro_timeout_seconds", 300))
 
-        ids = context.outputs.get("capability_ids") or []
+        limit = int(context.params.get("repro_limit", 1))
+        target_id = context.params.get("repro_item_id")
+
+        # 直接扫库取候选:待复现验证 + 有 code_url + 尚未复现过
+        # (不依赖当次 run 的 capability_ids——repro_pipeline 独立跑时 outputs 是空的)
+        if target_id:
+            row = repo.get_domain_item(context.conn, "capabilities", int(target_id))
+            candidates = [row] if row else []
+        else:
+            items = repo.list_domain_items(context.conn, "capabilities", item_type="capability", status="待复现验证", limit=10000)
+            candidates = [
+                it for it in items
+                if (it.get("payload") or {}).get("code_url")
+                and (it.get("payload") or {}).get("repro_status") not in ("succeeded", "failed", "error")
+            ][:limit]
         triggered = 0
         succeeded = 0
         failed = 0
 
-        for item_id in ids:
-            row = context.conn.execute("SELECT * FROM domain_items WHERE id=?", (item_id,)).fetchone()
-            if not row:
-                continue
-            item = repo.row_to_dict(row)
+        for item in candidates:
             payload = item.get("payload") or {}
             review = payload.get("review") or {}
             code_url = payload.get("code_url") or ""
             status = item.get("status") or ""
+            item_id = item.get("id")
 
             # 只对"待复现验证"且有 code_url 的触发
             if status != "待复现验证" or not code_url:
@@ -89,7 +100,7 @@ def _trigger_repro(base_url: str, password: str, code_url: str, title: str, time
     )
     req = urllib.request.Request(
         f"{base_url}/session/{session_id}/message", method="POST", headers=headers,
-        data=json.dumps({"messageID": f"repro-{int(time.time())}", "parts": [{"type": "text", "text": prompt}]}).encode(),
+        data=json.dumps({"messageID": f"msg-{int(time.time())}", "parts": [{"type": "text", "text": prompt}]}).encode(),
     )
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         msg_data = json.loads(resp.read())
