@@ -103,9 +103,15 @@ def _trigger_repro(base_url: str, password: str, code_url: str, title: str, time
         f"install dependencies, run the build, and execute tests. "
         f"Report: 1) build success/failure 2) test results 3) key issues or caveats. "
         f"Be concise.\n"
+        f"Note: this environment has NO Docker. If the project expects Docker/"
+        f"docker-compose deployment, first try building and running the source "
+        f"directly without Docker (pip/npm/yarn/make etc.). Only if Docker is the "
+        f"only viable path, output FINAL_VERDICT PARTIAL and state clearly in the "
+        f"report that the repository requires a Docker environment and cannot be "
+        f"fully reproduced here.\n"
         f"At the very end output exactly one line: FINAL_VERDICT: SUCCESS, PARTIAL, or FAILURE. "
         f"(SUCCESS = clean build and tests pass; PARTIAL = builds/tests only after manual fixes "
-        f"like creating missing stub files; FAILURE = cannot build or run.)"
+        f"like creating missing stub files, or requires Docker; FAILURE = cannot build or run.)"
     )
     req = urllib.request.Request(
         f"{base_url}/session/{session_id}/message", method="POST", headers=headers,
