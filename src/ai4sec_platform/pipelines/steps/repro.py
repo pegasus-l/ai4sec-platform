@@ -280,10 +280,22 @@ def _parse_report(full_text: str) -> tuple[dict | None, str]:
     return report, status
 
 
+def _is_machine_line(line: str) -> bool:
+    """排除原始 JSON / 命令 / 代码行, 避免把结构化 step 字符串当作文本结论。"""
+    s = line.strip()
+    if s.startswith("{"):
+        return True
+    if '"cmd"' in s or '"steps"' in s or '"blockers"' in s:
+        return True
+    if s.startswith(("```", "$ ", "git ", "cd ", "pip ", "npm ", "python", "poetry ", "docker ")):
+        return True
+    return False
+
+
 def _fallback_report(session_id: str, full_text: str, reason: str) -> tuple[dict[str, Any], str]:
     """中断/超时且无结构化报告时, 构造带中文结论的兜底报告。返回 (report, verdict)。
-    有阶段文本→partial(有进展), 全空→failed。summary 优先取结论性句子。"""
-    lines = [l.strip() for l in full_text.splitlines() if l.strip()]
+    有阶段文本→partial(有进展), 全空→failed。summary 优先取结论性句子(跳过 JSON/命令行)。"""
+    lines = [l.strip() for l in full_text.splitlines() if l.strip() and not _is_machine_line(l)]
     key_line = next(
         (l for l in reversed(lines) if any(k in l for k in ("核心", "跑通", "成功", "完成", "失败", "结论", "已就绪"))),
         lines[-1] if lines else "",
@@ -474,16 +486,29 @@ def _run_task(task_id: int, item_id: int, code_url: str, title: str, timeout: in
         salvaged = _fetch_transcript_text(repro_url, headers, session_id) if session_id else ""
         if timed_out:
             reason = f"超时(上限 {timeout}s), 已产出阶段文本见日志"
-            report, verdict = _fallback_report(session_id, salvaged, reason)
-            report["blockers"] = [f"复现超时: {emsg}"] if salvaged.strip() else [f"复现超时: {emsg}(未产出有效文本)"]
+            if salvaged.strip():
+                # 先尝试解析会话里可能已写完整的结构化报告(agent 可能已写完, 只是 serve 响应迟到)
+                report, verdict = _parse_report(salvaged)
+            else:
+                report, verdict = None, "failed"
+            report_complete = isinstance(report, dict) and report.get("status") in ("success", "partial", "failed")
+            if report_complete:
+                report = dict(report)
+                report.setdefault("blockers", [])
+                report["blockers"].append(f"复现通道超时({timeout}s)后从会话拉取到完整报告: {emsg}")
+                task_status = verdict
+            else:
+                report, verdict = _fallback_report(session_id, salvaged, reason)
+                report["blockers"] = [f"复现超时: {emsg}"] if salvaged.strip() else [f"复现超时: {emsg}(未产出有效文本)"]
+                task_status = "timeout"
             _update_task(
-                task_id, status="timeout", finished_at=_utc_now(),
+                task_id, status=task_status, finished_at=_utc_now(),
                 result=(salvaged or emsg)[:20000],
                 report_json=json.dumps(report, ensure_ascii=False),
             )
             _append_log(task_id, f"✗ {emsg}")
             if salvaged.strip():
-                _append_log(task_id, f"⏱ 超时, 已从会话拉取 {len(salvaged.splitlines())} 行已产出文本:")
+                _append_log(task_id, f"⏱ 通道超时, 已从会话拉取 {len(salvaged.splitlines())} 行已产出文本:")
                 for line in salvaged.splitlines():
                     _append_log(task_id, line)
             _write_payload(item_id, verdict, {
