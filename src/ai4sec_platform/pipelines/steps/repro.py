@@ -50,6 +50,10 @@ def _connect() -> sqlite3.Connection:
 _PAYLOAD_ACTIVE_STATUSES = {"success", "succeeded", "partial", "failed", "in_progress", "error"}
 _STATUS_TO_ITEM = {"success": "已复现", "partial": "部分复现", "failed": "复现失败", "error": "复现失败"}
 
+# 平台对外访问链接: 用户打开复现 Web 界面的入口(ASIS 8091 → /insights/ rewrite → ai4sec → /repro-web/ → repro:8080)
+_PLATFORM_WEB_ROOT = _env("PLATFORM_WEB_ROOT", "http://119.8.125.117:8091")
+REPRO_WEB_URL = f"{_PLATFORM_WEB_ROOT}/insights/repro-web/"
+
 # 停止协作标志（线程无法强杀，用 Event 在每个心跳检查点中止）
 _STOP_FLAGS: dict[int, threading.Event] = {}
 
@@ -121,7 +125,8 @@ def _build_repro_prompt(code_url: str, task_id: int) -> str:
         f"仓库源码地址: {code_url}。请把它全新克隆到独立目录 /workspace/repo-{task_id} "
         f"(若该目录或 /workspace/repo 有上次残留, 先 rm -rf 再克隆), 严禁在残留目录上操作。"
         f"全程用中文说明你在做什么——每一步、每个命令、遇到的坑都简要写出来。\n\n"
-        f"环境注意: 本环境没有 Docker, 没有 GPU, 也没有外部端口映射(服务只能容器内启动并 curl 验证, 用户无法从外部打开)。"
+        f"环境注意: 本环境没有 Docker、没有 GPU。Web 服务必须监听 0.0.0.0:8080 —— 平台已把对外路径 /repro-web/ 反代到容器内 8080, "
+        f"用户可通过 http://<平台地址>:8091/insights/repro-web/ 直接打开该界面。"
         f"总预算约 18 分钟, 必须在 15-16 分钟前停止继续探索, 把已验证的事实整理成报告; 核心闭环验证后不要枚举非必要功能。\n\n"
         f"# 第零步(最重要): 先判断这个项目【本身】到底有没有 Web 界面\n"
         f"读 README、看项目结构, 判断它是否【自带】一个真正的 Web 应用/界面:\n"
@@ -131,7 +136,8 @@ def _build_repro_prompt(code_url: str, task_id: int) -> str:
         f"你【绝对不要】自己造一个网页(比如写个 Flask 把一堆 .md 文件列出来), 那样毫无价值。"
         f"直接如实报告: is_web=false、web_started=false, 在 summary 说清\"该项目本身没有 Web 界面, 它是 XX 类型\"。\n\n"
         f"# 如果确认项目自带 Web 界面, 才执行下面的启动流程\n"
-        f"- 服务必须监听 0.0.0.0:8080(容器内验证用, 无外部端口映射)。\n"
+        f"- 服务必须监听 0.0.0.0:8080(平台对外路径 /repro-web/ → 容器内 8080, 用户可访问)。"
+        f"启动前若 8080 被上次任务残留进程占用, 先找到并 kill 掉再启动(如 `fuser -k 8080/tcp` 或按端口查 PID)。\n"
         f"- 常见启动方式: Streamlit: `streamlit run xxx.py --server.address 0.0.0.0 --server.port 8080`; "
         f"Gradio: 设 server_name=\"0.0.0.0\", server_port=8080; Flask/FastAPI: `uvicorn main:app --host 0.0.0.0 --port 8080`; "
         f"Node/Vite/React: `--host 0.0.0.0 --port 8080` 或 PORT=8080; 前端项目先 npm install。\n"
@@ -462,12 +468,16 @@ def _run_task(task_id: int, item_id: int, code_url: str, title: str, timeout: in
         report_json.setdefault("environment", {"provider": "opencode-serve", "session_id": session_id})
         report_json.setdefault("steps", [])
 
+        # 对外访问链接: web 服务已启动时, 通过平台反代路径开放给用户点击
+        web_started = bool((report or {}).get("web_started"))
         _update_task(
             task_id,
             status=verdict,
             finished_at=_utc_now(),
             result=full_response[:20000],
             report_json=json.dumps(report_json, ensure_ascii=False),
+            web_url=REPRO_WEB_URL if web_started else "",
+            web_port=8080 if web_started else None,
         )
         _write_payload(item_id, verdict, {
             "verdict": verdict,
@@ -501,10 +511,13 @@ def _run_task(task_id: int, item_id: int, code_url: str, title: str, timeout: in
                 report, verdict = _fallback_report(session_id, salvaged, reason)
                 report["blockers"] = [f"复现超时: {emsg}"] if salvaged.strip() else [f"复现超时: {emsg}(未产出有效文本)"]
                 task_status = "timeout"
+            web_started = bool((report or {}).get("web_started"))
             _update_task(
                 task_id, status=task_status, finished_at=_utc_now(),
                 result=(salvaged or emsg)[:20000],
                 report_json=json.dumps(report, ensure_ascii=False),
+                web_url=REPRO_WEB_URL if web_started else "",
+                web_port=8080 if web_started else None,
             )
             _append_log(task_id, f"✗ {emsg}")
             if salvaged.strip():
