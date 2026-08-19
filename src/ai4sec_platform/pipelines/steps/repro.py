@@ -25,7 +25,7 @@ class TriggerReproStep:
     def run(self, context: PipelineContext) -> StepResult:
         repro_url = _env("REPRO_API_URL", "http://repro:4096")
         repro_password = _env("REPRO_PASSWORD", "")
-        timeout = int(context.params.get("repro_timeout_seconds", 300))
+        timeout = int(context.params.get("repro_timeout_seconds", 1200))
 
         limit = int(context.params.get("repro_limit", 1))
         target_id = context.params.get("repro_item_id")
@@ -40,7 +40,7 @@ class TriggerReproStep:
             candidates = [
                 it for it in items
                 if (it.get("payload") or {}).get("code_url")
-                and (it.get("payload") or {}).get("repro_status") not in ("succeeded", "failed", "error")
+                and (it.get("payload") or {}).get("repro_status") not in ("succeeded", "failed")  # error(中断)可重试
             ][:limit]
         triggered = 0
         succeeded = 0
@@ -69,7 +69,10 @@ class TriggerReproStep:
                 else:
                     failed += 1
             except Exception as e:
-                payload["repro_result"] = {"error": str(e)}
+                emsg = str(e)
+                if "timed out" in emsg.lower():
+                    emsg = f"timed out after {timeout}s (REPRO_API_URL={repro_url})"
+                payload["repro_result"] = {"error": emsg}
                 payload["repro_status"] = "error"
                 repo.update_domain_item(context.conn, item_id=item_id, status="复现失败", payload=payload)
                 failed += 1
