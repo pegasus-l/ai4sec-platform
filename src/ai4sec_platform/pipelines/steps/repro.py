@@ -388,10 +388,14 @@ def _run_task(task_id: int, item_id: int, code_url: str, title: str, timeout: in
         if interrupted and not report:
             # 无结构化报告且被中断: 构造带中文结论的兜底报告(有阶段文本→partial, 全空→failed)
             verdict = "partial" if full_response.strip() else "failed"
-            last_line = next((l for l in reversed(full_response.splitlines()) if l.strip()), "")
+            lines = [l.strip() for l in full_response.splitlines() if l.strip()]
+            key_line = next(
+                (l for l in reversed(lines) if any(k in l for k in ("核心", "跑通", "成功", "完成", "失败", "结论", "已就绪"))),
+                lines[-1] if lines else "",
+            )
             report = {
                 "status": verdict,
-                "summary": last_line[:200] if last_line else "复现过程中断, agent 未产出有效输出",
+                "summary": key_line[:200] if key_line else "复现过程中断, agent 未产出有效输出",
                 "web_started": False,
                 "web_framework": "",
                 "start_command": "",
