@@ -51,7 +51,8 @@ async def repro_web_proxy(request: Request):
     headers["accept-encoding"] = "identity"
     body = await request.body()
     try:
-        resp = await client.request(request.method, url, headers=headers, content=body, stream=True)
+        req = client.build_request(request.method, url, headers=headers, content=body)
+        resp = await client.send(req, stream=True)
     except Exception as e:  # noqa: BLE001 - 上游不可达给友好错误
         return JSONResponse({"detail": f"repro web upstream unreachable: {e}"}, status_code=502)
     resp_headers = {
