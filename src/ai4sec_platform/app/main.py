@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import threading
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
@@ -22,7 +23,13 @@ FRONTEND_DIST = PROJECT_ROOT / "frontend" / "dist"
 
 
 
+_pipeline_lock = threading.Lock()
+
 def _run_pipeline_job(pipeline_name: str, params: dict | None = None) -> None:
+    acquired = _pipeline_lock.acquire(timeout=600)
+    if not acquired:
+        print(f'[scheduler] {pipeline_name}: skipped (another pipeline running)', flush=True)
+        return
     try:
         from ai4sec_platform.pipelines.runner import PipelineRunner
         r = PipelineRunner()
@@ -31,6 +38,8 @@ def _run_pipeline_job(pipeline_name: str, params: dict | None = None) -> None:
         print(f'[scheduler] {pipeline_name}: {status}', flush=True)
     except Exception as e:
         print(f'[scheduler] {pipeline_name} error: {e}', flush=True)
+    finally:
+        _pipeline_lock.release()
 
 
 def create_app() -> FastAPI:

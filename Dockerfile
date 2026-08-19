@@ -11,6 +11,7 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends gcc cron && rm -rf /var/lib/apt/lists/*
 COPY pyproject.toml ./
 RUN pip install --no-cache-dir -e .
+RUN python3 -m playwright install-deps && python3 -m playwright install chromium
 COPY --from=frontend-builder /app/frontend/dist ./frontend/dist
 COPY src ./src
 COPY configs ./configs
