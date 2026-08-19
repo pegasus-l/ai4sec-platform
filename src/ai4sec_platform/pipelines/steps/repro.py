@@ -280,6 +280,33 @@ def _parse_report(full_text: str) -> tuple[dict | None, str]:
     return report, status
 
 
+def _fallback_report(session_id: str, full_text: str, reason: str) -> tuple[dict[str, Any], str]:
+    """中断/超时且无结构化报告时, 构造带中文结论的兜底报告。返回 (report, verdict)。
+    有阶段文本→partial(有进展), 全空→failed。summary 优先取结论性句子。"""
+    lines = [l.strip() for l in full_text.splitlines() if l.strip()]
+    key_line = next(
+        (l for l in reversed(lines) if any(k in l for k in ("核心", "跑通", "成功", "完成", "失败", "结论", "已就绪"))),
+        lines[-1] if lines else "",
+    )
+    verdict = "partial" if lines else "failed"
+    report = {
+        "status": verdict,
+        "summary": key_line[:200] if key_line else f"复现{reason}, agent 未产出有效输出",
+        "web_started": False,
+        "web_framework": "",
+        "start_command": "",
+        "verify": "",
+        "project_type": "auto",
+        "core_workflow": {"goal": "", "mode": "real", "verified": False, "result": "", "evidence": []},
+        "environment": {"provider": "opencode-serve", "session_id": session_id},
+        "steps": [],
+        "blockers": [reason],
+        "gotchas": [],
+        "usage": {"what": "项目复现未能产出最终报告", "how_to_use": "", "prerequisites": "", "limitations": f"复现{reason}, 已产出阶段文本见日志, 需人工查看会话补判"},
+    }
+    return report, verdict
+
+
 # ---------------------------------------------------------------------------
 # Task-aware DB helpers（每操作新开连接，线程安全）
 # ---------------------------------------------------------------------------
@@ -388,27 +415,8 @@ def _run_task(task_id: int, item_id: int, code_url: str, title: str, timeout: in
 
         if interrupted and not report:
             # 无结构化报告且被中断: 构造带中文结论的兜底报告(有阶段文本→partial, 全空→failed)
-            verdict = "partial" if full_response.strip() else "failed"
-            lines = [l.strip() for l in full_response.splitlines() if l.strip()]
-            key_line = next(
-                (l for l in reversed(lines) if any(k in l for k in ("核心", "跑通", "成功", "完成", "失败", "结论", "已就绪"))),
-                lines[-1] if lines else "",
-            )
-            report = {
-                "status": verdict,
-                "summary": key_line[:200] if key_line else "复现过程中断, agent 未产出有效输出",
-                "web_started": False,
-                "web_framework": "",
-                "start_command": "",
-                "verify": "",
-                "project_type": "auto",
-                "core_workflow": {"goal": "", "mode": "real", "verified": False, "result": "", "evidence": []},
-                "environment": {"provider": "opencode-serve", "session_id": session_id},
-                "steps": [],
-                "blockers": [f"复现过程中断: {run_error}" if run_error else "复现过程中断(agent 未输出最终报告)"],
-                "gotchas": [],
-                "usage": {"what": "项目复现未能产出最终报告", "how_to_use": "", "prerequisites": "", "limitations": "复现被模型内容审核/API错误中断, 已产出阶段文本见日志, 需人工查看会话补判"},
-            }
+            reason = f"复现过程中断: {run_error}" if run_error else "复现过程中断(agent 未输出最终报告)"
+            report, verdict = _fallback_report(session_id, full_response, reason)
             _append_log(task_id, f"[复现完成-中断] agent 未输出最终结构化报告, 已产出阶段文本, 判定 {verdict.upper()}")
         else:
             _append_log(task_id, f"[复现完成] 判定 {verdict.upper()}，复现过程与报告:")
@@ -459,11 +467,28 @@ def _run_task(task_id: int, item_id: int, code_url: str, title: str, timeout: in
         }, item_status=_STATUS_TO_ITEM.get(verdict))
     except Exception as e:  # noqa: BLE001
         emsg = str(e)
-        if "timed out" in emsg.lower():
+        timed_out = "timed out" in emsg.lower()
+        if timed_out:
             emsg = f"timed out after {timeout}s (REPRO_API_URL={repro_url})"
-            _update_task(task_id, status="timeout", finished_at=_utc_now(), result=emsg[:10000])
+        # 超时/异常也尝试从会话拉取已产出文本, 给中文结论(不丢阶段成果)
+        salvaged = _fetch_transcript_text(repro_url, headers, session_id) if session_id else ""
+        if timed_out:
+            reason = f"超时(上限 {timeout}s), 已产出阶段文本见日志"
+            report, verdict = _fallback_report(session_id, salvaged, reason)
+            report["blockers"] = [f"复现超时: {emsg}"] if salvaged.strip() else [f"复现超时: {emsg}(未产出有效文本)"]
+            _update_task(
+                task_id, status="timeout", finished_at=_utc_now(),
+                result=(salvaged or emsg)[:20000],
+                report_json=json.dumps(report, ensure_ascii=False),
+            )
             _append_log(task_id, f"✗ {emsg}")
-            _write_payload(item_id, "error", {"error": emsg}, item_status="复现失败")
+            if salvaged.strip():
+                _append_log(task_id, f"⏱ 超时, 已从会话拉取 {len(salvaged.splitlines())} 行已产出文本:")
+                for line in salvaged.splitlines():
+                    _append_log(task_id, line)
+            _write_payload(item_id, verdict, {
+                "verdict": verdict, "error": emsg, "session_id": session_id, "summary": report.get("summary"),
+            }, item_status=_STATUS_TO_ITEM.get(verdict))
         else:
             _update_task(task_id, status="failed", finished_at=_utc_now(), result=emsg[:10000])
             _append_log(task_id, f"✗ 复现异常: {emsg}")
