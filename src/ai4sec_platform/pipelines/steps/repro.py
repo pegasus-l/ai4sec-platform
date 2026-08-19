@@ -171,6 +171,8 @@ def _build_repro_prompt(code_url: str) -> str:
         f"prerequisites 只写当前使用者仍需自行完成的前置条件——若本次复现已配置并验证了 LLM/API/数据库, "
         f"必须明确写\"当前复现环境已配置并验证 …, 无需用户额外配置\", 不能泛泛写\"需要配置 LLM API\"。"
         f"复现失败(failed)则 usage 只填 what 和 limitations。\n"
+        f"安全/攻击类工具报告: 最终报告【不要原样回显攻击载荷、恶意样本或敏感内容】, 用\"攻击载荷1/2/3\"或 <redacted> 代替, "
+        f"只写攻击类型、步骤与结论——避免模型内容审核中断报告, 也让报告更易读。\n"
         f"诚实第一: 项目没有 Web 界面就如实说, 绝不编造页面充数; 跑不起来就 failed 并在 blockers 说清缺什么。"
         f"JSON 之后再另起一行输出: FINAL_VERDICT: SUCCESS 或 PARTIAL 或 FAILURE。"
     )
@@ -196,9 +198,34 @@ def _get_session_meta(base_url: str, headers: dict[str, str], session_id: str) -
 
 
 def _extract_full_response(msg_data: dict[str, Any]) -> str:
+    if isinstance(msg_data, list):
+        msg_data = msg_data[-1] if msg_data else {}
+    if not isinstance(msg_data, dict):
+        return ""
     parts = msg_data.get("parts") or []
-    text_parts = [p.get("text", "") for p in parts if isinstance(p, dict) and p.get("type") == "text"]
-    return "\n".join(text_parts)
+    return "\n".join(p.get("text", "") for p in parts if isinstance(p, dict) and p.get("type") == "text")
+
+
+def _fetch_transcript_text(base_url: str, headers: dict[str, str], session_id: str) -> str:
+    """agent 运行被中断时, 从 serve 拉取会话已产出的 assistant 文本(尽力而为)。"""
+    try:
+        req = urllib.request.Request(f"{base_url}/session/{session_id}/message", headers=headers)
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            data = json.loads(resp.read())
+        msgs = data if isinstance(data, list) else (data.get("messages") or [])
+        texts: list[str] = []
+        for m in msgs:
+            if not isinstance(m, dict):
+                continue
+            info = m.get("info") or {}
+            if info.get("role") != "assistant":
+                continue
+            for p in m.get("parts") or []:
+                if isinstance(p, dict) and p.get("type") == "text":
+                    texts.append(str(p.get("text", "")))
+        return "\n".join(texts)
+    except Exception:  # noqa: BLE001 - 拉取失败不阻断主流程
+        return ""
 
 
 def _detect_verdict(text: str) -> str:
@@ -341,9 +368,50 @@ def _run_task(task_id: int, item_id: int, code_url: str, title: str, timeout: in
 
         msg_data = result_box["value"]
         full_response = _extract_full_response(msg_data)
+        run_error = ""
+        if isinstance(msg_data, dict):
+            err = msg_data.get("error")
+            if isinstance(err, dict):
+                run_error = str(err.get("message") or json.dumps(err, ensure_ascii=False))[:400]
+            elif isinstance(err, str):
+                run_error = err[:400]
+
+        interrupted = bool(run_error) or not full_response.strip()
+        if interrupted and not full_response.strip():
+            _append_log(task_id, "⚠ agent 运行被中断(可能是模型内容审核或 API 错误), 尝试从会话拉取已产出文本…")
+            full_response = _fetch_transcript_text(repro_url, headers, session_id)
+            if full_response.strip():
+                _append_log(task_id, f"已从会话拉取 {len(full_response.splitlines())} 行已产出文本")
+
         report, verdict = _parse_report(full_response)
 
-        _append_log(task_id, f"[复现完成] 判定 {verdict.upper()}，复现过程与报告:")
+        if interrupted and not report:
+            # 无结构化报告且被中断: 构造带中文结论的兜底报告(有阶段文本→partial, 全空→failed)
+            verdict = "partial" if full_response.strip() else "failed"
+            last_line = next((l for l in reversed(full_response.splitlines()) if l.strip()), "")
+            report = {
+                "status": verdict,
+                "summary": last_line[:200] if last_line else "复现过程中断, agent 未产出有效输出",
+                "web_started": False,
+                "web_framework": "",
+                "start_command": "",
+                "verify": "",
+                "project_type": "auto",
+                "core_workflow": {"goal": "", "mode": "real", "verified": False, "result": "", "evidence": []},
+                "environment": {"provider": "opencode-serve", "session_id": session_id},
+                "steps": [],
+                "blockers": [f"复现过程中断: {run_error}" if run_error else "复现过程中断(agent 未输出最终报告)"],
+                "gotchas": [],
+                "usage": {"what": "项目复现未能产出最终报告", "how_to_use": "", "prerequisites": "", "limitations": "复现被模型内容审核/API错误中断, 已产出阶段文本见日志, 需人工查看会话补判"},
+            }
+            _append_log(task_id, f"[复现完成-中断] agent 未输出最终结构化报告, 已产出阶段文本, 判定 {verdict.upper()}")
+        else:
+            _append_log(task_id, f"[复现完成] 判定 {verdict.upper()}，复现过程与报告:")
+            if run_error:
+                report = report or {}
+                report.setdefault("blockers", [])
+                report["blockers"].append(f"复现末尾异常: {run_error}")
+
         for line in full_response.splitlines():
             _append_log(task_id, line)
 
