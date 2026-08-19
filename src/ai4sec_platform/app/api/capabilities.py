@@ -31,7 +31,8 @@ from pydantic import BaseModel
 
 from ai4sec_platform.app.dependencies import get_db
 from ai4sec_platform.db import repositories as repo
-from ai4sec_platform.domains.capabilities.adapters.repro_runner import classify_log_line, manager as repro_manager
+from ai4sec_platform.domains.capabilities.adapters.repro_runner import classify_log_line
+from ai4sec_platform.pipelines.steps.repro import start_repro_task, stop_repro_task, cleanup_repro_task
 from ai4sec_platform.domains.capabilities.assessments import classify_batch
 from ai4sec_platform.domains.capabilities.schemas import ReproTaskResponse
 from ai4sec_platform.domains.capabilities.selectors import pick_top_repro_candidates, _resolve_repo_url
@@ -121,7 +122,7 @@ class StartReproRequest(BaseModel):
 
 @router.post("/items/{item_id}/start-repro")
 def start_repro(item_id: int, body: StartReproRequest = StartReproRequest(), conn: sqlite3.Connection = Depends(get_db)) -> dict:
-    """启动复现任务（迁自旧 /api/repro/start）"""
+    """启动复现（新链路: 建 task 行 + 后台调 repro 容器）。页面实时看进度/汇总。"""
     item = repo.get_domain_item(conn, DOMAIN, item_id)
     if not item:
         raise HTTPException(status_code=404, detail="capability item not found")
@@ -140,80 +141,8 @@ def start_repro(item_id: int, body: StartReproRequest = StartReproRequest(), con
     if not repo_url:
         raise HTTPException(status_code=400, detail="no repo URL found in item")
 
-    # 清理旧的非成功 task；partial 重试前也要释放容器和端口
-    for old_task in repo.list_repro_tasks(conn, item_id=item_id, include_cleaned=True):
-        if old_task["status"] in ("partial", "failed", "timeout", "stopped"):
-            repro_manager.cleanup_task(
-                old_task["id"],
-                container_name=old_task.get("container_name"),
-                workspace_path=old_task.get("workspace_path"),
-                web_port=old_task.get("web_port"),
-            )
-            repo.update_repro_task(conn, task_id=old_task["id"], status="cleaned", cleaned_at=datetime.utcnow().isoformat())
-
-    # 创建 task
-    task_id = repo.create_repro_task(conn, item_id=item_id, repo_url=repo_url, trigger="manual")
-
-    # Web 端口分配
-    web_port = None
-    if body.web or (item.get("payload") or {}).get("is_web"):
-        web_port = _alloc_web_port(conn)
-        if web_port:
-            repo.update_repro_task(conn, task_id=task_id, web_port=web_port)
-
-    conn.commit()
-
-    # 回调
-    def on_log(line: str):
-        from ai4sec_platform.db.session import connect as db_connect
-
-        callback_conn = db_connect()
-        try:
-            repo.append_repro_log(callback_conn, task_id=task_id, line=line)
-            callback_conn.commit()
-        finally:
-            callback_conn.close()
-
-    def on_status(status: str, _tid=task_id, _iid=item_id, **kw):
-        from ai4sec_platform.db.session import connect as db_connect
-
-        callback_conn = db_connect()
-        update_fields: dict[str, Any] = {"status": status}
-        if "result" in kw:
-            update_fields["result"] = str(kw["result"])[:10000]
-        if status in ("success", "failed", "timeout", "stopped", "partial"):
-            update_fields["finished_at"] = datetime.utcnow().isoformat()
-        if "report" in kw and kw["report"]:
-            update_fields["report_json"] = json.dumps(kw["report"], ensure_ascii=False) if isinstance(kw["report"], dict) else str(kw["report"])
-        if "web_port" in kw:
-            update_fields["web_port"] = kw["web_port"]
-        try:
-            repo.update_repro_task(callback_conn, task_id=_tid, **update_fields)
-            if "report" in kw and kw["report"]:
-                from ai4sec_platform.domains.capabilities.adapters.repro_results import update_capability_from_report
-                update_capability_from_report(callback_conn, item_id=_iid, report=kw["report"])
-            callback_conn.commit()
-        finally:
-            callback_conn.close()
-
-    # 启动 ReproRunner
-    runner = repro_manager.start_task(
-        task_id=task_id,
-        repo_url=repo_url,
-        on_log=on_log,
-        on_status=on_status,
-        web_port=web_port,
-    )
-    repo.update_repro_task(
-        conn,
-        task_id=task_id,
-        container_name=runner.container_name,
-        workspace_path=str(runner.workspace),
-        web_url=f"http://127.0.0.1:{web_port}" if web_port else "",
-    )
-    conn.commit()
-
-    return {"ok": True, "task_id": task_id, "repo_url": repo_url, "web_port": web_port}
+    task_id, _ = start_repro_task(conn, item_id=item_id, code_url=repo_url, trigger="manual")
+    return {"ok": True, "task_id": task_id, "repo_url": repo_url, "web_port": None}
 
 
 @router.get("/repro/{task_id}")
@@ -231,9 +160,7 @@ def stop_repro(task_id: int, conn: sqlite3.Connection = Depends(get_db)) -> dict
     task = repo.get_repro_task(conn, task_id)
     if not task:
         raise HTTPException(status_code=404, detail="repro task not found")
-    repro_manager.stop_task(task_id)
-    repo.update_repro_task(conn, task_id=task_id, status="stopped", finished_at=datetime.utcnow().isoformat())
-    conn.commit()
+    stop_repro_task(task_id)
     return {"ok": True}
 
 
@@ -243,12 +170,7 @@ def cleanup_repro(task_id: int, conn: sqlite3.Connection = Depends(get_db)) -> d
     task = repo.get_repro_task(conn, task_id)
     if not task:
         raise HTTPException(status_code=404, detail="repro task not found")
-    repro_manager.cleanup_task(
-        task_id,
-        container_name=task.get("container_name"),
-        workspace_path=task.get("workspace_path"),
-        web_port=task.get("web_port"),
-    )
+    cleanup_repro_task(task_id)
     repo.update_repro_task(
         conn,
         task_id=task_id,

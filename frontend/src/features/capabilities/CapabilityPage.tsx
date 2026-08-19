@@ -176,7 +176,7 @@ function CapabilityCard({ item, rank, onClick }: { item: CapabilityItem; rank: n
   const newsScore = sourceNewsScore(p);
   const sourceType = p.source_type || (item.source_url?.includes('github.com') ? 'github' : 'arxiv');
   const reproTag = p.repro_status === 'candidate' ? 'green' : p.repro_status === 'in_progress' ? 'sky' : p.repro_status === 'no_code' ? 'slate' : 'amber';
-  const reproText = { candidate: '可复现', in_progress: '复现中', no_code: '无代码', success: '已复现', failed: '复现失败' }[p.repro_status ?? ''] ?? p.repro_status;
+  const reproText = { candidate: '可复现', in_progress: '复现中', no_code: '无代码', success: '已复现', succeeded: '已复现', partial: '部分复现', failed: '复现失败', error: '复现异常', demo_verified: '官方Demo' }[p.repro_status ?? ''] ?? p.repro_status;
   return <div className="asis-card clickable" onClick={onClick}>
     <div className="rank">{rank}</div>
     <div>
