@@ -332,6 +332,16 @@ def list_domain_items(conn: sqlite3.Connection, domain: str, *, item_type: str |
     return [row_to_dict(row) for row in conn.execute(sql, params).fetchall()]
 
 
+def get_domain_item_by_repo(conn: sqlite3.Connection, domain: str, repo_url: str) -> dict[str, Any] | None:
+    """按规范化仓库 URL(code_url)查 domain_item,同仓库取最高分一条。用于库级去重。"""
+    row = conn.execute(
+        "SELECT * FROM domain_items WHERE domain = ? AND json_extract(payload_json, '$.code_url') = ? "
+        "ORDER BY COALESCE(score, 0) DESC, id DESC LIMIT 1",
+        (domain, repo_url),
+    ).fetchone()
+    return row_to_dict(row) if row else None
+
+
 def get_domain_item(conn: sqlite3.Connection, domain: str, item_id: int) -> dict[str, Any] | None:
     row = conn.execute("SELECT * FROM domain_items WHERE domain = ? AND id = ?", (domain, item_id)).fetchone()
     if not row:

@@ -283,9 +283,17 @@ class StoreCapabilitiesStep:
             tags = [item.get("source_type", ""), review.get("topic", ""), review.get("capability_type", "")]
             tags = [t for t in tags if t]
 
-            existing = repo.get_domain_item_by_key(context.conn, domain="capabilities", item_key=item_key) if hasattr(repo, 'get_domain_item_by_key') else None
+            # 库级去重按仓库身份(code_url),不再按 item_key(信源ID每轮都变,从未命中过→重复入库)
+            code_url = str(item.get("code_url") or "").strip()
+            existing = repo.get_domain_item_by_repo(context.conn, domain="capabilities", repo_url=code_url) if code_url else None
 
             if existing:
+                # 复用已有行时保留 repro 结果,避免重置回 candidate 造成重复复现
+                prev_payload = existing.get("payload") or {}
+                if prev_payload.get("repro_status"):
+                    payload["repro_status"] = prev_payload["repro_status"]
+                if prev_payload.get("repro_result"):
+                    payload["repro_result"] = prev_payload["repro_result"]
                 repo.update_domain_item(context.conn, item_id=existing["id"], status=status, score=score, payload=payload)
                 item_ids.append(existing["id"])
                 updated += 1
