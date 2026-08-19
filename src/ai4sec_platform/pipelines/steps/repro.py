@@ -243,8 +243,8 @@ def _run_task(task_id: int, item_id: int, code_url: str, title: str, timeout: in
             line = f"[复现中] agent 正在克隆 / 构建 / 测试… (已等待 {elapsed}s)"
             meta = _get_session_meta(repro_url, headers, session_id)
             tokens = meta.get("tokens")
-            if tokens:
-                line += f" · tokens={tokens}"
+            if isinstance(tokens, dict) and tokens.get("input") is not None:
+                line += f" · tokens in={tokens.get('input')} out={tokens.get('output') or 0}"
             _append_log(task_id, line)
             time.sleep(15)
 
