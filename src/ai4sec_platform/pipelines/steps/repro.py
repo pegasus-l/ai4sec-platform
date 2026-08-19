@@ -96,22 +96,88 @@ def _create_session(base_url: str, headers: dict[str, str], title: str) -> str:
     return session_id
 
 
-def _send_message(base_url: str, headers: dict[str, str], session_id: str, code_url: str, title: str, timeout: int) -> dict[str, Any]:
-    prompt = (
-        f"Please clone the repository at {code_url}, read the README, "
-        f"install dependencies, run the build, and execute tests. "
-        f"Report: 1) build success/failure 2) test results 3) key issues or caveats. "
-        f"Be concise.\n"
-        f"Note: this environment has NO Docker. If the project expects Docker/"
-        f"docker-compose deployment, first try building and running the source "
-        f"directly without Docker (pip/npm/yarn/make etc.). Only if Docker is the "
-        f"only viable path, output FINAL_VERDICT PARTIAL and state clearly in the "
-        f"report that the repository requires a Docker environment and cannot be "
-        f"fully reproduced here.\n"
-        f"At the very end output exactly one line: FINAL_VERDICT: SUCCESS, PARTIAL, or FAILURE. "
-        f"(SUCCESS = clean build and tests pass; PARTIAL = builds/tests only after manual fixes "
-        f"like creating missing stub files, or requires Docker; FAILURE = cannot build or run.)"
+_WEB_REPORT_EXAMPLE = """{
+  "is_web": true/false,
+  "status": "success|partial|failed",
+  "summary": "一句话结论(中文)。若项目本身无 Web 界面, 明确说明它是什么类型、为什么没界面",
+  "web_started": true/false,
+  "web_framework": "如 Streamlit / Gradio / FastAPI / React+Vite; 无则填空",
+  "start_command": "你启动服务的命令; 没启动填空",
+  "verify": "curl 验证结果; 没验证填空",
+  "project_type": "python|node|rust|go|web|其他",
+  "core_workflow": {"goal": "核心用户价值", "mode": "real|mock", "verified": true/false, "result": "产物或失败阶段", "evidence": ["真实响应/产物摘要"]},
+  "environment": {"language": "如 Python 3.12", "key_deps": ["关键依赖"]},
+  "steps": [{"cmd": "关键命令", "ok": true/false, "note": "可选"}],
+  "blockers": ["卡点; 若项目本身无Web界面, 在此说明"],
+  "gotchas": ["踩坑"],
+  "usage": {"what": "这个项目是干什么的(一两句话, 让没接触过的人看懂)", "how_to_use": "用户打开页面后怎么用(页面上有什么功能/怎么操作/API怎么调用)", "prerequisites": "使用前必须配置的东西(API key、后端服务、数据库等, 没有就留空)", "limitations": "当前状态下的限制(哪些功能不可用、需要额外条件等, 没有就留空)"}
+}"""
+
+
+def _build_repro_prompt(code_url: str) -> str:
+    """Web 类复现 prompt(中文)——判断是否有 Web 界面 → 启动验证 → 核心可用性验收 → 输出标记包裹的结构化 JSON。"""
+    return (
+        f"你在一个隔离容器里(你是 root, 可自由装包), 目标是【把一个开源项目跑起来、确认环境可用、尽量跑出真实运行效果】。"
+        f"仓库源码地址: {code_url}。请先把它 clone 到 /workspace/repo(失败重试一次, 位置也可自定)。"
+        f"全程用中文说明你在做什么——每一步、每个命令、遇到的坑都简要写出来。\n\n"
+        f"环境注意: 本环境没有 Docker, 没有 GPU, 也没有外部端口映射(服务只能容器内启动并 curl 验证, 用户无法从外部打开)。"
+        f"总预算约 18 分钟, 必须在 15-16 分钟前停止继续探索, 把已验证的事实整理成报告; 核心闭环验证后不要枚举非必要功能。\n\n"
+        f"# 第零步(最重要): 先判断这个项目【本身】到底有没有 Web 界面\n"
+        f"读 README、看项目结构, 判断它是否【自带】一个真正的 Web 应用/界面:\n"
+        f"- 有真 Web 界面的标志: 项目里有前端代码(React/Vue/HTML 应用)、或用 streamlit/gradio/flask/fastapi 写的、"
+        f"README 明确说\"启动后访问 localhost:xxxx 看界面/dashboard\"。\n"
+        f"- ❌ 如果项目【本身没有】Web 界面(它是 CLI 工具、Python 库、研究代码、prompt/数据集合集等), "
+        f"你【绝对不要】自己造一个网页(比如写个 Flask 把一堆 .md 文件列出来), 那样毫无价值。"
+        f"直接如实报告: is_web=false、web_started=false, 在 summary 说清\"该项目本身没有 Web 界面, 它是 XX 类型\"。\n\n"
+        f"# 如果确认项目自带 Web 界面, 才执行下面的启动流程\n"
+        f"- 服务必须监听 0.0.0.0:8080(容器内验证用, 无外部端口映射)。\n"
+        f"- 常见启动方式: Streamlit: `streamlit run xxx.py --server.address 0.0.0.0 --server.port 8080`; "
+        f"Gradio: 设 server_name=\"0.0.0.0\", server_port=8080; Flask/FastAPI: `uvicorn main:app --host 0.0.0.0 --port 8080`; "
+        f"Node/Vite/React: `--host 0.0.0.0 --port 8080` 或 PORT=8080; 前端项目先 npm install。\n"
+        f"- 在【后台】启动(nohup/setsid &), 启动后【sleep 10 秒】等服务起来, 再 `curl -s http://localhost:8080`。"
+        f"如果 curl 没响应, 最多等 30 秒重试 2-3 次, 仍不行就如实报告 web_started=false 并结束。"
+        f"用项目【原有】的前端, 不要自己另写页面。\n"
+        f"- 启动命令纪律: 先定位真正的应用根目录(如仓库是 backend/app/main.py, 必须先 cd backend 再运行); "
+        f"不要用 --reload/hot reload; 后台启动后立刻记录 PID(`nohup ... >/tmp/service.log 2>&1 & echo $! >/tmp/service.pid`), "
+        f"需要停止重试时用 `kill $(cat /tmp/service.pid)`, 绝对不要用 pkill -f(会误杀当前 shell)。"
+        f"首次启动失败不能直接结束: 读服务日志、检查工作目录/模块路径/端口/依赖, 至少修正重试一次。"
+        f"前后端分离项目: 后端按其真实目录启动到内部端口(如 8000), 前端最终监听 0.0.0.0:8080, 并确认前端 /api 代理指向已启动的后端。\n"
+        f"- 写配置前检查项目实际配置加载逻辑(Pydantic env_file、dotenv、进程 cwd), 配置文件必须放在运行进程真正读取的位置; "
+        f"启动后通过配置对象、进程环境或实际响应确认 provider/model 等关键配置已生效, 不能只确认文件存在。\n"
+        f"- `curl http://localhost:8080` 只证明页面服务启动, 不能单独作为复现成功的依据。\n"
+        f"- 如果页面需要登录/注册: 必须实际调用注册或登录 API 确认能进入受保护页面; "
+        f"没有预置账号但支持注册就创建专用 Demo 账号(不要用真实个人账号), 并把账号密码写进 usage.prerequisites; "
+        f"注册不可用就找安全演示入口, 不能把用户留在登录页。\n\n"
+        f"# 核心可用性验收(必须执行, 禁止\"首页 200 = 复现成功\")\n"
+        f"- 读 README 和页面功能, 先一句话定义该项目最核心的用户价值与最短操作闭环。\n"
+        f"- 至少实际完成一条超越登录和普通 CRUD 的核心业务链(如 AI 平台真实调用一次 AI 生成; 扫描器提交目标并拿到扫描结果; "
+        f"分析工具导入样例并产出报告)。只创建账号、创建 Project、打开空 Dashboard 都不算。\n"
+        f"- 前后端分离或多目录项目必须确认配置文件放在【实际进程读取的位置】, 并从运行中进程/生成结果验证配置已生效, 不能因为写过 .env 就声称启用。"
+        f"若项目支持 mock, 必须区分 mock 输出与真实能力输出。\n"
+        f"- 核心链依赖 LLM/API/数据库时, 必须检查真实 provider/model、响应内容、错误信息, 不能只看 HTTP 状态码。"
+        f"核心 LLM 阶段超时/JSON 解析失败/schema 校验失败时不要立刻判失败: 先读错误详情, 优先降低 temperature、启用 JSON/structured-output 模式(若支持), "
+        f"对同一阶段至少重试 2 次; 重试成功以成功产物为最终结论, 早先失败记入 gotchas; 全部失败才报 partial/failed。\n"
+        f"- status 定义: success=核心业务链完整跑通且结果可用; partial=页面和部分功能可用但核心链仅部分跑通、用 mock、超时或关键阶段失败; "
+        f"failed=页面不可用或核心入口完全无法执行。未执行核心业务链不得报 success。"
+        f"core_workflow.mode 必须区分 real/mock, 用 mock/fixture/静态占位只能报 partial。\n"
+        f"- 检查关键页面入口是否真实可点击; 核心路由/API 可用但页面无可发现入口时, 允许做最小导航修复(如加\"进入项目\"按钮), "
+        f"但不得重写业务功能, 并必须在 gotchas 和 steps 中记录修改。\n\n"
+        f"# 最后必须输出结构化报告(用标记包裹, JSON 必须合法, status/summary/usage 用中文)\n"
+        f"===REPRO_REPORT_START===\n"
+        f"{_WEB_REPORT_EXAMPLE}\n"
+        f"===REPRO_REPORT_END===\n\n"
+        f"usage 字段是给用户看的\"使用说明\", 不要写安装部署步骤, 重点写怎么用: "
+        f"what=项目是干什么的; how_to_use=打开页面后怎么操作; prerequisites=必须先配好什么; limitations=有什么限制。"
+        f"prerequisites 只写当前使用者仍需自行完成的前置条件——若本次复现已配置并验证了 LLM/API/数据库, "
+        f"必须明确写\"当前复现环境已配置并验证 …, 无需用户额外配置\", 不能泛泛写\"需要配置 LLM API\"。"
+        f"复现失败(failed)则 usage 只填 what 和 limitations。\n"
+        f"诚实第一: 项目没有 Web 界面就如实说, 绝不编造页面充数; 跑不起来就 failed 并在 blockers 说清缺什么。"
+        f"JSON 之后再另起一行输出: FINAL_VERDICT: SUCCESS 或 PARTIAL 或 FAILURE。"
     )
+
+
+def _send_message(base_url: str, headers: dict[str, str], session_id: str, code_url: str, title: str, timeout: int) -> dict[str, Any]:
+    prompt = _build_repro_prompt(code_url)
     req = urllib.request.Request(
         f"{base_url}/session/{session_id}/message", method="POST", headers=headers,
         data=json.dumps({"messageID": f"msg-{int(time.time())}", "parts": [{"type": "text", "text": prompt}]}).encode(),
@@ -162,6 +228,28 @@ def _extract_test_results(text: str) -> str:
     lines = text.split("\n")
     test_lines = [l for l in lines if any(k in l.lower() for k in ["test", "pass", "fail", "skip", "coverage"])]
     return "\n".join(test_lines[:20]) if test_lines else "No test results found in response"
+
+
+def _parse_report(full_text: str) -> tuple[dict | None, str]:
+    """解析 agent 全文里的结构化 JSON 报告(复用旧 extract_report), 返回 (report, status)。
+    status 优先级: JSON 报告 status > FINAL_VERDICT > 关键词兜底。"""
+    report: dict | None = None
+    try:
+        from ai4sec_platform.domains.capabilities.adapters.repro_runner import extract_report
+
+        report = extract_report(full_text)
+    except Exception:  # noqa: BLE001 - 解析失败降级
+        report = None
+    status: str | None = None
+    if isinstance(report, dict):
+        s = report.get("status")
+        if s == "succeeded":
+            s = "success"
+        if s in ("success", "partial", "failed"):
+            status = s
+    if not status:
+        status = _detect_verdict(full_text)
+    return report, status
 
 
 # ---------------------------------------------------------------------------
@@ -253,14 +341,22 @@ def _run_task(task_id: int, item_id: int, code_url: str, title: str, timeout: in
 
         msg_data = result_box["value"]
         full_response = _extract_full_response(msg_data)
-        verdict = _detect_verdict(full_response)
+        report, verdict = _parse_report(full_response)
 
-        _append_log(task_id, f"[复现完成] 判定 {verdict.upper()}，全文报告:")
+        _append_log(task_id, f"[复现完成] 判定 {verdict.upper()}，复现过程与报告:")
         for line in full_response.splitlines():
             _append_log(task_id, line)
 
-        summary = full_response.strip()[:400]
-        report: dict[str, Any] = {
+        # 结构化关键步骤/实际运行也落日志, 便于页面日志区直接看
+        steps = (report or {}).get("steps") or []
+        if steps:
+            _append_log(task_id, f"— 关键步骤 {len(steps)} 条 —")
+            for st in steps:
+                mark = "✓" if st.get("ok") else "✗"
+                note = f"  ({st.get('note')})" if st.get("note") else ""
+                _append_log(task_id, f"{mark} {st.get('cmd', '')}{note}")
+        summary = (report or {}).get("summary") or full_response.strip()[:400]
+        report_json: dict[str, Any] = report if isinstance(report, dict) else {
             "status": verdict,
             "summary": summary,
             "level": "auto",
@@ -268,12 +364,17 @@ def _run_task(task_id: int, item_id: int, code_url: str, title: str, timeout: in
             "environment": {"provider": "opencode-serve", "session_id": session_id},
             "steps": [],
         }
+        report_json.setdefault("status", verdict)
+        report_json.setdefault("summary", summary)
+        report_json.setdefault("environment", {"provider": "opencode-serve", "session_id": session_id})
+        report_json.setdefault("steps", [])
+
         _update_task(
             task_id,
             status=verdict,
             finished_at=_utc_now(),
-            result=full_response[:10000],
-            report_json=json.dumps(report, ensure_ascii=False),
+            result=full_response[:20000],
+            report_json=json.dumps(report_json, ensure_ascii=False),
         )
         _write_payload(item_id, verdict, {
             "verdict": verdict,
