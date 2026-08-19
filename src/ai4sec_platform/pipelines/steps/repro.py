@@ -114,11 +114,12 @@ _WEB_REPORT_EXAMPLE = """{
 }"""
 
 
-def _build_repro_prompt(code_url: str) -> str:
+def _build_repro_prompt(code_url: str, task_id: int) -> str:
     """Web 类复现 prompt(中文)——判断是否有 Web 界面 → 启动验证 → 核心可用性验收 → 输出标记包裹的结构化 JSON。"""
     return (
         f"你在一个隔离容器里(你是 root, 可自由装包), 目标是【把一个开源项目跑起来、确认环境可用、尽量跑出真实运行效果】。"
-        f"仓库源码地址: {code_url}。请先把它 clone 到 /workspace/repo(失败重试一次, 位置也可自定)。"
+        f"仓库源码地址: {code_url}。请把它全新克隆到独立目录 /workspace/repo-{task_id} "
+        f"(若该目录或 /workspace/repo 有上次残留, 先 rm -rf 再克隆), 严禁在残留目录上操作。"
         f"全程用中文说明你在做什么——每一步、每个命令、遇到的坑都简要写出来。\n\n"
         f"环境注意: 本环境没有 Docker, 没有 GPU, 也没有外部端口映射(服务只能容器内启动并 curl 验证, 用户无法从外部打开)。"
         f"总预算约 18 分钟, 必须在 15-16 分钟前停止继续探索, 把已验证的事实整理成报告; 核心闭环验证后不要枚举非必要功能。\n\n"
@@ -178,8 +179,8 @@ def _build_repro_prompt(code_url: str) -> str:
     )
 
 
-def _send_message(base_url: str, headers: dict[str, str], session_id: str, code_url: str, title: str, timeout: int) -> dict[str, Any]:
-    prompt = _build_repro_prompt(code_url)
+def _send_message(base_url: str, headers: dict[str, str], session_id: str, code_url: str, title: str, timeout: int, task_id: int) -> dict[str, Any]:
+    prompt = _build_repro_prompt(code_url, task_id)
     req = urllib.request.Request(
         f"{base_url}/session/{session_id}/message", method="POST", headers=headers,
         data=json.dumps({"messageID": f"msg-{int(time.time())}", "parts": [{"type": "text", "text": prompt}]}).encode(),
@@ -340,7 +341,7 @@ def _run_task(task_id: int, item_id: int, code_url: str, title: str, timeout: in
 
         def _post() -> None:
             try:
-                result_box["value"] = _send_message(repro_url, headers, session_id, code_url, title, timeout)
+                result_box["value"] = _send_message(repro_url, headers, session_id, code_url, title, timeout, task_id)
             except Exception as e:  # noqa: BLE001 - 线程内兜底
                 result_box["error"] = e
 
