@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 import threading
 from pathlib import Path
 
@@ -28,12 +29,57 @@ FRONTEND_DIST = PROJECT_ROOT / "frontend" / "dist"
 _pipeline_lock = threading.Lock()
 
 # ─── 复现 Web 服务反代: 用户从平台(/repro-web/*)打开复现容器里 agent 启动的 Web 界面 ───
-# 链路: 用户 → 8091(ASIS) → /insights/ rewrite → ai4sec:8100 → /repro-web/ → repro:8080
+# 链路: 用户 → 8091(ASIS) → /insights/ rewrite → ai4sec:8100 → /repro-web/{path} → repro:8080/{path}
 REPRO_WEB_UPSTREAM = os.environ.get("REPRO_WEB_UPSTREAM", "http://repro:8080")
+# ASIS 把 /insights/* rewrite 过来, 子路径前缀固定为 /insights/repro-web
+REPRO_WEB_PREFIX = os.environ.get("REPRO_WEB_PREFIX", "/insights/repro-web")
+
+# HTML 子路径适配: 很多 agent 启动的 SPA 用 root-absolute(/mail,/thread/x) 或相对(./static/...) 路径,
+# 在 /insights/repro-web/ 子路径下会 404。这里注入 <base> 处理相对路径, 再给 root-absolute href/src 加前缀。
+_REPRO_WEB_BASE_TAG = re.compile(r"<base\b", re.IGNORECASE)
+_REPRO_WEB_HEAD = re.compile(r"<head[^>]*>", re.IGNORECASE)
+# (href|src|action|data-src)="/xxx" → 加前缀; 跳过已带前缀(/insights/)、协议相对(//)、外部协议(http: 等)
+# 注意组1只含 "attr=", 组2是引号; \1\2 拼回 "attr=quote/prefix/..."
+_REPRO_WEB_ROOT_ATTR = re.compile(
+    r"(\b(?:href|src|action|data-src)=)([\"'])/(?!/|insights/|[A-Za-z][A-Za-z0-9+.\-]*:)",
+    re.IGNORECASE,
+)
+
+
+def _web_prefix(x_pathname: str | None, app_path: str) -> str:
+    """从 ASIS middleware 写入的 x-pathname(原始路径)推导子路径前缀。
+
+    例: x-pathname=/insights/repro-web/appwin.js, app_path=appwin.js → /insights/repro-web
+         x-pathname=/insights/repro-web,        app_path=""          → /insights/repro-web
+    """
+    if not x_pathname:
+        return REPRO_WEB_PREFIX
+    prefix = x_pathname
+    if app_path and prefix.endswith("/" + app_path):
+        prefix = prefix[: -len(app_path) - 1]
+    prefix = prefix.rstrip("/")
+    if len(prefix.split("/")) >= 2:
+        return prefix
+    return REPRO_WEB_PREFIX
+
+
+def _rewrite_web_html(html: str, prefix: str) -> str:
+    """给 HTML 页面注入 <base href="{prefix}/"> 并把 root-absolute 链接改写成子路径, 返回改写结果。"""
+    if not prefix:
+        return html
+    if not _REPRO_WEB_BASE_TAG.search(html):
+        base_tag = f'<base href="{prefix}/">'
+        m = _REPRO_WEB_HEAD.search(html)
+        html = html[: m.end()] + base_tag + html[m.end():] if m else base_tag + html
+    return _REPRO_WEB_ROOT_ATTR.sub(rf"\1\2{prefix}/", html)
 
 
 async def repro_web_proxy(request: Request):
-    """把 /repro-web/{path} 透明转发到 repro 容器内 agent 启动的 Web 服务(默认 8080)。"""
+    """把 /repro-web/{path} 转发到 repro 容器内 agent 启动的 Web 服务(默认 8080)。
+
+    对 HTML 响应做子路径适配(注入 <base> + root-absolute 链接加前缀), 使 SPA 在
+    /insights/repro-web/ 下完整可用; 非 HTML 按原样流式透传。
+    """
     app = request.app
     client = getattr(app.state, "repro_web_client", None)
     if client is None:
@@ -59,9 +105,25 @@ async def repro_web_proxy(request: Request):
         k: v for k, v in resp.headers.items()
         if k.lower() not in ("content-length", "transfer-encoding", "connection")
     }
+    status = resp.status_code
+    ctype = (resp.headers.get("content-type") or "").lower()
+    # 仅 GET 成功响应的 text/html 才做子路径适配; 其余(静态资源/接口/错误页)按原文透传
+    if "text/html" in ctype and "json" not in ctype and status < 400 and request.method in ("GET", "HEAD"):
+        try:
+            data = await resp.aread()
+        finally:
+            await resp.aclose()
+        if data:
+            prefix = _web_prefix(request.headers.get("x-pathname"), path)
+            text = data.decode("utf-8", errors="replace")
+            rewritten = _rewrite_web_html(text, prefix)
+            if rewritten != text:
+                data = rewritten.encode("utf-8")
+            resp_headers["content-length"] = str(len(data))
+            return StreamingResponse(iter([data]), status_code=status, headers=resp_headers)
     return StreamingResponse(
         resp.aiter_raw(),
-        status_code=resp.status_code,
+        status_code=status,
         headers=resp_headers,
         background=BackgroundTask(resp.aclose),
     )
@@ -99,6 +161,13 @@ def create_app() -> FastAPI:
     )
     app.include_router(api_router)
     # 复现 Web 服务反代(必须注册在 catch-all /{path:path} 之前)
+    # 无斜杠 /repro-web 和带斜杠 /repro-web/ 都匹配: ASIS rewrite 会产生无斜杠路径, 不能让它落到 catch-all
+    app.add_api_route(
+        "/repro-web",
+        repro_web_proxy,
+        methods=["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"],
+        include_in_schema=False,
+    )
     app.add_api_route(
         "/repro-web/{path:path}",
         repro_web_proxy,
