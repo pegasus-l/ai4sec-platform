@@ -130,7 +130,7 @@ def _build_repro_prompt(code_url: str, task_id: int) -> str:
         f"全程用中文说明你在做什么——每一步、每个命令、遇到的坑都简要写出来。\n\n"
         f"环境注意: 本环境没有 Docker、没有 GPU。Web 服务必须监听 0.0.0.0:8080 —— 平台已把对外路径 /repro-web/ 反代到容器内 8080, "
         f"用户可通过 http://<平台地址>:8091/insights/repro-web/ 直接打开该界面。"
-        f"总预算约 18 分钟, 必须在 15-16 分钟前停止继续探索, 把已验证的事实整理成报告; 核心闭环验证后不要枚举非必要功能。\n\n"
+        f"总预算约 35 分钟, 必须在 33 分钟前停止继续探索, 把已验证的事实整理成报告; 核心闭环验证后不要枚举非必要功能。\n\n"
         f"# 第零步(最重要): 先判断这个项目【本身】到底有没有 Web 界面\n"
         f"读 README、看项目结构, 判断它是否【自带】一个真正的 Web 应用/界面:\n"
         f"- 有真 Web 界面的标志: 项目里有前端代码(React/Vue/HTML 应用)、或用 streamlit/gradio/flask/fastapi 写的、"
@@ -211,6 +211,20 @@ def _get_session_meta(base_url: str, headers: dict[str, str], session_id: str) -
         return {}
 
 
+def _abort_session(base_url: str, headers: dict[str, str], session_id: str | None) -> bool:
+    """放弃等待时中止 serve 会话(尽力而为)。实测: 客户端超时后 serve 端 agent 会一直跑并持续烧 token,
+    DELETE /session/{id} 返回 200 true 即中止 agent; 之后该会话 transcript 变 404, 无法再拉取。
+    故任何给放弃路径(give-up)都必须先拉完需要的东西再调用本函数。"""
+    if not session_id:
+        return False
+    try:
+        req = urllib.request.Request(f"{base_url}/session/{session_id}", method="DELETE", headers=headers)
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            return resp.status == 200
+    except Exception:  # noqa: BLE001 - 中止失败不阻断主流程
+        return False
+
+
 def _extract_full_response(msg_data: dict[str, Any]) -> str:
     if isinstance(msg_data, list):
         msg_data = msg_data[-1] if msg_data else {}
@@ -287,7 +301,7 @@ def _render_tool_part(p: dict[str, Any], out_only: bool = False) -> list[str]:
     return [f"[工具:{tool}] {summary[:100]}" if summary else f"[工具:{tool}]"]
 
 
-def _render_transcript_delta(base_url: str, headers: dict[str, str], session_id: str, seen_ids: set[str], inflight: dict[str, Any]) -> tuple[list[str], bool]:
+def _render_transcript_delta(base_url: str, headers: dict[str, str], session_id: str, seen_ids: set[str], inflight: dict[str, Any]) -> tuple[list[str], bool, bool]:
     """增量拉取会话 transcript, 把尚未见过的 part 渲染成日志行。
 
     serve 全程缓冲, 但 /session/{id}/message 运行中即可拉到已产出部分, 所以轮询增量即可
@@ -296,14 +310,16 @@ def _render_transcript_delta(base_url: str, headers: dict[str, str], session_id:
 
     inflight: {part_id: None} 已渲染过命令但当时还没有输出(命令仍在执行)的 tool part;
     之后轮询若其输出出现, 补渲染输出/退出码行, 让"命令失败→agent 怎么恢复"可见。
-    返回 (lines, has_new)。拉取失败返回 ([], False)。"""
+    返回 (lines, has_new, done)。done=会话已输出 FINAL_VERDICT(agent 完成), 供超时宽限期判断。
+    拉取失败返回 ([], False, False)。"""
     lines: list[str] = []
+    done = False
     try:
         req = urllib.request.Request(f"{base_url}/session/{session_id}/message", headers=headers)
         with urllib.request.urlopen(req, timeout=30) as resp:
             data = json.loads(resp.read())
     except Exception:  # noqa: BLE001 - 拉取失败降级为心跳
-        return lines, False
+        return lines, False, False
     msgs = data if isinstance(data, list) else (data.get("messages") or [])
     for m in msgs:
         if not isinstance(m, dict):
@@ -339,10 +355,12 @@ def _render_transcript_delta(base_url: str, headers: dict[str, str], session_id:
                 t = str(p.get("text", "")).strip()
                 if not t:
                     continue
+                if "final_verdict" in t.lower():
+                    done = True
                 prefix = "[提示词]" if role == "user" else "[agent]"
                 for sub in t.splitlines():
                     lines.append(f"{prefix} {sub}")
-    return lines, bool(lines)
+    return lines, bool(lines), done
 
 
 def _detect_verdict(text: str) -> str:
@@ -506,18 +524,23 @@ def _run_task(task_id: int, item_id: int, code_url: str, title: str, timeout: in
         t0 = time.time()
         seen_ids: set[str] = set()
         inflight: dict[str, Any] = {}
-        while poster.is_alive():
+        _GRACE = int(os.getenv("REPRO_GRACE_SECONDS", "900"))
+        grace_deadline: float | None = None
+        session_done = False
+        while True:
             if _is_stopped(task_id):
                 _update_task(task_id, status="stopped", finished_at=_utc_now(), result="stopped by user")
                 _append_log(task_id, "⏹ 已由用户停止")
+                if _abort_session(repro_url, headers, session_id):
+                    _append_log(task_id, "⏹ 已中止 serve 会话, 停止 agent 继续烧 token")
                 _write_payload(item_id, "candidate", {"stopped": True})
                 return
             elapsed = int(time.time() - t0)
             # 流式拉取 agent 真实活动(提示词/命令/输出/恢复), 增量落日志
             try:
-                delta_lines, has_new = _render_transcript_delta(repro_url, headers, session_id, seen_ids, inflight)
+                delta_lines, has_new, session_done = _render_transcript_delta(repro_url, headers, session_id, seen_ids, inflight)
             except Exception:  # noqa: BLE001 - 拉取失败降级为心跳
-                delta_lines, has_new = [], False
+                delta_lines, has_new, session_done = [], False, False
             for dl in delta_lines:
                 _append_log(task_id, dl)
             meta = _get_session_meta(repro_url, headers, session_id)
@@ -529,20 +552,54 @@ def _run_task(task_id: int, item_id: int, code_url: str, title: str, timeout: in
                 _append_log(task_id, f"[复现中] agent 运行中… (已等待 {elapsed}s){token_str}")
             elif token_str:
                 _append_log(task_id, f"[进度] 已等待 {elapsed}s{token_str}")
+
+            if poster.is_alive():
+                time.sleep(15)
+                continue
+            # poster 已结束: 正常返回或非超时异常 → 退出循环走解析
+            err = result_box.get("error")
+            timed_out = err is not None and "timed out" in str(err).lower()
+            if not timed_out:
+                break
+            # POST 通道超时: serve 会话仍可能在后台跑完(实测会继续), 进入宽限期等 agent 完成
+            if grace_deadline is None:
+                grace_deadline = time.time() + _GRACE
+                _append_log(task_id, f"⏱ 通道等待已达 {timeout}s, serve 会话仍在运行, 进入宽限期(≤{_GRACE}s)等 agent 完成…")
+            if session_done:
+                _append_log(task_id, "✓ 会话已输出 FINAL_VERDICT, 拉取最终结果")
+                break
+            if time.time() >= grace_deadline:
+                _append_log(task_id, f"⏱ 宽限 {_GRACE}s 后会话仍未完成, 结束等待")
+                break
             time.sleep(15)
 
-        if "error" in result_box:
-            raise result_box["error"]
-
-        msg_data = result_box["value"]
-        full_response = _extract_full_response(msg_data)
+        full_response = ""
         run_error = ""
-        if isinstance(msg_data, dict):
-            err = msg_data.get("error")
-            if isinstance(err, dict):
-                run_error = str(err.get("message") or json.dumps(err, ensure_ascii=False))[:400]
-            elif isinstance(err, str):
-                run_error = err[:400]
+        if "error" in result_box:
+            err = result_box["error"]
+            emsg = str(err)
+            if "timed out" not in emsg.lower():
+                raise err
+            # POST 通道超时: serve 会话仍在后台跑完(实测), 从完整 transcript 解析真实报告
+            _append_log(task_id, f"⏱ POST 通道超时({timeout}s); 尝试从会话拉取最终文本…")
+            full_response = _fetch_transcript_text(repro_url, headers, session_id)
+            if full_response.strip():
+                report, verdict = _parse_report(full_response)
+                if isinstance(report, dict) and report.get("status") in ("success", "partial", "failed"):
+                    _append_log(task_id, f"✓ 会话在宽限期内完成, 判定 {verdict.upper()}")
+                else:
+                    raise err  # 无结构化报告 → 外层 except 走兜底
+            else:
+                raise err  # 会话无产出 → 外层 except
+        else:
+            msg_data = result_box["value"]
+            full_response = _extract_full_response(msg_data)
+            if isinstance(msg_data, dict):
+                err = msg_data.get("error")
+                if isinstance(err, dict):
+                    run_error = str(err.get("message") or json.dumps(err, ensure_ascii=False))[:400]
+                elif isinstance(err, str):
+                    run_error = err[:400]
 
         interrupted = bool(run_error) or not full_response.strip()
         if interrupted and not full_response.strip():
@@ -566,7 +623,7 @@ def _run_task(task_id: int, item_id: int, code_url: str, title: str, timeout: in
                 report["blockers"].append(f"复现末尾异常: {run_error}")
 
         # 运行中已由增量渲染写过的内容不重复落盘, 只补拉完成时尚未流出的会话尾部
-        tail_lines, _ = _render_transcript_delta(repro_url, headers, session_id, seen_ids, inflight)
+        tail_lines, _, _ = _render_transcript_delta(repro_url, headers, session_id, seen_ids, inflight)
         for tl in tail_lines:
             _append_log(task_id, tl)
 
@@ -611,6 +668,8 @@ def _run_task(task_id: int, item_id: int, code_url: str, title: str, timeout: in
             "test_results": _extract_test_results(full_response),
             "report_text": full_response[:2000],
         }, item_status=_STATUS_TO_ITEM.get(verdict))
+        # 会话已利用完毕: 中止 serve 会话(即便 agent 已自然结束也做清理, 防止边缘情况残留烧 token)
+        _abort_session(repro_url, headers, session_id)
     except Exception as e:  # noqa: BLE001
         emsg = str(e)
         timed_out = "timed out" in emsg.lower()
@@ -655,11 +714,25 @@ def _run_task(task_id: int, item_id: int, code_url: str, title: str, timeout: in
             _update_task(task_id, status="failed", finished_at=_utc_now(), result=emsg[:10000])
             _append_log(task_id, f"✗ 复现异常: {emsg}")
             _write_payload(item_id, "error", {"error": emsg}, item_status="复现失败")
+        # 兜底清理: 任何异常/放弃路径都中止 serve 会话, 防止客户端不再等待时 agent 继续烧 token
+        _abort_session(repro_url, headers, session_id)
 
 
-def start_repro_task(conn: sqlite3.Connection, *, item_id: int, code_url: str, trigger: str = "manual", timeout: int = 1200) -> tuple[int, threading.Thread]:
+def _default_timeout() -> int:
+    """复现默认超时(秒)。复杂 Web 项目完整部署 + 核心业务链验证需 30-40 分钟(见 AutoCVE 20 分钟仍差一步被砍),
+    故默认 2400s; 超时后还有 REPRO_GRACE_SECONDS(默认 900s)宽限期继续等 serve 会话跑完, 不轻易判死。"""
+    return int(os.getenv("REPRO_TIMEOUT_SECONDS", "2400"))
+
+
+def _grace_seconds() -> int:
+    return int(os.getenv("REPRO_GRACE_SECONDS", "900"))
+
+
+def start_repro_task(conn: sqlite3.Connection, *, item_id: int, code_url: str, trigger: str = "manual", timeout: int | None = None) -> tuple[int, threading.Thread]:
     """建 task 行并后台跑复现（API 按钮/管道共用）。返回 (task_id, thread)。
-    thread.join() 等完成；API 侧忽略 thread 即可（daemon 继续跑）。"""
+    thread.join() 等完成；API 侧忽略 thread 即可（daemon 继续跑）。timeout 缺省取 REPRO_TIMEOUT_SECONDS。"""
+    if timeout is None:
+        timeout = _default_timeout()
     task_id = repo.create_repro_task(conn, item_id=item_id, repo_url=code_url, trigger=trigger)
     conn.commit()
     _STOP_FLAGS[task_id] = threading.Event()
@@ -670,10 +743,12 @@ def start_repro_task(conn: sqlite3.Connection, *, item_id: int, code_url: str, t
     return task_id, thread
 
 
-def run_repro_sync(conn: sqlite3.Connection, *, item_id: int, code_url: str, trigger: str = "manual", timeout: int = 1200) -> str:
+def run_repro_sync(conn: sqlite3.Connection, *, item_id: int, code_url: str, trigger: str = "manual", timeout: int | None = None) -> str:
     """同步跑一条复现并返回最终 task status（供管道 step 使用）。"""
+    if timeout is None:
+        timeout = _default_timeout()
     task_id, thread = start_repro_task(conn, item_id=item_id, code_url=code_url, trigger=trigger, timeout=timeout)
-    thread.join(timeout=timeout + 120)
+    thread.join(timeout=timeout + _grace_seconds() + 120)
     task = repo.get_repro_task(conn, task_id)
     return (task or {}).get("status", "failed")
 
@@ -685,7 +760,7 @@ class TriggerReproStep:
     step_type: str = "repro"
 
     def run(self, context: PipelineContext) -> StepResult:
-        timeout = int(context.params.get("repro_timeout_seconds", 1200))
+        timeout = int(context.params.get("repro_timeout_seconds", _default_timeout()))
         limit = int(context.params.get("repro_limit", 1))
         target_id = context.params.get("repro_item_id")
 
