@@ -51,8 +51,14 @@ def today(limit: int = Query(200, ge=1, le=500), conn: sqlite3.Connection = Depe
 
 
 @router.get("/items")
-def items(limit: int = Query(200, ge=1, le=500), conn: sqlite3.Connection = Depends(get_db)) -> dict:
-    return domain_items.list_items(conn, DOMAIN, limit=limit)
+def items(
+    limit: int = Query(200, ge=1, le=500),
+    q: str | None = Query(None, max_length=200, description="搜索关键词(标题/仓库/技术点/概述)"),
+    page: int | None = Query(None, ge=1, description="页码(1-based), 与 page_size 同时给出时启用分页"),
+    page_size: int | None = Query(None, ge=1, le=500, description="每页条数"),
+    conn: sqlite3.Connection = Depends(get_db),
+) -> dict:
+    return domain_items.list_items(conn, DOMAIN, limit=limit, q=q, page=page, page_size=page_size)
 
 
 @router.get("/items/{item_id}")

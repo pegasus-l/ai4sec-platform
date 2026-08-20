@@ -31,6 +31,17 @@ const conversionGroups = ['待评估', '待复现', '复现中', '复现成功',
 
 interface ConvertFormData { status: string; scenario: string; owner: string; next_action: string; notes: string; }
 
+function matchItem(item: CapabilityItem, q: string): boolean {
+  const p = item.payload ?? {};
+  const hay = [
+    item.title, item.summary ?? '', item.source_url ?? '',
+    p.display_title, p.display_work_name, p.display_topic, p.one_liner, p.overview,
+    p.code_url,
+    Array.isArray(p.tech_points) ? p.tech_points.join(' ') : '',
+  ].filter(Boolean).join(' ').toLowerCase();
+  return hay.includes(q.toLowerCase());
+}
+
 function sourceNewsScore(payload: CapabilityItem['payload']): number | null {
   const directScore = Number(payload?.source_news_score);
   if (Number.isFinite(directScore) && directScore > 0) return directScore;
@@ -45,6 +56,7 @@ function formatScore(score: number): string {
 
 export function CapabilityPage() {
   const [view, setView] = useState<CapabilityView>('today');
+  const [search, setSearch] = useState('');
   const { push } = useDrawerStack();
   const { toast } = useToast();
   const qc = useQueryClient();
@@ -60,6 +72,17 @@ export function CapabilityPage() {
   const reproRuns = ((reproData as Record<string, unknown> | undefined)?.items ?? []) as ReproTask[];
   const conversions = ((convData as Record<string, unknown> | undefined)?.items ?? []) as ConversionRecord[];
   const stats = statsData ?? { total: 0, classified: 0, unclassified: 0, web_count: 0 };
+
+  // 【搜索】搜索框全局过滤: 今日能力 + 能力库(跨标题/仓库/技术点/概述), 空则显示全部
+  const trimmedSearch = search.trim();
+  const filteredToday = useMemo(
+    () => (trimmedSearch ? todayItems.filter(i => matchItem(i, trimmedSearch)) : todayItems),
+    [todayItems, trimmedSearch],
+  );
+  const filteredLibrary = useMemo(
+    () => (trimmedSearch ? libraryItems.filter(i => matchItem(i, trimmedSearch)) : libraryItems),
+    [libraryItems, trimmedSearch],
+  );
 
   const viewRef = useRef<HTMLDivElement>(null);
   useEffect(() => { if (viewRef.current) viewRef.current.scrollTop = 0; }, [view]);
@@ -108,12 +131,12 @@ export function CapabilityPage() {
     <section className="content">
       <section className="content-head">
         <div className="content-title"><span className="label">{navGroups.flatMap(g => g.items).find(i => i.id === view)?.title ?? '能力洞察'}</span><h1>{heroTitle(view)}</h1><p>{heroCopy(view)}</p></div>
-        <div className="head-actions"><label className="search"><span>⌕</span><input placeholder="搜索能力 / 仓库 / 技术点" onChange={() => {}} /></label><button className="btn" onClick={() => qc.invalidateQueries({ queryKey: ['cap-'] })}>刷新数据</button></div>
+        <div className="head-actions"><label className="search"><span>⌕</span><input placeholder="搜索能力 / 仓库 / 技术点" value={search} onChange={e => setSearch(e.target.value)} /></label><button className="btn" onClick={() => qc.invalidateQueries({ queryKey: ['cap-'] })}>刷新数据</button></div>
       </section>
       <div className="content-body view" ref={viewRef}>
         {todayLoading && view === 'today' && <EmptyState title="正在加载" description="从 /api/capabilities/today 拉取数据。" />}
-        {view === 'today' && <CapabilityToday items={todayItems} stats={stats} openDetail={openDetail} />}
-        {view === 'library' && <CapabilityLibrary items={libraryItems} openDetail={openDetail} />}
+        {view === 'today' && <CapabilityToday items={filteredToday} stats={stats} openDetail={openDetail} />}
+        {view === 'library' && <CapabilityLibrary items={filteredLibrary} openDetail={openDetail} />}
         {view === 'repro' && <CapabilityRepro runs={reproRuns} openDetail={openDetail} items={libraryItems} />}
         {view === 'conversion' && <CapabilityConversion conversions={conversions} openConversion={openConversion} />}
         {view === 'ops-overview' && <CapabilityOps />}
@@ -199,6 +222,12 @@ function CapabilityCard({ item, rank, onClick }: { item: CapabilityItem; rank: n
 // ========== 能力库（改动 1: 4 个视图 + 改动 3: classifyBatch 按钮）==========
 function CapabilityLibrary({ items, openDetail }: { items: CapabilityItem[]; openDetail: (item: CapabilityItem) => void }) {
   const [viewMode, setViewMode] = useState<'列表视图' | '能力分类' | '应用场景' | '工程可用性'>('列表视图');
+  // 【分页】列表视图分页(每页 20 条); 搜索/数据变化时回到第 1 页
+  const PAGE_SIZE = 20;
+  const [page, setPage] = useState(1);
+  const pageCount = Math.max(1, Math.ceil(items.length / PAGE_SIZE));
+  const pageItems = useMemo(() => items.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE), [items, page]);
+  useEffect(() => { setPage(1); }, [items]);
 
   // 【改动 1】能力分类视图：按 capability_type 分组
   const typeGroups = useMemo(() => {
@@ -231,15 +260,30 @@ function CapabilityLibrary({ items, openDetail }: { items: CapabilityItem[]; ope
     {items.length === 0 && <EmptyState title="能力库为空" description="先跑 capabilities.from_news_pipeline 生成能力卡" />}
 
     {/* 列表视图 */}
-    {items.length > 0 && viewMode === '列表视图' && <div className="table-card"><table className="data-table"><thead><tr><th>能力</th><th>概述</th><th>能力评分</th><th>资讯洞察</th><th>标签</th></tr></thead><tbody>
-      {items.map(item => { const p = item.payload ?? {}; const st = p.source_type || (item.source_url?.includes('github.com') ? 'github' : 'arxiv'); const ov = p.display_summary || p.overview || p.one_liner || ''; return <tr key={item.id} className="clickable" onClick={() => openDetail(item)}>
+    {items.length > 0 && viewMode === '列表视图' && <div className="table-card">
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 12px', borderBottom: '1px solid var(--line)', fontSize: 12, color: '#8a94a6' }}>
+        <span>共 {items.length} 条 · 每页 {PAGE_SIZE} 条</span>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <button className="btn" disabled={page <= 1} onClick={() => setPage(p => Math.max(1, p - 1))}>‹ 上一页</button>
+          <span>第 {page}/{pageCount} 页</span>
+          <button className="btn" disabled={page >= pageCount} onClick={() => setPage(p => Math.min(pageCount, p + 1))}>下一页 ›</button>
+        </div>
+      </div>
+      <table className="data-table"><thead><tr><th>能力</th><th>概述</th><th>能力评分</th><th>资讯洞察</th><th>标签</th></tr></thead><tbody>
+      {pageItems.map(item => { const p = item.payload ?? {}; const st = p.source_type || (item.source_url?.includes('github.com') ? 'github' : 'arxiv'); const ov = p.display_summary || p.overview || p.one_liner || ''; return <tr key={item.id} className="clickable" onClick={() => openDetail(item)}>
         <td><div className="table-title">{p.display_title || item.title}</div><div className="table-sub">{st}</div></td>
         <td style={{maxWidth: '320px'}} className="small muted">{ov.slice(0, 120)}{ov.length > 120 ? '…' : ''}</td>
         <td><div className="score-ring">{item.score}</div></td>
         <td>{sourceNewsScore(p) !== null ? <Badge tone="sky">{formatScore(sourceNewsScore(p)!)}</Badge> : <span className="muted">—</span>}</td>
         <td><div className="badges">{p.capability_type && <Badge tone="green">{p.capability_type}</Badge>}<Badge tone={p.repro_status === 'candidate' ? 'green' : 'amber'}>{p.repro_status ?? '未知'}</Badge>{p.is_web ? <Badge tone="amber">Web</Badge> : <Badge tone="slate">非Web</Badge>}</div></td>
       </tr>; })}
-    </tbody></table></div>}
+    </tbody></table>
+    {pageCount > 1 && <div style={{ display: 'flex', justifyContent: 'center', gap: 8, alignItems: 'center', padding: '10px 12px', borderTop: '1px solid var(--line)' }}>
+      <button className="btn" disabled={page <= 1} onClick={() => setPage(p => Math.max(1, p - 1))}>‹ 上一页</button>
+      <span style={{ fontSize: 12, color: '#8a94a6' }}>第 {page}/{pageCount} 页</span>
+      <button className="btn" disabled={page >= pageCount} onClick={() => setPage(p => Math.min(pageCount, p + 1))}>下一页 ›</button>
+    </div>}
+    </div>}
 
     {/* 能力分类视图 */}
     {items.length > 0 && viewMode === '能力分类' && Object.entries(typeGroups).map(([type, groupItems]) => (

@@ -50,9 +50,10 @@ def _connect() -> sqlite3.Connection:
 _PAYLOAD_ACTIVE_STATUSES = {"success", "succeeded", "partial", "failed", "in_progress", "error"}
 _STATUS_TO_ITEM = {"success": "已复现", "partial": "部分复现", "failed": "复现失败", "error": "复现失败"}
 
-# 平台对外访问链接: 用户打开复现 Web 界面的入口(ASIS 8091 → /insights/ rewrite → ai4sec → /repro-web/ → repro:8080)
-_PLATFORM_WEB_ROOT = _env("PLATFORM_WEB_ROOT", "http://119.8.125.117:8091")
-REPRO_WEB_URL = f"{_PLATFORM_WEB_ROOT}/insights/repro-web/"
+# 平台对外访问链接: 用户打开复现 Web 界面的入口(ASIS → /insights/ rewrite → ai4sec → /repro-web/ → repro:8080)
+# 用相对路径: 云服务器 8091 外部不可直连, 用户经本地端口映射(localhost:18092→8091)访问 ASIS 时,
+# 相对路径自动落到当前 origin → http://localhost:18092/insights/repro-web/, 按钮点击即可用。
+REPRO_WEB_URL = _env("REPRO_WEB_URL", "/insights/repro-web/")
 
 # 停止协作标志（线程无法强杀，用 Event 在每个心跳检查点中止）
 _STOP_FLAGS: dict[int, threading.Event] = {}

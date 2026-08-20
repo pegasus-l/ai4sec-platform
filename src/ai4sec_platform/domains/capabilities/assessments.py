@@ -470,6 +470,19 @@ def classify_batch(
                         if dep_signals:
                             final_framework = dep_signals[0].replace("dep:", "")
 
+                # 低置信 Web 兜底:LLM 判 web 但无任何佐证(无验证通过的 demo、无框架名、无规则信号)
+                # → 不视为 Web。修复 misevolve 类误判:LLM 按"宁可多判不要漏判"把无 Web 界面的
+                #   纯 CLI/评测基准项目误判成 web。此覆盖不算真非 web, 保留原状态走 CLI 复现, 不降级。
+                low_conf_web = (
+                    final_is_web
+                    and not verified_demo
+                    and not final_framework
+                    and rule_score < 6
+                )
+                if low_conf_web:
+                    final_is_web = False
+                    final_framework = "LOWCONF"
+
                 is_web = 1 if final_is_web else 0
                 framework = final_framework
                 classify_ts = datetime.now().isoformat()
@@ -490,7 +503,8 @@ def classify_batch(
                 if repro_status:
                     web_payload["repro_status"] = repro_status
                 # web/demo 把关:LLM 判非 web 且无 demo 兜底 → 降为已淘汰,不进复现队列
-                if not final_is_web:
+                # (低置信覆盖 not final_is_web 但 low_conf_web 为真, 不降级)
+                if not final_is_web and not low_conf_web:
                     demoted += 1
                     repo.update_domain_item(
                         conn,
