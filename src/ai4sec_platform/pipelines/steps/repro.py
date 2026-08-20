@@ -576,11 +576,25 @@ class TriggerReproStep:
             candidates = [row] if row else []
         else:
             items = repo.list_domain_items(context.conn, "capabilities", item_type="capability", status="待复现验证", limit=10000)
-            candidates = [
-                it for it in items
-                if (it.get("payload") or {}).get("code_url")
-                and (it.get("payload") or {}).get("repro_status") not in _PAYLOAD_ACTIVE_STATUSES
-            ][:limit]
+            # 审核门槛(宁可漏判): 复现队列只收 review 通过且分数达标的项目。
+            # review.decision==rejected → 不进队列; review.score 低于 60 分 → 不进队列。
+            # (review 未生成时视为通过, 回退旧逻辑; 见 mailkb review.rejected 38.5 仍被复现的教训)
+            _MIN_REVIEW_SCORE = 60
+            candidates = []
+            for it in items:
+                pl = it.get("payload") or {}
+                if not pl.get("code_url"):
+                    continue
+                if pl.get("repro_status") in _PAYLOAD_ACTIVE_STATUSES:
+                    continue
+                rev = pl.get("review") or {}
+                if rev.get("decision") == "rejected":
+                    continue
+                rev_score = rev.get("score")
+                if isinstance(rev_score, (int, float)) and rev_score < _MIN_REVIEW_SCORE:
+                    continue
+                candidates.append(it)
+            candidates = candidates[:limit]
 
         triggered = 0
         succeeded = 0

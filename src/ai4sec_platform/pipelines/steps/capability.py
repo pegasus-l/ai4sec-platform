@@ -88,7 +88,7 @@ class AssessCapabilitiesStep:
                 continue
             item_data = repo.row_to_dict(item)
             prompt = """你是安全能力评估专家。评估这个项目是否值得复现和能力转化。输出 JSON：
-{"overview":"一句话说清这个项目是做什么的","security_value":"一段话说明它解决了什么安全问题、为什么重要","reproducibility_assessment":"能不能跑起来？需要什么环境/依赖？有什么坑？","code_quality":"README质量、有没有测试、代码结构如何","application_advice":"适合用在什么场景？怎么集成到团队工作流？","recommended_score":1到5的整数,"score_reason":"给这个分的理由（自然语言段落）","capability_type":"从以下选一个：验证与评估 | 推理与规划 | 工具调用","application_scenarios":["场景1","场景2"]}"""
+{"overview":"一句话说清这个项目是做什么的","security_value":"一段话说明它解决了什么安全问题、为什么重要","reproducibility_assessment":"能不能跑起来？需要什么环境/依赖？有什么坑？","code_quality":"README质量、有没有测试、代码结构如何","application_advice":"适合用在什么场景？怎么集成到团队工作流？","recommended_score":1到5的整数（严格给分：宁缺毋滥——只有 README/标题无实际代码、纯提示词/Prompt 合集、无技术深度的项目给1-2；有实际代码但非安全或技术含量一般的给3；技术扎实、可复现、与AI安全相关、有真实工程量的给4-5）,"score_reason":"给这个分的理由（自然语言段落）","capability_type":"从以下选一个：验证与评估 | 推理与规划 | 工具调用","application_scenarios":["场景1","场景2"]}"""
             try:
                 output = router.complete_json(profile=self.model_profile, prompt=prompt, payload=item_data)
             except Exception as exc:
@@ -108,7 +108,24 @@ class AssessCapabilitiesStep:
                 continue
             scoring = score_capability_candidate(item_data)
             model_result = output.get("result") or output.get("parsed") or {}
-            recommended_status = model_result.get("recommended_status") or ("待复现验证" if scoring.priority in {"high", "medium"} else "待资料补齐")
+            # 审核收紧(宁可漏判):状态以 LLM recommended_score 为最终闸门, 规则 priority 只做先验。
+            # - 规则 high/medium 且 LLM >=3  → 待复现验证
+            # - 规则低但 LLM >=3            → 待资料补齐(保留待人工判断)
+            # - LLM <3 (低技术含量)         → 已淘汰(不进库)
+            # LLM 未返回分时回退旧逻辑(规则闸门)。
+            llm_score = model_result.get("recommended_score")
+            try:
+                llm_score = float(llm_score) if llm_score is not None else None
+            except (TypeError, ValueError):
+                llm_score = None
+            if model_result.get("recommended_status"):
+                recommended_status = model_result.get("recommended_status")
+            elif scoring.priority in {"high", "medium"} and (llm_score is None or llm_score >= 3):
+                recommended_status = "待复现验证"
+            elif llm_score is not None and llm_score < 3:
+                recommended_status = "已淘汰"
+            else:
+                recommended_status = "待资料补齐"
             repo.create_model_call(
                 context.conn,
                 run_id=context.run_id,

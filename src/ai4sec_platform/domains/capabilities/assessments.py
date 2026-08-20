@@ -297,7 +297,7 @@ def llm_classify_web(
 - 纯数据集、prompt 合集 → 不算 Web
 - 如果项目有 Web 界面/dashboard/前端页面，即使也提供 CLI 或 API 库，也算 Web
 - 浏览器扩展/插件、IDE 插件 → 不算 Web
-- 宁可多判不要漏判：有 web 界面迹象的都算 Web
+- 宁可漏判不要多判：只有明确自带可运行 Web 界面/服务（README 有部署/访问方式、项目内含前端页面或 dashboard）才算 Web；仅凭迹象、拿不准、或项目本体不含可访问前端界面的一律判非 Web
 
 项目信息：
 - 名称: {repo_name}
@@ -471,8 +471,9 @@ def classify_batch(
                             final_framework = dep_signals[0].replace("dep:", "")
 
                 # 低置信 Web 兜底:LLM 判 web 但无任何佐证(无验证通过的 demo、无框架名、无规则信号)
-                # → 不视为 Web。修复 misevolve 类误判:LLM 按"宁可多判不要漏判"把无 Web 界面的
-                #   纯 CLI/评测基准项目误判成 web。此覆盖不算真非 web, 保留原状态走 CLI 复现, 不降级。
+                # → 不视为 Web。修复 misevolve 类误判:LLM 按旧"宁可多判"口径把无 Web 界面的
+                #   纯 CLI/评测基准项目误判成 web。现口径已改"宁可漏判", 此覆盖兜底低置信判 web。
+                #   此覆盖不算真非 web, 保留原状态走 CLI 复现, 不降级。
                 low_conf_web = (
                     final_is_web
                     and not verified_demo
