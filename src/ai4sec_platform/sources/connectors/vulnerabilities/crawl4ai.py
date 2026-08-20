@@ -37,7 +37,7 @@ class Crawl4aiConnector:
 
         policy = VulnerabilityCrawlPolicy.from_params(params, request.config or {})
         max_items = int(params.get("max_items") or request.config.get("max_items") or len(candidates) or 0)
-        max_concurrency = _bounded_int(params.get("crawl_max_concurrency"), 10, maximum=10)
+        max_concurrency = _bounded_int(params.get("crawl_max_concurrency"), 3, maximum=5)
         on_item = params.get("on_crawl_item")
         items: list[dict[str, Any]] = []
         errors: list[str] = []
