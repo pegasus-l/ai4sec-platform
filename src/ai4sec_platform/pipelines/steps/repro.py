@@ -240,6 +240,109 @@ def _fetch_transcript_text(base_url: str, headers: dict[str, str], session_id: s
         return ""
 
 
+def _render_tool_part(p: dict[str, Any], out_only: bool = False) -> list[str]:
+    """把一条 tool part 渲染为日志行: bash 命令 + 输出摘要 + 退出码, 其余工具一行摘要。
+    out_only=True 时只渲染输出/退出码(命令已在上轮渲染过, 补拉在途命令的完成结果)。"""
+    state = p.get("state") or {}
+    tool = p.get("tool") or ""
+    inp = state.get("input") or {}
+    out = str(state.get("output") or "").strip()
+    meta = state.get("metadata") or {}
+    exit_code = meta.get("exit")
+    if tool == "bash":
+        cmd = str(inp.get("command") or "").strip()
+        title = str(inp.get("description") or "").strip()
+        lines: list[str] = []
+        if not out_only:
+            if cmd:
+                for sub in cmd.splitlines():
+                    lines.append(f"$ {sub}")
+            if title and title != cmd:
+                lines.append(f"   # {title}")
+        if out:
+            is_err = (exit_code not in (None, 0)) or any(
+                k in out.lower() for k in ("fatal", "error:", "traceback", "command not found", "permission denied", "failed", "❌")
+            )
+            snippet = out[:500] if is_err else out[:200]
+            lines.append(f"   → {snippet}")
+            if exit_code not in (None, 0):
+                lines.append(f"   ⚠ 退出码 {exit_code}")
+        elif exit_code not in (None, 0):
+            lines.append(f"   ⚠ 退出码 {exit_code}")
+        return lines
+    summary = ""
+    todos = inp.get("todos")
+    if isinstance(todos, list) and todos and isinstance(todos[0], dict) and todos[0].get("content"):
+        summary = str(todos[0]["content"])
+    for k in ("content", "description", "path", "url", "command", "pattern"):
+        v = inp.get(k)
+        if isinstance(v, str) and v:
+            summary = v
+            break
+        if isinstance(v, list) and v and isinstance(v[0], dict) and v[0].get("content"):
+            summary = str(v[0]["content"])
+            break
+    return [f"[工具:{tool}] {summary[:100]}" if summary else f"[工具:{tool}]"]
+
+
+def _render_transcript_delta(base_url: str, headers: dict[str, str], session_id: str, seen_ids: set[str], inflight: dict[str, Any]) -> tuple[list[str], bool]:
+    """增量拉取会话 transcript, 把尚未见过的 part 渲染成日志行。
+
+    serve 全程缓冲, 但 /session/{id}/message 运行中即可拉到已产出部分, 所以轮询增量即可
+    实现"实时看到 agent 活动"。渲染: user 提示词 / assistant 叙述(text) / bash 命令+输出+
+    退出码 / 其余工具调用摘要。reasoning(隐藏思维链)与 step 边界不落日志, 避免刷屏。
+
+    inflight: {part_id: None} 已渲染过命令但当时还没有输出(命令仍在执行)的 tool part;
+    之后轮询若其输出出现, 补渲染输出/退出码行, 让"命令失败→agent 怎么恢复"可见。
+    返回 (lines, has_new)。拉取失败返回 ([], False)。"""
+    lines: list[str] = []
+    try:
+        req = urllib.request.Request(f"{base_url}/session/{session_id}/message", headers=headers)
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            data = json.loads(resp.read())
+    except Exception:  # noqa: BLE001 - 拉取失败降级为心跳
+        return lines, False
+    msgs = data if isinstance(data, list) else (data.get("messages") or [])
+    for m in msgs:
+        if not isinstance(m, dict):
+            continue
+        info = m.get("info") or {}
+        role = info.get("role") or ""
+        for p in m.get("parts") or []:
+            if not isinstance(p, dict):
+                continue
+            pid = p.get("id")
+            if not pid:
+                continue
+            ptype = p.get("type")
+            if ptype == "tool":
+                state = p.get("state") or {}
+                out = str(state.get("output") or "").strip()
+                exit_code = (state.get("metadata") or {}).get("exit")
+                if pid in seen_ids:
+                    # 已渲染过的命令, 若当时无输出而现在有了, 补输出/退出码(命令失败恢复可见)
+                    if pid in inflight and (out or exit_code not in (None, 0)):
+                        inflight.pop(pid, None)
+                        lines.extend(_render_tool_part(p, out_only=True))
+                    continue
+                seen_ids.add(pid)
+                if ptype == "tool" and not out and exit_code is None:
+                    inflight[pid] = None
+                lines.extend(_render_tool_part(p))
+                continue
+            if pid in seen_ids:
+                continue
+            seen_ids.add(pid)
+            if ptype == "text":
+                t = str(p.get("text", "")).strip()
+                if not t:
+                    continue
+                prefix = "[提示词]" if role == "user" else "[agent]"
+                for sub in t.splitlines():
+                    lines.append(f"{prefix} {sub}")
+    return lines, bool(lines)
+
+
 def _detect_verdict(text: str) -> str:
     """三态判定 FINAL_VERDICT → success|partial|failed（结构化优先，关键词兜底）。"""
     text_lower = text.lower()
@@ -399,6 +502,8 @@ def _run_task(task_id: int, item_id: int, code_url: str, title: str, timeout: in
         poster.start()
 
         t0 = time.time()
+        seen_ids: set[str] = set()
+        inflight: dict[str, Any] = {}
         while poster.is_alive():
             if _is_stopped(task_id):
                 _update_task(task_id, status="stopped", finished_at=_utc_now(), result="stopped by user")
@@ -406,12 +511,22 @@ def _run_task(task_id: int, item_id: int, code_url: str, title: str, timeout: in
                 _write_payload(item_id, "candidate", {"stopped": True})
                 return
             elapsed = int(time.time() - t0)
-            line = f"[复现中] agent 正在克隆 / 构建 / 测试… (已等待 {elapsed}s)"
+            # 流式拉取 agent 真实活动(提示词/命令/输出/恢复), 增量落日志
+            try:
+                delta_lines, has_new = _render_transcript_delta(repro_url, headers, session_id, seen_ids, inflight)
+            except Exception:  # noqa: BLE001 - 拉取失败降级为心跳
+                delta_lines, has_new = [], False
+            for dl in delta_lines:
+                _append_log(task_id, dl)
             meta = _get_session_meta(repro_url, headers, session_id)
             tokens = meta.get("tokens")
+            token_str = ""
             if isinstance(tokens, dict) and tokens.get("input") is not None:
-                line += f" · tokens in={tokens.get('input')} out={tokens.get('output') or 0}"
-            _append_log(task_id, line)
+                token_str = f" · tokens in={tokens.get('input')} out={tokens.get('output') or 0}"
+            if not has_new:
+                _append_log(task_id, f"[复现中] agent 运行中… (已等待 {elapsed}s){token_str}")
+            elif token_str:
+                _append_log(task_id, f"[进度] 已等待 {elapsed}s{token_str}")
             time.sleep(15)
 
         if "error" in result_box:
@@ -448,8 +563,10 @@ def _run_task(task_id: int, item_id: int, code_url: str, title: str, timeout: in
                 report.setdefault("blockers", [])
                 report["blockers"].append(f"复现末尾异常: {run_error}")
 
-        for line in full_response.splitlines():
-            _append_log(task_id, line)
+        # 运行中已由增量渲染写过的内容不重复落盘, 只补拉完成时尚未流出的会话尾部
+        tail_lines, _ = _render_transcript_delta(repro_url, headers, session_id, seen_ids, inflight)
+        for tl in tail_lines:
+            _append_log(task_id, tl)
 
         # 结构化关键步骤/实际运行也落日志, 便于页面日志区直接看
         steps = (report or {}).get("steps") or []
