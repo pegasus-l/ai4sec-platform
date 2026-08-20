@@ -5,8 +5,10 @@ Task-aware 版本（2026-08-19）: 每次复现在 capability_repro_tasks 建 ta
 实时写 log（进度心跳 + 完成全文），report_json 存 ReproReport 结构，
 前端"复现验证"页（任务队列 + 实时日志 + 结果汇总）原样显示。
 
-实时性说明: opencode serve 缓冲整个 agent 运行，完成后才返回；session 元数据
-无增量文本。因此运行时推送的是"进度心跳"，完成后全文一次性落盘。
+实时性说明: opencode serve 缓冲整个 agent 运行，完成后才返回；但 /session/{id}/message
+运行中即可拉到已产出的 transcript。因此每 15s 增量拉取并渲染"提示词/agent 叙述/
+命令/输出/退出码"进 log（reasoning 与 step 边界跳过），在途命令补渲染输出——
+运行时即可看到 agent 做了什么、命令失败后怎么恢复；完成时补拉会话尾部并写汇总。
 """
 from __future__ import annotations
 
