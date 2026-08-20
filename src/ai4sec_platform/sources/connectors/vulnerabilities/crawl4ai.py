@@ -6,7 +6,7 @@ import re
 import time
 import urllib.error
 import urllib.request
-from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as FuturesTimeoutError
+from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
 from html import unescape
 from typing import Any, Callable
 
@@ -55,34 +55,35 @@ class Crawl4aiConnector:
             selected.append(candidate)
 
         prefer_url_fetch = bool(params.get("prefer_url_fetch", False))
-        # hard timeout: if no future completes within this window, treat remaining as stuck
-        per_page_timeout = policy.slow_site_timeout_seconds + 30
+        # idle timeout: if NO page completes within this window, remaining are stuck
+        idle_timeout = policy.slow_site_timeout_seconds + 30
         executor = ThreadPoolExecutor(max_workers=min(max_concurrency, len(selected) or 1))
-        futures = {executor.submit(_crawl_candidate, candidate, policy=policy, prefer_url_fetch=prefer_url_fetch): candidate for candidate in selected}
-        pending = set(futures.keys())
+        pending = {executor.submit(_crawl_candidate, candidate, policy=policy, prefer_url_fetch=prefer_url_fetch): candidate for candidate in selected}
         try:
-            for future in as_completed(futures, timeout=per_page_timeout):
-                pending.discard(future)
-                candidate = futures[future]
-                try:
-                    item = future.result(timeout=5)
-                except Exception as exc:  # pragma: no cover - defensive worker isolation
-                    item = _failed(candidate, f"{type(exc).__name__}: {exc}", failure_reason="crawl_worker_error")
-                items.append(item)
-                if callable(on_item):
-                    on_item(item, len(items), len(selected))
-                if not item.get("success"):
-                    errors.append(f"{item.get('url')}: {item.get('failure_reason') or item.get('error')}")
-        except FuturesTimeoutError:
-            # Stuck futures — cancel and mark as failed
-            for future in pending:
-                future.cancel()
-                candidate = futures[future]
-                item = _failed(candidate, "crawl_timeout", failure_reason="future_timeout")
-                items.append(item)
-                if callable(on_item):
-                    on_item(item, len(items), len(selected))
-                errors.append(f"{item.get('url')}: future_timeout")
+            while pending:
+                done, _ = wait(list(pending.keys()), timeout=idle_timeout, return_when=FIRST_COMPLETED)
+                if not done:
+                    # No page completed within idle_timeout — kill remaining stuck futures
+                    for future in pending:
+                        future.cancel()
+                    candidate = pending[future]
+                    item = _failed(candidate, "crawl_idle_timeout", failure_reason="idle_timeout")
+                    items.append(item)
+                    if callable(on_item):
+                        on_item(item, len(items), len(selected))
+                    errors.append(f"{candidate.get('url')}: idle_timeout")
+                    break
+                for future in done:
+                    candidate = pending.pop(future)
+                    try:
+                        item = future.result()
+                    except Exception as exc:
+                        item = _failed(candidate, f"{type(exc).__name__}: {exc}", failure_reason="crawl_worker_error")
+                    items.append(item)
+                    if callable(on_item):
+                        on_item(item, len(items), len(selected))
+                    if not item.get("success"):
+                        errors.append(f"{item.get('url')}: {item.get('failure_reason') or item.get('error')}")
         finally:
             executor.shutdown(wait=False, cancel_futures=True)
 

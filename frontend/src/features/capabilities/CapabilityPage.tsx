@@ -222,47 +222,59 @@ function CapabilityCard({ item, rank, onClick }: { item: CapabilityItem; rank: n
 // ========== 能力库（改动 1: 4 个视图 + 改动 3: classifyBatch 按钮）==========
 function CapabilityLibrary({ items, openDetail }: { items: CapabilityItem[]; openDetail: (item: CapabilityItem) => void }) {
   const [viewMode, setViewMode] = useState<'列表视图' | '能力分类' | '应用场景' | '工程可用性'>('列表视图');
-  // 【分页】列表视图分页(每页 20 条); 搜索/数据变化时回到第 1 页
+  // 【改动 新增筛选】能力库筛选: 全部 / Web 项目 / 官方 Demo (与搜索叠加, 命中 payload.is_web / demo_url)
+  const [filterTag, setFilterTag] = useState<'全部' | 'Web 项目' | '官方 Demo'>('全部');
+  const webCount = useMemo(() => items.filter(i => i.payload?.is_web).length, [items]);
+  const demoCount = useMemo(() => items.filter(i => Boolean(i.payload?.demo_url)).length, [items]);
+  const filtered = useMemo(() => {
+    if (filterTag === 'Web 项目') return items.filter(i => i.payload?.is_web);
+    if (filterTag === '官方 Demo') return items.filter(i => Boolean(i.payload?.demo_url));
+    return items;
+  }, [items, filterTag]);
+  // 【分页】列表视图分页(每页 20 条); 搜索/筛选变化时回到第 1 页
   const PAGE_SIZE = 20;
   const [page, setPage] = useState(1);
-  const pageCount = Math.max(1, Math.ceil(items.length / PAGE_SIZE));
-  const pageItems = useMemo(() => items.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE), [items, page]);
-  useEffect(() => { setPage(1); }, [items]);
+  const pageCount = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+  const pageItems = useMemo(() => filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE), [filtered, page]);
+  useEffect(() => { setPage(1); }, [filtered]);
 
   // 【改动 1】能力分类视图：按 capability_type 分组
   const typeGroups = useMemo(() => {
     const g: Record<string, CapabilityItem[]> = {};
-    items.forEach(item => { const t = item.payload?.capability_type || '未分类'; (g[t] ??= []).push(item); });
+    filtered.forEach(item => { const t = item.payload?.capability_type || '未分类'; (g[t] ??= []).push(item); });
     return g;
-  }, [items]);
+  }, [filtered]);
 
   // 【改动 1】应用场景视图：按 application_scenarios 分组
   const scenarioGroups = useMemo(() => {
     const g: Record<string, CapabilityItem[]> = {};
-    items.forEach(item => { (item.payload?.application_scenarios ?? ['未标注']).forEach(s => { (g[s] ??= []).push(item); }); });
+    filtered.forEach(item => { (item.payload?.application_scenarios ?? ['未标注']).forEach(s => { (g[s] ??= []).push(item); }); });
     return g;
-  }, [items]);
+  }, [filtered]);
 
   const engineeringGroups = useMemo(() => ({
-    '官方 Demo': items.filter(i => Boolean(i.payload?.demo_url)),
-    '完整复现': items.filter(i => !i.payload?.demo_url && i.payload?.repro_status === 'success'),
-    '部分复现': items.filter(i => !i.payload?.demo_url && i.payload?.repro_status === 'partial'),
-    '复现中': items.filter(i => !i.payload?.demo_url && i.payload?.repro_status === 'in_progress'),
-    '待 Web 复现': items.filter(i => !i.payload?.demo_url && Boolean(i.payload?.is_web) && ['candidate', 'no_code', undefined].includes(i.payload?.repro_status)),
-    '待命令行验证': items.filter(i => !i.payload?.demo_url && !i.payload?.is_web && ['candidate', 'no_code', undefined].includes(i.payload?.repro_status)),
-    '复现失败': items.filter(i => !i.payload?.demo_url && i.payload?.repro_status === 'failed'),
-  }), [items]);
+    '官方 Demo': filtered.filter(i => Boolean(i.payload?.demo_url)),
+    '完整复现': filtered.filter(i => !i.payload?.demo_url && i.payload?.repro_status === 'success'),
+    '部分复现': filtered.filter(i => !i.payload?.demo_url && i.payload?.repro_status === 'partial'),
+    '复现中': filtered.filter(i => !i.payload?.demo_url && i.payload?.repro_status === 'in_progress'),
+    '待 Web 复现': filtered.filter(i => !i.payload?.demo_url && Boolean(i.payload?.is_web) && ['candidate', 'no_code', undefined].includes(i.payload?.repro_status)),
+    '待命令行验证': filtered.filter(i => !i.payload?.demo_url && !i.payload?.is_web && ['candidate', 'no_code', undefined].includes(i.payload?.repro_status)),
+    '复现失败': filtered.filter(i => !i.payload?.demo_url && i.payload?.repro_status === 'failed'),
+  }), [filtered]);
 
   return <div className="grid">
     <div className="view-switch">
       {(['列表视图', '能力分类', '应用场景', '工程可用性'] as const).map(v => <span key={v} className={`view-pill ${viewMode === v ? 'active' : ''}`} onClick={() => setViewMode(v)}>{v}</span>)}
     </div>
-    {items.length === 0 && <EmptyState title="能力库为空" description="先跑 capabilities.from_news_pipeline 生成能力卡" />}
+    <div className="view-switch" style={{ marginTop: 8 }}>
+      {([['全部', items.length], ['Web 项目', webCount], ['官方 Demo', demoCount]] as const).map(([tag, count]) => <span key={tag} className={`view-pill ${filterTag === tag ? 'active' : ''}`} onClick={() => setFilterTag(tag)}>{tag}<em style={{ fontSize: 11, opacity: 0.7, fontStyle: 'normal' }}> {count}</em></span>)}
+    </div>
+    {filtered.length === 0 && <EmptyState title="能力库为空" description="先跑 capabilities.from_news_pipeline 生成能力卡" />}
 
     {/* 列表视图 */}
-    {items.length > 0 && viewMode === '列表视图' && <div className="table-card">
+    {filtered.length > 0 && viewMode === '列表视图' && <div className="table-card">
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 12px', borderBottom: '1px solid var(--line)', fontSize: 12, color: '#8a94a6' }}>
-        <span>共 {items.length} 条 · 每页 {PAGE_SIZE} 条</span>
+        <span>共 {filtered.length} 条 · 每页 {PAGE_SIZE} 条</span>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
           <button className="btn" disabled={page <= 1} onClick={() => setPage(p => Math.max(1, p - 1))}>‹ 上一页</button>
           <span>第 {page}/{pageCount} 页</span>
@@ -286,7 +298,7 @@ function CapabilityLibrary({ items, openDetail }: { items: CapabilityItem[]; ope
     </div>}
 
     {/* 能力分类视图 */}
-    {items.length > 0 && viewMode === '能力分类' && Object.entries(typeGroups).map(([type, groupItems]) => (
+    {filtered.length > 0 && viewMode === '能力分类' && Object.entries(typeGroups).map(([type, groupItems]) => (
       <div className="panel" key={type}>
         <div className="panel-head"><h3>{type}</h3><span>{groupItems.length} 个</span></div>
         <div className="panel-body"><div className="asis-list">
@@ -296,7 +308,7 @@ function CapabilityLibrary({ items, openDetail }: { items: CapabilityItem[]; ope
     ))}
 
     {/* 应用场景视图 */}
-    {items.length > 0 && viewMode === '应用场景' && Object.entries(scenarioGroups).map(([scenario, groupItems]) => (
+    {filtered.length > 0 && viewMode === '应用场景' && Object.entries(scenarioGroups).map(([scenario, groupItems]) => (
       <div className="panel" key={scenario}>
         <div className="panel-head"><h3>{scenario}</h3><span>{groupItems.length} 个</span></div>
         <div className="panel-body"><div className="asis-list">
@@ -306,7 +318,7 @@ function CapabilityLibrary({ items, openDetail }: { items: CapabilityItem[]; ope
     ))}
 
     {/* 工程可用性视图 */}
-    {items.length > 0 && viewMode === '工程可用性' && <div className="grid cols-2">
+    {filtered.length > 0 && viewMode === '工程可用性' && <div className="grid cols-2">
       {Object.entries(engineeringGroups).map(([label, groupItems]) => (
         <div className="panel" key={label}>
           <div className="panel-head"><h3>{label}</h3><span>{groupItems.length} 个</span></div>
