@@ -48,6 +48,8 @@ MATERIAL_REVIEW_PROMPT = """你是一个资深安全研究员和技术内容审�
     - [ ] AI 摘要体（泛泛而谈，无代码，无细节）
     - [ ] 仅复述官方公告，无独立分析
     - [ ] 无技术细节的威胁恐吓文
+    - [ ] 链接索引/资源导航页：内容主体是外部链接列表或 CVE 编号集合（如 awesome-list、resource collection），无具体漏洞技术分析、无代码、无利用细节
+    - [ ] GitHub 仓库页面本身：内容含 GitHub 导航菜单/侧边栏/UI 元素，而非 README 正文的技术分析内容
 
 请只返回 JSON，保持以下 schema；其中扩展字段用于新平台事件聚合和证据追溯，但不能降低上述审核标准：
 {{
@@ -56,7 +58,7 @@ MATERIAL_REVIEW_PROMPT = """你是一个资深安全研究员和技术内容审�
   "confidence": 0.0,
   "reason": "判断理由的简要说明",
   "key_findings": ["关键发现1", "关键发现2"],
-  "material_type": "poc_exploit|tech_analysis|kernel_security|academic_conf|other",
+  "material_type": "poc_exploit|tech_analysis|kernel_security|academic_conf|reference_index|other",
   "quality_signals": ["code", "call_chain", "data_flow", "root_cause", "fix_analysis", "discovery_method", "repro_steps", "tooling", "bypass", "exploit_primitive", "exploit_chain", "stability_limit"],
   "cve_ids": ["CVE-YYYY-NNNN"],
   "cwe_ids": ["CWE-NNN"],
