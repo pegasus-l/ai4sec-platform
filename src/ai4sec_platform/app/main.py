@@ -199,6 +199,15 @@ def create_app() -> FastAPI:
     @app.on_event('startup')
     def _start_scheduler():
         scheduler.start()
+        # 容器重建/重启会把在跑的复现 runner 线程杀死(任务卡 running/queued), 而 serve 端 agent
+        # 会继续跑并烧 token(实测 task 13: runner 死于容器 recreate, agent 白烧 90min/$2.1)。
+        # 启动时清扫孤儿任务: 抢救已产出文本→诚实判定→中止 serve 会话止损。
+        try:
+            from ai4sec_platform.pipelines.steps.repro import recover_orphaned_tasks
+            n = recover_orphaned_tasks()
+            print(f'[repro-recover] {n} orphaned repro task(s) recovered', flush=True)
+        except Exception as e:  # noqa: BLE001 - 清扫失败不影响启动
+            print(f'[repro-recover] error: {e}', flush=True)
         print('[scheduler] started: capability(15min), threat(daily 02:00), vuln(daily 22:00)', flush=True)
 
     @app.on_event('shutdown')
