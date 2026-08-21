@@ -21,6 +21,11 @@ export function fetchReproTask(taskId: number): Promise<ReproTask> {
   return getJson(`/api/capabilities/repro/${taskId}`);
 }
 
+export function fetchReproFullLog(taskId: number): Promise<{ task_id: number; log: string }> {
+  // 完整日志(不经 log_excerpt 的 200 行截断),用于 SSE 断流/终态后的全文兜底
+  return getJson(`/api/capabilities/repro/${taskId}/log`);
+}
+
 export function fetchConversions(): Promise<{ items: ConversionRecord[] }> {
   return getJson('/api/capabilities/conversions');
 }

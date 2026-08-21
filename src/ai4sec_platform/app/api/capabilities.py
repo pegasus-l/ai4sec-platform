@@ -257,6 +257,19 @@ async def stream_repro_logs(task_id: int, request: Request, conn: sqlite3.Connec
     )
 
 
+@router.get("/repro/{task_id}/log")
+def get_repro_full_log(task_id: int, conn: sqlite3.Connection = Depends(get_db)) -> dict:
+    """复现任务完整日志(不经 log_excerpt 的 200 行截断)。
+
+    SSE 断流/终态后, 前端用它兜底全文显示, 避免只看到最后 200 行、
+    前面已经流出来的行"被回滚"。
+    """
+    task = repo.get_repro_task(conn, task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="repro task not found")
+    return {"task_id": task_id, "log": task.get("log") or ""}
+
+
 # ============================================================================
 # 能力转化端点
 # ============================================================================

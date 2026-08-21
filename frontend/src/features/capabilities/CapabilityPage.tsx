@@ -7,7 +7,7 @@ import { useToast } from '../../components/Toast';
 import { useDrawerStack } from '../../components/DrawerStack';
 import {
   fetchToday, fetchLibrary, fetchReproRuns, fetchConversions, fetchClassifyStats,
-  fetchDetail, fetchReproTask, startRepro, stopRepro, cleanupRepro, markConversion,
+  fetchDetail, fetchReproTask, fetchReproFullLog, startRepro, stopRepro, cleanupRepro, markConversion,
   streamReproLogs, classifyLogLine, stripAnsi,
 } from './capabilityQueries';
 import type { CapabilityItem, ReproTask, ConversionRecord, CapabilityView } from './capabilityTypes';
@@ -394,6 +394,13 @@ function ReproDetailContent({ task, capabilityItem, openDetail }: { task: ReproT
     refetchInterval: task.status === 'running' || task.status === 'queued' ? 2_000 : false,
   });
   const currentTask = taskDetail ?? task;
+  // 完整日志(不经 log_excerpt 的 200 行截断):SSE 存活时仅预热一次;
+  // SSE 断流/终态后回退到它, 运行中保持轮询追上进度
+  const { data: fullLog } = useQuery({
+    queryKey: ['cap-repro-full-log', task.id],
+    queryFn: () => fetchReproFullLog(task.id),
+    refetchInterval: streaming ? false : (currentTask.status === 'running' || currentTask.status === 'queued') ? 2_000 : false,
+  });
   const [liveStatus, setLiveStatus] = useState(currentTask.status);
   const [liveReport, setLiveReport] = useState(currentTask.report ?? null);
 
@@ -430,11 +437,23 @@ function ReproDetailContent({ task, capabilityItem, openDetail }: { task: ReproT
     }
   }, [currentTask.id, currentTask.status, qc]);
 
-  useEffect(() => { if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight; }, [logs]);
+  // SSE 断开/结束 → 立即拉一次完整日志兜底(终态内容), 不等轮询
+  useEffect(() => {
+    if (!streaming) qc.invalidateQueries({ queryKey: ['cap-repro-full-log', task.id] });
+  }, [streaming, qc, task.id]);
+
+  useEffect(() => {
+    // 流式中或仍在运行(即便 SSE 断了靠轮询续)都自动滚到底部; 终态后不强制, 方便从头看
+    if (logRef.current && (streaming || ['running', 'queued'].includes(liveStatus))) {
+      logRef.current.scrollTop = logRef.current.scrollHeight;
+    }
+  }, [logs, fullLog?.log, streaming, liveStatus]);
 
   const report = liveReport ?? currentTask.report ?? capabilityItem?.payload?.repro_report;
   const p = capabilityItem?.payload ?? {};
-  const displayedLogs = streaming ? logs : (currentTask.log_excerpt || currentTask.result || '').split('\n').filter(Boolean).map(line => ({ line: stripAnsi(line), kind: classifyLogLine(line) }));
+  // 流式用 SSE 全量; 断流/终态/刷新用完整日志(不再是 log_excerpt 的最后 200 行)
+  const fullLogText = fullLog?.log ?? currentTask.log_excerpt ?? currentTask.result ?? '';
+  const displayedLogs = streaming ? logs : fullLogText.split('\n').filter(Boolean).map(line => ({ line: stripAnsi(line), kind: classifyLogLine(line) }));
 
   return <div className="repro-console">
     <div className="repro-console-head">
@@ -450,7 +469,7 @@ function ReproDetailContent({ task, capabilityItem, openDetail }: { task: ReproT
       {capabilityItem && <button className="btn" onClick={() => openDetail(capabilityItem)}>查看能力详情</button>}
     </div>
     <section className="repro-section">
-      <div className="repro-section-title"><span>执行日志</span><small>{streaming ? 'SSE LIVE' : `${displayedLogs.length} 行摘要`}</small></div>
+      <div className="repro-section-title"><span>执行日志</span><small>{streaming ? 'SSE LIVE' : `全文 ${displayedLogs.length} 行`}</small></div>
       <div className="log-stream" ref={logRef}>{displayedLogs.map((log, index) => <div key={`${index}-${log.line}`} className={`log-line log-${log.kind}`}>{log.line}</div>)}{displayedLogs.length === 0 && <div className="muted small">{liveStatus === 'queued' ? '任务已排队，等待复现调度…' : '等待日志输出…'}</div>}</div>
     </section>
     {report && <>
