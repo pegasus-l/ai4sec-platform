@@ -862,7 +862,7 @@
 .repro-section-title { display: flex; align-items: center; justify-content: space-between; }
 .repro-section-title span { color: var(--text); font-size: 13px; font-weight: 900; }
 .repro-section-title small { color: var(--faint); font-size: 10px; }
-.repro-detail-panel .log-stream { min-height: 220px; max-height: 420px; background: #050b16; }
+.repro-detail-panel .log-stream { min-height: 220px; max-height: 65vh; background: #050b16; }
 .repro-summary { border-left: 3px solid var(--muted); border-radius: 10px; padding: 11px 13px; background: rgba(148,163,184,0.06); }
 .repro-summary.success { border-color: var(--green); background: rgba(52,211,153,0.06); }
 .repro-summary.partial { border-color: var(--amber); background: rgba(245,158,11,0.06); }
