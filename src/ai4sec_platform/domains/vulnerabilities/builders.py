@@ -25,21 +25,38 @@ def build_vulnerability_items(conn: sqlite3.Connection, items: list[dict], *, ru
         scoring = score_material({**payload, "classification": classification.as_payload()})
         material_type = _material_type(classification.category)
         payload = {**payload, "material_type": material_type, "classification": classification.as_payload(), "scoring": scoring.as_payload(), "extracted_evidence": extracted}
-        item_id = repo.create_domain_item(
-            conn,
-            domain="vulnerabilities",
-            item_type="material",
-            title=payload.get("title") or "未命名漏洞素材",
-            summary=payload.get("summary") or "来自漏洞素材 raw pipeline，待知识提取。",
-            score=scoring.score,
-            status="待知识提取" if scoring.priority in {"high", "medium"} or payload.get("is_relevant") else "低相关待复核",
-            source="raw_pipeline",
-            source_url=payload.get("url") or "",
-            primary_date=payload.get("primary_date") or "",
-            tags=["raw_pipeline", material_type, payload.get("category") or "素材", classification.category, scoring.grade, *payload.get("cve_ids", [])[:3]],
-            metrics={"pipeline_run": run_id, "confidence": payload.get("confidence"), "markdown_length": payload.get("markdown_length"), "score_breakdown": scoring.breakdown, "cve_count": len(payload.get("cve_ids", [])), "snippet_count": len(extracted.get("evidence_snippets", []))},
-            payload=payload,
-        )
+        source_url = payload.get("url") or ""
+        existing = conn.execute(
+            "SELECT id FROM domain_items WHERE domain=? AND item_type=? AND source_url=? AND source_url != ? ORDER BY id DESC LIMIT 1",
+            ("vulnerabilities", "material", source_url, ""),
+        ).fetchone()
+        if existing:
+            item_id = existing[0]
+            repo.update_domain_item(
+                conn,
+                item_id=item_id,
+                payload=payload,
+                metrics={"pipeline_run": run_id, "confidence": payload.get("confidence"), "markdown_length": payload.get("markdown_length"), "score_breakdown": scoring.breakdown, "cve_count": len(payload.get("cve_ids", [])), "snippet_count": len(extracted.get("evidence_snippets", []))},
+            )
+            conn.execute("UPDATE domain_items SET title=?, summary=?, score=?, status=?, updated_at=? WHERE id=?",
+                (payload.get("title") or "未命名漏洞素材", payload.get("summary") or "来自漏洞素材 raw pipeline，待知识提取。", scoring.score,
+                 "待知识提取" if scoring.priority in {"high", "medium"} or payload.get("is_relevant") else "低相关待复核", repo.utc_now(), item_id))
+        else:
+            item_id = repo.create_domain_item(
+                conn,
+                domain="vulnerabilities",
+                item_type="material",
+                title=payload.get("title") or "未命名漏洞素材",
+                summary=payload.get("summary") or "来自漏洞素材 raw pipeline，待知识提取。",
+                score=scoring.score,
+                status="待知识提取" if scoring.priority in {"high", "medium"} or payload.get("is_relevant") else "低相关待复核",
+                source="raw_pipeline",
+                source_url=source_url,
+                primary_date=payload.get("primary_date") or "",
+                tags=["raw_pipeline", material_type, payload.get("category") or "素材", classification.category, scoring.grade, *payload.get("cve_ids", [])[:3]],
+                metrics={"pipeline_run": run_id, "confidence": payload.get("confidence"), "markdown_length": payload.get("markdown_length"), "score_breakdown": scoring.breakdown, "cve_count": len(payload.get("cve_ids", [])), "snippet_count": len(extracted.get("evidence_snippets", []))},
+                payload=payload,
+            )
         materials += 1
         material_ids.append(item_id)
         content = payload.get("summary") or "\n".join(str(x) for x in payload.get("key_findings") or [])

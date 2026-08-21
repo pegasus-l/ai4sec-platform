@@ -194,7 +194,7 @@ def create_app() -> FastAPI:
     scheduler = BackgroundScheduler(daemon=True)
     scheduler.add_job(_run_pipeline_job, IntervalTrigger(minutes=15), args=['capabilities.from_news_pipeline'], id='cap', name='capability(15min)', replace_existing=True)
     scheduler.add_job(_run_pipeline_job, CronTrigger(hour=2, minute=0), args=['threats.huawei_full_migration_pipeline'], id='threat', name='threat(daily 02:00)', replace_existing=True)
-    scheduler.add_job(_run_pipeline_job, CronTrigger(hour=22, minute=0), args=['vulnerabilities.full_knowledge_discovery_pipeline', {'keyword_profile': 'daily_watch'}], id='vuln', name='vuln(daily 22:00)', replace_existing=True)
+    scheduler.add_job(_run_pipeline_job, CronTrigger(hour=22, minute=0), args=['vulnerabilities.full_knowledge_discovery_pipeline', {'keyword_profile': 'daily_watch', 'skip_existing_urls': True}], id='vuln', name='vuln(daily 22:00)', replace_existing=True)
 
     @app.on_event('startup')
     def _start_scheduler():
