@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+import asyncio
 import os
 import re
 import threading
+import urllib.parse
 from pathlib import Path
 
 import httpx
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -114,7 +116,9 @@ async def repro_web_proxy(request: Request):
         finally:
             await resp.aclose()
         if data:
-            prefix = _web_prefix(request.headers.get("x-pathname"), path)
+            # ASIS 走 /insights/* 时由 middleware 注入 x-pathname; 直连 /repro-web/* 时用请求路径兜底,
+            # 否则 base href 会错指向 /insights/repro-web 导致静态资源 404 / MIME 拒绝(实测页面空白)。
+            prefix = _web_prefix(request.headers.get("x-pathname") or request.url.path, path)
             text = data.decode("utf-8", errors="replace")
             rewritten = _rewrite_web_html(text, prefix)
             if rewritten != text:
@@ -127,6 +131,69 @@ async def repro_web_proxy(request: Request):
         headers=resp_headers,
         background=BackgroundTask(resp.aclose),
     )
+
+
+async def repro_web_ws_proxy(websocket: WebSocket) -> None:
+    """WebSocket 反代: 浏览器 /repro-web/{path} → repro 容器 8080。
+
+    httpx 无法转发 WS 升级(实测 /repro-web/_stcore/stream 只回 200, Streamlit 页面空白根因),
+    这里用 websockets 客户端做双向隧道, 浏览器 → ai4sec → repro 容器 全链路 101。
+    """
+    import websockets
+    from websockets.exceptions import ConnectionClosed
+
+    path = websocket.path_params.get("path", "")
+    base = REPRO_WEB_UPSTREAM.replace("http://", "ws://").replace("https://", "wss://")
+    url = f"{base}/{path}"
+    if websocket.query_params:
+        url += "?" + urllib.parse.urlencode(list(websocket.query_params.items()))
+    extra_headers = None
+    cookie = websocket.headers.get("cookie")
+    if cookie:
+        extra_headers = {"Cookie": cookie}
+    client_subprotocols = list(websocket.scope.get("subprotocols") or [])
+    try:
+        await websocket.accept(subprotocol=client_subprotocols[0] if client_subprotocols else None)
+    except Exception:  # noqa: BLE001 - 客户端先断开则直接放弃
+        return
+
+    try:
+        async with websockets.connect(
+            url, additional_headers=extra_headers, subprotocols=client_subprotocols or None
+        ) as upstream:
+            async def pump_upstream() -> None:
+                """repro 容器 → 浏览器。"""
+                try:
+                    while True:
+                        msg = await upstream.recv()
+                        if isinstance(msg, str):
+                            await websocket.send_text(msg)
+                        else:
+                            await websocket.send_bytes(msg)
+                except ConnectionClosed:
+                    pass
+                except Exception:  # noqa: BLE001
+                    pass
+
+            async def pump_client() -> None:
+                """浏览器 → repro 容器。"""
+                try:
+                    while True:
+                        data = await websocket.receive()
+                        if data["type"] == "websocket.disconnect":
+                            break
+                        msg = data.get("text") or data.get("bytes")
+                        if msg is not None:
+                            await upstream.send(msg)
+                except Exception:  # noqa: BLE001
+                    pass
+
+            await asyncio.gather(pump_upstream(), pump_client())
+    except Exception:  # noqa: BLE001 - 上游连不上/中途断开给浏览器干净关闭
+        try:
+            await websocket.close(code=1011)
+        except Exception:  # noqa: BLE001
+            pass
 
 
 def _run_pipeline_job(pipeline_name: str, params: dict | None = None) -> None:
@@ -174,6 +241,9 @@ def create_app() -> FastAPI:
         methods=["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"],
         include_in_schema=False,
     )
+    # WS 反代(与 HTTP 反代同路径, uvicorn 按 Upgrade 分派): Streamlit 等 Web 界面的 _stcore/stream
+    app.add_api_websocket_route("/repro-web", repro_web_ws_proxy)
+    app.add_api_websocket_route("/repro-web/{path:path}", repro_web_ws_proxy)
     if (FRONTEND_DIST / "assets").exists():
         app.mount("/assets", StaticFiles(directory=FRONTEND_DIST / "assets"), name="assets")
 

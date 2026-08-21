@@ -10,6 +10,7 @@ dependencies = [
   "PyYAML",
   "crawl4ai>=0.7,<0.8",
   "apscheduler>=3.10,<4.0",
+  "websockets>=14.0,<17.0",
 ]
 
 [tool.pytest.ini_options]
