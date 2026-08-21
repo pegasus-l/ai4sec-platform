@@ -69,11 +69,14 @@ def _rewrite_web_html(html: str, prefix: str) -> str:
     """给 HTML 页面注入 <base href="{prefix}/"> 并把 root-absolute 链接改写成子路径, 返回改写结果。"""
     if not prefix:
         return html
+    # 先改写 root-absolute 链接, 再注入 <base>: 若先注入 base, 注入的 href="/{prefix}/" 会被
+    # root-attr 正则再次命中而二次加前缀(直连 /repro-web 时 base 变成 /repro-web/repro-web/, 静态资源全 404)。
+    html = _REPRO_WEB_ROOT_ATTR.sub(rf"\1\2{prefix}/", html)
     if not _REPRO_WEB_BASE_TAG.search(html):
         base_tag = f'<base href="{prefix}/">'
         m = _REPRO_WEB_HEAD.search(html)
         html = html[: m.end()] + base_tag + html[m.end():] if m else base_tag + html
-    return _REPRO_WEB_ROOT_ATTR.sub(rf"\1\2{prefix}/", html)
+    return html
 
 
 async def repro_web_proxy(request: Request):
