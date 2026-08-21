@@ -222,14 +222,17 @@ function CapabilityCard({ item, rank, onClick }: { item: CapabilityItem; rank: n
 // ========== 能力库（改动 1: 4 个视图 + 改动 3: classifyBatch 按钮）==========
 function CapabilityLibrary({ items, openDetail }: { items: CapabilityItem[]; openDetail: (item: CapabilityItem) => void }) {
   const [viewMode, setViewMode] = useState<'列表视图' | '能力分类' | '应用场景' | '工程可用性'>('列表视图');
-  // 【改动 新增筛选】能力库筛选: 全部 / Web 项目 / 官方 Demo (与搜索叠加, 命中 payload.is_web / demo_url)
-  const [filterTag, setFilterTag] = useState<'全部' | 'Web 项目' | '官方 Demo'>('全部');
+  // 【改动 新增筛选】能力库筛选: 默认 Web+官方Demo(非 web 无 demo 的 LOWCONF/CLI 项目隐藏),
+  // 可点"全部"放开 (与搜索叠加, 命中 payload.is_web / demo_url)
+  const [filterTag, setFilterTag] = useState<'Web+官方Demo' | '全部' | 'Web 项目' | '官方 Demo'>('Web+官方Demo');
   const webCount = useMemo(() => items.filter(i => i.payload?.is_web).length, [items]);
   const demoCount = useMemo(() => items.filter(i => Boolean(i.payload?.demo_url)).length, [items]);
+  const webDemoCount = useMemo(() => items.filter(i => i.payload?.is_web || Boolean(i.payload?.demo_url)).length, [items]);
   const filtered = useMemo(() => {
     if (filterTag === 'Web 项目') return items.filter(i => i.payload?.is_web);
     if (filterTag === '官方 Demo') return items.filter(i => Boolean(i.payload?.demo_url));
-    return items;
+    if (filterTag === '全部') return items;
+    return items.filter(i => i.payload?.is_web || Boolean(i.payload?.demo_url)); // 默认: Web ∪ 官方Demo
   }, [items, filterTag]);
   // 【分页】列表视图分页(每页 20 条); 搜索/筛选变化时回到第 1 页
   const PAGE_SIZE = 20;
@@ -267,7 +270,7 @@ function CapabilityLibrary({ items, openDetail }: { items: CapabilityItem[]; ope
       {(['列表视图', '能力分类', '应用场景', '工程可用性'] as const).map(v => <span key={v} className={`view-pill ${viewMode === v ? 'active' : ''}`} onClick={() => setViewMode(v)}>{v}</span>)}
     </div>
     <div className="view-switch" style={{ marginTop: 8 }}>
-      {([['全部', items.length], ['Web 项目', webCount], ['官方 Demo', demoCount]] as const).map(([tag, count]) => <span key={tag} className={`view-pill ${filterTag === tag ? 'active' : ''}`} onClick={() => setFilterTag(tag)}>{tag}<em style={{ fontSize: 11, opacity: 0.7, fontStyle: 'normal' }}> {count}</em></span>)}
+      {([['Web+官方Demo', webDemoCount], ['Web 项目', webCount], ['官方 Demo', demoCount], ['全部', items.length]] as const).map(([tag, count]) => <span key={tag} className={`view-pill ${filterTag === tag ? 'active' : ''}`} onClick={() => setFilterTag(tag)}>{tag}<em style={{ fontSize: 11, opacity: 0.7, fontStyle: 'normal' }}> {count}</em></span>)}
     </div>
     {filtered.length === 0 && <EmptyState title="能力库为空" description="先跑 capabilities.from_news_pipeline 生成能力卡" />}
 
