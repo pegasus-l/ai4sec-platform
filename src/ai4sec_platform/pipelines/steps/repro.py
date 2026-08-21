@@ -491,7 +491,7 @@ def _update_task(task_id: int, **fields: Any) -> None:
         conn.close()
 
 
-def _write_payload(item_id: int, repro_status: str, repro_result: dict[str, Any], item_status: str | None = None) -> None:
+def _write_payload(item_id: int, repro_status: str, repro_result: dict[str, Any], item_status: str | None = None, web_report: dict[str, Any] | None = None) -> None:
     conn = _connect()
     try:
         item = repo.get_domain_item(conn, "capabilities", item_id)
@@ -500,6 +500,18 @@ def _write_payload(item_id: int, repro_status: str, repro_result: dict[str, Any]
         payload = dict(item.get("payload") or {})
         payload["repro_status"] = repro_status
         payload["repro_result"] = repro_result
+        # 复现报告明确给出 web 判断时同步回 payload 分类, 修正分类器误判(LOWCONF 等):
+        #   报告 is_web=True → 回写 is_web=True + web_framework + web_reclass 标记;
+        #   报告 is_web=False → 回写 is_web=False(agent 明确判定项目无 web 界面)。
+        # 报告缺省该字段(超时兜底/异常路径)则不覆盖, 保留原分类。
+        web_flag = (web_report or {}).get("is_web")
+        if isinstance(web_flag, bool):
+            payload["is_web"] = web_flag
+            if web_flag:
+                fw = (web_report or {}).get("web_framework")
+                if fw:
+                    payload["web_framework"] = fw
+                payload["web_reclass"] = f"repro-corrected-{_utc_now()[:10]}"
         fields: dict[str, Any] = {"payload": payload}
         if item_status:
             fields["status"] = item_status
@@ -684,7 +696,7 @@ def _run_task(task_id: int, item_id: int, code_url: str, title: str, timeout: in
             "build_success": verdict == "success",
             "test_results": _extract_test_results(full_response),
             "report_text": full_response[:2000],
-        }, item_status=_STATUS_TO_ITEM.get(verdict))
+        }, item_status=_STATUS_TO_ITEM.get(verdict), web_report=report)
         # 会话已利用完毕: 中止 serve 会话(即便 agent 已自然结束也做清理, 防止边缘情况残留烧 token)
         _abort_session(repro_url, headers, session_id)
     except Exception as e:  # noqa: BLE001
@@ -726,7 +738,7 @@ def _run_task(task_id: int, item_id: int, code_url: str, title: str, timeout: in
                     _append_log(task_id, line)
             _write_payload(item_id, verdict, {
                 "verdict": verdict, "error": emsg, "session_id": session_id, "summary": report.get("summary"),
-            }, item_status=_STATUS_TO_ITEM.get(verdict))
+            }, item_status=_STATUS_TO_ITEM.get(verdict), web_report=report)
         else:
             _update_task(task_id, status="failed", finished_at=_utc_now(), result=emsg[:10000])
             _append_log(task_id, f"✗ 复现异常: {emsg}")
@@ -906,7 +918,7 @@ def recover_orphaned_tasks() -> int:
             _write_payload(item_id, verdict if verdict in ("success", "partial", "failed") else "failed",
                            {"verdict": verdict, "error": "复现进程被容器重建/重启中断", "session_id": session_id,
                             "summary": (report.get("summary") or "")},
-                           item_status=_STATUS_TO_ITEM.get(verdict))
+                           item_status=_STATUS_TO_ITEM.get(verdict), web_report=report)
             recovered += 1
             print(f"[repro-recover] task {task_id}: {status} → {task_status} (session={session_id or '-'}, salvaged={len(salvaged)}c)", flush=True)
     finally:
