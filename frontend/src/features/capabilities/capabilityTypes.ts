@@ -122,6 +122,21 @@ export interface ClassifyStats {
   web_count: number;
 }
 
+export interface LibraryStats {
+  domain: string;
+  total: number;
+  web: number;
+  non_web: number;
+  demo: number;
+  repro: {
+    success: number;
+    partial: number;
+    in_progress: number;
+    pending: number;
+    failed: number;
+  };
+}
+
 export interface CapStats {
   total: number;
   candidates: number;

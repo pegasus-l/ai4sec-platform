@@ -372,6 +372,56 @@ def count_by_domain(conn: sqlite3.Connection, domain: str) -> int:
     return int(row["count"])
 
 
+def filter_stats_by_domain(conn: sqlite3.Connection, domain: str) -> dict[str, Any]:
+    """能力库筛选统计:全量 SQL 聚合,不受 /items 的 limit 窗口影响。
+
+    与 /items 列表同人口(domain + status != '已淘汰'),保证 chip 计数与列表一致。
+    桶划分与前端 engineeringGroups 一致:官方 Demo 为独立维度(demo_url 有即归它),
+    repro 桶全部前置「无 demo」条件,各桶互斥且补齐全部人口。
+    json_extract 对缺失键/非法 JSON 返回 NULL → 落入"不匹配"桶(非 Web / 待复现),
+    与 Python 端 loads(payload_json, {}) 兜底语义一致。is_web 兼容 JSON true(=1) 与字符串 "true"/"1"。
+    """
+    row = conn.execute(
+        """
+        SELECT
+            COUNT(*) AS total,
+            SUM(CASE WHEN json_extract(payload_json, '$.is_web') IN (1, 'true', '1') THEN 1 ELSE 0 END) AS web_count,
+            SUM(CASE WHEN COALESCE(json_extract(payload_json, '$.demo_url'), '') != '' THEN 1 ELSE 0 END) AS demo_count,
+            SUM(CASE WHEN COALESCE(json_extract(payload_json, '$.demo_url'), '') = ''
+                     AND json_extract(payload_json, '$.repro_status') IN ('success', 'succeeded') THEN 1 ELSE 0 END) AS repro_success,
+            SUM(CASE WHEN COALESCE(json_extract(payload_json, '$.demo_url'), '') = ''
+                     AND json_extract(payload_json, '$.repro_status') = 'partial' THEN 1 ELSE 0 END) AS repro_partial,
+            SUM(CASE WHEN COALESCE(json_extract(payload_json, '$.demo_url'), '') = ''
+                     AND json_extract(payload_json, '$.repro_status') = 'in_progress' THEN 1 ELSE 0 END) AS repro_in_progress,
+            SUM(CASE WHEN COALESCE(json_extract(payload_json, '$.demo_url'), '') = ''
+                     AND (json_extract(payload_json, '$.repro_status') IN ('candidate', 'no_code')
+                          OR json_extract(payload_json, '$.repro_status') IS NULL) THEN 1 ELSE 0 END) AS repro_pending,
+            SUM(CASE WHEN COALESCE(json_extract(payload_json, '$.demo_url'), '') = ''
+                     AND json_extract(payload_json, '$.repro_status') IN ('failed', 'error') THEN 1 ELSE 0 END) AS repro_failed
+        FROM domain_items
+        WHERE domain = ? AND status != ?
+        """,
+        (domain, "已淘汰"),
+    ).fetchone()
+    r = dict(row)
+    total = int(r["total"] or 0)
+    web = int(r["web_count"] or 0)
+    return {
+        "domain": domain,
+        "total": total,
+        "web": web,
+        "non_web": total - web,  # 与 Python `not is_web` 语义一致(NULL → 非 Web)
+        "demo": int(r["demo_count"] or 0),
+        "repro": {
+            "success": int(r["repro_success"] or 0),
+            "partial": int(r["repro_partial"] or 0),
+            "in_progress": int(r["repro_in_progress"] or 0),
+            "pending": int(r["repro_pending"] or 0),
+            "failed": int(r["repro_failed"] or 0),
+        },
+    }
+
+
 # ============================================================================
 # capability_repro_tasks - 复现任务 CRUD（迁移自旧 v1 db.py）
 # ============================================================================

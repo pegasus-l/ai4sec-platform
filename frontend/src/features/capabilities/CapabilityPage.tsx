@@ -6,11 +6,11 @@ import { Badge, MetricCard, EmptyState } from '../../components/ui';
 import { useToast } from '../../components/Toast';
 import { useDrawerStack } from '../../components/DrawerStack';
 import {
-  fetchToday, fetchLibrary, fetchReproRuns, fetchConversions, fetchClassifyStats,
+  fetchToday, fetchLibrary, fetchLibraryStats, fetchReproRuns, fetchConversions, fetchClassifyStats,
   fetchDetail, fetchReproTask, fetchReproFullLog, startRepro, stopRepro, cleanupRepro, markConversion,
   streamReproLogs, classifyLogLine, stripAnsi,
 } from './capabilityQueries';
-import type { CapabilityItem, ReproTask, ConversionRecord, CapabilityView } from './capabilityTypes';
+import type { CapabilityItem, ReproTask, ConversionRecord, CapabilityView, LibraryStats } from './capabilityTypes';
 import { CapabilityOps, CapabilityOpsQuality, CapabilityOpsRuns } from './CapabilityOps';
 
 const navGroups: Array<{ title: string; items: Array<{ id: CapabilityView; icon: LucideIcon; title: string }> }> = [
@@ -30,6 +30,11 @@ const navGroups: Array<{ title: string; items: Array<{ id: CapabilityView; icon:
 const conversionGroups = ['待评估', '待复现', '复现中', '复现成功', '待集成', '持续观察', '已采用'];
 
 interface ConvertFormData { status: string; scenario: string; owner: string; next_action: string; notes: string; }
+
+/** 多选 chip 切换(同 NewsPage): 已选则移除, 未选则追加 */
+function toggleValue(values: string[], value: string): string[] {
+  return values.includes(value) ? values.filter(v => v !== value) : [...values, value];
+}
 
 function matchItem(item: CapabilityItem, q: string): boolean {
   const p = item.payload ?? {};
@@ -62,7 +67,8 @@ export function CapabilityPage() {
   const qc = useQueryClient();
 
   const { data: todayData, isLoading: todayLoading } = useQuery({ queryKey: ['cap-today'], queryFn: fetchToday, staleTime: 300_000 });
-  const { data: libraryData } = useQuery({ queryKey: ['cap-library'], queryFn: () => fetchLibrary(500), staleTime: 300_000 });
+  const { data: libraryData } = useQuery({ queryKey: ['cap-library'], queryFn: () => fetchLibrary(2000), staleTime: 300_000 });
+  const { data: libraryStatsData } = useQuery({ queryKey: ['cap-library-stats'], queryFn: fetchLibraryStats, staleTime: 300_000 });
   const { data: reproData } = useQuery({ queryKey: ['cap-repro'], queryFn: fetchReproRuns, staleTime: 1_000, refetchInterval: 5_000 });
   const { data: convData } = useQuery({ queryKey: ['cap-conversions'], queryFn: fetchConversions, staleTime: 300_000 });
   const { data: statsData } = useQuery({ queryKey: ['cap-classify-stats'], queryFn: fetchClassifyStats, staleTime: 300_000 });
@@ -72,6 +78,7 @@ export function CapabilityPage() {
   const reproRuns = ((reproData as Record<string, unknown> | undefined)?.items ?? []) as ReproTask[];
   const conversions = ((convData as Record<string, unknown> | undefined)?.items ?? []) as ConversionRecord[];
   const stats = statsData ?? { total: 0, classified: 0, unclassified: 0, web_count: 0 };
+  const libraryStats = libraryStatsData as LibraryStats | undefined;
 
   // 【搜索】搜索框全局过滤: 今日能力 + 能力库(跨标题/仓库/技术点/概述), 空则显示全部
   const trimmedSearch = search.trim();
@@ -136,7 +143,7 @@ export function CapabilityPage() {
       <div className="content-body view" ref={viewRef}>
         {todayLoading && view === 'today' && <EmptyState title="正在加载" description="从 /api/capabilities/today 拉取数据。" />}
         {view === 'today' && <CapabilityToday items={filteredToday} stats={stats} openDetail={openDetail} />}
-        {view === 'library' && <CapabilityLibrary items={filteredLibrary} openDetail={openDetail} />}
+        {view === 'library' && <CapabilityLibrary items={filteredLibrary} stats={libraryStats} openDetail={openDetail} />}
         {view === 'repro' && <CapabilityRepro runs={reproRuns} openDetail={openDetail} items={libraryItems} />}
         {view === 'conversion' && <CapabilityConversion conversions={conversions} openConversion={openConversion} />}
         {view === 'ops-overview' && <CapabilityOps />}
@@ -209,7 +216,8 @@ function CapabilityCard({ item, rank, onClick }: { item: CapabilityItem; rank: n
         <Badge tone={sourceType === 'github' ? 'sky' : 'violet'}>{sourceType}</Badge>
         {p.capability_type && <Badge tone="green">{p.capability_type}</Badge>}
         <Badge tone={reproTag as 'green' | 'sky' | 'slate' | 'amber'}>{reproText}</Badge>
-        {p.demo_url ? <Badge tone="green">官方 Demo</Badge> : p.is_web ? <Badge tone="amber">Web{p.web_framework ? `:${p.web_framework}` : ''}</Badge> : <Badge tone="slate">非Web</Badge>}
+        {p.is_web ? <Badge tone="amber">Web{p.web_framework ? `:${p.web_framework}` : ''}</Badge> : <Badge tone="slate">非Web</Badge>}
+        {p.demo_url && <Badge tone="green">官方 Demo</Badge>}
       </div>
     </div>
     <div style={{ display: 'grid', gap: 6, justifyItems: 'end' }}>
@@ -220,20 +228,52 @@ function CapabilityCard({ item, rank, onClick }: { item: CapabilityItem; rank: n
 }
 
 // ========== 能力库（改动 1: 4 个视图 + 改动 3: classifyBatch 按钮）==========
-function CapabilityLibrary({ items, openDetail }: { items: CapabilityItem[]; openDetail: (item: CapabilityItem) => void }) {
+function CapabilityLibrary({ items, stats, openDetail }: { items: CapabilityItem[]; stats?: LibraryStats; openDetail: (item: CapabilityItem) => void }) {
   const [viewMode, setViewMode] = useState<'列表视图' | '能力分类' | '应用场景' | '工程可用性'>('列表视图');
-  // 【改动 新增筛选】能力库筛选: 默认 Web+官方Demo(非 web 无 demo 的 LOWCONF/CLI 项目隐藏),
-  // 可点"全部"放开 (与搜索叠加, 命中 payload.is_web / demo_url)
-  const [filterTag, setFilterTag] = useState<'Web+官方Demo' | '全部' | 'Web 项目' | '官方 Demo'>('Web+官方Demo');
-  const webCount = useMemo(() => items.filter(i => i.payload?.is_web).length, [items]);
-  const demoCount = useMemo(() => items.filter(i => Boolean(i.payload?.demo_url)).length, [items]);
-  const webDemoCount = useMemo(() => items.filter(i => i.payload?.is_web || Boolean(i.payload?.demo_url)).length, [items]);
+  // 【正交双维度多选筛选】形态(Web/非Web) × 可体验·复现(官方Demo/完整复现/…)。
+  // 计数全部来自 /items/stats 服务端全量聚合(不受 fetch 窗口/搜索影响)。
+  // 形态默认只选 Web(保持旧默认"隐藏非 Web 噪音");可体验默认全放开。
+  const [formChips, setFormChips] = useState<string[]>(['Web']);
+  const [reproChips, setReproChips] = useState<string[]>([]);
+  const chipCount = (chip: string): number | undefined => {
+    if (!stats) return undefined;
+    switch (chip) {
+      case 'Web': return stats.web;
+      case '非Web': return stats.non_web;
+      case '官方 Demo': return stats.demo;
+      case '完整复现': return stats.repro.success;
+      case '部分复现': return stats.repro.partial;
+      case '复现中': return stats.repro.in_progress;
+      case '待复现': return stats.repro.pending;
+      case '复现失败': return stats.repro.failed;
+      default: return undefined;
+    }
+  };
+  // 谓词与 engineeringGroups(下方 工程可用性 视图)完全一致,保证两个视图数字对得上。
+  // 官方 Demo 为独立维度, repro 桶全部前置「无 demo」条件。
+  const matchesReproChip = (p: CapabilityItem['payload'] | undefined, chip: string): boolean => {
+    const hasDemo = Boolean(p?.demo_url);
+    const rs = p?.repro_status;
+    switch (chip) {
+      case '官方 Demo': return hasDemo;
+      case '完整复现': return !hasDemo && (rs === 'success' || rs === 'succeeded');
+      case '部分复现': return !hasDemo && rs === 'partial';
+      case '复现中': return !hasDemo && rs === 'in_progress';
+      case '待复现': return !hasDemo && (rs === 'candidate' || rs === 'no_code' || rs === undefined || rs === null);
+      case '复现失败': return !hasDemo && (rs === 'failed' || rs === 'error');
+      default: return false;
+    }
+  };
   const filtered = useMemo(() => {
-    if (filterTag === 'Web 项目') return items.filter(i => i.payload?.is_web);
-    if (filterTag === '官方 Demo') return items.filter(i => Boolean(i.payload?.demo_url));
-    if (filterTag === '全部') return items;
-    return items.filter(i => i.payload?.is_web || Boolean(i.payload?.demo_url)); // 默认: Web ∪ 官方Demo
-  }, [items, filterTag]);
+    let list = items;
+    // 形态:恰好选一个才过滤(两个都不选/都选 = 全部)
+    const wantWeb = formChips.includes('Web');
+    const wantNonWeb = formChips.includes('非Web');
+    if (wantWeb !== wantNonWeb) list = list.filter(i => Boolean(i.payload?.is_web) === wantWeb);
+    // 可体验·复现:多选 OR
+    if (reproChips.length > 0) list = list.filter(i => reproChips.some(chip => matchesReproChip(i.payload, chip)));
+    return list;
+  }, [items, formChips, reproChips]);
   // 【分页】列表视图分页(每页 20 条); 搜索/筛选变化时回到第 1 页
   const PAGE_SIZE = 20;
   const [page, setPage] = useState(1);
@@ -270,7 +310,12 @@ function CapabilityLibrary({ items, openDetail }: { items: CapabilityItem[]; ope
       {(['列表视图', '能力分类', '应用场景', '工程可用性'] as const).map(v => <span key={v} className={`view-pill ${viewMode === v ? 'active' : ''}`} onClick={() => setViewMode(v)}>{v}</span>)}
     </div>
     <div className="view-switch" style={{ marginTop: 8 }}>
-      {([['Web+官方Demo', webDemoCount], ['Web 项目', webCount], ['官方 Demo', demoCount], ['全部', items.length]] as const).map(([tag, count]) => <span key={tag} className={`view-pill ${filterTag === tag ? 'active' : ''}`} onClick={() => setFilterTag(tag)}>{tag}<em style={{ fontSize: 11, opacity: 0.7, fontStyle: 'normal' }}> {count}</em></span>)}
+      <span style={{ fontSize: 12, color: 'var(--faint)', alignSelf: 'center', whiteSpace: 'nowrap' }}>形态</span>
+      {(['Web', '非Web'] as const).map(chip => <span key={chip} className={`view-pill ${formChips.includes(chip) ? 'active' : ''}`} onClick={() => setFormChips(toggleValue(formChips, chip))}>{chip}{chipCount(chip) !== undefined && <em style={{ fontSize: 11, opacity: 0.7, fontStyle: 'normal' }}> {chipCount(chip)}</em>}</span>)}
+    </div>
+    <div className="view-switch" style={{ marginTop: 8 }}>
+      <span style={{ fontSize: 12, color: 'var(--faint)', alignSelf: 'center', whiteSpace: 'nowrap' }}>可体验·复现</span>
+      {(['官方 Demo', '完整复现', '部分复现', '复现中', '待复现', '复现失败'] as const).map(chip => <span key={chip} className={`view-pill ${reproChips.includes(chip) ? 'active' : ''}`} onClick={() => setReproChips(toggleValue(reproChips, chip))}>{chip}{chipCount(chip) !== undefined && <em style={{ fontSize: 11, opacity: 0.7, fontStyle: 'normal' }}> {chipCount(chip)}</em>}</span>)}
     </div>
     {filtered.length === 0 && <EmptyState title="能力库为空" description="先跑 capabilities.from_news_pipeline 生成能力卡" />}
 
@@ -290,7 +335,7 @@ function CapabilityLibrary({ items, openDetail }: { items: CapabilityItem[]; ope
         <td style={{maxWidth: '320px'}} className="small muted">{ov.slice(0, 120)}{ov.length > 120 ? '…' : ''}</td>
         <td><div className="score-ring">{item.score}</div></td>
         <td>{sourceNewsScore(p) !== null ? <Badge tone="sky">{formatScore(sourceNewsScore(p)!)}</Badge> : <span className="muted">—</span>}</td>
-        <td><div className="badges">{p.capability_type && <Badge tone="green">{p.capability_type}</Badge>}<Badge tone={p.repro_status === 'candidate' ? 'green' : 'amber'}>{p.repro_status ?? '未知'}</Badge>{p.is_web ? <Badge tone="amber">Web</Badge> : <Badge tone="slate">非Web</Badge>}</div></td>
+        <td><div className="badges">{p.capability_type && <Badge tone="green">{p.capability_type}</Badge>}<Badge tone={p.repro_status === 'candidate' ? 'green' : 'amber'}>{p.repro_status ?? '未知'}</Badge>{p.is_web ? <Badge tone="amber">Web</Badge> : <Badge tone="slate">非Web</Badge>}{p.demo_url && <Badge tone="green">官方 Demo</Badge>}</div></td>
       </tr>; })}
     </tbody></table>
     {pageCount > 1 && <div style={{ display: 'flex', justifyContent: 'center', gap: 8, alignItems: 'center', padding: '10px 12px', borderTop: '1px solid var(--line)' }}>
@@ -432,6 +477,7 @@ function ReproDetailContent({ task, capabilityItem, openDetail }: { task: ReproT
             qc.invalidateQueries({ queryKey: ['cap-repro'] });
             qc.invalidateQueries({ queryKey: ['cap-repro-task', currentTask.id] });
             qc.invalidateQueries({ queryKey: ['cap-library'] });
+            qc.invalidateQueries({ queryKey: ['cap-library-stats'] });
           }
         },
         () => setStreaming(false)
@@ -616,7 +662,7 @@ function CapabilityDetailContent({ itemId, initialItem, onRepro, onConvert }: { 
     {/* 复现 & 转化 */}
     {p.demo_url && <div className="drawer-section"><h3>官方在线演示</h3><p style={{ color: 'var(--green)' }}>项目已提供官方 Demo，按复现策略直接使用官方环境，不启动本地容器。</p><p><a href={p.demo_url} target="_blank" rel="noopener" style={{ color: 'var(--sky)' }}>{p.demo_url}</a></p></div>}
     {!p.demo_url && p.repro_summary && <div className="drawer-section"><h3>复现摘要</h3><p style={{ color: 'var(--green)' }}>{p.repro_summary}</p></div>}
-    <div className="drawer-section"><h3>复现 & 转化</h3><div className="badges"><Badge tone={p.repro_status === 'candidate' ? 'green' : 'amber'}>{p.repro_status ?? '未知'}</Badge><Badge tone="violet">{p.conversion_status ?? '待评估'}</Badge>{p.is_web ? <Badge tone="amber">Web{p.web_framework ? `:${p.web_framework}` : ''}</Badge> : <Badge tone="slate">非Web</Badge>}</div></div>
+    <div className="drawer-section"><h3>复现 & 转化</h3><div className="badges"><Badge tone={p.repro_status === 'candidate' ? 'green' : 'amber'}>{p.repro_status ?? '未知'}</Badge><Badge tone="violet">{p.conversion_status ?? '待评估'}</Badge>{p.is_web ? <Badge tone="amber">Web{p.web_framework ? `:${p.web_framework}` : ''}</Badge> : <Badge tone="slate">非Web</Badge>}{p.demo_url && <Badge tone="green">官方 Demo</Badge>}</div></div>
 
     {/* 使用说明 */}
     {p.usage && Object.keys(p.usage).length > 0 && <div className="drawer-section"><h3>使用说明</h3><p><b>是什么:</b> {p.usage.what ?? ''}</p><p><b>怎么用:</b> {p.usage.how_to_use ?? ''}</p>{p.usage.prerequisites && <p><b>前提:</b> {p.usage.prerequisites}</p>}{p.usage.limitations && <p><b>限制:</b> {p.usage.limitations}</p>}</div>}

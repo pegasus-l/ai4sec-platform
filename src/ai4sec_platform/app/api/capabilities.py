@@ -52,13 +52,23 @@ def today(limit: int = Query(200, ge=1, le=500), conn: sqlite3.Connection = Depe
 
 @router.get("/items")
 def items(
-    limit: int = Query(200, ge=1, le=500),
+    limit: int = Query(500, ge=1, le=2000),
     q: str | None = Query(None, max_length=200, description="搜索关键词(标题/仓库/技术点/概述)"),
     page: int | None = Query(None, ge=1, description="页码(1-based), 与 page_size 同时给出时启用分页"),
     page_size: int | None = Query(None, ge=1, le=500, description="每页条数"),
     conn: sqlite3.Connection = Depends(get_db),
 ) -> dict:
     return domain_items.list_items(conn, DOMAIN, limit=limit, q=q, page=page, page_size=page_size)
+
+
+@router.get("/items/stats")
+def items_stats(conn: sqlite3.Connection = Depends(get_db)) -> dict:
+    """能力库筛选统计:全量 SQL 聚合,不受 /items 的 limit 窗口影响,chip 计数始终精确。
+
+    必须注册在 /items/{item_id} 之前:Starlette 按注册顺序匹配路由,
+    若靠后,"stats" 会被 {item_id:int} 强制转换而 422。
+    """
+    return domain_items.filter_stats(conn, DOMAIN)
 
 
 @router.get("/items/{item_id}")

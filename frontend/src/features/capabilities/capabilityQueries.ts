@@ -1,12 +1,16 @@
 import { getJson, postJson } from '../../api/client';
-import type { CapabilityItem, ReproTask, ConversionRecord, ClassifyStats, CapStats } from './capabilityTypes';
+import type { CapabilityItem, ReproTask, ConversionRecord, ClassifyStats, CapStats, LibraryStats } from './capabilityTypes';
 
 export function fetchToday(): Promise<{ items: CapabilityItem[] }> {
   return getJson('/api/capabilities/today?limit=200');
 }
 
-export function fetchLibrary(limit = 500): Promise<{ items: CapabilityItem[] }> {
+export function fetchLibrary(limit = 2000): Promise<{ items: CapabilityItem[] }> {
   return getJson(`/api/capabilities/items?limit=${limit}`);
+}
+
+export function fetchLibraryStats(): Promise<LibraryStats> {
+  return getJson('/api/capabilities/items/stats');
 }
 
 export function fetchDetail(id: number): Promise<CapabilityItem> {

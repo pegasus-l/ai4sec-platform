@@ -82,5 +82,10 @@ def today(conn: sqlite3.Connection, domain: str, *, limit: int = 12) -> dict[str
     return list_items(conn, domain, item_type=TODAY_ITEM_TYPES.get(domain), limit=limit)
 
 
+def filter_stats(conn: sqlite3.Connection, domain: str) -> dict[str, Any]:
+    """能力库筛选统计:全量 SQL 聚合,不受 /items 的 limit 窗口影响。与列表同人口。"""
+    return repo.filter_stats_by_domain(conn, domain)
+
+
 def detail(conn: sqlite3.Connection, domain: str, item_id: int) -> dict[str, Any] | None:
     return repo.get_domain_item(conn, domain, item_id)
