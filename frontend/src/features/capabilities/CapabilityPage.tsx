@@ -53,18 +53,6 @@ function matchItem(item: CapabilityItem, q: string): boolean {
   return hay.includes(q.toLowerCase());
 }
 
-function sourceNewsScore(payload: CapabilityItem['payload']): number | null {
-  const directScore = Number(payload?.source_news_score);
-  if (Number.isFinite(directScore) && directScore > 0) return directScore;
-  const sourceItem = payload?.source_news_item as Record<string, unknown> | undefined;
-  const inheritedScore = Number(sourceItem?.score);
-  return Number.isFinite(inheritedScore) && inheritedScore > 0 ? inheritedScore : null;
-}
-
-function formatScore(score: number): string {
-  return Number.isInteger(score) ? String(score) : score.toFixed(1);
-}
-
 export function CapabilityPage() {
   const [view, setView] = useState<CapabilityView>('today');
   const [search, setSearch] = useState('');
@@ -217,7 +205,6 @@ function CapabilityToday({ items, stats, openDetail }: { items: CapabilityItem[]
 
 function CapabilityCard({ item, rank, onClick, onViewRepro }: { item: CapabilityItem; rank: number; onClick: () => void; onRepro: () => void; onViewRepro?: (item: CapabilityItem) => void }) {
   const p = item.payload ?? {};
-  const newsScore = sourceNewsScore(p);
   const sourceType = p.source_type || (item.source_url?.includes('github.com') ? 'github' : 'arxiv');
   const reproTag = p.repro_status === 'candidate' ? 'green' : p.repro_status === 'in_progress' ? 'sky' : p.repro_status === 'no_code' ? 'slate' : 'amber';
   const reproText = { candidate: '可复现', in_progress: '复现中', no_code: '无代码', success: '已复现', succeeded: '已复现', partial: '部分复现', failed: '复现失败', error: '复现异常', demo_verified: '官方Demo' }[p.repro_status ?? ''] ?? p.repro_status;
@@ -237,7 +224,6 @@ function CapabilityCard({ item, rank, onClick, onViewRepro }: { item: Capability
     </div>
     <div style={{ display: 'grid', gap: 6, justifyItems: 'end' }}>
       <div className="score-ring" title="能力综合评分（1–5）">{item.score}</div>
-      {newsScore !== null && <span className="small muted" title="来源资讯洞察评分">资讯 {formatScore(newsScore)}</span>}
     </div>
   </div>;
 }
@@ -344,12 +330,11 @@ function CapabilityLibrary({ items, stats, openDetail, onViewRepro }: { items: C
           <button className="btn" disabled={page >= pageCount} onClick={() => setPage(p => Math.min(pageCount, p + 1))}>下一页 ›</button>
         </div>
       </div>
-      <table className="data-table"><thead><tr><th>能力</th><th>概述</th><th>能力评分</th><th>资讯洞察</th><th>标签</th></tr></thead><tbody>
+      <table className="data-table"><thead><tr><th>能力</th><th>概述</th><th>能力评分</th><th>标签</th></tr></thead><tbody>
       {pageItems.map(item => { const p = item.payload ?? {}; const st = p.source_type || (item.source_url?.includes('github.com') ? 'github' : 'arxiv'); const ov = p.display_summary || p.overview || p.one_liner || ''; return <tr key={item.id} className="clickable" onClick={() => openDetail(item)}>
         <td><div className="table-title">{p.display_title || item.title}</div><div className="table-sub">{st}</div></td>
         <td style={{maxWidth: '320px'}} className="small muted">{ov.slice(0, 120)}{ov.length > 120 ? '…' : ''}</td>
         <td><div className="score-ring">{item.score}</div></td>
-        <td>{sourceNewsScore(p) !== null ? <Badge tone="sky">{formatScore(sourceNewsScore(p)!)}</Badge> : <span className="muted">—</span>}</td>
         <td><div className="badges">{p.capability_type && <Badge tone="green">{p.capability_type}</Badge>}<Badge tone={p.repro_status === 'candidate' ? 'green' : 'amber'}>{p.repro_status ?? '未知'}</Badge>{p.is_web ? <Badge tone="amber">Web</Badge> : <Badge tone="slate">非Web</Badge>}{p.demo_url && <Badge tone="green">官方 Demo</Badge>}{hasReproResult(p) && <button className="btn" style={{ padding: '1px 8px', fontSize: 11 }} onClick={(e) => { e.stopPropagation(); onViewRepro(item); }}>查看复现 →</button>}</div></td>
       </tr>; })}
     </tbody></table>
@@ -628,7 +613,6 @@ function CapabilityDetailContent({ itemId, initialItem, onRepro, onConvert, onVi
     staleTime: 0,
   });
   const p = item?.payload ?? initialItem.payload ?? {};
-  const newsScore = sourceNewsScore(p);
 
   // 【改动 2】转化表单状态
   const [showConvertForm, setShowConvertForm] = useState(false);
@@ -653,14 +637,6 @@ function CapabilityDetailContent({ itemId, initialItem, onRepro, onConvert, onVi
         </div>
       </div>
     </div>
-
-    {newsScore !== null && <div className="drawer-section">
-      <h3>来源资讯洞察评分</h3>
-      <div className="split" style={{ alignItems: 'center' }}>
-        <div className="score-ring">{formatScore(newsScore)}</div>
-        <p style={{ flex: 1 }}>该项目在资讯洞察阶段的原始综合评分；与上方能力综合评分独立，用于保留来源热度与价值判断。</p>
-      </div>
-    </div>}
 
     {/* LLM 评估 */}
     {p.overview && <div className="drawer-section"><h3>项目概述</h3><p>{p.overview}</p></div>}
