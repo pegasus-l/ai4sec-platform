@@ -24,6 +24,7 @@ export interface CapabilityItem {
     application_scenarios?: string[];
     tech_points?: string[];
     repro_status?: string;
+    repro_result?: unknown;
     conversion_status?: string;
     is_web?: boolean;
     web_framework?: string;

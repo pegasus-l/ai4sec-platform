@@ -36,6 +36,12 @@ function toggleValue(values: string[], value: string): string[] {
   return values.includes(value) ? values.filter(v => v !== value) : [...values, value];
 }
 
+/** 是否具备可跳转的复现结果(success/partial/failed/in_progress 状态, 或 payload 里有 repro_result) */
+function hasReproResult(p: CapabilityItem['payload'] | undefined): boolean {
+  const s = p?.repro_status;
+  return ['success', 'succeeded', 'partial', 'failed', 'error', 'in_progress'].includes(s ?? '') || Boolean(p?.repro_result);
+}
+
 function matchItem(item: CapabilityItem, q: string): boolean {
   const p = item.payload ?? {};
   const hay = [
@@ -62,7 +68,9 @@ function formatScore(score: number): string {
 export function CapabilityPage() {
   const [view, setView] = useState<CapabilityView>('today');
   const [search, setSearch] = useState('');
-  const { push } = useDrawerStack();
+  // 【跳转复现】从能力库点「查看复现」时记录目标能力, 切到复现验证页后由 CapabilityRepro 选中对应任务
+  const [reproTargetItemId, setReproTargetItemId] = useState<number | null>(null);
+  const { push, clear } = useDrawerStack();
   const { toast } = useToast();
   const qc = useQueryClient();
 
@@ -95,11 +103,17 @@ export function CapabilityPage() {
   useEffect(() => { if (viewRef.current) viewRef.current.scrollTop = 0; }, [view]);
 
   // 【改动 4】抽屉打开时调 fetchDetail 获取完整 payload
+  // 【跳转复现】从能力库/详情抽屉跳到复现验证页, 自动选中该能力的复现任务
+  const openReproView = useCallback((item: CapabilityItem) => {
+    setReproTargetItemId(item.id);
+    setView('repro');
+  }, []);
+
   const openDetail = useCallback((item: CapabilityItem) => {
     push({
       title: item.payload?.display_title || item.title,
       subtitle: `${item.payload?.source_type ?? ''} · score ${item.score}`,
-      render: () => <CapabilityDetailContent itemId={item.id} initialItem={item} onRepro={async () => {
+      render: () => <CapabilityDetailContent itemId={item.id} initialItem={item} onViewRepro={() => { clear(); openReproView(item); }} onRepro={async () => {
         try {
           const result = await startRepro(item.id, item.payload?.is_web ?? false);
           if (result.skipped && result.demo_url) {
@@ -117,7 +131,7 @@ export function CapabilityPage() {
         catch (e) { toast(`转化失败: ${e}`, 'error'); }
       }} />,
     });
-  }, [push, toast, qc]);
+  }, [push, clear, toast, qc, openReproView]);
 
   const openConversion = useCallback((conv: ConversionRecord) => {
     push({
@@ -143,8 +157,8 @@ export function CapabilityPage() {
       <div className="content-body view" ref={viewRef}>
         {todayLoading && view === 'today' && <EmptyState title="正在加载" description="从 /api/capabilities/today 拉取数据。" />}
         {view === 'today' && <CapabilityToday items={filteredToday} stats={stats} openDetail={openDetail} />}
-        {view === 'library' && <CapabilityLibrary items={filteredLibrary} stats={libraryStats} openDetail={openDetail} />}
-        {view === 'repro' && <CapabilityRepro runs={reproRuns} openDetail={openDetail} items={libraryItems} />}
+        {view === 'library' && <CapabilityLibrary items={filteredLibrary} stats={libraryStats} openDetail={openDetail} onViewRepro={openReproView} />}
+        {view === 'repro' && <CapabilityRepro runs={reproRuns} openDetail={openDetail} items={libraryItems} targetItemId={reproTargetItemId} onTargetConsumed={() => setReproTargetItemId(null)} />}
         {view === 'conversion' && <CapabilityConversion conversions={conversions} openConversion={openConversion} />}
         {view === 'ops-overview' && <CapabilityOps />}
         {view === 'ops-quality' && <CapabilityOpsQuality />}
@@ -201,7 +215,7 @@ function CapabilityToday({ items, stats, openDetail }: { items: CapabilityItem[]
   </div>;
 }
 
-function CapabilityCard({ item, rank, onClick }: { item: CapabilityItem; rank: number; onClick: () => void; onRepro: () => void }) {
+function CapabilityCard({ item, rank, onClick, onViewRepro }: { item: CapabilityItem; rank: number; onClick: () => void; onRepro: () => void; onViewRepro?: (item: CapabilityItem) => void }) {
   const p = item.payload ?? {};
   const newsScore = sourceNewsScore(p);
   const sourceType = p.source_type || (item.source_url?.includes('github.com') ? 'github' : 'arxiv');
@@ -219,6 +233,7 @@ function CapabilityCard({ item, rank, onClick }: { item: CapabilityItem; rank: n
         {p.is_web ? <Badge tone="amber">Web{p.web_framework ? `:${p.web_framework}` : ''}</Badge> : <Badge tone="slate">非Web</Badge>}
         {p.demo_url && <Badge tone="green">官方 Demo</Badge>}
       </div>
+      {onViewRepro && hasReproResult(p) && <button className="btn" style={{ marginTop: 6, padding: '2px 8px', fontSize: 11 }} onClick={(e) => { e.stopPropagation(); onViewRepro(item); }}>查看复现 →</button>}
     </div>
     <div style={{ display: 'grid', gap: 6, justifyItems: 'end' }}>
       <div className="score-ring" title="能力综合评分（1–5）">{item.score}</div>
@@ -228,7 +243,7 @@ function CapabilityCard({ item, rank, onClick }: { item: CapabilityItem; rank: n
 }
 
 // ========== 能力库（改动 1: 4 个视图 + 改动 3: classifyBatch 按钮）==========
-function CapabilityLibrary({ items, stats, openDetail }: { items: CapabilityItem[]; stats?: LibraryStats; openDetail: (item: CapabilityItem) => void }) {
+function CapabilityLibrary({ items, stats, openDetail, onViewRepro }: { items: CapabilityItem[]; stats?: LibraryStats; openDetail: (item: CapabilityItem) => void; onViewRepro: (item: CapabilityItem) => void }) {
   const [viewMode, setViewMode] = useState<'列表视图' | '能力分类' | '应用场景' | '工程可用性'>('列表视图');
   // 【正交双维度多选筛选】形态(Web/非Web) × 可体验·复现(官方Demo/完整复现/…)。
   // 计数全部来自 /items/stats 服务端全量聚合(不受 fetch 窗口/搜索影响)。
@@ -335,7 +350,7 @@ function CapabilityLibrary({ items, stats, openDetail }: { items: CapabilityItem
         <td style={{maxWidth: '320px'}} className="small muted">{ov.slice(0, 120)}{ov.length > 120 ? '…' : ''}</td>
         <td><div className="score-ring">{item.score}</div></td>
         <td>{sourceNewsScore(p) !== null ? <Badge tone="sky">{formatScore(sourceNewsScore(p)!)}</Badge> : <span className="muted">—</span>}</td>
-        <td><div className="badges">{p.capability_type && <Badge tone="green">{p.capability_type}</Badge>}<Badge tone={p.repro_status === 'candidate' ? 'green' : 'amber'}>{p.repro_status ?? '未知'}</Badge>{p.is_web ? <Badge tone="amber">Web</Badge> : <Badge tone="slate">非Web</Badge>}{p.demo_url && <Badge tone="green">官方 Demo</Badge>}</div></td>
+        <td><div className="badges">{p.capability_type && <Badge tone="green">{p.capability_type}</Badge>}<Badge tone={p.repro_status === 'candidate' ? 'green' : 'amber'}>{p.repro_status ?? '未知'}</Badge>{p.is_web ? <Badge tone="amber">Web</Badge> : <Badge tone="slate">非Web</Badge>}{p.demo_url && <Badge tone="green">官方 Demo</Badge>}{hasReproResult(p) && <button className="btn" style={{ padding: '1px 8px', fontSize: 11 }} onClick={(e) => { e.stopPropagation(); onViewRepro(item); }}>查看复现 →</button>}</div></td>
       </tr>; })}
     </tbody></table>
     {pageCount > 1 && <div style={{ display: 'flex', justifyContent: 'center', gap: 8, alignItems: 'center', padding: '10px 12px', borderTop: '1px solid var(--line)' }}>
@@ -350,7 +365,7 @@ function CapabilityLibrary({ items, stats, openDetail }: { items: CapabilityItem
       <div className="panel" key={type}>
         <div className="panel-head"><h3>{type}</h3><span>{groupItems.length} 个</span></div>
         <div className="panel-body"><div className="asis-list">
-          {groupItems.map((item, i) => <CapabilityCard key={item.id} item={item} rank={i + 1} onClick={() => openDetail(item)} onRepro={() => {}} />)}
+          {groupItems.map((item, i) => <CapabilityCard key={item.id} item={item} rank={i + 1} onClick={() => openDetail(item)} onRepro={() => {}} onViewRepro={onViewRepro} />)}
         </div></div>
       </div>
     ))}
@@ -360,7 +375,7 @@ function CapabilityLibrary({ items, stats, openDetail }: { items: CapabilityItem
       <div className="panel" key={scenario}>
         <div className="panel-head"><h3>{scenario}</h3><span>{groupItems.length} 个</span></div>
         <div className="panel-body"><div className="asis-list">
-          {groupItems.map((item, i) => <CapabilityCard key={item.id} item={item} rank={i + 1} onClick={() => openDetail(item)} onRepro={() => {}} />)}
+          {groupItems.map((item, i) => <CapabilityCard key={item.id} item={item} rank={i + 1} onClick={() => openDetail(item)} onRepro={() => {}} onViewRepro={onViewRepro} />)}
         </div></div>
       </div>
     ))}
@@ -372,7 +387,7 @@ function CapabilityLibrary({ items, stats, openDetail }: { items: CapabilityItem
           <div className="panel-head"><h3>{label}</h3><span>{groupItems.length} 个</span></div>
           <div className="panel-body"><div className="asis-list">
             {groupItems.length === 0 && <div className="empty-hint">暂无</div>}
-            {groupItems.map((item, i) => <CapabilityCard key={item.id} item={item} rank={i + 1} onClick={() => openDetail(item)} onRepro={() => {}} />)}
+            {groupItems.map((item, i) => <CapabilityCard key={item.id} item={item} rank={i + 1} onClick={() => openDetail(item)} onRepro={() => {}} onViewRepro={onViewRepro} />)}
           </div></div>
         </div>
       ))}
@@ -381,8 +396,21 @@ function CapabilityLibrary({ items, stats, openDetail }: { items: CapabilityItem
 }
 
 // ========== 复现验证 ==========
-function CapabilityRepro({ runs, items, openDetail }: { runs: ReproTask[]; items: CapabilityItem[]; openDetail: (item: CapabilityItem) => void }) {
+function CapabilityRepro({ runs, items, openDetail, targetItemId, onTargetConsumed }: { runs: ReproTask[]; items: CapabilityItem[]; openDetail: (item: CapabilityItem) => void; targetItemId?: number | null; onTargetConsumed?: () => void }) {
   const [selectedTaskId, setSelectedTaskId] = useState<number | null>(null);
+  const [targetHint, setTargetHint] = useState<string | null>(null);
+  // 【跳转复现】从能力库带目标能力进入: 找到对应任务并选中; 队列已加载仍无匹配则提示
+  useEffect(() => {
+    if (!targetItemId) return;
+    const match = runs.find(run => run.item_id === targetItemId);
+    if (match) {
+      setSelectedTaskId(match.id);
+      setTargetHint(null);
+      onTargetConsumed?.();
+    } else if (runs.length > 0) {
+      setTargetHint('该能力暂无对应复现任务, 可回到能力库点「加入复现」触发');
+    }
+  }, [targetItemId, runs, onTargetConsumed]);
   useEffect(() => {
     if (runs.length > 0 && (selectedTaskId === null || !runs.some(run => run.id === selectedTaskId))) {
       setSelectedTaskId(runs[0].id);
@@ -395,6 +423,7 @@ function CapabilityRepro({ runs, items, openDetail }: { runs: ReproTask[]; items
   const failedCount = runs.filter(run => run.status === 'failed' || run.status === 'timeout').length;
 
   return <div className="grid">
+    {targetHint && <div style={{ padding: '8px 12px', marginBottom: 8, borderRadius: 6, border: '1px solid var(--amber, #f5b83d)', background: 'var(--amber-bg, rgba(245,184,61,0.12))', fontSize: 12, color: 'var(--faint)' }}>ℹ {targetHint}</div>}
     {runs.length === 0 && <EmptyState title="暂无复现任务" description="从今日能力或能力库点击「加入复现」触发" />}
     {runs.length > 0 && <>
       <div className="repro-metrics">
@@ -407,7 +436,7 @@ function CapabilityRepro({ runs, items, openDetail }: { runs: ReproTask[]; items
         <div className="panel repro-task-panel">
           <div className="panel-head"><h3>任务队列 ({runs.length})</h3><span>{runningCount > 0 ? '实时更新中' : '历史任务'}</span></div>
           <div className="panel-body repro-task-list">
-            {runs.map((run, index) => <button type="button" key={run.id} className={`repro-task ${run.id === selected?.id ? 'active' : ''}`} onClick={() => setSelectedTaskId(run.id)}>
+            {runs.map((run, index) => <button type="button" key={run.id} className={`repro-task ${run.id === selected?.id ? 'active' : ''}`} onClick={() => { setSelectedTaskId(run.id); setTargetHint(null); }}>
               <span className={`repro-status-dot status-${run.status}`} />
               <span className="repro-task-main">
                 <strong>{run.title || run.repo_url?.split('/').filter(Boolean).slice(-1)[0] || `task-${run.id}`}</strong>
@@ -590,7 +619,7 @@ function CapabilityConversion({ conversions, openConversion }: { conversions: Co
 }
 
 // ========== 能力详情抽屉内容（改动 2: 转化表单 + 改动 4: fetchDetail）==========
-function CapabilityDetailContent({ itemId, initialItem, onRepro, onConvert }: { itemId: number; initialItem: CapabilityItem; onRepro: () => void; onConvert: (data: ConvertFormData) => Promise<void> }) {
+function CapabilityDetailContent({ itemId, initialItem, onRepro, onConvert, onViewRepro }: { itemId: number; initialItem: CapabilityItem; onRepro: () => void; onConvert: (data: ConvertFormData) => Promise<void>; onViewRepro?: (item: CapabilityItem) => void }) {
   // 【改动 4】调 fetchDetail 获取完整 payload
   const { data: item } = useQuery({
     queryKey: ['cap-detail', itemId],
@@ -703,6 +732,7 @@ function CapabilityDetailContent({ itemId, initialItem, onRepro, onConvert }: { 
     <div className="drawer-actions">
       {p.demo_url && <a className="pill-button primary" href={p.demo_url} target="_blank" rel="noopener">打开官方 Demo</a>}
       {!p.demo_url && p.is_web && <button className="pill-button primary" onClick={onRepro}>加入复现</button>}
+      {hasReproResult(p) && onViewRepro && <button className="pill-button" onClick={() => onViewRepro(item ?? initialItem)}>查看复现结果</button>}
       {!showConvertForm && <button className="pill-button" onClick={() => setShowConvertForm(true)}>加入转化</button>}
       {showConvertForm && <button className="pill-button primary" onClick={handleConvert} disabled={submitting}>{submitting ? '提交中…' : '确认转化'}</button>}
     </div>
