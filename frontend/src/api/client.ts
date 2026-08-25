@@ -1,4 +1,4 @@
-const BASE = '/insights';  // ASIS 反代挂载路径
+export const BASE = '/insights';  // ASIS 反代挂载路径
 
 export async function getJson<T>(path: string): Promise<T> {
   const response = await fetch(BASE + path, { cache: 'no-store' });

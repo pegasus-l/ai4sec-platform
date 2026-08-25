@@ -461,7 +461,8 @@ function ReproDetailContent({ task, capabilityItem, openDetail }: { task: ReproT
   const { data: fullLog } = useQuery({
     queryKey: ['cap-repro-full-log', task.id],
     queryFn: () => fetchReproFullLog(task.id),
-    refetchInterval: streaming ? false : (currentTask.status === 'running' || currentTask.status === 'queued') ? 2_000 : false,
+    // ASIS 反代对 SSE 流 gzip 压缩, 增量事件无法送达浏览器 → SSE 存活时也保持轮询兜底
+    refetchInterval: (currentTask.status === 'running' || currentTask.status === 'queued') ? 2_000 : false,
   });
   const [liveStatus, setLiveStatus] = useState(currentTask.status);
   const [liveReport, setLiveReport] = useState(currentTask.report ?? null);
@@ -497,6 +498,9 @@ function ReproDetailContent({ task, capabilityItem, openDetail }: { task: ReproT
         () => setStreaming(false)
       );
       return () => { cleanupRef.current?.(); };
+    } else {
+      // 终态: SSE 的 end 事件经 ASIS gzip 可能收不到, 显式结束流, 交由 fullLog 重取接管
+      setStreaming(false);
     }
   }, [currentTask.id, currentTask.status, qc]);
 
@@ -516,7 +520,7 @@ function ReproDetailContent({ task, capabilityItem, openDetail }: { task: ReproT
   const p = capabilityItem?.payload ?? {};
   // 流式用 SSE 全量; 断流/终态/刷新用完整日志(不再是 log_excerpt 的最后 200 行)
   const fullLogText = fullLog?.log ?? currentTask.log_excerpt ?? currentTask.result ?? '';
-  const displayedLogs = streaming ? logs : fullLogText.split('\n').filter(Boolean).map(line => ({ line: stripAnsi(line), kind: classifyLogLine(line) }));
+  const displayedLogs = streaming && logs.length > 0 ? logs : fullLogText.split('\n').filter(Boolean).map(line => ({ line: stripAnsi(line), kind: classifyLogLine(line) }));
 
   return <div className="repro-console">
     <div className="repro-console-head">
@@ -532,7 +536,7 @@ function ReproDetailContent({ task, capabilityItem, openDetail }: { task: ReproT
       {capabilityItem && <button className="btn" onClick={() => openDetail(capabilityItem)}>查看能力详情</button>}
     </div>
     <section className="repro-section">
-      <div className="repro-section-title"><span>执行日志</span><small>{streaming ? 'SSE LIVE' : `全文 ${displayedLogs.length} 行`}</small></div>
+      <div className="repro-section-title"><span>执行日志</span><small>{streaming && logs.length > 0 ? 'SSE LIVE' : `全文 ${displayedLogs.length} 行`}</small></div>
       <div className="log-stream" ref={logRef}>{displayedLogs.map((log, index) => <div key={`${index}-${log.line}`} className={`log-line log-${log.kind}`}>{log.line}</div>)}{displayedLogs.length === 0 && <div className="muted small">{liveStatus === 'queued' ? '任务已排队，等待复现调度…' : '等待日志输出…'}</div>}</div>
     </section>
     {report && <>

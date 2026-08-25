@@ -263,6 +263,7 @@ async def stream_repro_logs(task_id: int, request: Request, conn: sqlite3.Connec
             "Cache-Control": "no-cache",
             "Connection": "keep-alive",
             "X-Accel-Buffering": "no",  # nginx 不缓冲
+            "Content-Encoding": "identity",  # 禁止 ASIS/反代对 SSE 流 gzip 压缩, 否则压缩缓冲导致浏览器收不到增量事件
         },
     )
 

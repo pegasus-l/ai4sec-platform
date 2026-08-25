@@ -1,4 +1,4 @@
-import { getJson, postJson } from '../../api/client';
+import { getJson, postJson, BASE } from '../../api/client';
 import type { CapabilityItem, ReproTask, ConversionRecord, ClassifyStats, CapStats, LibraryStats } from './capabilityTypes';
 
 export function fetchToday(): Promise<{ items: CapabilityItem[] }> {
@@ -80,7 +80,7 @@ export function streamReproLogs(
   onStatus: (status: string, report: unknown) => void,
   onEnd: () => void
 ): () => void {
-  const url = `/api/capabilities/repro/${taskId}/logs/stream`;
+  const url = `${BASE}/api/capabilities/repro/${taskId}/logs/stream`;
   const es = new EventSource(url);
 
   es.addEventListener('log', (e: MessageEvent) => {
