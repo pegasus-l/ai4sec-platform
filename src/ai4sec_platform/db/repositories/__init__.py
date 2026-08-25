@@ -315,7 +315,7 @@ def update_domain_item(
     conn.execute(f"UPDATE domain_items SET {', '.join(fields)} WHERE id = ?", params)
 
 
-def list_domain_items(conn: sqlite3.Connection, domain: str, *, item_type: str | None = None, limit: int = 50, status: str | None = None, exclude_status: str | None = None) -> list[dict[str, Any]]:
+def list_domain_items(conn: sqlite3.Connection, domain: str, *, item_type: str | None = None, limit: int = 50, status: str | None = None, exclude_status: str | None = None, since: str | None = None) -> list[dict[str, Any]]:
     sql = "SELECT * FROM domain_items WHERE domain = ?"
     params: list[Any] = [domain]
     if item_type:
@@ -327,6 +327,10 @@ def list_domain_items(conn: sqlite3.Connection, domain: str, *, item_type: str |
     if exclude_status:
         sql += " AND status != ?"
         params.append(exclude_status)
+    if since:
+        # 时间下界(ISO-8601 UTC 字符串比较, 与 created_at 存储格式一致)
+        sql += " AND created_at >= ?"
+        params.append(since)
     sql += " ORDER BY COALESCE(score, 0) DESC, primary_date DESC, id DESC LIMIT ?"
     params.append(limit)
     return [row_to_dict(row) for row in conn.execute(sql, params).fetchall()]

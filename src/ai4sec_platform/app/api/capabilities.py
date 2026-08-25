@@ -22,7 +22,7 @@ import asyncio
 import json
 import socket
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -47,7 +47,10 @@ DOMAIN = "capabilities"
 # ============================================================================
 @router.get("/today")
 def today(limit: int = Query(200, ge=1, le=500), conn: sqlite3.Connection = Depends(get_db)) -> dict:
-    return domain_items.today(conn, DOMAIN, limit=limit)
+    """今日能力: 只返回当日(UTC)新产出的能力卡, 不再返回历史高分 TOP-N。
+    created_at >= 今日零点; 当天新增不足 limit 就显示实际数量, 不硬凑高分旧项目。"""
+    today_start = f"{datetime.now(timezone.utc):%Y-%m-%d}T00:00:00Z"
+    return domain_items.today(conn, DOMAIN, limit=limit, since=today_start)
 
 
 @router.get("/items")

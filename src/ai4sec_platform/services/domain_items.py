@@ -48,16 +48,17 @@ def _item_matches_q(item: dict[str, Any], q: str) -> bool:
 
 
 def list_items(conn: sqlite3.Connection, domain: str, *, item_type: str | None = None, limit: int = 50,
-               q: str | None = None, page: int | None = None, page_size: int | None = None) -> dict[str, Any]:
+               q: str | None = None, page: int | None = None, page_size: int | None = None, since: str | None = None) -> dict[str, Any]:
     """列能力卡。支持搜索(q)与分页(page/page_size 同时给出时启用)。
 
     搜索/分页需要覆盖全量数据做过滤, 不走搜索时按原 limit 截取。
+    since: created_at 时间下界(ISO-8601 UTC), 如「今日零点」→ 只返回该时刻之后产出的条目。
     返回: {domain, label, count, total, page, page_size, items}
     """
     fetch_limit = limit
     if q or page is not None:
         fetch_limit = 10000
-    items = repo.list_domain_items(conn, domain, item_type=item_type, limit=fetch_limit, exclude_status="已淘汰")
+    items = repo.list_domain_items(conn, domain, item_type=item_type, limit=fetch_limit, exclude_status="已淘汰", since=since)
     q = (q or "").strip()
     if q:
         items = [it for it in items if _item_matches_q(it, q)]
@@ -78,8 +79,8 @@ def list_items(conn: sqlite3.Connection, domain: str, *, item_type: str | None =
     }
 
 
-def today(conn: sqlite3.Connection, domain: str, *, limit: int = 12) -> dict[str, Any]:
-    return list_items(conn, domain, item_type=TODAY_ITEM_TYPES.get(domain), limit=limit)
+def today(conn: sqlite3.Connection, domain: str, *, limit: int = 12, since: str | None = None) -> dict[str, Any]:
+    return list_items(conn, domain, item_type=TODAY_ITEM_TYPES.get(domain), limit=limit, since=since)
 
 
 def filter_stats(conn: sqlite3.Connection, domain: str) -> dict[str, Any]:
