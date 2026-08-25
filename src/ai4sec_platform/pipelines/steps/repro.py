@@ -48,10 +48,11 @@ def _connect() -> sqlite3.Connection:
 
 # ---------------------------------------------------------------------------
 # 前端 ReproTask status 词表: queued|running|success|partial|failed|timeout|stopped|cleaned
-# payload repro_status 词表（与前端卡片 map 对齐）: candidate|in_progress|no_code|success|partial|failed|error
+# payload repro_status 词表（与前端卡片 map 对齐）: candidate|in_progress|no_code|success|partial|failed|error|not_supported
+# not_supported=无法复现: 项目依赖 Docker 等本环境不支持的运行条件, 判定后不进复现队列
 # ---------------------------------------------------------------------------
-_PAYLOAD_ACTIVE_STATUSES = {"success", "succeeded", "partial", "failed", "in_progress", "error"}
-_STATUS_TO_ITEM = {"success": "已复现", "partial": "部分复现", "failed": "复现失败", "error": "复现失败"}
+_PAYLOAD_ACTIVE_STATUSES = {"success", "succeeded", "partial", "failed", "in_progress", "error", "not_supported"}
+_STATUS_TO_ITEM = {"success": "已复现", "partial": "部分复现", "failed": "复现失败", "error": "复现失败", "not_supported": "无法复现"}
 
 # 平台对外访问链接: 用户打开复现 Web 界面的入口(ASIS → /insights/ rewrite → ai4sec → /repro-web/ → repro:8080)
 # 用相对路径: 云服务器 8091 外部不可直连, 用户经本地端口映射(localhost:18092→8091)访问 ASIS 时,
@@ -519,6 +520,29 @@ def _update_task(task_id: int, **fields: Any) -> None:
         conn.close()
 
 
+def _final_payload_status(verdict: str, report: dict[str, Any] | None) -> str:
+    """终态 payload 归一: 环境不支持(Docker 等外部依赖缺失)导致的复现失败 → 'not_supported'(无法复现)。
+    判定依据: 复现结论为 FAILURE, 且 report 的 summary/blockers 明确写出"本环境不支持 Docker / 按规则不复现"
+    等标记。命中后 item 级状态归 not_supported, 不再进复现队列; task 记录仍保留原 failed 结论(历史不变)。"""
+    if verdict != "failed":
+        return verdict
+    report = report or {}
+    texts = [str(report.get("summary") or "")]
+    blockers = report.get("blockers")
+    if isinstance(blockers, list):
+        texts.extend(str(b) for b in blockers)
+    elif blockers:
+        texts.append(str(blockers))
+    blob = " ".join(texts).lower()
+    if "docker" not in blob:
+        return verdict
+    markers = ("不支持 docker", "不支持docker", "必须 docker", "必须docker",
+               "依赖 docker", "依赖docker", "docker 沙箱", "docker沙箱",
+               "本环境不支持", "环境不支持", "按平台规则不复现", "按规则不复现",
+               "不予复现", "无法复现")
+    return "not_supported" if any(m in blob for m in markers) else verdict
+
+
 def _write_payload(item_id: int, repro_status: str, repro_result: dict[str, Any], item_status: str | None = None, web_report: dict[str, Any] | None = None) -> None:
     conn = _connect()
     try:
@@ -717,14 +741,15 @@ def _run_task(task_id: int, item_id: int, code_url: str, title: str, timeout: in
             web_url=REPRO_WEB_URL if web_started else "",
             web_port=8080 if web_started else None,
         )
-        _write_payload(item_id, verdict, {
+        payload_status = _final_payload_status(verdict, report)
+        _write_payload(item_id, payload_status, {
             "verdict": verdict,
             "summary": summary,
             "session_id": session_id,
             "build_success": verdict == "success",
             "test_results": _extract_test_results(full_response),
             "report_text": full_response[:2000],
-        }, item_status=_STATUS_TO_ITEM.get(verdict), web_report=report)
+        }, item_status=_STATUS_TO_ITEM.get(payload_status), web_report=report)
         # 会话已利用完毕: 中止 serve 会话(即便 agent 已自然结束也做清理, 防止边缘情况残留烧 token)
         _abort_session(repro_url, headers, session_id)
     except Exception as e:  # noqa: BLE001
@@ -764,9 +789,10 @@ def _run_task(task_id: int, item_id: int, code_url: str, title: str, timeout: in
                 _append_log(task_id, f"⏱ 通道超时, 已从会话拉取 {len(salvaged.splitlines())} 行已产出文本:")
                 for line in salvaged.splitlines():
                     _append_log(task_id, line)
-            _write_payload(item_id, verdict, {
+            payload_status = _final_payload_status(verdict, report)
+            _write_payload(item_id, payload_status, {
                 "verdict": verdict, "error": emsg, "session_id": session_id, "summary": report.get("summary"),
-            }, item_status=_STATUS_TO_ITEM.get(verdict), web_report=report)
+            }, item_status=_STATUS_TO_ITEM.get(payload_status), web_report=report)
         else:
             _update_task(task_id, status="failed", finished_at=_utc_now(), result=emsg[:10000])
             _append_log(task_id, f"✗ 复现异常: {emsg}")

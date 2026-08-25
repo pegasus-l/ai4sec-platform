@@ -397,7 +397,9 @@ def filter_stats_by_domain(conn: sqlite3.Connection, domain: str) -> dict[str, A
                      AND (json_extract(payload_json, '$.repro_status') IN ('candidate', 'no_code')
                           OR json_extract(payload_json, '$.repro_status') IS NULL) THEN 1 ELSE 0 END) AS repro_pending,
             SUM(CASE WHEN COALESCE(json_extract(payload_json, '$.demo_url'), '') = ''
-                     AND json_extract(payload_json, '$.repro_status') IN ('failed', 'error') THEN 1 ELSE 0 END) AS repro_failed
+                     AND json_extract(payload_json, '$.repro_status') IN ('failed', 'error') THEN 1 ELSE 0 END) AS repro_failed,
+            SUM(CASE WHEN COALESCE(json_extract(payload_json, '$.demo_url'), '') = ''
+                     AND json_extract(payload_json, '$.repro_status') = 'not_supported' THEN 1 ELSE 0 END) AS repro_not_supported
         FROM domain_items
         WHERE domain = ? AND status != ?
         """,
@@ -418,6 +420,7 @@ def filter_stats_by_domain(conn: sqlite3.Connection, domain: str) -> dict[str, A
             "in_progress": int(r["repro_in_progress"] or 0),
             "pending": int(r["repro_pending"] or 0),
             "failed": int(r["repro_failed"] or 0),
+            "not_supported": int(r["repro_not_supported"] or 0),
         },
     }
 

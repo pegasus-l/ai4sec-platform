@@ -153,6 +153,16 @@ def start_repro(item_id: int, body: StartReproRequest = StartReproRequest(), con
             "demo_url": demo_url,
         }
 
+    # 无法复现(环境不支持, 如依赖 Docker 而本环境无 Docker): 拒绝再次入队, 与官方 Demo 同为跳过语义
+    repro_status = str((item.get("payload") or {}).get("repro_status") or "")
+    if repro_status == "not_supported":
+        return {
+            "ok": True,
+            "skipped": True,
+            "reason": "not_supported",
+            "item_id": item_id,
+        }
+
     repo_url = _resolve_repo_url(item)
     if not repo_url:
         raise HTTPException(status_code=400, detail="no repo URL found in item")

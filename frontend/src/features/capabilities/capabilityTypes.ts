@@ -135,6 +135,7 @@ export interface LibraryStats {
     in_progress: number;
     pending: number;
     failed: number;
+    not_supported: number;
   };
 }
 

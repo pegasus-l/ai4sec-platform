@@ -42,6 +42,16 @@ function hasReproResult(p: CapabilityItem['payload'] | undefined): boolean {
   return ['success', 'succeeded', 'partial', 'failed', 'error', 'in_progress'].includes(s ?? '') || Boolean(p?.repro_result);
 }
 
+/** 复现状态徽标文案/色调(含 not_supported=无法复现) */
+const REPRO_LABEL: Record<string, string> = {
+  candidate: '可复现', in_progress: '复现中', no_code: '无代码', success: '已复现',
+  succeeded: '已复现', partial: '部分复现', failed: '复现失败', error: '复现异常',
+  not_supported: '无法复现', demo_verified: '官方Demo',
+};
+const reproBadgeLabel = (rs?: string) => REPRO_LABEL[rs ?? ''] ?? rs ?? '未知';
+const reproBadgeTone = (rs?: string): 'green' | 'sky' | 'slate' | 'amber' | 'red' =>
+  rs === 'candidate' ? 'green' : rs === 'in_progress' ? 'sky' : rs === 'no_code' ? 'slate' : rs === 'not_supported' ? 'red' : 'amber';
+
 function matchItem(item: CapabilityItem, q: string): boolean {
   const p = item.payload ?? {};
   const hay = [
@@ -177,7 +187,7 @@ function CapabilityToday({ items, stats, openDetail }: { items: CapabilityItem[]
   const [viewMode, setViewMode] = useState<'推荐' | '高可复现' | '高应用潜力' | '需人工判断'>('推荐');
 
   const filtered = useMemo(() => {
-    if (viewMode === '高可复现') return items.filter(i => i.payload?.repro_status === 'candidate' || i.payload?.code_url);
+    if (viewMode === '高可复现') return items.filter(i => (i.payload?.repro_status === 'candidate' || i.payload?.code_url) && i.payload?.repro_status !== 'not_supported');
     if (viewMode === '高应用潜力') return items.filter(i => (i.payload?.application_scenarios ?? []).length > 0);
     if (viewMode === '需人工判断') return items.filter(i => i.payload?.repro_status === 'no_code' || !i.payload?.code_url);
     return items;
@@ -206,8 +216,8 @@ function CapabilityToday({ items, stats, openDetail }: { items: CapabilityItem[]
 function CapabilityCard({ item, rank, onClick, onViewRepro }: { item: CapabilityItem; rank: number; onClick: () => void; onRepro: () => void; onViewRepro?: (item: CapabilityItem) => void }) {
   const p = item.payload ?? {};
   const sourceType = p.source_type || (item.source_url?.includes('github.com') ? 'github' : 'arxiv');
-  const reproTag = p.repro_status === 'candidate' ? 'green' : p.repro_status === 'in_progress' ? 'sky' : p.repro_status === 'no_code' ? 'slate' : 'amber';
-  const reproText = { candidate: '可复现', in_progress: '复现中', no_code: '无代码', success: '已复现', succeeded: '已复现', partial: '部分复现', failed: '复现失败', error: '复现异常', demo_verified: '官方Demo' }[p.repro_status ?? ''] ?? p.repro_status;
+  const reproTag = p.repro_status === 'candidate' ? 'green' : p.repro_status === 'in_progress' ? 'sky' : p.repro_status === 'no_code' ? 'slate' : p.repro_status === 'not_supported' ? 'red' : 'amber';
+  const reproText = reproBadgeLabel(p.repro_status);
   return <div className="asis-card clickable" onClick={onClick}>
     <div className="rank">{rank}</div>
     <div>
@@ -216,7 +226,7 @@ function CapabilityCard({ item, rank, onClick, onViewRepro }: { item: Capability
       <div className="badges">
         <Badge tone={sourceType === 'github' ? 'sky' : 'violet'}>{sourceType}</Badge>
         {p.capability_type && <Badge tone="green">{p.capability_type}</Badge>}
-        <Badge tone={reproTag as 'green' | 'sky' | 'slate' | 'amber'}>{reproText}</Badge>
+        <Badge tone={reproTag as 'green' | 'sky' | 'slate' | 'amber' | 'red'}>{reproText}</Badge>
         {p.is_web ? <Badge tone="amber">Web{p.web_framework ? `:${p.web_framework}` : ''}</Badge> : <Badge tone="slate">非Web</Badge>}
         {p.demo_url && <Badge tone="green">官方 Demo</Badge>}
       </div>
@@ -247,6 +257,7 @@ function CapabilityLibrary({ items, stats, openDetail, onViewRepro }: { items: C
       case '复现中': return stats.repro.in_progress;
       case '待复现': return stats.repro.pending;
       case '复现失败': return stats.repro.failed;
+      case '无法复现': return stats.repro.not_supported;
       default: return undefined;
     }
   };
@@ -262,6 +273,7 @@ function CapabilityLibrary({ items, stats, openDetail, onViewRepro }: { items: C
       case '复现中': return !hasDemo && rs === 'in_progress';
       case '待复现': return !hasDemo && (rs === 'candidate' || rs === 'no_code' || rs === undefined || rs === null);
       case '复现失败': return !hasDemo && (rs === 'failed' || rs === 'error');
+      case '无法复现': return !hasDemo && rs === 'not_supported';
       default: return false;
     }
   };
@@ -304,6 +316,7 @@ function CapabilityLibrary({ items, stats, openDetail, onViewRepro }: { items: C
     '待 Web 复现': filtered.filter(i => !i.payload?.demo_url && Boolean(i.payload?.is_web) && ['candidate', 'no_code', undefined].includes(i.payload?.repro_status)),
     '待命令行验证': filtered.filter(i => !i.payload?.demo_url && !i.payload?.is_web && ['candidate', 'no_code', undefined].includes(i.payload?.repro_status)),
     '复现失败': filtered.filter(i => !i.payload?.demo_url && i.payload?.repro_status === 'failed'),
+    '无法复现': filtered.filter(i => !i.payload?.demo_url && i.payload?.repro_status === 'not_supported'),
   }), [filtered]);
 
   return <div className="grid">
@@ -316,7 +329,7 @@ function CapabilityLibrary({ items, stats, openDetail, onViewRepro }: { items: C
     </div>
     <div className="view-switch" style={{ marginTop: 8 }}>
       <span style={{ fontSize: 12, color: 'var(--faint)', alignSelf: 'center', whiteSpace: 'nowrap' }}>可体验·复现</span>
-      {(['官方 Demo', '完整复现', '部分复现', '复现中', '待复现', '复现失败'] as const).map(chip => <span key={chip} className={`view-pill ${reproChips.includes(chip) ? 'active' : ''}`} onClick={() => setReproChips(toggleValue(reproChips, chip))}>{chip}{chipCount(chip) !== undefined && <em style={{ fontSize: 11, opacity: 0.7, fontStyle: 'normal' }}> {chipCount(chip)}</em>}</span>)}
+      {(['官方 Demo', '完整复现', '部分复现', '复现中', '待复现', '复现失败', '无法复现'] as const).map(chip => <span key={chip} className={`view-pill ${reproChips.includes(chip) ? 'active' : ''}`} onClick={() => setReproChips(toggleValue(reproChips, chip))}>{chip}{chipCount(chip) !== undefined && <em style={{ fontSize: 11, opacity: 0.7, fontStyle: 'normal' }}> {chipCount(chip)}</em>}</span>)}
     </div>
     {filtered.length === 0 && <EmptyState title="能力库为空" description="先跑 capabilities.from_news_pipeline 生成能力卡" />}
 
@@ -335,7 +348,7 @@ function CapabilityLibrary({ items, stats, openDetail, onViewRepro }: { items: C
         <td><div className="table-title">{p.display_title || item.title}</div><div className="table-sub">{st}</div></td>
         <td style={{maxWidth: '320px'}} className="small muted">{ov.slice(0, 120)}{ov.length > 120 ? '…' : ''}</td>
         <td><div className="score-ring">{item.score}</div></td>
-        <td><div className="badges">{p.capability_type && <Badge tone="green">{p.capability_type}</Badge>}<Badge tone={p.repro_status === 'candidate' ? 'green' : 'amber'}>{p.repro_status ?? '未知'}</Badge>{p.is_web ? <Badge tone="amber">Web</Badge> : <Badge tone="slate">非Web</Badge>}{p.demo_url && <Badge tone="green">官方 Demo</Badge>}{hasReproResult(p) && <button className="btn" style={{ padding: '1px 8px', fontSize: 11 }} onClick={(e) => { e.stopPropagation(); onViewRepro(item); }}>查看复现 →</button>}</div></td>
+        <td><div className="badges">{p.capability_type && <Badge tone="green">{p.capability_type}</Badge>}<Badge tone={reproBadgeTone(p.repro_status)}>{reproBadgeLabel(p.repro_status)}</Badge>{p.is_web ? <Badge tone="amber">Web</Badge> : <Badge tone="slate">非Web</Badge>}{p.demo_url && <Badge tone="green">官方 Demo</Badge>}{hasReproResult(p) && <button className="btn" style={{ padding: '1px 8px', fontSize: 11 }} onClick={(e) => { e.stopPropagation(); onViewRepro(item); }}>查看复现 →</button>}</div></td>
       </tr>; })}
     </tbody></table>
     {pageCount > 1 && <div style={{ display: 'flex', justifyContent: 'center', gap: 8, alignItems: 'center', padding: '10px 12px', borderTop: '1px solid var(--line)' }}>
@@ -530,7 +543,7 @@ function ReproDetailContent({ task, capabilityItem, openDetail }: { task: ReproT
     <div className="repro-actions">
       {p.demo_url && <a className="btn primary" href={p.demo_url} target="_blank" rel="noreferrer">打开官方 Demo ↗</a>}
       {!p.demo_url && currentTask.web_url && report?.web_started && <a className="btn primary" href={currentTask.web_url} target="_blank" rel="noreferrer">打开 Web 验证 ↗</a>}
-      {!p.demo_url && <button className="btn primary" onClick={async () => { if (capabilityItem) { try { await startRepro(capabilityItem.id, p.is_web ?? false); toast('已重跑复现', 'success'); qc.invalidateQueries({ queryKey: ['cap-repro'] }); } catch (e) { toast(`重跑失败: ${e}`, 'error'); } } }}>重跑</button>}
+      {!p.demo_url && p.repro_status !== 'not_supported' && <button className="btn primary" onClick={async () => { if (capabilityItem) { try { await startRepro(capabilityItem.id, p.is_web ?? false); toast('已重跑复现', 'success'); qc.invalidateQueries({ queryKey: ['cap-repro'] }); } catch (e) { toast(`重跑失败: ${e}`, 'error'); } } }}>重跑</button>}
       {['running', 'queued'].includes(liveStatus) && <button className="btn" onClick={async () => { try { await stopRepro(currentTask.id); toast('已停止', 'success'); qc.invalidateQueries({ queryKey: ['cap-repro'] }); } catch (e) { toast(`停止失败: ${e}`, 'error'); } }}>停止</button>}
       <button className="btn" onClick={async () => { try { await cleanupRepro(currentTask.id); toast('已清理', 'success'); qc.invalidateQueries({ queryKey: ['cap-repro'] }); } catch (e) { toast(`清理失败: ${e}`, 'error'); } }}>清理</button>
       {capabilityItem && <button className="btn" onClick={() => openDetail(capabilityItem)}>查看能力详情</button>}
@@ -629,6 +642,8 @@ function CapabilityDetailContent({ itemId, initialItem, onRepro, onConvert, onVi
     setSubmitting(false);
     setShowConvertForm(false);
   };
+  // 无法复现的原因全文(取自复现结果 repro_result.summary, 如 AutoCVE 的 FAILURE 判定说明)
+  const reproReason = p.repro_result && typeof p.repro_result === 'object' ? (p.repro_result as { summary?: string }).summary : undefined;
 
   return <div className="grid">
     {/* 能力评分（LLM 自然语言理由） */}
@@ -671,7 +686,10 @@ function CapabilityDetailContent({ itemId, initialItem, onRepro, onConvert, onVi
     {/* 复现 & 转化 */}
     {p.demo_url && <div className="drawer-section"><h3>官方在线演示</h3><p style={{ color: 'var(--green)' }}>项目已提供官方 Demo，按复现策略直接使用官方环境，不启动本地容器。</p><p><a href={p.demo_url} target="_blank" rel="noopener" style={{ color: 'var(--sky)' }}>{p.demo_url}</a></p></div>}
     {!p.demo_url && p.repro_summary && <div className="drawer-section"><h3>复现摘要</h3><p style={{ color: 'var(--green)' }}>{p.repro_summary}</p></div>}
-    <div className="drawer-section"><h3>复现 & 转化</h3><div className="badges"><Badge tone={p.repro_status === 'candidate' ? 'green' : 'amber'}>{p.repro_status ?? '未知'}</Badge><Badge tone="violet">{p.conversion_status ?? '待评估'}</Badge>{p.is_web ? <Badge tone="amber">Web{p.web_framework ? `:${p.web_framework}` : ''}</Badge> : <Badge tone="slate">非Web</Badge>}{p.demo_url && <Badge tone="green">官方 Demo</Badge>}</div></div>
+    <div className="drawer-section"><h3>复现 & 转化</h3><div className="badges"><Badge tone={reproBadgeTone(p.repro_status)}>{reproBadgeLabel(p.repro_status)}</Badge><Badge tone="violet">{p.conversion_status ?? '待评估'}</Badge>{p.is_web ? <Badge tone="amber">Web{p.web_framework ? `:${p.web_framework}` : ''}</Badge> : <Badge tone="slate">非Web</Badge>}{p.demo_url && <Badge tone="green">官方 Demo</Badge>}</div></div>
+
+    {/* 无法复现说明: 环境不支持(Docker 等) → 已剔除复现队列 */}
+    {p.repro_status === 'not_supported' && <div className="drawer-section"><h3>复现说明</h3><p style={{ color: 'var(--red)' }}>项目依赖 Docker 等本环境不支持的运行条件，已按平台规则判定为「无法复现」，不进入复现队列。</p>{reproReason && <blockquote style={{ margin: '8px 0 0', padding: '8px 12px', background: 'rgba(255,0,0,.05)', borderLeft: '3px solid var(--red)', fontSize: 12 }}>{reproReason}</blockquote>}</div>}
 
     {/* 使用说明 */}
     {p.usage && Object.keys(p.usage).length > 0 && <div className="drawer-section"><h3>使用说明</h3><p><b>是什么:</b> {p.usage.what ?? ''}</p><p><b>怎么用:</b> {p.usage.how_to_use ?? ''}</p>{p.usage.prerequisites && <p><b>前提:</b> {p.usage.prerequisites}</p>}{p.usage.limitations && <p><b>限制:</b> {p.usage.limitations}</p>}</div>}
@@ -711,7 +729,7 @@ function CapabilityDetailContent({ itemId, initialItem, onRepro, onConvert, onVi
 
     <div className="drawer-actions">
       {p.demo_url && <a className="pill-button primary" href={p.demo_url} target="_blank" rel="noopener">打开官方 Demo</a>}
-      {!p.demo_url && p.is_web && <button className="pill-button primary" onClick={onRepro}>加入复现</button>}
+      {!p.demo_url && p.is_web && p.repro_status !== 'not_supported' && <button className="pill-button primary" onClick={onRepro}>加入复现</button>}
       {hasReproResult(p) && onViewRepro && <button className="pill-button" onClick={() => onViewRepro(item ?? initialItem)}>查看复现结果</button>}
       {!showConvertForm && <button className="pill-button" onClick={() => setShowConvertForm(true)}>加入转化</button>}
       {showConvertForm && <button className="pill-button primary" onClick={handleConvert} disabled={submitting}>{submitting ? '提交中…' : '确认转化'}</button>}
