@@ -574,31 +574,18 @@ def _collect_single_asset_source(registry: SourceRegistry, source: str, connecto
 
 
 def _collect_openx_huawei_assets(registry: SourceRegistry, params: dict[str, Any]) -> dict[str, Any]:
+    # OpenXHuaweiConnector.fetch() 会递归爬完整棵目录树, 返回的是文件列表(item.is_dir 全为 False)。
+    # 历史实现误以为 fetch 返回的是根目录目录列表, 只取 is_dir 项做 BFS → queue 恒空 → 永远采集 0 条资产。
+    # 现在直接消费 fetch 已爬好的文件列表, 按 max_files 截断。
     connector = registry.get("openx_huawei")
     root = connector.fetch(SourceFetchRequest(source_name="openx_huawei:root", params={"timeout_seconds": params.get("timeout_seconds", 20)}))
     errors = list(root.errors)
-    items: list[dict[str, Any]] = []
-    max_depth = int(params.get("openx_depth", 4 if _full_scan(params) else 1))
-    max_dirs = int(params.get("openx_dir_limit", 200 if _full_scan(params) else 8))
     max_files = int(params.get("openx_file_limit", 500 if _full_scan(params) else 30))
-    queue = [(item, 0, item.get("name") or "") for item in root.items if item.get("is_dir")]
-    visited = 0
-    while queue and visited < max_dirs and len(items) < max_files:
-        node, depth, category = queue.pop(0)
-        if depth >= max_depth:
-            continue
-        visited += 1
-        result = connector.fetch(SourceFetchRequest(source_name=f"openx_huawei:{node.get('url')}", params={"url": node.get("url"), "timeout_seconds": params.get("timeout_seconds", 20)}))
-        errors.extend(result.errors)
-        for child in result.items:
-            child = {**child, "category": category, "source_type": "openx_huawei"}
-            if child.get("is_dir"):
-                queue.append((child, depth + 1, category))
-            else:
-                items.append(child)
-                if len(items) >= max_files:
-                    break
-    return {"source": "openx_huawei", "path": "connector:openx_huawei", "exists": not bool(errors), "items": items, "raw": {"metadata": root.metadata, "errors": errors, "mode": "live", "visited_dirs": visited}, "mode": "live"}
+    items = [it for it in root.items if not it.get("is_dir")][:max_files]
+    for it in items:
+        it.setdefault("source_type", "openx_huawei")
+    return {"source": "openx_huawei", "path": "connector:openx_huawei", "exists": not bool(errors), "items": items,
+            "raw": {"metadata": root.metadata, "errors": errors, "mode": "live", "visited_dirs": len(items)}, "mode": "live"}
 
 
 def _full_scan(params: dict[str, Any]) -> bool:
