@@ -182,7 +182,7 @@ def stop_repro(task_id: int, conn: sqlite3.Connection = Depends(get_db)) -> dict
 
 @router.post("/repro/{task_id}/cleanup")
 def cleanup_repro(task_id: int, conn: sqlite3.Connection = Depends(get_db)) -> dict:
-    """清理复现任务（删容器 + 产物）"""
+    """清理复现任务（删容器 + 产物）；若清理的是该 item 最新任务且其正显示失败/进行中, 复位为待复现"""
     task = repo.get_repro_task(conn, task_id)
     if not task:
         raise HTTPException(status_code=404, detail="repro task not found")
@@ -194,6 +194,24 @@ def cleanup_repro(task_id: int, conn: sqlite3.Connection = Depends(get_db)) -> d
         cleaned_at=datetime.utcnow().isoformat(),
         web_url="",
     )
+    # 清理失败/运行中的任务 → 若该任务仍是该 item 的最新任务, 复位 item 的 repro_status 为 candidate(待复现),
+    # 让能力库卡片与「工程可用性」不再把它归入「复现失败」(成功/部分成功不清除)。
+    item_id = task["item_id"]
+    latest_id = conn.execute(
+        "SELECT MAX(id) AS m FROM capability_repro_tasks WHERE item_id = ?", (item_id,)
+    ).fetchone()["m"]
+    if latest_id == task_id:
+        item = repo.get_domain_item(conn, "capabilities", item_id)
+        if item:
+            payload = dict(item.get("payload") or {})
+            if payload.get("repro_status") in ("failed", "error", "in_progress"):
+                payload["repro_status"] = "candidate"
+                repo.update_domain_item(conn, item_id=item_id, status="待复现验证", payload=payload)
+                # update_domain_item 对 payload 是 merge(不删键), 显式 json_remove 清除 repro_result
+                conn.execute(
+                    "UPDATE domain_items SET payload_json = json_remove(payload_json, '$.repro_result') WHERE id = ?",
+                    (item_id,),
+                )
     conn.commit()
     return {"ok": True}
 

@@ -933,10 +933,23 @@ def _recover_task(task_id: int, item_id: int, status: str, log: str, reason: str
         conn.commit()
     finally:
         conn.close()
-    _write_payload(item_id, verdict if verdict in ("success", "partial", "failed") else "failed",
-                   {"verdict": verdict, "error": reason, "session_id": session_id,
-                    "summary": (report.get("summary") or "")},
-                   item_status=_STATUS_TO_ITEM.get(verdict), web_report=report)
+    # 防覆写: 仅当本任务仍是该 item 的最新任务时才回写 payload。
+    # 否则让更新任务的写入胜出——旧任务/僵尸任务(如容器重启遗留)的回收不得覆盖
+    # 其后新任务已写好的 payload(比如已成功复现的结果)。
+    conn = _connect()
+    try:
+        latest_id = conn.execute(
+            "SELECT MAX(id) AS m FROM capability_repro_tasks WHERE item_id = ?", (item_id,)
+        ).fetchone()["m"]
+    finally:
+        conn.close()
+    if latest_id == task_id:
+        _write_payload(item_id, verdict if verdict in ("success", "partial", "failed") else "failed",
+                       {"verdict": verdict, "error": reason, "session_id": session_id,
+                        "summary": (report.get("summary") or "")},
+                       item_status=_STATUS_TO_ITEM.get(verdict), web_report=report)
+    else:
+        print(f"[repro-recover] task {task_id}: 非该 item 最新任务(latest={latest_id}), 跳过 payload 回写", flush=True)
     print(f"[repro-recover] task {task_id}: {status} → {task_status} (session={session_id or '-'}, salvaged={len(salvaged)}c)", flush=True)
     return 1
 
