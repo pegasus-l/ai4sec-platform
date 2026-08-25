@@ -150,7 +150,7 @@ export function CapabilityPage() {
     <section className="content">
       <section className="content-head">
         <div className="content-title"><span className="label">{navGroups.flatMap(g => g.items).find(i => i.id === view)?.title ?? '能力洞察'}</span><h1>{heroTitle(view)}</h1><p>{heroCopy(view)}</p></div>
-        <div className="head-actions"><label className="search"><span>⌕</span><input placeholder="搜索能力 / 仓库 / 技术点" value={search} onChange={e => setSearch(e.target.value)} /></label><button className="btn" onClick={() => qc.invalidateQueries({ queryKey: ['cap-'] })}>刷新数据</button></div>
+        <div className="head-actions"><label className="search"><span>⌕</span><input placeholder="搜索能力 / 仓库 / 技术点" value={search} onChange={e => setSearch(e.target.value)} /></label><button className="btn" onClick={async () => { await qc.invalidateQueries({ predicate: q => typeof q.queryKey[0] === 'string' && (q.queryKey[0] as string).startsWith('cap-') }); toast('数据已刷新', 'success'); }}>刷新数据</button></div>
       </section>
       <div className="content-body view" ref={viewRef}>
         {todayLoading && view === 'today' && <EmptyState title="正在加载" description="从 /api/capabilities/today 拉取数据。" />}
