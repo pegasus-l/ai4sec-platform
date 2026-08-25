@@ -1,7 +1,7 @@
 import { useMemo, useState, useEffect, useRef, type ComponentType } from 'react';
 import { ThemeToggle } from '../../components/ThemeToggle';
 import { Star, Github, LayoutGrid, Database, Share2, ListChecks, Activity, RefreshCw, ShieldCheck, BrainCircuit, type LucideIcon } from 'lucide-react';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { fetchTargets, fetchAssets, fetchTrackingQueue, fetchSurfaceStats, trackTarget, trackAsset, postJson, getJson, type AiAssociationResult } from '../../api/client';
 import { Card, Drawer, EmptyState, MetricCard } from '../../components/ui';
 import type { ThreatAsset, ThreatRepo } from '../../types/threat';
@@ -52,6 +52,7 @@ export function ThreatPage() {
   const [currentPage, setCurrentPage] = useState(1);
   const { push } = useDrawerStack();
   const { toast } = useToast();
+  const qc = useQueryClient();
 
   // Fetch targets with pagination + server-side filtering (summary fields only = ~1KB/item instead of 103KB)
   const { data: targetsData, isLoading, error } = useQuery({
@@ -126,7 +127,7 @@ export function ThreatPage() {
     <section className="content">
       <section className="content-head">
         <div className="content-title"><span className="label">{navGroups.flatMap(g => g.items).find(i => i.id === view)?.title ?? '威胁洞察'}</span><h1>{heroTitle(view)}</h1><p>{heroCopy(view)}</p></div>
-        <div className="head-actions">{view === 'repos' ? <FiltersBar filters={filters} setFilters={setFilters} grades={repoGrades} surfaces={repoSurfaces} /> : <><label className="search"><span>⌕</span><input placeholder="搜索标题 / CVE / 仓库 / 资产" onChange={() => {}} /></label><button className="btn primary" onClick={() => location.reload()}>刷新数据</button><a className="btn" href="/api/threats/reports" target="_blank">查看报告 API</a></>}</div>
+        <div className="head-actions">{view === 'repos' ? <FiltersBar filters={filters} setFilters={setFilters} grades={repoGrades} surfaces={repoSurfaces} /> : <><label className="search"><span>⌕</span><input placeholder="搜索标题 / CVE / 仓库 / 资产" onChange={() => {}} /></label><button className="btn primary" onClick={async () => { await qc.invalidateQueries(); toast('数据已刷新', 'success'); }}>刷新数据</button></>}</div>
       </section>
       <div className="content-body view" ref={viewRef}>
         {isLoading && <EmptyState title="正在加载" description="从 /api/threats/targets 拉取数据。" />}
