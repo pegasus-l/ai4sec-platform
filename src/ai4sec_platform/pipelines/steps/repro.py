@@ -273,9 +273,8 @@ def _fetch_transcript_text(base_url: str, headers: dict[str, str], session_id: s
         return ""
 
 
-def _render_tool_part(p: dict[str, Any], out_only: bool = False) -> list[str]:
-    """把一条 tool part 渲染为日志行: bash 命令 + 输出摘要 + 退出码, 其余工具一行摘要。
-    out_only=True 时只渲染输出/退出码(命令已在上轮渲染过, 补拉在途命令的完成结果)。"""
+def _render_tool_part(p: dict[str, Any]) -> list[str]:
+    """把一条 tool part 渲染为日志行: bash 命令 + 输出摘要 + 退出码, 其余工具一行摘要。"""
     state = p.get("state") or {}
     tool = p.get("tool") or ""
     inp = state.get("input") or {}
@@ -286,12 +285,11 @@ def _render_tool_part(p: dict[str, Any], out_only: bool = False) -> list[str]:
         cmd = str(inp.get("command") or "").strip()
         title = str(inp.get("description") or "").strip()
         lines: list[str] = []
-        if not out_only:
-            if cmd:
-                for sub in cmd.splitlines():
-                    lines.append(f"$ {sub}")
-            if title and title != cmd:
-                lines.append(f"   # {title}")
+        if cmd:
+            for sub in cmd.splitlines():
+                lines.append(f"$ {sub}")
+        if title and title != cmd:
+            lines.append(f"   # {title}")
         if out:
             is_err = (exit_code not in (None, 0)) or any(
                 k in out.lower() for k in ("fatal", "error:", "traceback", "command not found", "permission denied", "failed", "❌")
@@ -318,6 +316,30 @@ def _render_tool_part(p: dict[str, Any], out_only: bool = False) -> list[str]:
     return [f"[工具:{tool}] {summary[:100]}" if summary else f"[工具:{tool}]"]
 
 
+def _render_bash_tail(p: dict[str, Any], prev_len: int | None) -> list[str]:
+    """渲染 bash part 自 prev_len 起的输出增量: 运行中流式显示新增尾部, 完成时附最终输出与退出码。
+    供 _render_transcript_delta 的 inflight 增量轮询使用。"""
+    state = p.get("state") or {}
+    out = str(state.get("output") or "")
+    exit_code = (state.get("metadata") or {}).get("exit")
+    new = out[prev_len:] if prev_len is not None else out
+    lines: list[str] = []
+    cleaned = new.replace("\r", "\n")
+    tail_lines = [ln.strip() for ln in cleaned.splitlines() if ln.strip()][-4:]
+    if tail_lines:
+        text = " / ".join(tail_lines)
+        if exit_code is not None:
+            is_err = (exit_code not in (None, 0)) or any(
+                k in text.lower() for k in ("fatal", "error:", "traceback", "command not found", "permission denied", "failed", "❌")
+            )
+            lines.append(f"   → {text[:500] if is_err else text[:200]}")
+        else:
+            lines.append(f"   · {text[:400]}")
+    if exit_code not in (None, 0):
+        lines.append(f"   ⚠ 退出码 {exit_code}")
+    return lines
+
+
 def _render_transcript_delta(base_url: str, headers: dict[str, str], session_id: str, seen_ids: set[str], inflight: dict[str, Any]) -> tuple[list[str], bool, bool]:
     """增量拉取会话 transcript, 把尚未见过的 part 渲染成日志行。
 
@@ -325,8 +347,8 @@ def _render_transcript_delta(base_url: str, headers: dict[str, str], session_id:
     实现"实时看到 agent 活动"。渲染: user 提示词 / assistant 叙述(text) / bash 命令+输出+
     退出码 / 其余工具调用摘要。reasoning(隐藏思维链)与 step 边界不落日志, 避免刷屏。
 
-    inflight: {part_id: None} 已渲染过命令但当时还没有输出(命令仍在执行)的 tool part;
-    之后轮询若其输出出现, 补渲染输出/退出码行, 让"命令失败→agent 怎么恢复"可见。
+    inflight: {part_id: 已渲染输出字节偏移} 运行中的 bash part; 输出增长时流式补渲染增量,
+    完成时补最终输出与退出码。非 bash 工具不入 inflight。
     返回 (lines, has_new, done)。done=会话已输出 FINAL_VERDICT(agent 完成), 供超时宽限期判断。
     拉取失败返回 ([], False, False)。"""
     lines: list[str] = []
@@ -352,17 +374,23 @@ def _render_transcript_delta(base_url: str, headers: dict[str, str], session_id:
             ptype = p.get("type")
             if ptype == "tool":
                 state = p.get("state") or {}
-                out = str(state.get("output") or "").strip()
+                tool = p.get("tool") or ""
+                out = str(state.get("output") or "")
                 exit_code = (state.get("metadata") or {}).get("exit")
                 if pid in seen_ids:
-                    # 已渲染过的命令, 若当时无输出而现在有了, 补输出/退出码(命令失败恢复可见)
-                    if pid in inflight and (out or exit_code not in (None, 0)):
-                        inflight.pop(pid, None)
-                        lines.extend(_render_tool_part(p, out_only=True))
+                    prev = inflight.get(pid)
+                    if prev is not None:
+                        # 运行中的 bash: 输出增长则流式补渲染增量; 完成则补最终输出+退出码
+                        if exit_code is not None:
+                            inflight.pop(pid, None)
+                            lines.extend(_render_bash_tail(p, prev))
+                        elif len(out) > prev:
+                            inflight[pid] = len(out)
+                            lines.extend(_render_bash_tail(p, prev))
                     continue
                 seen_ids.add(pid)
-                if ptype == "tool" and not out and exit_code is None:
-                    inflight[pid] = None
+                if tool == "bash" and exit_code is None:
+                    inflight[pid] = len(out)
                 lines.extend(_render_tool_part(p))
                 continue
             if pid in seen_ids:
