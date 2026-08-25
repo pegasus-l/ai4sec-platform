@@ -898,14 +898,53 @@ def _session_id_from_log(log: str) -> str:
     return m.group(1) if m else ""
 
 
+def _recover_task(task_id: int, item_id: int, status: str, log: str, reason: str) -> int:
+    """单个"孤儿/僵尸"复现任务的善后(启动清扫与看门狗共用):
+    抢救 serve 会话已产出文本 → 诚实判定(有结构化报告用其 verdict; 有阶段文本→partial; 无→failed)
+    → DELETE /session 中止止损 → 回写 task 状态 + payload。返回 1。"""
+    repro_url = _env("REPRO_API_URL", "http://repro:4096")
+    headers = _headers(_env("REPRO_PASSWORD", ""))
+    session_id = _session_id_from_log(log or "")
+    salvaged = _fetch_transcript_text(repro_url, headers, session_id) if session_id else ""
+    report, verdict = _parse_report(salvaged)
+    report_ok = isinstance(report, dict) and report.get("status") in ("success", "partial", "failed")
+    if report_ok:
+        task_status = verdict
+    elif salvaged.strip():
+        report, verdict = _fallback_report(session_id, salvaged, reason)
+        task_status = "partial"
+    else:
+        report, verdict = _fallback_report(session_id, "", reason)
+        report = dict(report)
+        report["blockers"] = report.get("blockers") or [reason + ", 无已产出文本"]
+        task_status = "failed"
+        verdict = "failed"
+    aborted = _abort_session(repro_url, headers, session_id)
+    report = dict(report) if isinstance(report, dict) else {}
+    report.setdefault("blockers", [])
+    report["blockers"].append(reason + ", " + ("serve 会话已中止止损" if aborted else "serve 会话中止失败(可能已不存在)"))
+    _update_task(task_id, status=task_status, finished_at=_utc_now(),
+                 result=(salvaged or log or "")[:20000],
+                 report_json=json.dumps(report, ensure_ascii=False))
+    note = (f"\n[恢复] {reason}; 会话={session_id or '无'}(抢救 {len(salvaged)} 字符), 中止={'成功' if aborted else '失败/不存在'}")
+    conn = _connect()
+    try:
+        conn.execute("UPDATE capability_repro_tasks SET log = log || ? WHERE id = ?", (note, task_id))
+        conn.commit()
+    finally:
+        conn.close()
+    _write_payload(item_id, verdict if verdict in ("success", "partial", "failed") else "failed",
+                   {"verdict": verdict, "error": reason, "session_id": session_id,
+                    "summary": (report.get("summary") or "")},
+                   item_status=_STATUS_TO_ITEM.get(verdict), web_report=report)
+    print(f"[repro-recover] task {task_id}: {status} → {task_status} (session={session_id or '-'}, salvaged={len(salvaged)}c)", flush=True)
+    return 1
+
+
 def recover_orphaned_tasks() -> int:
     """启动恢复清扫: 容器重建/重启会把在跑的复现 runner 线程杀死, 任务卡在 queued/running,
     但 serve 端 agent(独立 repro 容器)仍会一直跑并烧 token(实测 task 13: runner 死于容器
-    recreate, agent 白烧 90min/$2.1)。应用启动时找出孤儿任务:
-    抢救 serve 会话已产出文本 → 诚实判定(有结构化报告用其 verdict; 有阶段文本→partial; 无→failed)
-    → DELETE /session 中止止损 → 回写 task 状态 + payload。"""
-    repro_url = _env("REPRO_API_URL", "http://repro:4096")
-    headers = _headers(_env("REPRO_PASSWORD", ""))
+    recreate, agent 白烧 90min/$2.1)。应用启动时找出孤儿任务, 逐条走 _recover_task 善后。"""
     conn = _connect()
     recovered = 0
     try:
@@ -914,41 +953,62 @@ def recover_orphaned_tasks() -> int:
             "WHERE status IN ('queued','running')"
         ).fetchall()
         for task_id, item_id, status, log in rows:
-            session_id = _session_id_from_log(log or "")
-            salvaged = _fetch_transcript_text(repro_url, headers, session_id) if session_id else ""
-            report, verdict = _parse_report(salvaged)
-            report_ok = isinstance(report, dict) and report.get("status") in ("success", "partial", "failed")
-            if report_ok:
-                task_status = verdict
-            elif salvaged.strip():
-                report, verdict = _fallback_report(session_id, salvaged, "复现进程被容器重建/重启中断(runner 线程已死)")
-                task_status = "partial"
-            else:
-                report, verdict = _fallback_report(session_id, "", "复现进程被容器重建/重启中断(runner 线程已死)")
-                report = dict(report)
-                report["blockers"] = report.get("blockers") or ["复现进程被容器重建/重启中断, 无已产出文本"]
-                task_status = "failed"
-                verdict = "failed"
-            aborted = _abort_session(repro_url, headers, session_id)
-            report = dict(report) if isinstance(report, dict) else {}
-            report.setdefault("blockers", [])
-            report["blockers"].append(
-                "复现进程被容器重建/重启中断(runner 线程随进程消亡), "
-                + ("serve 会话已中止止损" if aborted else "serve 会话中止失败(可能已不存在)")
+            recovered += _recover_task(
+                task_id, item_id, status, log,
+                reason="复现进程被容器重建/重启中断(runner 线程随进程消亡)",
             )
-            _update_task(task_id, status=task_status, finished_at=_utc_now(),
-                         result=(salvaged or log or "")[:20000],
-                         report_json=json.dumps(report, ensure_ascii=False))
-            note = (f"\n[恢复] 启动清扫: 容器重建中断复现({status}→{task_status}); "
-                    f"会话={session_id or '无'}(抢救 {len(salvaged)} 字符), 中止={'成功' if aborted else '失败/不存在'}")
-            conn.execute("UPDATE capability_repro_tasks SET log = log || ? WHERE id = ?", (note, task_id))
-            conn.commit()
-            _write_payload(item_id, verdict if verdict in ("success", "partial", "failed") else "failed",
-                           {"verdict": verdict, "error": "复现进程被容器重建/重启中断", "session_id": session_id,
-                            "summary": (report.get("summary") or "")},
-                           item_status=_STATUS_TO_ITEM.get(verdict), web_report=report)
-            recovered += 1
-            print(f"[repro-recover] task {task_id}: {status} → {task_status} (session={session_id or '-'}, salvaged={len(salvaged)}c)", flush=True)
+    finally:
+        conn.close()
+    return recovered
+
+
+def _elapsed_seconds(created_at: str | None) -> float | None:
+    """把 DB 里 ISO 格式 created_at(UTC)转成距现在秒数; 无法解析返回 None。"""
+    if not created_at:
+        return None
+    try:
+        from datetime import datetime, timezone
+        created = datetime.fromisoformat(str(created_at).replace("Z", "+00:00"))
+        return (datetime.now(timezone.utc) - created).total_seconds()
+    except Exception:  # noqa: BLE001 - 解析失败视为无时间信息
+        return None
+
+
+def reap_stale_repro_tasks() -> int:
+    """周期性看门狗: 回收"僵尸"复现任务——状态 running/queued 但已无善后机会的任务。
+
+    两种判死:
+      1) 进程内没有名为 repro-{task_id} 的存活 runner 线程 → 线程已死(崩溃 / 容器重启遗留 /
+         run 中途意外退出), 立即回收——即使刚启动几分钟, 线程没了任务必然不会再有新进展;
+      2) 线程仍存活但任务运行超过 _default_timeout()+_grace_seconds()+300 → agent 挂死
+         (bash 子进程卡死等), 超时兜底回收。
+
+    回收动作复用 _recover_task(抢救已产出文本 → 诚实判定 → 中止会话止损 → 回写状态+payload)。
+    uvicorn 单 worker 运行(无 --workers), threading.enumerate() 能看到本进程内所有 runner 线程。
+    返回回收数量。"""
+    alive_ids = {
+        int(name.split("-", 1)[1])
+        for name in (t.name or "" for t in threading.enumerate())
+        if name.startswith("repro-")
+    }
+    conn = _connect()
+    recovered = 0
+    try:
+        rows = conn.execute(
+            "SELECT id, item_id, status, log, created_at FROM capability_repro_tasks "
+            "WHERE status IN ('queued','running')"
+        ).fetchall()
+        threshold = _default_timeout() + _grace_seconds() + 300
+        for task_id, item_id, status, log, created_at in rows:
+            if task_id in alive_ids:
+                # 线程活着: 只有超时兜底才回收(覆盖线程活着但 agent 挂死等场景)
+                elapsed = _elapsed_seconds(created_at)
+                if elapsed is None or elapsed <= threshold:
+                    continue
+                reason = f"看门狗回收: 运行超 {threshold}s 未完成(runner 线程仍在, agent 可能挂死)"
+            else:
+                reason = "看门狗回收: runner 线程已死(崩溃或容器重启遗留)"
+            recovered += _recover_task(task_id, item_id, status, log, reason)
     finally:
         conn.close()
     return recovered

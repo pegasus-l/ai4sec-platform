@@ -263,11 +263,23 @@ def create_app() -> FastAPI:
             return FileResponse(target)
         return FileResponse(FRONTEND_DIST / "index.html", headers={"Cache-Control": "no-store"})
 
+    def _reap_repro_tasks():
+        # 周期性看门狗: 回收僵尸复现任务(线程已死/超时未完成, 状态卡 running 的孤儿)。
+        # 容器重启遗留 + runner 中途崩溃都靠它兜底, 否则任务永远显示"复现中"。
+        try:
+            from ai4sec_platform.pipelines.steps.repro import reap_stale_repro_tasks
+            n = reap_stale_repro_tasks()
+            if n:
+                print(f'[repro-reap] {n} stale repro task(s) reaped', flush=True)
+        except Exception as e:  # noqa: BLE001 - 回收失败不阻断调度器
+            print(f'[repro-reap] error: {e}', flush=True)
+
     # APScheduler: pipeline scheduling
     scheduler = BackgroundScheduler(daemon=True)
     scheduler.add_job(_run_pipeline_job, IntervalTrigger(minutes=15), args=['capabilities.from_news_pipeline'], id='cap', name='capability(15min)', replace_existing=True)
     scheduler.add_job(_run_pipeline_job, CronTrigger(hour=2, minute=0), args=['threats.huawei_full_migration_pipeline'], id='threat', name='threat(daily 02:00)', replace_existing=True)
     scheduler.add_job(_run_pipeline_job, CronTrigger(hour=22, minute=0), args=['vulnerabilities.full_knowledge_discovery_pipeline', {'keyword_profile': 'daily_watch', 'skip_existing_urls': True}], id='vuln', name='vuln(daily 22:00)', replace_existing=True)
+    scheduler.add_job(_reap_repro_tasks, IntervalTrigger(minutes=5), id='repro-reap', name='repro-watchdog(5min)', replace_existing=True)
 
     @app.on_event('startup')
     def _start_scheduler():
@@ -281,7 +293,7 @@ def create_app() -> FastAPI:
             print(f'[repro-recover] {n} orphaned repro task(s) recovered', flush=True)
         except Exception as e:  # noqa: BLE001 - 清扫失败不影响启动
             print(f'[repro-recover] error: {e}', flush=True)
-        print('[scheduler] started: capability(15min), threat(daily 02:00), vuln(daily 22:00)', flush=True)
+        print('[scheduler] started: capability(15min), threat(daily 02:00), vuln(daily 22:00), repro-watchdog(5min)', flush=True)
 
     @app.on_event('shutdown')
     def _stop_scheduler():
