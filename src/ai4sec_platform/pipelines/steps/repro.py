@@ -307,7 +307,7 @@ def _render_tool_part(p: dict[str, Any], out_only: bool = False) -> list[str]:
     todos = inp.get("todos")
     if isinstance(todos, list) and todos and isinstance(todos[0], dict) and todos[0].get("content"):
         summary = str(todos[0]["content"])
-    for k in ("content", "description", "path", "url", "command", "pattern"):
+    for k in ("content", "description", "path", "url", "command", "pattern", "filePath"):
         v = inp.get(k)
         if isinstance(v, str) and v:
             summary = v
