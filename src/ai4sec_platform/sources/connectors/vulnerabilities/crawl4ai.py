@@ -31,7 +31,9 @@ class Crawl4aiConnector:
         params = request.params or {}
         candidates = params.get("candidates") or params.get("items") or []
         if not candidates and params.get("urls"):
-            candidates = [{"url": url, "title": url} for url in params.get("urls")]
+            # 不给占位 title: 让爬取结果里的真实标题(HTML <title>/crawl4ai metadata)生效,
+            # 避免 url-fetch 的素材标题退化成裸 URL。
+            candidates = [{"url": url} for url in params.get("urls")]
         if not isinstance(candidates, list):
             return SourceFetchResult(source_name=request.source_name, connector_name=self.connector_name, errors=["invalid_candidates"])
 
@@ -269,7 +271,11 @@ def _success(
     media = metadata.pop("media", {})
     return {
         **candidate,
-        "title": title or candidate.get("title") or candidate.get("url") or "未命名抓取页",
+        "title": title
+        or candidate.get("title")
+        or (metadata.get("title") if isinstance(metadata, dict) else None)
+        or candidate.get("url")
+        or "未命名抓取页",
         "success": True,
         "error": "",
         "failure_reason": "",
