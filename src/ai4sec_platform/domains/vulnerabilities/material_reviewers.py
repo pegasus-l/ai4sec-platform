@@ -12,24 +12,33 @@ from ai4sec_platform.domains.vulnerabilities.relevance_scorers import score_mate
 from ai4sec_platform.models.local_rules import LocalRuleProvider
 from ai4sec_platform.models.router import LLMRouter
 
-MATERIAL_REVIEW_PROMPT = """你是一个资深安全研究员和技术内容审核专家。请分析用户消息 JSON 中 content 字段提供的网页正文内容，判断是否属于“高质量漏洞技术分析”文章。
+MATERIAL_REVIEW_PROMPT = """你是一个资深安全研究员和技术内容审核专家。请分析用户消息 JSON 中 content 字段提供的网页正文内容，判断是否属于“高质量漏洞技术分析文章（writeup）”。
+
+本平台的目标：收集能讲清某个漏洞“前因后果”的优质 writeup 素材，让大模型只看素材就能完整理解该漏洞，并据此抽象漏洞模式。因此审核时，除技术深度外，重点评估素材对“前因后果故事链路”的完整交代。
 
 检查要求：
   同时满足基础要求和评估标准
 
   基础要求：
     {requirements}
-    - 是否为安全社区/技术平台发布的分析非转载文章，或者为漏洞利用代码仓库/Exploit 数据库，或者出处为安全学术顶会/工业顶会，或者为内核安全学习资源。
-    - 是否为原创内容非转载。
+    - 首选：安全社区/技术平台发布的深度漏洞分析文章（writeup），能讲清 背景/影响→根因→触发→利用→修复 中的核心链路。
+    - 次选：漏洞利用代码仓库/Exploit 数据库、学术/工业顶会文章、内核安全学习资源——仅当其内容本身就是完整技术分析（而非只有代码/幻灯片/链接列表）时接受。
+    - 必须为原创内容非转载。
 
   评估标准：
-    技术深度（权重 40%）
+    完整性与教学性（权重 30%）
+    - [ ] 前因后果自包含：覆盖 根因→触发→利用→修复 中的核心链路，缺链不影响“看懂这个漏洞”
+    - [ ] 不依赖外部前置知识，新读者能独立理解
+    - [ ] 结构清晰，有步骤/层级/结论，可直接作为 LLM 知识来源
+    - [ ] 关键结论都有推导支撑，而非只给结论
+
+    技术深度（权重 30%）
     - [ ] 包含具体代码片段（非伪代码，可验证）
     - [ ] 展示完整调用链或数据流
     - [ ] 解释漏洞根因（为什么错，而非哪里错）
     - [ ] 有修复前后代码对比或原理说明
 
-    方法论价值（权重 30%）
+    方法论价值（权重 20%）
     - [ ] 描述发现路径（如何找到这个漏洞）
     - [ ] 提供可复现的步骤或环境配置
     - [ ] 分析工具链使用或调试技巧
@@ -49,7 +58,9 @@ MATERIAL_REVIEW_PROMPT = """你是一个资深安全研究员和技术内容审�
     - [ ] 仅复述官方公告，无独立分析
     - [ ] 无技术细节的威胁恐吓文
     - [ ] 链接索引/资源导航页：内容主体是外部链接列表或 CVE 编号集合（如 awesome-list、resource collection），无具体漏洞技术分析、无代码、无利用细节
-    - [ ] GitHub 仓库页面本身：内容含 GitHub 导航菜单/侧边栏/UI 元素，而非 README 正文的技术分析内容
+    - [ ] GitHub 仓库页面本身：内容含 GitHub 导航菜单/侧边栏/UI 元素，而非 README 正文的技术分析内容（仓库内独立的漏洞 writeup 文档除外）
+    - [ ] 视频/演讲页面：内容为视频、幻灯片或演讲简介，正文无可读技术分析文本
+    - [ ] 只有代码没有讲解：纯 PoC/exploit 代码或提交 diff，无文字解释
 
 请只返回 JSON，保持以下 schema；其中扩展字段用于新平台事件聚合和证据追溯，但不能降低上述审核标准：
 {{
@@ -154,6 +165,9 @@ def _rule_review(normalized: dict[str, Any], *, requirements: str, confidence_th
         confidence = max(0.0, confidence - 0.18)
 
     decision = _rule_decision(classification, evidence, confidence=confidence, confidence_threshold=confidence_threshold, scoring_priority=scoring.priority)
+    gate_result = _rule_gate_result(classification, evidence)
+    if decision == "accept":
+        decision = _enforce_quality_gate(gate_result, decision)
     reasons = list(classification.get("reasons") or []) + list(scoring.reasons or [])
     if requirements:
         reasons.append(f"审核要求：{requirements[:180]}")
@@ -165,7 +179,7 @@ def _rule_review(normalized: dict[str, Any], *, requirements: str, confidence_th
         decision=decision,
         reason="；".join(dict.fromkeys(reasons)) or "本地规则未发现足够高质量漏洞技术信号。",
         key_findings=key_findings,
-        extra={"classification": classification, "scoring": scoring.as_payload(), "extracted_evidence": evidence, "reviewer": "local_rules", "model_used": False, "llm_review_error": normalized.get("llm_review_error"), "latency_ms": normalized.get("llm_review_latency_ms", 0)},
+        extra={"classification": classification, "scoring": scoring.as_payload(), "extracted_evidence": evidence, "reviewer": "local_rules", "model_used": False, "quality_gate": _quality_gate_reason(gate_result, decision), "llm_review_error": normalized.get("llm_review_error"), "latency_ms": normalized.get("llm_review_latency_ms", 0)},
     )
 
 
@@ -239,6 +253,46 @@ def _quality_gate_reason(result: dict[str, Any], decision: str) -> str:
     if decision == "accept":
         return "passed_quality_gate"
     return "not_accepted_without_deep_technical_evidence"
+
+
+def _rule_gate_result(classification: dict[str, Any], evidence: dict[str, Any]) -> dict[str, Any]:
+    """把规则路径的分类/证据结果映射为 _enforce_quality_gate 可消费的结构，统一两条评审路径的深度门禁。
+
+    规则路径没有 LLM 的 quality_signals，这里按分类命中和证据片段类型重建等价信号：
+    - 命中 PoC/Exploit 线索 → poc_exploit；命中技术分析线索 → tech_analysis；命中公告线索 → advisory；否则 other。
+    - 证据片段类型 root_cause/trigger/poc/patch 分别映射到 root_cause/trigger/poc/fix_analysis 信号。
+    """
+    signals = classification.get("signals") or {}
+    if signals.get("poc_hits"):
+        material_type = "poc_exploit"
+    elif signals.get("tech_hits"):
+        material_type = "tech_analysis"
+    elif signals.get("advisory_hits"):
+        material_type = "advisory"
+    else:
+        material_type = "other"
+    quality: set[str] = set()
+    if signals.get("poc_hits"):
+        quality.add("poc")
+    if signals.get("tech_hits"):
+        quality.add("tech")
+    for snippet in evidence.get("evidence_snippets") or []:
+        if not isinstance(snippet, dict):
+            continue
+        st = str(snippet.get("snippet_type") or "").lower()
+        if st == "root_cause":
+            quality.add("root_cause")
+        elif st == "trigger":
+            quality.add("trigger")
+        elif st == "poc":
+            quality.add("poc")
+        elif st == "patch":
+            quality.add("fix_analysis")
+    return {
+        "material_type": material_type,
+        "quality_signals": sorted(quality),
+        "evidence_snippets": evidence.get("evidence_snippets") or [],
+    }
 
 
 def _rule_decision(classification: dict[str, Any], evidence: dict[str, Any], *, confidence: float, confidence_threshold: float, scoring_priority: str) -> str:

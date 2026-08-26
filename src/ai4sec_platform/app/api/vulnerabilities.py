@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import io
+import re
 import sqlite3
-from fastapi import APIRouter, Depends, HTTPException, Query
+import zipfile
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel
 
 from ai4sec_platform.app.dependencies import get_db
@@ -41,6 +44,73 @@ class FieldReviewRequest(BaseModel):
     value: object | None = None
     reason: str = ""
     evidence_ids: list[int] = []
+
+
+class BulkDownloadRequest(BaseModel):
+    item_ids: list[int] | None = None
+
+
+def _str_list(value: object) -> list[str]:
+    if isinstance(value, list):
+        return [str(v) for v in value if str(v).strip()]
+    if isinstance(value, str) and value.strip():
+        return [value.strip()]
+    return []
+
+
+def _material_markdown(item: dict) -> str:
+    """把单条素材渲染成可下载的 markdown 文档：元信息 + 摘要 + 正文 + 关键发现 + 证据片段 + 审核结论。"""
+    payload = item.get("payload") or {}
+    source = item.get("source_url") or item.get("source") or payload.get("source_host") or ""
+    cves = _str_list(payload.get("cve_ids"))
+    cwes = _str_list(payload.get("cwe_ids"))
+    products = _str_list(payload.get("affected_products"))
+    findings = _str_list(payload.get("key_findings"))
+    snippets = payload.get("evidence_snippets") or payload.get("extracted_evidence", {}).get("evidence_snippets") or []
+    body = str(payload.get("cleaned_text") or payload.get("markdown") or "").strip()
+    lines = [
+        f"# {item.get('title') or '未命名漏洞素材'}",
+        "",
+        f"> 原文：{source or '未知'}",
+        "",
+        "## 素材元信息",
+        "",
+        f"- 素材 ID：{item.get('id')}",
+        f"- 状态：{item.get('status') or ''}",
+        f"- 评分：{item.get('score') or ''}",
+        f"- 类型：{payload.get('material_type') or payload.get('classification', {}).get('category') or ''}",
+        f"- CVE：{', '.join(cves) or '无'}",
+        f"- CWE：{', '.join(cwes) or '无'}",
+        f"- 影响产品：{', '.join(products) or '无'}",
+        "",
+        "## 摘要",
+        "",
+        str(item.get("summary") or payload.get("summary") or "暂无摘要"),
+        "",
+    ]
+    if body:
+        lines.extend(["## 正文", "", body, ""])
+    lines.extend(["## 关键发现", ""])
+    if findings:
+        lines.extend(f"- {finding}" for finding in findings)
+    else:
+        lines.append("- 无")
+    lines.extend(["", "## 证据片段", ""])
+    for snippet in snippets:
+        if isinstance(snippet, dict):
+            lines.append(f"- [{snippet.get('snippet_type')}] {str(snippet.get('content') or '')[:2000]}")
+    for evidence in item.get("evidence") or []:
+        if isinstance(evidence, dict):
+            lines.append(f"- {str(evidence.get('content') or '')[:2000]}")
+    if not snippets and not item.get("evidence"):
+        lines.append("- 无")
+    lines.extend(["", "## 审核结论", "", str(payload.get("check_reason") or payload.get("reason") or "无")])
+    return "\n".join(lines)
+
+
+def _download_filename(item: dict, prefix: str) -> str:
+    safe = re.sub(r"[^A-Za-z0-9_-]+", "_", str(item.get("title") or ""))[:60].strip("_")
+    return f"{prefix}_{item.get('id')}_{safe or 'material'}.md"
 
 
 @router.get("/keyword-profiles")
@@ -159,6 +229,48 @@ def material_detail(item_id: int, conn: sqlite3.Connection = Depends(get_db)) ->
     if not item:
         raise HTTPException(status_code=404, detail="material not found")
     return item
+
+
+@router.get("/materials/{item_id}/download")
+def material_download(item_id: int, conn: sqlite3.Connection = Depends(get_db)) -> Response:
+    """漏洞素材一键下载：把单条素材渲染为 markdown 附件返回。"""
+    item = domain_items.detail(conn, DOMAIN, item_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="material not found")
+    return Response(
+        _material_markdown(item),
+        media_type="text/markdown; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{_download_filename(item, "vuln_material")}"'},
+    )
+
+
+@router.post("/materials/bulk-download")
+def materials_bulk_download(request: BulkDownloadRequest, conn: sqlite3.Connection = Depends(get_db)) -> Response:
+    """漏洞素材批量下载：按 item_ids 打包 zip；不传 ids 时下载全部素材。"""
+    if request.item_ids:
+        placeholders = ",".join("?" for _ in request.item_ids)
+        rows = conn.execute(
+            f"SELECT * FROM domain_items WHERE domain = ? AND item_type = ? AND id IN ({placeholders}) ORDER BY id",
+            (DOMAIN, "material", *request.item_ids),
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT * FROM domain_items WHERE domain = ? AND item_type = ? ORDER BY id",
+            (DOMAIN, "material"),
+        ).fetchall()
+    if not rows:
+        raise HTTPException(status_code=404, detail="no materials found")
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+        for row in rows:
+            item = repo.row_to_dict(row)
+            archive.writestr(_download_filename(item, "vuln_material"), _material_markdown(item))
+    buffer.seek(0)
+    return Response(
+        buffer.getvalue(),
+        media_type="application/zip",
+        headers={"Content-Disposition": 'attachment; filename="vuln_materials_bulk.zip"'},
+    )
 
 
 @router.get("/events")

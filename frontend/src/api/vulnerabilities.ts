@@ -1,4 +1,4 @@
-import { getJson, postJson } from './client';
+import { BASE, getJson, postJson } from './client';
 import type {
   DomainItem,
   FieldReviewRequest,
@@ -21,6 +21,31 @@ export function fetchVulnerabilityToday(): Promise<VulnerabilityTodayResponse> {
 
 export function fetchVulnerabilityMaterials(): Promise<ListResponse<DomainItem<MaterialPayload>>> {
   return getJson('/api/vulnerabilities/materials?limit=200');
+}
+
+/** 单条素材一键下载地址：<a href> 直接跳转，服务器按 Content-Disposition 触发下载。 */
+export function materialDownloadUrl(itemId: number): string {
+  return `${BASE}/api/vulnerabilities/materials/${itemId}/download`;
+}
+
+/** 批量下载：POST 打包 zip 后通过临时 <a> 保存为文件。返回是否成功。 */
+export async function downloadMaterialZip(itemIds: number[]): Promise<boolean> {
+  const response = await fetch(`${BASE}/api/vulnerabilities/materials/bulk-download`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ item_ids: itemIds }),
+  });
+  if (!response.ok) return false;
+  const blob = await response.blob();
+  const objectUrl = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = objectUrl;
+  anchor.download = 'vuln_materials_bulk.zip';
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(objectUrl);
+  return true;
 }
 
 export function fetchVulnerabilityCandidates(): Promise<ListResponse<DomainItem>> {
