@@ -11,6 +11,7 @@ from ai4sec_platform.app.dependencies import get_db
 from ai4sec_platform.db import repositories as repo
 from ai4sec_platform.core.config import load_settings
 from ai4sec_platform.domains.vulnerabilities.keyword_profiles import list_keyword_profiles
+from ai4sec_platform.domains.vulnerabilities.pattern_synthesizers import render_pattern_markdown
 from ai4sec_platform.domains.vulnerabilities import service as vuln_service
 from ai4sec_platform.services import domain_items
 from ai4sec_platform.services import operations
@@ -276,6 +277,37 @@ def materials_bulk_download(request: BulkDownloadRequest, conn: sqlite3.Connecti
 @router.get("/events")
 def events(limit: int = Query(50, ge=1, le=200), conn: sqlite3.Connection = Depends(get_db)) -> dict:
     return vuln_service.events(conn, limit=limit)
+
+
+@router.get("/patterns")
+def patterns(limit: int = Query(50, ge=1, le=200), conn: sqlite3.Connection = Depends(get_db)) -> dict:
+    data = domain_items.list_items(conn, DOMAIN, item_type="vulnerability_pattern", limit=limit)
+    for item in data["items"]:
+        payload = item.get("payload")
+        if isinstance(payload, dict):
+            payload.pop("model_output", None)  # 列表接口不返回完整模型输出, 保持轻量
+    return data
+
+
+@router.get("/patterns/{item_id}")
+def pattern_detail(item_id: int, conn: sqlite3.Connection = Depends(get_db)) -> dict:
+    item = domain_items.detail(conn, DOMAIN, item_id)
+    if not item or item.get("item_type") != "vulnerability_pattern":
+        raise HTTPException(status_code=404, detail="pattern not found")
+    return item
+
+
+@router.get("/patterns/{item_id}/download")
+def pattern_download(item_id: int, conn: sqlite3.Connection = Depends(get_db)) -> Response:
+    """漏洞模式 markdown 一键下载。"""
+    item = domain_items.detail(conn, DOMAIN, item_id)
+    if not item or item.get("item_type") != "vulnerability_pattern":
+        raise HTTPException(status_code=404, detail="pattern not found")
+    return Response(
+        render_pattern_markdown(item),
+        media_type="text/markdown; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{_download_filename(item, "vuln_pattern")}"'},
+    )
 
 
 @router.get("/events/{item_id}")

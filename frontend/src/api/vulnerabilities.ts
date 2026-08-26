@@ -7,6 +7,7 @@ import type {
   KeywordProfile,
   ListResponse,
   MaterialPayload,
+  PatternPayload,
   PipelineRunDetail,
   PipelineRunSummary,
   PipelineRunStartResponse,
@@ -139,6 +140,25 @@ export function fetchVulnerabilityEventDetail(itemId: number): Promise<DomainIte
 
 export function fetchVulnerabilityExtractions(): Promise<ListResponse<DomainItem<KnowledgePayload>>> {
   return getJson('/api/vulnerabilities/extractions?limit=200');
+}
+
+export function fetchVulnerabilityPatterns(): Promise<ListResponse<DomainItem<PatternPayload>>> {
+  return getJson('/api/vulnerabilities/patterns?limit=200');
+}
+
+/** 漏洞模式 markdown 下载地址：<a href> 直接跳转，服务器按 Content-Disposition 触发下载。 */
+export function patternDownloadUrl(itemId: number): string {
+  return `${BASE}/api/vulnerabilities/patterns/${itemId}/download`;
+}
+
+/** 触发漏洞模式抽象 pipeline(按 CWE 聚类已确认知识, 跨素材归纳模式)。 */
+export function runPatternSynthesis(): Promise<PipelineRunStartResponse> {
+  return postJson('/api/runs', {
+    pipeline_name: 'vulnerabilities.pattern_synthesis_pipeline',
+    reset: false,
+    wait: false,
+    params: {},
+  });
 }
 
 export function fetchVulnerabilityKnowledge(): Promise<ListResponse<DomainItem<KnowledgePayload>>> {

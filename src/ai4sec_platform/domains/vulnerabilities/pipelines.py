@@ -7,6 +7,7 @@ from ai4sec_platform.pipelines.steps.vulnerability_event import AggregateVulnera
 from ai4sec_platform.pipelines.steps.vulnerability_evaluation import BuildVulnerabilityShadowEvaluationStep
 from ai4sec_platform.pipelines.steps.vulnerability_raw import BuildVulnerabilityMaterialItemsStep, ImportVulnerabilityRawStep, NormalizeVulnerabilityRawStep
 from ai4sec_platform.pipelines.steps.vulnerability_knowledge import ExtractVulnerabilityKnowledgeStep, SelectVulnerabilityKnowledgeCandidatesStep
+from ai4sec_platform.pipelines.steps.vulnerability_pattern import SynthesizeVulnerabilityPatternsStep
 
 
 def vulnerability_raw_pipeline() -> PipelineDefinition:
@@ -30,6 +31,14 @@ def vulnerability_event_pipeline() -> PipelineDefinition:
         name="vulnerabilities.event_aggregation_pipeline",
         domain="vulnerabilities",
         steps=[AggregateVulnerabilityEventsStep()],
+    )
+
+
+def vulnerability_pattern_pipeline() -> PipelineDefinition:
+    return PipelineDefinition(
+        name="vulnerabilities.pattern_synthesis_pipeline",
+        domain="vulnerabilities",
+        steps=[SynthesizeVulnerabilityPatternsStep()],
     )
 
 

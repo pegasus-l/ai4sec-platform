@@ -56,10 +56,11 @@ def _knowledge_payload(item: dict[str, Any]) -> dict[str, Any]:
 
 
 def _model_input_limit() -> int:
+    # 目标:让大模型看完整 writeup(常 5k-20k 字符)后再抽取, 避免抽象建立在截断视图上
     try:
-        limit = int(os.getenv("AI4SEC_VULNERABILITY_KNOWLEDGE_EXTRACTOR_MAX_INPUT_CHARS", os.getenv("AI4SEC_MODEL_MAX_INPUT_CHARS", "4000")))
+        limit = int(os.getenv("AI4SEC_VULNERABILITY_KNOWLEDGE_EXTRACTOR_MAX_INPUT_CHARS", os.getenv("AI4SEC_MODEL_MAX_INPUT_CHARS", "12000")))
     except ValueError:
-        limit = 4000
+        limit = 12000
     return min(max(limit, 1000), 24000)
 
 
