@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+from datetime import datetime, timezone
 from typing import Any
 
 from ai4sec_platform.db import repositories as repo
@@ -15,9 +16,11 @@ def materials(conn: sqlite3.Connection, limit: int = 50) -> dict:
 
 
 def today(conn: sqlite3.Connection, limit: int = 12) -> dict[str, Any]:
-    materials_data = domain_items.list_items(conn, DOMAIN, item_type="material", limit=limit)
-    events_data = _active_events(conn, limit)
-    knowledge_data = domain_items.list_items(conn, DOMAIN, item_type="knowledge", limit=limit)
+    # 今日情报 = 当天零点(UTC)之后产出的素材/事件/知识, 与能力洞察一致
+    today_start = f"{datetime.now(timezone.utc):%Y-%m-%d}T00:00:00Z"
+    materials_data = domain_items.list_items(conn, DOMAIN, item_type="material", limit=limit, since=today_start)
+    events_data = _active_events(conn, limit, since=today_start)
+    knowledge_data = domain_items.list_items(conn, DOMAIN, item_type="knowledge", limit=limit, since=today_start)
     pending_fields = _pending_field_count(knowledge_data["items"])
     return {
         "domain": DOMAIN,
@@ -31,6 +34,7 @@ def today(conn: sqlite3.Connection, limit: int = 12) -> dict[str, Any]:
         "priority_events": [_event_card(item) for item in events_data["items"]],
         "priority_event_items": events_data["items"],
         "new_materials": materials_data["items"],
+        "new_knowledge": knowledge_data["items"],
         "items": materials_data["items"],
         "next_workload": {"materials": len(materials_data["items"]), "events": len(events_data["items"]), "pending_fields": pending_fields, "knowledge": len(knowledge_data["items"])},
     }
@@ -40,8 +44,8 @@ def events(conn: sqlite3.Connection, limit: int = 50) -> dict[str, Any]:
     return _active_events(conn, limit)
 
 
-def _active_events(conn: sqlite3.Connection, limit: int) -> dict[str, Any]:
-    data = domain_items.list_items(conn, DOMAIN, item_type="event", limit=max(limit * 3, limit))
+def _active_events(conn: sqlite3.Connection, limit: int, since: str | None = None) -> dict[str, Any]:
+    data = domain_items.list_items(conn, DOMAIN, item_type="event", limit=max(limit * 3, limit), since=since)
     items = [item for item in data["items"] if item.get("status") != "superseded"][:limit]
     return {"domain": DOMAIN, "count": len(items), "items": items}
 
