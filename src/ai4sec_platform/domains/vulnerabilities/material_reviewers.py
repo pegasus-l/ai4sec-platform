@@ -57,6 +57,7 @@ MATERIAL_REVIEW_PROMPT = """你是一个资深安全研究员和技术内容审�
   "decision": "accept|needs_review|reject",
   "confidence": 0.0,
   "reason": "判断理由的简要说明",
+  "title_cn": "标题的简洁中文翻译(意译即可, 技术术语保持准确, 如 'Linux 内核 kSmbd 未授权栈溢出利用')",
   "key_findings": ["关键发现1", "关键发现2"],
   "material_type": "poc_exploit|tech_analysis|kernel_security|academic_conf|reference_index|other",
   "quality_signals": ["code", "call_chain", "data_flow", "root_cause", "fix_analysis", "discovery_method", "repro_steps", "tooling", "bypass", "exploit_primitive", "exploit_chain", "stability_limit"],
@@ -125,7 +126,7 @@ def _try_llm_review(normalized: dict[str, Any], *, requirements: str, confidence
             "evidence_snippets": [item for item in result.get("evidence_snippets") or [] if isinstance(item, dict)],
         }
         return _review(
-            {**normalized, "material_type": result.get("material_type") or normalized.get("material_type"), "cve_ids": extra_evidence["cve_ids"], "cwe_ids": extra_evidence["cwe_ids"], "affected_products": extra_evidence["affected_products"]},
+            {**normalized, "material_type": result.get("material_type") or normalized.get("material_type"), "title_cn": str(result.get("title_cn") or "").strip(), "cve_ids": extra_evidence["cve_ids"], "cwe_ids": extra_evidence["cwe_ids"], "affected_products": extra_evidence["affected_products"]},
             is_relevant=decision in {"accept", "needs_review"},
             confidence=round(confidence, 2),
             decision=decision,
