@@ -500,7 +500,16 @@
 .table-sub { max-width: 430px; color: var(--faint); margin-top: 4px; line-height: 1.35; overflow: hidden; text-overflow: ellipsis; }
 .material-title-cn { max-width: 430px; color: var(--muted); margin-top: 3px; font-size: 11px; line-height: 1.35; overflow: hidden; text-overflow: ellipsis; }
 .workbench { display: grid; grid-template-columns: 330px minmax(0,1fr); gap: 12px; align-items: start; }
-.extraction-workbench { padding: 12px; border: 1px solid rgba(148,163,184,.22); border-radius: var(--radius); background: var(--panel-2); box-shadow: inset 0 1px 0 rgba(255,255,255,.025); }
+.extraction-workbench { height: calc(100vh - 204px); min-height: 500px; padding: 12px; border: 1px solid rgba(148,163,184,.22); border-radius: var(--radius); background: var(--panel-2); box-shadow: inset 0 1px 0 rgba(255,255,255,.025); overflow: hidden; align-items: stretch; margin-bottom: -120px; /* 抵消 .vuln-content-body 的 padding-bottom:120px, 避免整页滚动 */ }
+.extraction-workbench > .panel { display: flex; flex-direction: column; min-height: 0; }
+.extraction-workbench > .panel > .panel-head { flex-shrink: 0; }
+.extraction-workbench > .panel > .panel-body { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; }
+.extraction-workbench .queue-list { flex: 1; min-height: 0; overflow-y: auto; padding-right: 4px; }
+.extraction-workbench .queue-footer { flex-shrink: 0; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--line); }
+.extraction-workbench .queue-footer .pagination { padding: 6px 0 0; justify-content: flex-start; }
+@media (max-width: 1180px) {
+  .extraction-workbench { height: auto; min-height: 0; overflow: visible; }
+}
 .queue-item { display: block; width: 100%; border: 1px solid rgba(148,163,184,.14); border-radius: 15px; background: var(--panel-2); padding: 12px; margin-bottom: 9px; color: inherit; text-align: left; cursor: pointer; }
 .queue-item.active, .queue-item:hover { border-color: rgba(167,139,250,.48); background: rgba(167,139,250,.08); }
 .queue-item p { margin: 7px 0 0; color: var(--muted); font-size: 12px; line-height: 1.5; }
