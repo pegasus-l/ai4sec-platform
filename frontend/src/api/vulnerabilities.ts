@@ -16,7 +16,7 @@ import type {
 } from '../types/vulnerability';
 
 export function fetchVulnerabilityToday(): Promise<VulnerabilityTodayResponse> {
-  return getJson('/api/vulnerabilities/today');
+  return getJson('/api/vulnerabilities/today?limit=200');
 }
 
 export function fetchVulnerabilityMaterials(): Promise<ListResponse<DomainItem<MaterialPayload>>> {

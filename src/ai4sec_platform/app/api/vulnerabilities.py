@@ -114,7 +114,7 @@ def runs(limit: int = Query(20, ge=1, le=100), conn: sqlite3.Connection = Depend
 
 
 @router.get("/today")
-def today(limit: int = Query(12, ge=1, le=100), conn: sqlite3.Connection = Depends(get_db)) -> dict:
+def today(limit: int = Query(200, ge=1, le=500), conn: sqlite3.Connection = Depends(get_db)) -> dict:
     return vuln_service.today(conn, limit=limit)
 
 
