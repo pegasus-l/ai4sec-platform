@@ -50,6 +50,7 @@ class ComprehensionProbeStep:
             is_failure=lambda output: bool((output.get("result") or {}).get("llm_error")),
             max_concurrency=max_concurrency,
             circuit_failure_threshold=circuit_failure_threshold,
+            item_timeout_seconds=int(context.params.get("item_timeout_seconds", 1800)),
         )
 
         probe_ids: list[int] = []

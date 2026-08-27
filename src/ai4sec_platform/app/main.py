@@ -205,6 +205,18 @@ def _run_pipeline_job(pipeline_name: str, params: dict | None = None) -> None:
         print(f'[scheduler] {pipeline_name}: skipped (another pipeline running)', flush=True)
         return
     try:
+        # DB 级防重: 线程锁随进程崩溃/重启释放后, 旧 run 的 DB 行仍是 running 僵尸,
+        # 不能只靠内存锁判断"是否在跑"。启动前查同 pipeline 是否有存活 run, 有则跳过。
+        from ai4sec_platform.core.config import load_settings
+        from ai4sec_platform.db.session import connect
+        with connect(load_settings()) as conn:
+            existing = conn.execute(
+                "SELECT run_id FROM pipeline_runs WHERE pipeline_name=? AND status IN ('queued','running') LIMIT 1",
+                (pipeline_name,),
+            ).fetchone()
+        if existing:
+            print(f'[scheduler] {pipeline_name}: skipped (DB active run {existing["run_id"]})', flush=True)
+            return
         from ai4sec_platform.pipelines.runner import PipelineRunner
         r = PipelineRunner()
         result = r.run(pipeline_name, params=params or {})
@@ -274,12 +286,24 @@ def create_app() -> FastAPI:
         except Exception as e:  # noqa: BLE001 - 回收失败不阻断调度器
             print(f'[repro-reap] error: {e}', flush=True)
 
+    def _reap_stale_pipeline_runs():
+        # 周期看门狗: 回收悬挂的 pipeline_run(心跳停滞/超时未完成, 状态卡 running 的僵尸)。
+        # 与启动时的 recover_orphaned_pipeline_runs 互补: 后者清重启遗留, 前者清运行中挂死。
+        try:
+            from ai4sec_platform.pipelines.recovery import reap_stale_pipeline_runs
+            n = reap_stale_pipeline_runs()
+            if n:
+                print(f'[pipeline-reap] {n} stale pipeline run(s) reaped', flush=True)
+        except Exception as e:  # noqa: BLE001 - 回收失败不阻断调度器
+            print(f'[pipeline-reap] error: {e}', flush=True)
+
     # APScheduler: pipeline scheduling
     scheduler = BackgroundScheduler(timezone="Asia/Shanghai", daemon=True)
     scheduler.add_job(_run_pipeline_job, IntervalTrigger(minutes=15), args=['capabilities.from_news_pipeline'], id='cap', name='capability(15min)', replace_existing=True)
     scheduler.add_job(_run_pipeline_job, CronTrigger(hour=2, minute=0, timezone="Asia/Shanghai"), args=['threats.huawei_full_migration_pipeline'], id='threat', name='threat(daily 02:00)', replace_existing=True)
     scheduler.add_job(_run_pipeline_job, CronTrigger(hour=22, minute=0, timezone="Asia/Shanghai"), args=['vulnerabilities.full_knowledge_discovery_pipeline', {'keyword_profile': 'daily_watch', 'skip_existing_urls': True}], id='vuln', name='vuln(daily 22:00)', replace_existing=True)
     scheduler.add_job(_reap_repro_tasks, IntervalTrigger(minutes=5), id='repro-reap', name='repro-watchdog(5min)', replace_existing=True)
+    scheduler.add_job(_reap_stale_pipeline_runs, IntervalTrigger(minutes=5), id='pipeline-reap', name='pipeline-watchdog(5min)', replace_existing=True)
 
     @app.on_event('startup')
     def _start_scheduler():
@@ -293,7 +317,15 @@ def create_app() -> FastAPI:
             print(f'[repro-recover] {n} orphaned repro task(s) recovered', flush=True)
         except Exception as e:  # noqa: BLE001 - 清扫失败不影响启动
             print(f'[repro-recover] error: {e}', flush=True)
-        print('[scheduler] started: capability(15min), threat(daily 02:00), vuln(daily 22:00), repro-watchdog(5min)', flush=True)
+        # 容器重启会把在跑的 pipeline runner 线程杀死, DB 行卡 running(实测 14 个僵尸)。
+        # 启动清扫全部翻 interrupted, 保证无 running 行在重启后存活。
+        try:
+            from ai4sec_platform.pipelines.recovery import recover_orphaned_pipeline_runs
+            n = recover_orphaned_pipeline_runs()
+            print(f'[pipeline-recover] {n} orphaned pipeline run(s) recovered', flush=True)
+        except Exception as e:  # noqa: BLE001 - 清扫失败不影响启动
+            print(f'[pipeline-recover] error: {e}', flush=True)
+        print('[scheduler] started: capability(15min), threat(daily 02:00), vuln(daily 22:00), repro-watchdog(5min), pipeline-watchdog(5min)', flush=True)
 
     @app.on_event('shutdown')
     def _stop_scheduler():

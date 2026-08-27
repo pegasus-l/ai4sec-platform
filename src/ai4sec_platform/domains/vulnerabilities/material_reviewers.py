@@ -79,12 +79,17 @@ MATERIAL_REVIEW_PROMPT = """你是一个资深安全研究员和技术内容审�
 }}"""
 
 
-def review_crawled_material(page: dict[str, Any], *, requirements: str = "", confidence_threshold: float = 0.55, use_model: bool = True) -> dict[str, Any]:
+def review_crawled_material(page: dict[str, Any], *, requirements: str = "", confidence_threshold: float = 0.55, use_model: bool = True, fallback_mode: str = "needs_review", llm_max_attempts: int = 2) -> dict[str, Any]:
     """Deterministic review that mirrors the old AI checker schema.
 
     The old project used an LLM to decide whether a crawled page was a high-quality
     vulnerability material. This reviewer keeps the same output contract and uses
-    an OpenAI-compatible model when configured, with local rules as fallback.
+    an OpenAI-compatible model when configured.
+
+    LLM 失败时的处理由 fallback_mode 决定(默认 `needs_review` = 诚实标记, 不做规则决策):
+      - "needs_review": LLM 有界重试(llm_max_attempts)后仍失败 → failed_review 标记(decision=needs_review, reviewer=llm_failed)。
+      - "retry": 同 needs_review, 但默认多试几次(≥3)。
+      - "rules": 旧行为, 显式 opt-in —— LLM 失败回退本地规则做 accept/reject 决策。
     """
     if not page.get("success"):
         return _review(page, is_relevant=False, confidence=0.0, decision="reject", reason=f"抓取失败：{page.get('error') or 'unknown'}", key_findings=[])
@@ -108,47 +113,88 @@ def review_crawled_material(page: dict[str, Any], *, requirements: str = "", con
             reason="正文内容不足 800 字符，不能作为高质量漏洞技术分析素材。",
             key_findings=[],
         )
-    llm_review = _try_llm_review(normalized, requirements=requirements, confidence_threshold=confidence_threshold) if use_model else None
+    if fallback_mode not in {"needs_review", "retry", "rules"}:
+        fallback_mode = "needs_review"
+    max_attempts = max(int(llm_max_attempts), 1)
+    if fallback_mode == "retry":
+        max_attempts = max(max_attempts, 3)
+    llm_review = _try_llm_review(normalized, requirements=requirements, confidence_threshold=confidence_threshold, max_attempts=max_attempts) if use_model else None
     if llm_review:
         return llm_review
-    return _rule_review(normalized, requirements=requirements, confidence_threshold=confidence_threshold)
+    if fallback_mode == "rules":
+        return _rule_review(normalized, requirements=requirements, confidence_threshold=confidence_threshold)
+    error = str(normalized.get("llm_review_error") or "模型审核不可用或已禁用")
+    return failed_review(normalized, error=error)
 
 
-def _try_llm_review(normalized: dict[str, Any], *, requirements: str, confidence_threshold: float) -> dict[str, Any] | None:
+def failed_review(page: dict[str, Any], *, error: str) -> dict[str, Any]:
+    """LLM 审核失败/超时的诚实标记: 不产出 accept/reject 决策, 留给人工复核。
+
+    与 _rule_review 的关键区别: 规则至多作为 evidence 注解(不在此实现), 决策字段
+    固定 needs_review + reviewer=llm_failed, llm_error 置顶层(供 is_failure/审计识别)。
+    needs_review 且 BuildAcceptedVulnerabilityMaterialsStep 默认 include_needs_review=False
+    → 不进入素材构建, 只留 review 阶段行给人审。
+    """
+    normalized = _normalize_review_input(page)
+    normalized["llm_review_error"] = error[:300]
+    return _review(
+        normalized,
+        is_relevant=True,
+        confidence=0.0,
+        decision="needs_review",
+        reason=f"LLM 审核失败，标记待人工复核：{error}",
+        key_findings=[],
+        extra={
+            "reviewer": "llm_failed",
+            "model_used": False,
+            "llm_error": error[:300],
+            "fallback_mode": "needs_review",
+            "latency_ms": normalized.get("llm_review_latency_ms", 0),
+        },
+    )
+
+
+def _try_llm_review(normalized: dict[str, Any], *, requirements: str, confidence_threshold: float, max_attempts: int = 2, backoff_seconds: float = 2.0) -> dict[str, Any] | None:
+    """有界重试的 LLM 审核。全部尝试失败 → 置 llm_review_error 并返回 None(由调用方按 fallback_mode 处理)。"""
     started = time.perf_counter()
-    try:
-        provider = LLMRouter().provider_for("vulnerability_material_reviewer")
-        if isinstance(provider, LocalRuleProvider):
-            return None
-        content, input_truncated = prepare_model_input(str(normalized.get("cleaned_text") or normalized.get("summary") or ""), profile="vulnerability_material_reviewer")
-        payload = {"url": normalized.get("url"), "title": normalized.get("title"), "requirements": requirements, "content": content}
-        prompt = MATERIAL_REVIEW_PROMPT.format(requirements=requirements or "- 无额外要求")
-        response = provider.complete_json(prompt=prompt, payload=payload)
-        result = response.get("result") or response.get("parsed") or {}
-        confidence = _safe_float(result.get("confidence"), 0.0)
-        decision = str(result.get("decision") or ("accept" if result.get("is_relevant") and confidence >= confidence_threshold else "needs_review" if result.get("is_relevant") else "reject"))
-        if decision not in {"accept", "needs_review", "reject"}:
-            decision = "needs_review"
-        decision = _enforce_quality_gate(result, decision)
-        extra_evidence = {
-            "cve_ids": _list_str(result.get("cve_ids")),
-            "cwe_ids": _list_str(result.get("cwe_ids")),
-            "affected_products": _list_str(result.get("affected_products")),
-            "evidence_snippets": [item for item in result.get("evidence_snippets") or [] if isinstance(item, dict)],
-        }
-        return _review(
-            {**normalized, "material_type": result.get("material_type") or normalized.get("material_type"), "title_cn": str(result.get("title_cn") or "").strip(), "cve_ids": extra_evidence["cve_ids"], "cwe_ids": extra_evidence["cwe_ids"], "affected_products": extra_evidence["affected_products"]},
-            is_relevant=decision in {"accept", "needs_review"},
-            confidence=round(confidence, 2),
-            decision=decision,
-            reason=str(result.get("reason") or "模型完成漏洞素材审核。"),
-            key_findings=_list_str(result.get("key_findings")),
-            extra={"classification": {"category": result.get("material_type") or "llm_review", "confidence": confidence}, "scoring": {"score": round(confidence * 100, 2), "priority": "high" if decision == "accept" else "medium" if decision == "needs_review" else "low"}, "extracted_evidence": extra_evidence, "reviewer": response.get("provider"), "review_model": response.get("model"), "model_used": True, "prompt": prompt, "llm_output": result, "quality_gate": _quality_gate_reason(result, decision), "model_input_characters": len(content), "model_input_truncated": input_truncated, "latency_ms": int((time.perf_counter() - started) * 1000)},
-        )
-    except Exception as exc:  # pragma: no cover - external model dependent
-        normalized["llm_review_error"] = str(exc)[:300]
-        normalized["llm_review_latency_ms"] = int((time.perf_counter() - started) * 1000)
-        return None
+    last_error = ""
+    for attempt in range(1, max_attempts + 1):
+        try:
+            provider = LLMRouter().provider_for("vulnerability_material_reviewer")
+            if isinstance(provider, LocalRuleProvider):
+                return None
+            content, input_truncated = prepare_model_input(str(normalized.get("cleaned_text") or normalized.get("summary") or ""), profile="vulnerability_material_reviewer")
+            payload = {"url": normalized.get("url"), "title": normalized.get("title"), "requirements": requirements, "content": content}
+            prompt = MATERIAL_REVIEW_PROMPT.format(requirements=requirements or "- 无额外要求")
+            response = provider.complete_json(prompt=prompt, payload=payload)
+            result = response.get("result") or response.get("parsed") or {}
+            confidence = _safe_float(result.get("confidence"), 0.0)
+            decision = str(result.get("decision") or ("accept" if result.get("is_relevant") and confidence >= confidence_threshold else "needs_review" if result.get("is_relevant") else "reject"))
+            if decision not in {"accept", "needs_review", "reject"}:
+                decision = "needs_review"
+            decision = _enforce_quality_gate(result, decision)
+            extra_evidence = {
+                "cve_ids": _list_str(result.get("cve_ids")),
+                "cwe_ids": _list_str(result.get("cwe_ids")),
+                "affected_products": _list_str(result.get("affected_products")),
+                "evidence_snippets": [item for item in result.get("evidence_snippets") or [] if isinstance(item, dict)],
+            }
+            return _review(
+                {**normalized, "material_type": result.get("material_type") or normalized.get("material_type"), "title_cn": str(result.get("title_cn") or "").strip(), "cve_ids": extra_evidence["cve_ids"], "cwe_ids": extra_evidence["cwe_ids"], "affected_products": extra_evidence["affected_products"]},
+                is_relevant=decision in {"accept", "needs_review"},
+                confidence=round(confidence, 2),
+                decision=decision,
+                reason=str(result.get("reason") or "模型完成漏洞素材审核。"),
+                key_findings=_list_str(result.get("key_findings")),
+                extra={"classification": {"category": result.get("material_type") or "llm_review", "confidence": confidence}, "scoring": {"score": round(confidence * 100, 2), "priority": "high" if decision == "accept" else "medium" if decision == "needs_review" else "low"}, "extracted_evidence": extra_evidence, "reviewer": response.get("provider"), "review_model": response.get("model"), "model_used": True, "prompt": prompt, "llm_output": result, "quality_gate": _quality_gate_reason(result, decision), "model_input_characters": len(content), "model_input_truncated": input_truncated, "latency_ms": int((time.perf_counter() - started) * 1000)},
+            )
+        except Exception as exc:  # pragma: no cover - external model dependent
+            last_error = str(exc)
+            if attempt < max_attempts:
+                time.sleep(backoff_seconds * attempt)
+    normalized["llm_review_error"] = (last_error or "model error")[:300]
+    normalized["llm_review_latency_ms"] = int((time.perf_counter() - started) * 1000)
+    return None
 
 
 def _rule_review(normalized: dict[str, Any], *, requirements: str, confidence_threshold: float) -> dict[str, Any]:

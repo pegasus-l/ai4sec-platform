@@ -14,8 +14,12 @@ class OpenAICompatibleProvider:
         self.api_key = api_key
         self.model = model
         self.provider_name = provider_name
-        self.timeout_seconds = timeout_seconds
+        self.timeout_seconds = max(float(timeout_seconds), 5.0)
         self.max_output_tokens = max_output_tokens
+        # 兜底: 任何漏配 timeout 的 socket 继承进程级默认, 避免 read 无限阻塞。
+        # 已显式设过默认值(其它模块)则不覆盖。
+        if socket.getdefaulttimeout() is None:
+            socket.setdefaulttimeout(self.timeout_seconds)
 
     def complete_json(self, *, prompt: str, payload: dict) -> dict[str, Any]:
         if not self.base_url or not self.api_key or not self.model:
@@ -84,8 +88,11 @@ class OpenAICompatibleProvider:
                     raise TimeoutError(f"model response exceeded {self.timeout_seconds:g}s total deadline")
                 _set_response_socket_timeout(response, min(remaining, 15.0))
                 try:
-                    chunk = response.read(64 * 1024)
-                except socket.timeout as exc:
+                    # read1 至多取一次底层 raw read 的结果, 立即返回 → 每轮都过 deadline 检查。
+                    # 不能再用 read(64*1024): BufferedReader.read(amt) 会内部循环读到 amt/EOF,
+                    # 服务端慢速 dribble(每 <15s 来一点字节)时 socket.timeout 永不触发, deadline 形同虚设。
+                    chunk = response.read1(8 * 1024)
+                except (socket.timeout, TimeoutError) as exc:
                     if time.monotonic() >= deadline:
                         raise TimeoutError(f"model response exceeded {self.timeout_seconds:g}s total deadline") from exc
                     continue
@@ -96,7 +103,21 @@ class OpenAICompatibleProvider:
 
 
 def _set_response_socket_timeout(response: Any, timeout_seconds: float) -> None:
-    try:
-        response.fp.raw._sock.settimeout(timeout_seconds)
-    except AttributeError:
+    """多路径取响应底层 socket 并设 read 超时; 全部失败时用进程级 setdefaulttimeout 兜底。
+
+    不再静默吞 AttributeError —— 那是 16h 卡死的帮凶之一: 路径取不到时 socket 保持无/大超时,
+    read 可能无限阻塞。这里保证任意路径下 read 都有界。
+    """
+    sock = None
+    fp = getattr(response, "fp", None)
+    raw = getattr(fp, "raw", None)
+    if raw is not None:
+        sock = getattr(raw, "_sock", None)
+    if sock is None and fp is not None:
+        sock = getattr(fp, "_sock", None)
+    if sock is None:
+        sock = getattr(response, "_sock", None)
+    if sock is not None and hasattr(sock, "settimeout"):
+        sock.settimeout(max(float(timeout_seconds), 0.1))
         return
+    socket.setdefaulttimeout(max(float(timeout_seconds), 0.1))

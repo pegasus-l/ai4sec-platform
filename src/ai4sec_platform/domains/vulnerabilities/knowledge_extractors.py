@@ -25,7 +25,16 @@ KNOWLEDGE_EXTRACT_PROMPT = """你是漏洞知识工程专家。请把漏洞素�
 如果字段不确定，请保留“待复核/待确认”，不要编造。"""
 
 
-def extract_knowledge(item: dict[str, Any], *, use_model: bool = True) -> dict[str, Any]:
+def extract_knowledge(item: dict[str, Any], *, use_model: bool = True, fallback_mode: str = "needs_review") -> dict[str, Any]:
+    """LLM 抽取漏洞知识; 失败时按 fallback_mode 处理(默认诚实标记, 不生成规则知识)。
+
+    - "needs_review"(默认): LLM 失败 → 空 result + llm_error 标记。下游 _build_knowledge_payload
+      会回退到素材自身证据(_field_values/evidence), 产出"待人工确认"候选, 不做规则编造。
+    - "rules": 旧行为 opt-in, 失败回退 LocalRuleProvider 生成规则知识。
+    """
+    def _failed(error: str) -> dict[str, Any]:
+        return {"provider": "llm_failed", "status": "fallback", "agent": "knowledge_extract", "prompt": KNOWLEDGE_EXTRACT_PROMPT, "result": {"model_used": False, "llm_error": error[:300], "honest_failure": True}}
+
     if use_model:
         try:
             provider = LLMRouter().provider_for("vulnerability_knowledge_extractor")
@@ -35,12 +44,16 @@ def extract_knowledge(item: dict[str, Any], *, use_model: bool = True) -> dict[s
                 if isinstance(result, dict) and result:
                     return {"provider": response.get("provider"), "status": "success", "agent": "knowledge_extract", "model": response.get("model"), "prompt": KNOWLEDGE_EXTRACT_PROMPT, "result": {**result, "model_used": True}}
         except Exception as exc:  # pragma: no cover - external model dependent
-            local = LocalRuleProvider().complete_json(prompt="漏洞知识抽取", payload=item)
-            local["result"] = {**(local.get("result") or {}), "model_used": False, "llm_error": str(exc)[:300]}
-            return local
-    local = LocalRuleProvider().complete_json(prompt="漏洞知识抽取", payload=item)
-    local["result"] = {**(local.get("result") or {}), "model_used": False}
-    return local
+            if fallback_mode == "rules":
+                local = LocalRuleProvider().complete_json(prompt="漏洞知识抽取", payload=item)
+                local["result"] = {**(local.get("result") or {}), "model_used": False, "llm_error": str(exc)[:300]}
+                return local
+            return _failed(str(exc))
+    if fallback_mode == "rules":
+        local = LocalRuleProvider().complete_json(prompt="漏洞知识抽取", payload=item)
+        local["result"] = {**(local.get("result") or {}), "model_used": False}
+        return local
+    return _failed("模型不可用或已禁用")
 
 
 def _knowledge_payload(item: dict[str, Any]) -> dict[str, Any]:
