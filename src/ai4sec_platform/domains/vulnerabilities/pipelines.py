@@ -6,6 +6,7 @@ from ai4sec_platform.pipelines.steps.vulnerability_discovery import BuildAccepte
 from ai4sec_platform.pipelines.steps.vulnerability_event import AggregateVulnerabilityEventsStep
 from ai4sec_platform.pipelines.steps.vulnerability_evaluation import BuildVulnerabilityShadowEvaluationStep
 from ai4sec_platform.pipelines.steps.vulnerability_raw import BuildVulnerabilityMaterialItemsStep, ImportVulnerabilityRawStep, NormalizeVulnerabilityRawStep
+from ai4sec_platform.pipelines.steps.comprehension_probe import ComprehensionProbeStep
 from ai4sec_platform.pipelines.steps.vulnerability_knowledge import ExtractVulnerabilityKnowledgeStep, SelectVulnerabilityKnowledgeCandidatesStep
 from ai4sec_platform.pipelines.steps.vulnerability_pattern import SynthesizeVulnerabilityPatternsStep
 
@@ -23,6 +24,14 @@ def vulnerability_knowledge_pipeline() -> PipelineDefinition:
         name="vulnerabilities.knowledge_extraction_pipeline",
         domain="vulnerabilities",
         steps=[SelectVulnerabilityKnowledgeCandidatesStep(), ExtractVulnerabilityKnowledgeStep()],
+    )
+
+
+def comprehension_probe_pipeline() -> PipelineDefinition:
+    return PipelineDefinition(
+        name="vulnerabilities.comprehension_probe_pipeline",
+        domain="vulnerabilities",
+        steps=[ComprehensionProbeStep()],
     )
 
 

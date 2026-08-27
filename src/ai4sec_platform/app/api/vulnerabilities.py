@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import json
 import re
 import sqlite3
 import zipfile
@@ -11,6 +12,7 @@ from ai4sec_platform.app.dependencies import get_db
 from ai4sec_platform.db import repositories as repo
 from ai4sec_platform.core.config import load_settings
 from ai4sec_platform.domains.vulnerabilities.keyword_profiles import list_keyword_profiles
+from ai4sec_platform.domains.vulnerabilities.comprehension_probers import aggregate_feedback, render_probe_markdown
 from ai4sec_platform.domains.vulnerabilities.pattern_synthesizers import render_pattern_markdown
 from ai4sec_platform.domains.vulnerabilities import service as vuln_service
 from ai4sec_platform.services import domain_items
@@ -307,6 +309,71 @@ def pattern_download(item_id: int, conn: sqlite3.Connection = Depends(get_db)) -
         render_pattern_markdown(item),
         media_type="text/markdown; charset=utf-8",
         headers={"Content-Disposition": f'attachment; filename="{_download_filename(item, "vuln_pattern")}"'},
+    )
+
+
+@router.get("/comprehension")
+def comprehension(limit: int = Query(50, ge=1, le=200), conn: sqlite3.Connection = Depends(get_db)) -> dict:
+    data = domain_items.list_items(conn, DOMAIN, item_type="comprehension_probe", limit=limit)
+    for item in data["items"]:
+        payload = item.get("payload")
+        if isinstance(payload, dict):
+            payload.pop("model_output", None)  # 列表接口剥离完整模型输出, 保持轻量
+    return data
+
+
+@router.get("/comprehension/summary")
+def comprehension_summary(conn: sqlite3.Connection = Depends(get_db)) -> dict:
+    """通过率 + 各维度均分 + 回灌建议聚合。"""
+    rows = conn.execute(
+        "SELECT payload_json FROM domain_items WHERE domain = ? AND item_type = ?",
+        (DOMAIN, "comprehension_probe"),
+    ).fetchall()
+    probes = []
+    for row in rows:
+        try:
+            probes.append(json.loads(row["payload_json"]))
+        except (ValueError, TypeError):
+            continue
+    if not probes:
+        return {"tested": 0, "passed": 0, "failed": 0, "pass_rate": 0.0, "avg_score": 0.0, "dimension_averages": {}, "feedback": []}
+    passed = sum(1 for p in probes if p.get("verdict") == "pass")
+    scores = [p.get("overall_score") for p in probes if isinstance(p.get("overall_score"), (int, float))]
+    avg = round(sum(scores) / len(scores), 2) if scores else 0.0
+    dimension_averages: dict[str, float] = {}
+    for dim in ("root_cause", "trigger_condition", "exploit_primitives", "mitigation"):
+        vals = [p.get("per_field_scores", {}).get(dim) for p in probes if isinstance(p.get("per_field_scores"), dict)]
+        numeric = [v for v in vals if isinstance(v, (int, float))]
+        dimension_averages[dim] = round(sum(numeric) / len(numeric), 2) if numeric else 0.0
+    return {
+        "tested": len(probes),
+        "passed": passed,
+        "failed": len(probes) - passed,
+        "pass_rate": round(passed / len(probes), 2),
+        "avg_score": avg,
+        "dimension_averages": dimension_averages,
+        "feedback": aggregate_feedback(probes),
+    }
+
+
+@router.get("/comprehension/{item_id}")
+def comprehension_detail(item_id: int, conn: sqlite3.Connection = Depends(get_db)) -> dict:
+    item = domain_items.detail(conn, DOMAIN, item_id)
+    if not item or item.get("item_type") != "comprehension_probe":
+        raise HTTPException(status_code=404, detail="comprehension probe not found")
+    return item
+
+
+@router.get("/comprehension/{item_id}/download")
+def comprehension_download(item_id: int, conn: sqlite3.Connection = Depends(get_db)) -> Response:
+    """可理解性验证 markdown 一键下载。"""
+    item = domain_items.detail(conn, DOMAIN, item_id)
+    if not item or item.get("item_type") != "comprehension_probe":
+        raise HTTPException(status_code=404, detail="comprehension probe not found")
+    return Response(
+        render_probe_markdown(item),
+        media_type="text/markdown; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{_download_filename(item, "comprehension_probe")}"'},
     )
 
 

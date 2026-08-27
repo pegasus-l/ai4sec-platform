@@ -1,5 +1,7 @@
 import { BASE, getJson, postJson } from './client';
 import type {
+  ComprehensionProbePayload,
+  ComprehensionSummary,
   DomainItem,
   FieldReviewRequest,
   FieldReviewResponse,
@@ -155,6 +157,29 @@ export function patternDownloadUrl(itemId: number): string {
 export function runPatternSynthesis(): Promise<PipelineRunStartResponse> {
   return postJson('/api/runs', {
     pipeline_name: 'vulnerabilities.pattern_synthesis_pipeline',
+    reset: false,
+    wait: false,
+    params: {},
+  });
+}
+
+export function fetchVulnerabilityComprehension(): Promise<ListResponse<DomainItem<ComprehensionProbePayload>>> {
+  return getJson('/api/vulnerabilities/comprehension?limit=200');
+}
+
+export function fetchComprehensionSummary(): Promise<ComprehensionSummary> {
+  return getJson('/api/vulnerabilities/comprehension/summary');
+}
+
+/** 可理解性验证 markdown 下载地址：<a href> 直接跳转，服务器按 Content-Disposition 触发下载。 */
+export function probeDownloadUrl(itemId: number): string {
+  return `${BASE}/api/vulnerabilities/comprehension/${itemId}/download`;
+}
+
+/** 触发可理解性验证 pipeline(新 LLM 读素材作答 + judge 对拍打分)。 */
+export function runComprehensionProbe(): Promise<PipelineRunStartResponse> {
+  return postJson('/api/runs', {
+    pipeline_name: 'vulnerabilities.comprehension_probe_pipeline',
     reset: false,
     wait: false,
     params: {},
