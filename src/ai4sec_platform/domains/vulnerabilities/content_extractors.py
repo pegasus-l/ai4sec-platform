@@ -17,10 +17,36 @@ SLICE_EXTRACT_PROMPT = """你是网页正文抽取专家。输入包含完整漏
 只返回 JSON：{"body_start":"正文开头连续短句，可为空", "body_end":"正文结尾连续短句，可为空", "published_date":"可为空", "author":"可为空", "content_quality":"rich|usable|thin", "reason":"简短说明"}。"""
 
 
+def _looks_binary(markdown: str) -> bool:
+    """PDF/二进制内容检测: 评审与提取都无法读取二进制全文 → 不入选素材。"""
+    head = markdown.lstrip()[:64]
+    if head.startswith("%PDF-") or "%PDF-" in head:
+        return True
+    if "\x00" in markdown[:2048]:
+        return True
+    sample = markdown[:4096]
+    if sample:
+        non_printable = sum(1 for ch in sample if ord(ch) < 9 or 13 < ord(ch) < 32)
+        if non_printable / len(sample) > 0.05:
+            return True
+    return False
+
+
 def extract_page_content(page: dict[str, Any], *, use_model: bool = True) -> dict[str, Any]:
     markdown = str(page.get("markdown") or page.get("content") or page.get("snippet") or "")
     if not page.get("success") or not markdown.strip():
         return {**page, "cleaned_text": "", "content_extraction": {"provider": "none", "model_used": False, "status": "skipped", "reason": page.get("error") or "empty content"}}
+    if _looks_binary(markdown):
+        # PDF/二进制: 模型读不了, 评审也读不了全文 → 空正文 + not_supported, 评审长度门槛自然拒绝
+        return {
+            **page,
+            "cleaned_text": "",
+            "markdown_length": len(markdown),
+            "content_length": 0,
+            "content_quality": "thin",
+            "is_binary_content": True,
+            "content_extraction": {"provider": "detector", "model_attempted": False, "model_used": False, "status": "not_supported", "reason": "输入为PDF/二进制内容，无法提取可读正文，评审阶段亦无法读取全文，不入选素材。"},
+        }
     if use_model:
         started = time.perf_counter()
         provider_name = ""

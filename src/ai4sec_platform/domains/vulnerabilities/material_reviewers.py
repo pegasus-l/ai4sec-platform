@@ -79,6 +79,21 @@ MATERIAL_REVIEW_PROMPT = """你是一个资深安全研究员和技术内容审�
 }}"""
 
 
+def _looks_binary_content(text: str) -> bool:
+    """PDF/二进制内容检测: 评审无法读取二进制全文 → 直接拒绝, 不入选素材。"""
+    head = text.lstrip()[:64]
+    if head.startswith("%PDF-") or "%PDF-" in head:
+        return True
+    if "\x00" in text[:2048]:
+        return True
+    sample = text[:4096]
+    if sample:
+        non_printable = sum(1 for ch in sample if ord(ch) < 9 or 13 < ord(ch) < 32)
+        if non_printable / len(sample) > 0.05:
+            return True
+    return False
+
+
 def review_crawled_material(page: dict[str, Any], *, requirements: str = "", confidence_threshold: float = 0.55, use_model: bool = True, fallback_mode: str = "needs_review", llm_max_attempts: int = 2) -> dict[str, Any]:
     """Deterministic review that mirrors the old AI checker schema.
 
@@ -95,6 +110,15 @@ def review_crawled_material(page: dict[str, Any], *, requirements: str = "", con
         return _review(page, is_relevant=False, confidence=0.0, decision="reject", reason=f"抓取失败：{page.get('error') or 'unknown'}", key_findings=[])
 
     normalized = _normalize_review_input(page)
+    if _looks_binary_content(str((normalized.get("raw") or {}).get("markdown") or normalized.get("cleaned_text") or "")):
+        return _review(
+            normalized,
+            is_relevant=False,
+            confidence=0.0,
+            decision="reject",
+            reason="PDF/二进制内容，评审阶段无法读取全文，不入选素材。",
+            key_findings=[],
+        )
     if len(str(normalized.get("cleaned_text") or "").strip()) < 800:
         if re.search(r"\bCVE-\d{4}-\d{4,}\b", f"{normalized.get('title', '')}\n{normalized.get('cleaned_text', '')}", re.IGNORECASE):
             return _review(
