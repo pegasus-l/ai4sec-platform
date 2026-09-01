@@ -54,10 +54,20 @@ def _connect() -> sqlite3.Connection:
 _PAYLOAD_ACTIVE_STATUSES = {"success", "succeeded", "partial", "failed", "in_progress", "error", "not_supported"}
 _STATUS_TO_ITEM = {"success": "已复现", "partial": "部分复现", "failed": "复现失败", "error": "复现失败", "not_supported": "无法复现"}
 
-# 平台对外访问链接: 用户打开复现 Web 界面的入口(ASIS → /insights/ rewrite → ai4sec → /repro-web/ → repro:8080)
+# 平台对外访问链接: 用户打开复现 Web 界面的入口
+# (ASIS → /insights/ rewrite → ai4sec → /repro-web/ → repro nginx 总机:8080 → /task/{id}/ → 任务独立端口)
 # 用相对路径: 云服务器 8091 外部不可直连, 用户经本地端口映射(localhost:18092→8091)访问 ASIS 时,
-# 相对路径自动落到当前 origin → http://localhost:18092/insights/repro-web/, 按钮点击即可用。
+# 相对路径自动落到当前 origin → http://localhost:18092/insights/repro-web/task/{id}/, 按钮点击即可用。
 REPRO_WEB_URL = _env("REPRO_WEB_URL", "/insights/repro-web/")
+
+
+def _task_web_url(task_id: int) -> str:
+    """多服务分发方案: 每个复现任务有独立 URL /insights/repro-web/task/{id}, 互不覆盖。
+
+    不带尾斜杠: ASIS 层对带斜杠目录路径会 308 剥斜杠, 无斜杠路径能直通 repro nginx
+    (nginx 有精确 location = /task/{id} 兜底分发到应用根, 不产生内部 Host 的 301)。
+    """
+    return f"/insights/repro-web/task/{task_id}"
 
 # 停止协作标志（线程无法强杀，用 Event 在每个心跳检查点中止）
 _STOP_FLAGS: dict[int, threading.Event] = {}
@@ -137,8 +147,8 @@ def _build_repro_prompt(code_url: str, task_id: int) -> str:
         f"(LiteLLM 或 OpenAI 兼容: 通常 export OPENAI_API_KEY=$(读 auth.json 的 key) + OPENAI_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1, "
         f"或按项目自己的 LLM provider 配置方式设置, 模型名用 glm-5.1 或项目支持的 GLM 模型名)。"
         f"【绝对不要】因项目需要 LLM 就安装本地 Ollama/本地小模型——云端 key 现成且可用。"
-        f"Web 服务必须监听 0.0.0.0:8080 —— 平台已把对外路径 /repro-web/ 反代到容器内 8080, "
-        f"用户可通过 http://<平台地址>:8091/insights/repro-web/ 直接打开该界面。"
+        f"Web 服务必须监听 127.0.0.1:自选端口(8101~8199, 见下方启动流程)。平台 nginx 总机(常驻 8080)会按 "
+        f"/task/{task_id}/ 分发到你的端口, 用户通过 http://<平台地址>:8091/insights/repro-web/task/{task_id}/ 直接打开该界面。"
         f"总预算约 35 分钟, 必须在 33 分钟前停止继续探索, 把已验证的事实整理成报告; 核心闭环验证后不要枚举非必要功能。\n\n"
         f"# 第零步(最重要): ① 先判断项目是否必须 Docker(必须则不复现) → ② 再判断项目【本身】有没有 Web 界面\n"
         f"① 读 README/部署文档/源码, 从【部署方式】和【运行依赖】两个角度判断项目对 Docker 的硬依赖:\n"
@@ -157,26 +167,28 @@ def _build_repro_prompt(code_url: str, task_id: int) -> str:
         f"你【绝对不要】自己造一个网页(比如写个 Flask 把一堆 .md 文件列出来), 那样毫无价值。"
         f"直接如实报告: is_web=false、web_started=false, 在 summary 说清\"该项目本身没有 Web 界面, 它是 XX 类型\"。\n\n"
         f"# 如果确认项目自带 Web 界面, 才执行下面的启动流程\n"
-        f"- 服务必须监听 0.0.0.0:8080(平台对外路径 /repro-web/ → 容器内 8080, 用户可访问)。"
-        f"启动前若 8080 被上次任务残留进程占用: 【先】把自己的启动命令写入 /workspace/.repro-web/current.sh(这样看护进程即使在你切换期间拉起服务, 用的也是你的命令), "
-        f"【再】找到残留进程 kill 掉(如 `fuser -k 8080/tcp` 或按端口查 PID), 【最后】启动你自己的服务并验证 200。\n"
-        f"- 常见启动方式: Streamlit: `streamlit run xxx.py --server.address 0.0.0.0 --server.port 8080`; "
-        f"Gradio: 设 server_name=\"0.0.0.0\", server_port=8080; Flask/FastAPI: `uvicorn main:app --host 0.0.0.0 --port 8080`; "
-        f"Node/Vite/React: `--host 0.0.0.0 --port 8080` 或 PORT=8080; 前端项目先 npm install。\n"
+        f"- Web 服务必须监听 127.0.0.1:自选端口(8101~8199)。选端口前先探测空闲: "
+        f"`python3 -c \"import socket; print(socket.socket().connect_ex(('127.0.0.1',8101))!=0)\"` 输出 True 才是空闲, 被占就换下一个。"
+        f"【绝对不要】占用 8080(那是平台 nginx 总机, 常驻)。启动前若所选端口被上次任务残留进程占用, 先 kill 掉残留进程再启动。\n"
+        f"- 常见启动方式: Streamlit: `streamlit run xxx.py --server.address 127.0.0.1 --server.port <端口>`; "
+        f"Gradio: 设 server_name=\"127.0.0.1\", server_port=<端口>; Flask/FastAPI: `uvicorn main:app --host 127.0.0.1 --port <端口>`; "
+        f"Node/Vite/React: `--host 127.0.0.1 --port <端口>` 或 PORT=<端口>; 前端项目先 npm install。\n"
         f"- 在【后台】启动(`setsid nohup ... &`, 用 setsid 脱离当前会话进程组, 否则会话结束服务会被清掉), "
-        f"启动后【sleep 10 秒】等服务起来, 再 `curl -s http://localhost:8080`。"
+        f"启动后【sleep 10 秒】等服务起来, 再 `curl -s http://localhost:<端口>`。"
         f"如果 curl 没响应, 最多等 30 秒重试 2-3 次, 仍不行就如实报告 web_started=false 并结束。"
         f"用项目【原有】的前端, 不要自己另写页面。\n"
         f"- 启动命令纪律: 先定位真正的应用根目录(如仓库是 backend/app/main.py, 必须先 cd backend 再运行); "
-        f"不要用 --reload/hot reload; 后台启动后立刻记录 PID(`setsid nohup ... >/tmp/service.log 2>&1 & echo $! >/tmp/service.pid`), "
-        f"需要停止重试时用 `kill $(cat /tmp/service.pid)`, 绝对不要用 pkill -f(会误杀当前 shell)。"
-        f"启动成功且 curl 验证 200 后, 把【能独立重启服务】的启动命令写入 /workspace/.repro-web/current.sh(平台看护进程会在 8080 挂掉时用它自动拉起, 保证用户访问链接长期有效)。"
-        f"current.sh 必须用 sh 可执行、含 cd 到正确目录的完整命令, 例如: `#!/bin/sh` + `cd /workspace/repo-{task_id} && setsid nohup python3 -m <模块> serve --port 8080 >> /tmp/service.log 2>&1 &`。\n"
+        f"不要用 --reload/hot reload; 后台启动后立刻记录 PID(`setsid nohup ... >/tmp/service-{task_id}.log 2>&1 & echo $! >/tmp/service-{task_id}.pid`), "
+        f"需要停止重试时用 `kill $(cat /tmp/service-{task_id}.pid)`, 绝对不要用 pkill -f(会误杀当前 shell)。"
+        f"启动成功且 curl 验证 200 后, 做两步注册(平台多服务总机会把 /task/{task_id}/ 分发到你的端口并长期看护):\n"
+        f"  ① 把【能独立重启服务】的启动命令写入 /workspace/.repro-web/task-{task_id}.sh(#!/bin/sh + cd 正确目录 + setsid nohup ... 监听 127.0.0.1:<端口>);\n"
+        f"  ② 运行 `python3 /workspace/.repro-web/register.py add {task_id} <端口> '<项目名>' --framework <streamlit|gradio|nextjs|fastapi|generic>`, 生成 nginx 配置并热 reload;\n"
+        f"  ③ 验证: `curl -s http://localhost:8080/task/{task_id}/` 返回 200 且 HTML 含 `<base href=\"/insights/repro-web/task/{task_id}/\">` 即注册成功。\n"
         f"首次启动失败不能直接结束: 读服务日志、检查工作目录/模块路径/端口/依赖, 至少修正重试一次。"
-        f"前后端分离项目: 后端按其真实目录启动到内部端口(如 8000), 前端最终监听 0.0.0.0:8080, 并确认前端 /api 代理指向已启动的后端。\n"
+        f"前后端分离项目: 后端按其真实目录启动到内部端口(如 8000), 前端最终监听 127.0.0.1:<端口>, 并确认前端 /api 代理指向已启动的后端。\n"
         f"- 写配置前检查项目实际配置加载逻辑(Pydantic env_file、dotenv、进程 cwd), 配置文件必须放在运行进程真正读取的位置; "
         f"启动后通过配置对象、进程环境或实际响应确认 provider/model 等关键配置已生效, 不能只确认文件存在。\n"
-        f"- `curl http://localhost:8080` 只证明页面服务启动, 不能单独作为复现成功的依据。\n"
+        f"- `curl http://localhost:<端口>` 只证明页面服务启动, 不能单独作为复现成功的依据。\n"
         f"- 如果页面需要登录/注册: 必须实际调用注册或登录 API 确认能进入受保护页面; "
         f"没有预置账号但支持注册就创建专用 Demo 账号(不要用真实个人账号), 并把账号密码写进 usage.prerequisites; "
         f"注册不可用就找安全演示入口, 不能把用户留在登录页。\n\n"
@@ -738,7 +750,7 @@ def _run_task(task_id: int, item_id: int, code_url: str, title: str, timeout: in
             finished_at=_utc_now(),
             result=full_response[:20000],
             report_json=json.dumps(report_json, ensure_ascii=False),
-            web_url=REPRO_WEB_URL if web_started else "",
+            web_url=_task_web_url(task_id) if web_started else "",
             web_port=8080 if web_started else None,
         )
         payload_status = _final_payload_status(verdict, report)
@@ -781,7 +793,7 @@ def _run_task(task_id: int, item_id: int, code_url: str, title: str, timeout: in
                 task_id, status=task_status, finished_at=_utc_now(),
                 result=(salvaged or emsg)[:20000],
                 report_json=json.dumps(report, ensure_ascii=False),
-                web_url=REPRO_WEB_URL if web_started else "",
+                web_url=_task_web_url(task_id) if web_started else "",
                 web_port=8080 if web_started else None,
             )
             _append_log(task_id, f"✗ {emsg}")

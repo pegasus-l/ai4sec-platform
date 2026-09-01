@@ -80,10 +80,12 @@ def _rewrite_web_html(html: str, prefix: str) -> str:
 
 
 async def repro_web_proxy(request: Request):
-    """把 /repro-web/{path} 转发到 repro 容器内 agent 启动的 Web 服务(默认 8080)。
+    """把 /repro-web/{path} 转发到 repro 容器内 agent 启动的 Web 服务(默认 repro nginx 8080)。
 
-    对 HTML 响应做子路径适配(注入 <base> + root-absolute 链接加前缀), 使 SPA 在
-    /insights/repro-web/ 下完整可用; 非 HTML 按原样流式透传。
+    - /repro-web/task/{id}/...: 多服务分发路径。repro 容器内 nginx 总机按 /task/{id}/ 分发到各任务
+      独立端口并已做子路径改写(注入 <base> + 根绝对路径加前缀), 这里【不】再改 HTML, 原样透传。
+    - /repro-web/...(旧单服务): 仍由本层做 HTML 子路径适配(注入 <base> + root-absolute 链接加前缀)。
+    非 HTML 一律按原样流式透传。
     """
     app = request.app
     client = getattr(app.state, "repro_web_client", None)
@@ -112,8 +114,11 @@ async def repro_web_proxy(request: Request):
     }
     status = resp.status_code
     ctype = (resp.headers.get("content-type") or "").lower()
+    # 多服务分发路径(/task/{id} 或 /task/{id}/...)的 HTML 已由 repro 内 nginx sub_filter 改写, 此处不重复处理。
+    # 注意 ASIS 会把带斜杠目录 308 剥成无斜杠(/task/17), nginx 精确 location 兜底分发, 这里要一并识别。
+    is_task_path = bool(re.match(r"^task/\d+(/|$)", path))
     # 仅 GET 成功响应的 text/html 才做子路径适配; 其余(静态资源/接口/错误页)按原文透传
-    if "text/html" in ctype and "json" not in ctype and status < 400 and request.method in ("GET", "HEAD"):
+    if not is_task_path and "text/html" in ctype and "json" not in ctype and status < 400 and request.method in ("GET", "HEAD"):
         try:
             data = await resp.aread()
         finally:
