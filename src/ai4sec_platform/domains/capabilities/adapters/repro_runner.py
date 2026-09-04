@@ -47,7 +47,7 @@ DASHSCOPE_PROXY_URL = os.environ.get("DASHSCOPE_PROXY_URL", "")
 # 这些值会注入到 REPRO_PROMPT 里，供容器内 opencode 使用
 REPRO_LLM_API_KEY = os.environ.get("REPRO_LLM_API_KEY", "")
 REPRO_LLM_BASE_URL = os.environ.get("REPRO_LLM_BASE_URL", DASHSCOPE_PROXY_URL or "")
-REPRO_LLM_MODEL = os.environ.get("REPRO_LLM_MODEL", "glm-5.1")
+REPRO_LLM_MODEL = os.environ.get("REPRO_LLM_MODEL", "glm-5.2")
 
 
 def _repo_archive_url(repo_url: str) -> str:
