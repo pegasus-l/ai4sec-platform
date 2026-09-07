@@ -204,12 +204,37 @@ async def repro_web_ws_proxy(websocket: WebSocket) -> None:
             pass
 
 
+# 全局锁被长时间占用时的兜底(vuln 22:00 起跑可占 5-6h)。日更任务错过即当日无数据,
+# 不能直接 skip —— 排队延迟重试直到锁释放或达上限。capability(15min 高频)不排队,
+# 跳一轮下一轮自然补, 避免重试链堆积。
+_PIPELINE_RETRY_WHITELIST = {
+    "threats.huawei_full_migration_pipeline",
+    "vulnerabilities.full_knowledge_discovery_pipeline",
+}
+_PIPELINE_RETRY_DELAY_SECONDS = 10 * 60
+_PIPELINE_RETRY_MAX = 24  # 10min x 24 = 4h 重试窗口, 仍无锁则放弃当日
+
 def _run_pipeline_job(pipeline_name: str, params: dict | None = None) -> None:
     acquired = _pipeline_lock.acquire(timeout=600)
     if not acquired:
-        print(f'[scheduler] {pipeline_name}: skipped (another pipeline running)', flush=True)
+        retry = (params or {}).get('_retry', 0)
+        if pipeline_name in _PIPELINE_RETRY_WHITELIST and retry < _PIPELINE_RETRY_MAX:
+            print(f'[scheduler] {pipeline_name}: lock busy -> retry {retry + 1}/{_PIPELINE_RETRY_MAX} in {_PIPELINE_RETRY_DELAY_SECONDS // 60}min', flush=True)
+            t = threading.Timer(
+                _PIPELINE_RETRY_DELAY_SECONDS,
+                _run_pipeline_job,
+                args=[pipeline_name],
+                kwargs={"params": {**(params or {}), "_retry": retry + 1}},
+            )
+            t.daemon = True
+            t.start()
+        else:
+            print(f'[scheduler] {pipeline_name}: skipped (another pipeline running)', flush=True)
         return
     try:
+        # 剥掉内部重试标记, 不污染下游 pipeline 参数
+        if params and "_retry" in params:
+            params = {k: v for k, v in params.items() if k != "_retry"}
         # DB 级防重: 线程锁随进程崩溃/重启释放后, 旧 run 的 DB 行仍是 running 僵尸,
         # 不能只靠内存锁判断"是否在跑"。启动前查同 pipeline 是否有存活 run, 有则跳过。
         from ai4sec_platform.core.config import load_settings
@@ -305,7 +330,7 @@ def create_app() -> FastAPI:
     # APScheduler: pipeline scheduling
     scheduler = BackgroundScheduler(timezone="Asia/Shanghai", daemon=True)
     scheduler.add_job(_run_pipeline_job, IntervalTrigger(minutes=15), args=['capabilities.from_news_pipeline'], id='cap', name='capability(15min)', replace_existing=True)
-    scheduler.add_job(_run_pipeline_job, CronTrigger(hour=2, minute=0, timezone="Asia/Shanghai"), args=['threats.huawei_full_migration_pipeline'], id='threat', name='threat(daily 02:00)', replace_existing=True)
+    scheduler.add_job(_run_pipeline_job, CronTrigger(hour=5, minute=0, timezone="Asia/Shanghai"), args=['threats.huawei_full_migration_pipeline'], id='threat', name='threat(daily 05:00)', replace_existing=True)
     scheduler.add_job(_run_pipeline_job, CronTrigger(hour=22, minute=0, timezone="Asia/Shanghai"), args=['vulnerabilities.full_knowledge_discovery_pipeline', {'keyword_profile': 'daily_watch', 'skip_existing_urls': True}], id='vuln', name='vuln(daily 22:00)', replace_existing=True)
     scheduler.add_job(_reap_repro_tasks, IntervalTrigger(minutes=5), id='repro-reap', name='repro-watchdog(5min)', replace_existing=True)
     scheduler.add_job(_reap_stale_pipeline_runs, IntervalTrigger(minutes=5), id='pipeline-reap', name='pipeline-watchdog(5min)', replace_existing=True)
@@ -330,7 +355,7 @@ def create_app() -> FastAPI:
             print(f'[pipeline-recover] {n} orphaned pipeline run(s) recovered', flush=True)
         except Exception as e:  # noqa: BLE001 - 清扫失败不影响启动
             print(f'[pipeline-recover] error: {e}', flush=True)
-        print('[scheduler] started: capability(15min), threat(daily 02:00), vuln(daily 22:00), repro-watchdog(5min), pipeline-watchdog(5min)', flush=True)
+        print('[scheduler] started: capability(15min), threat(daily 05:00), vuln(daily 22:00), repro-watchdog(5min), pipeline-watchdog(5min)', flush=True)
 
     @app.on_event('shutdown')
     def _stop_scheduler():
