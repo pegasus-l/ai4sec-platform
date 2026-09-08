@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
 from ai4sec_platform.app.dependencies import get_db
+from ai4sec_platform.domains.threats import linkage as threat_linkage
 from ai4sec_platform.domains.threats import service as threat_service
 from ai4sec_platform.services import domain_items
 from ai4sec_platform.services import operations
@@ -228,6 +229,136 @@ def graph(conn: sqlite3.Connection = Depends(get_db)) -> dict:
     return {"domain": DOMAIN, "nodes": nodes, "edges": [], "status": "partial", "note": "第一阶段仅返回目标节点，CVE/固件/镜像关系待后续 threat raw pipeline 补齐。"}
 
 
+def _split_org_name(title: str) -> tuple[str, str]:
+    """repo title 'org/name' → (org, name);无 '/' 则 org 为空。"""
+    title = title or ""
+    if "/" in title:
+        org, _, name = title.partition("/")
+        return org, name
+    return "", title
+
+
+def _asset_category(asset_payload: dict) -> str:
+    """资产品类:raw.category(list/str) 优先,否则退回 payload source/source_type。"""
+    raw = asset_payload.get("raw") or {}
+    cat = raw.get("category") or raw.get("subcategory") or ""
+    if isinstance(cat, list):
+        cat = ", ".join(str(c) for c in cat)
+    if cat:
+        return str(cat)
+    return str(asset_payload.get("source_type") or asset_payload.get("source") or "")
+
+
+def _repo_meta(link: dict) -> dict:
+    rp = link.get("repo_payload") or {}
+    attack = rp.get("attack_surface") or {}
+    signals = rp.get("vulnerability_signals") or rp.get("signals") or {}
+    grade = attack.get("grade") if isinstance(attack, dict) else ""
+    cve = signals.get("cve_count") if isinstance(signals, dict) else None
+    if cve is None:
+        cve = rp.get("cve_count")
+    try:
+        cve = int(cve or 0)
+    except (TypeError, ValueError):
+        cve = 0
+    org, name = _split_org_name(link.get("repo_title") or "")
+    return {
+        "id": link["repo_id"],
+        "org": org,
+        "name": name or (link.get("repo_title") or ""),
+        "grade": grade or "",
+        "cve": cve,
+        "risk": link.get("repo_score"),
+    }
+
+
+def _asset_meta(link: dict, risk_in: float) -> dict:
+    ap = link.get("asset_payload") or {}
+    return {
+        "id": link["asset_id"],
+        "title": link.get("asset_title") or "",
+        "source": link.get("asset_source") or "",
+        "cat": _asset_category(ap),
+        "risk_in": round(risk_in, 1),
+    }
+
+
+@router.get("/associations")
+def associations(conn: sqlite3.Connection = Depends(get_db)) -> dict:
+    """一次取回可渲染全集的关联 bundle:links + 三态资产 + meta。
+
+    MVP 数据量小(167 资产量级)不做分页,前端客户端过滤/排序;not_run 全量返回有兜底上限。
+    risk_in = 该资产全部入边仓库风险(score)之和,与规格文档口径一致。
+    """
+    links = repo.list_threat_links(conn, domain=DOMAIN)
+    asset_rows = conn.execute(
+        "SELECT id, title, source, payload_json FROM domain_items WHERE domain = ? AND item_type = 'asset' ORDER BY id",
+        (DOMAIN,),
+    ).fetchall()
+
+    risk_in: dict[int, float] = {}
+    for link in links:
+        asset_id = link["asset_id"]
+        risk = link.get("repo_score")
+        try:
+            risk_in[asset_id] = risk_in.get(asset_id, 0.0) + (float(risk) if risk is not None else 0.0)
+        except (TypeError, ValueError):
+            pass
+
+    edges_asset_ids: set[int] = {int(link["asset_id"]) for link in links}
+
+    linked_ids: set[int] = set()
+    orphan_rows: list[dict] = []
+    not_run_rows: list[dict] = []
+    for row in asset_rows:
+        p = repo.loads(row["payload_json"], {})
+        if not isinstance(p, dict):
+            p = {}
+        status = p.get("assoc_status")
+        if status is None and p.get("ai_association"):
+            aa = p.get("ai_association") or {}
+            status = "linked" if aa.get("associations") else "orphan"
+        entry = {"id": row["id"], "title": row["title"], "cat": _asset_category(p)}
+        if row["id"] in edges_asset_ids:
+            # 以边为准:有 threat_links 边才算真 linked(陈旧 linked 但无边的并入 not_run,与批跑口径一致)
+            linked_ids.add(row["id"])
+        elif status == "orphan":
+            orphan_rows.append(entry)
+        else:
+            not_run_rows.append(entry)
+
+    by_confidence = {"direct": 0, "inferred": 0, "weak": 0}
+    serialized: list[dict] = []
+    for link in links:
+        conf = link.get("confidence") or "inferred"
+        if conf in by_confidence:
+            by_confidence[conf] += 1
+        asset_id = link["asset_id"]
+        serialized.append({
+            "id": link["link_id"],
+            "conf": conf,
+            "rel_type": link.get("rel_type") or "related",
+            "method": link.get("method") or "llm",
+            "reason": link.get("reason") or "",
+            "repo": _repo_meta(link),
+            "asset": _asset_meta(link, risk_in.get(asset_id, 0.0)),
+        })
+
+    return {
+        "meta": {
+            "total_assets": len(asset_rows),
+            "linked_assets": len(linked_ids),
+            "orphan_assets": len(orphan_rows),
+            "not_run_assets": len(not_run_rows),
+            "total_links": len(serialized),
+            "by_confidence": by_confidence,
+        },
+        "links": serialized,
+        "orphans": orphan_rows,
+        "not_run": not_run_rows[:300],
+    }
+
+
 @router.post("/{item_id}/ai-review")
 def ai_review(item_id: int, conn: sqlite3.Connection = Depends(get_db)) -> dict:
     """On-demand AI risk review for a single threat target.
@@ -311,142 +442,13 @@ def get_ai_review(item_id: int, conn: sqlite3.Connection = Depends(get_db)) -> d
     return {"item_id": item_id, "status": "cached", "assessment": data.get("payload", {})}
 
 
-def _asset_association_prompt() -> str:
-    return """
-你是华为开源生态分析专家。我给你一个资产信息和一批候选代码仓库，请判断哪些仓库和这个资产有关联。
-
-关联类型：
-- direct: 资产直接包含或依赖该仓库的代码（如固件包里有该仓库的 .so 文件）
-- inferred: 通过产品线/生态链路推断关联（如 Atlas 固件 → CANN 仓库，因为 CANN 是 Atlas 的软件栈）
-- weak: 间接关联（如镜像站包含该仓库的软件包）
-
-如果没有关联，返回空数组。
-
-输出 JSON：
-{
-  "associations": [
-    {"repo_id": "仓库ID", "repo_name": "org/name", "confidence": "direct|inferred|weak", "reason": "关联理由"}
-  ],
-  "summary": "一句话总结关联情况"
-}
-""".strip()
-
-
 @router.post("/assets/{item_id}/ai-associate")
 def ai_associate(item_id: int, conn: sqlite3.Connection = Depends(get_db)) -> dict:
-    """On-demand AI asset-to-repo association analysis."""
-    # Read the asset
-    row = conn.execute(
-        "SELECT * FROM domain_items WHERE id = ? AND domain = ? AND item_type = ?",
-        (item_id, DOMAIN, "asset"),
-    ).fetchone()
-    if not row:
-        raise HTTPException(status_code=404, detail="asset not found")
-    target = repo.row_to_dict(row)
-
-    # Check cache
-    existing = conn.execute(
-        "SELECT * FROM evidence_items WHERE domain_item_id = ? AND evidence_type = 'asset_association' ORDER BY id DESC LIMIT 1",
-        (item_id,),
-    ).fetchone()
-    if existing:
-        existing_data = repo.row_to_dict(existing)
-        return {"item_id": item_id, "status": "cached", "associations": existing_data.get("payload", {})}
-
-    # Build asset info
-    payload = target.get("payload") or {}
-    if isinstance(payload, str):
-        import json as _json
-        payload = _json.loads(payload)
-    raw = payload.get("raw") or {}
-    asset_name = target.get("title", "")
-    asset_source = payload.get("source", "")
-    asset_desc = raw.get("msg") or raw.get("description") or raw.get("softwareExplain") or ""
-    asset_model = raw.get("modelName") or raw.get("displayName") or raw.get("name") or raw.get("repoName") or ""
-
-    # Pre-filter candidate repos by name matching (limit to top 30)
-    all_repos = conn.execute(
-        "SELECT id, title, source, summary, payload_json FROM domain_items WHERE domain = ? AND item_type = ? LIMIT 800",
-        (DOMAIN, "target"),
-    ).fetchall()
-
-    candidates = []
-    asset_words = set()
-    for word in (asset_name + " " + asset_model + " " + asset_desc).lower().replace("/", " ").replace("-", " ").replace("_", " ").split():
-        if len(word) >= 3:
-            asset_words.add(word)
-
-    for repo_row in all_repos:
-        repo_data = repo.row_to_dict(repo_row)
-        repo_title = repo_data.get("title", "")
-        repo_summary = repo_data.get("summary", "")
-        repo_text = (repo_title + " " + repo_summary).lower()
-        # Match if any asset word appears in repo text
-        if any(word in repo_text for word in asset_words):
-            candidates.append({
-                "repo_id": str(repo_data.get("id", "")),
-                "repo_name": repo_title,
-                "repo_summary": (repo_summary or "")[:100],
-            })
-        if len(candidates) >= 30:
-            break
-
-    # If no candidates from name matching, take top repos by score as fallback
-    if not candidates:
-        top_repos = conn.execute(
-            "SELECT id, title, summary FROM domain_items WHERE domain = ? AND item_type = ? ORDER BY score DESC LIMIT 10",
-            (DOMAIN, "target"),
-        ).fetchall()
-        for repo_row in top_repos:
-            repo_data = repo.row_to_dict(repo_row)
-            candidates.append({
-                "repo_id": str(repo_data.get("id", "")),
-                "repo_name": repo_data.get("title", ""),
-                "repo_summary": (repo_data.get("summary") or "")[:100],
-            })
-
-    # Call LLM
-    llm_payload = {
-        "asset_name": asset_name,
-        "asset_type": asset_source,
-        "asset_model": asset_model,
-        "asset_description": asset_desc[:300],
-        "candidate_repos": candidates,
-    }
-
-    router_instance = LLMRouter()
-    prompt = _asset_association_prompt()
-    output = router_instance.complete_json(profile="configured_model", prompt=prompt, payload=llm_payload)
-
-    # Normalize result
-    result = output if isinstance(output, dict) else {}
-    associations = result.get("associations") or result.get("result", {}).get("associations", [])
-    summary = result.get("summary") or result.get("result", {}).get("summary", "已完成关联分析。")
-
-    association_data = {"associations": associations, "summary": summary, "reviewed_at": datetime.now().isoformat()}
-
-    # Cache to evidence
-    repo.create_evidence(
-        conn,
-        domain=DOMAIN,
-        domain_item_id=item_id,
-        evidence_type="asset_association",
-        title="AI 资产关联分析",
-        content=summary,
-        source_url=target.get("source_url") or "",
-        confidence=None,
-        payload=association_data,
-    )
-
-    # Write to domain_items payload
-    if isinstance(payload, str):
-        import json as _json
-        payload = _json.loads(payload)
-    payload["ai_association"] = association_data
-    repo.update_domain_item(conn, item_id=item_id, payload=payload)
-    conn.commit()
-
-    return {"item_id": item_id, "status": "success", "associations": association_data}
+    """On-demand AI asset-to-repo association analysis(逻辑已抽到 domains/threats/linkage.py)。"""
+    result = threat_linkage.run_asset_association(conn, asset_id=item_id)
+    if result.get("status") == "error":
+        raise HTTPException(status_code=404, detail=result.get("error", "asset not found"))
+    return result
 
 
 @router.get("/assets/{item_id}/ai-associate")

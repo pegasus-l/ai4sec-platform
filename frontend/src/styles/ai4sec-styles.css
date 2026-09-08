@@ -1125,3 +1125,129 @@
 
 /* 隐藏 sidebar-note demo 文字 */
 .ai4sec-sidebar-note { display: none !important; }
+
+/* ============================================================
+   资产↔仓关联 (C 泳道审计 / D 风险焦点) —— MVP
+   同一份 bundle:AI 批跑 → threat_links → GET /associations
+   ============================================================ */
+.assoc-view { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.assoc-view .tiny { font-size: 11px; color: var(--muted); line-height: 1.5; }
+.assoc-view .muted.tiny { font-size: 11px; color: var(--muted); }
+
+/* ---- 工具条 ---- */
+.assoc-toolbar { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.assoc-kpis { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; padding: 12px !important; }
+.assoc-kpi { display: flex; flex-direction: column; gap: 4px; align-items: flex-start; padding: 8px 10px;
+  border: 1px solid var(--line); border-radius: 10px; background: transparent; color: var(--text);
+  text-align: left; cursor: default; transition: border-color .15s, background .15s; min-width: 0; }
+button.assoc-kpi.clickable { cursor: pointer; }
+button.assoc-kpi:hover, .assoc-kpi.on { border-color: color-mix(in srgb, var(--accent) 42%, transparent); background: color-mix(in srgb, var(--accent) 7%, transparent); }
+.assoc-kpi b { font-size: 20px; letter-spacing: -0.02em; display: flex; align-items: center; gap: 5px; flex-wrap: wrap; }
+.assoc-kpi .badge { font-size: 10px; padding: 1px 6px; }
+
+.assoc-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.assoc-seg { display: inline-flex; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+.assoc-seg button { display: inline-flex; align-items: center; gap: 4px; padding: 5px 11px; font-size: 12px;
+  color: var(--muted); background: transparent; border: 0; cursor: pointer; }
+.assoc-seg button + button { border-left: 1px solid var(--line); }
+.assoc-seg button:hover { color: var(--text); background: color-mix(in srgb, var(--accent) 6%, transparent); }
+.assoc-seg button.on { color: #e0f2fe; background: color-mix(in srgb, var(--accent) 16%, transparent); font-weight: 700; }
+.assoc-search { width: 210px; }
+.assoc-run { display: inline-flex; align-items: center; gap: 6px; margin-left: auto; }
+.assoc-run .spin, .spin { animation: assoc-spin .9s linear infinite; display: inline-block; }
+@keyframes assoc-spin { to { transform: rotate(360deg); } }
+
+/* ---- D 风险焦点 ---- */
+.assoc-focus { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); gap: 14px; align-items: start; min-width: 0; }
+.assoc-focus-col { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.assoc-col-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px;
+  padding: 2px 2px 6px; border-bottom: 1px solid var(--line); }
+.assoc-repo-list, .assoc-asset-list { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+
+.assoc-repo-card { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px;
+  border: 1px solid var(--line); border-radius: 12px; min-width: 0;
+  background: color-mix(in srgb, var(--accent) 5%, transparent);
+  transition: opacity .12s, border-color .15s, background .15s, transform .15s; }
+.assoc-repo-card.clickable { cursor: pointer; }
+.assoc-repo-card.hl, .assoc-repo-card:hover { border-color: color-mix(in srgb, var(--accent) 46%, transparent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent); transform: translateY(-1px); }
+.assoc-repo-card.dim { opacity: .32; }
+.assoc-repo-name { display: flex; align-items: center; gap: 7px; min-width: 0; }
+.assoc-repo-name b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13.5px; min-width: 0; }
+.assoc-chips { display: inline-flex; align-items: center; gap: 4px; flex-wrap: wrap; justify-content: flex-end; }
+.assoc-repo-assets { display: flex; flex-wrap: wrap; gap: 4px; }
+.assoc-pill { display: inline-flex; align-items: center; gap: 4px; padding: 1px 6px 1px 8px; max-width: 100%;
+  border: 1px solid var(--line); border-radius: 999px; font-size: 11px; color: var(--muted);
+  background: rgba(148,163,184,.08); cursor: pointer; }
+.assoc-pill:hover { border-color: color-mix(in srgb, var(--accent) 40%, transparent); }
+.assoc-pill i { font-style: normal; font-size: 10px; }
+
+.assoc-asset-row { display: flex; flex-direction: column; gap: 4px; padding: 8px 12px;
+  border: 1px solid var(--line); border-radius: 12px; min-width: 0;
+  background: color-mix(in srgb, var(--sky) 4%, transparent);
+  transition: opacity .12s, border-color .15s, background .15s, transform .15s; }
+.assoc-asset-row.clickable { cursor: pointer; }
+.assoc-asset-row.hl, .assoc-asset-row:hover { border-color: color-mix(in srgb, var(--sky) 52%, transparent);
+  background: color-mix(in srgb, var(--sky) 9%, transparent); transform: translateY(-1px); }
+.assoc-asset-row.dim { opacity: .32; }
+.assoc-risk { display: flex; align-items: center; gap: 8px; }
+.assoc-risk .score-bar { flex: 1; width: auto; height: 6px; }
+.assoc-risk .score-bar i { background: linear-gradient(90deg, var(--amber), var(--red)); }
+.assoc-risk b { width: 42px; text-align: right; font-size: 12px; color: var(--rose); flex-shrink: 0; }
+
+.assoc-empty { display: flex; flex-direction: column; gap: 8px; align-items: center; justify-content: center;
+  padding: 44px 24px; text-align: center; }
+.assoc-empty strong { font-size: 16px; }
+.assoc-empty p { max-width: 560px; color: var(--muted); font-size: 13px; line-height: 1.7; }
+
+/* ---- C 泳道 ---- */
+.assoc-lane { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.assoc-lane-head { display: flex; flex-direction: column; gap: 4px; padding-bottom: 8px; border-bottom: 1px solid var(--line); }
+.assoc-lane-legend { display: inline-flex; gap: 12px; align-items: center; }
+.assoc-lane-legend span { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; color: var(--muted); }
+.assoc-lane-legend i.dot { width: 8px; height: 8px; border-radius: 50%; }
+.assoc-lane-legend i.dot.direct { background: #34d399; }
+.assoc-lane-legend i.dot.inferred { background: #f59e0b; }
+.assoc-lane-legend i.dot.weak { background: #fb7185; }
+
+.assoc-lane-body { display: flex; gap: 0; align-items: flex-start; min-width: 0; }
+.assoc-col { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; gap: 8px; }
+.assoc-colgap { position: relative; flex: 0 0 auto; height: 0; }
+.assoc-colgap svg { display: block; }
+.assoc-col-head { height: 34px; line-height: 34px; padding: 0 12px; font-size: 12px; font-weight: 700;
+  letter-spacing: .05em; color: var(--muted); border: 1px solid var(--line); border-radius: 10px;
+  background: color-mix(in srgb, var(--accent) 8%, transparent); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.assoc-lane-row { display: flex; align-items: center; gap: 7px; height: 46px; padding: 0 10px; min-width: 0;
+  border: 1px solid var(--line); border-radius: 10px; cursor: pointer;
+  background: color-mix(in srgb, var(--accent) 3%, transparent);
+  box-shadow: inset 3px 0 0 var(--sky);
+  transition: opacity .12s, border-color .12s, background .12s; }
+.assoc-lane-row.repo { box-shadow: inset 3px 0 0 var(--amber); }
+.assoc-lane-row .assoc-row-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; font-size: 12.5px; color: var(--text); }
+.assoc-lane-row .assoc-row-badges { display: inline-flex; gap: 4px; align-items: center; flex-shrink: 0; }
+.assoc-lane-row .assoc-row-badges .badge { font-size: 10px; padding: 1px 6px; }
+.assoc-lane-row.hl { border-color: color-mix(in srgb, var(--accent) 62%, transparent);
+  background: color-mix(in srgb, var(--accent) 13%, transparent); }
+.assoc-lane-row.dim { opacity: .28; }
+
+.assoc-lane-detail { margin-top: 2px; }
+.assoc-edge-list { display: flex; flex-direction: column; gap: 5px; margin-top: 8px; }
+.assoc-edge-item { display: flex; align-items: baseline; gap: 10px; padding: 6px 10px; cursor: pointer;
+  border-left: 3px solid transparent; border-radius: 8px; background: color-mix(in srgb, var(--accent) 3%, transparent); }
+.assoc-edge-item:hover { background: color-mix(in srgb, var(--accent) 9%, transparent); }
+.assoc-edge-pair { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 12px; flex-shrink: 0; }
+.assoc-edge-reason { flex: 1; min-width: 200px; }
+
+/* ---- 孤儿 / 未跑 rail ---- */
+.assoc-rail { }
+.assoc-rail-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 6px;
+  margin-top: 10px; max-height: 300px; overflow: auto; }
+.assoc-rail-item { display: flex; gap: 7px; align-items: center; width: 100%; padding: 6px 8px;
+  border: 1px solid var(--line); border-radius: 9px; background: transparent; color: var(--text);
+  text-align: left; cursor: pointer; }
+.assoc-rail-item:hover { border-color: color-mix(in srgb, var(--accent) 40%, transparent);
+  background: color-mix(in srgb, var(--accent) 7%, transparent); }
+.assoc-rail-item .badge { font-size: 10px; flex-shrink: 0; }
+
+.assoc-footnote { padding: 0 2px; line-height: 1.8; }

@@ -97,3 +97,119 @@ export interface AiReviewResult {
     recommended_actions: string[];
   };
 }
+
+// ============================================================================
+// 资产↔仓关联 bundle (GET /api/threats/associations)
+// ============================================================================
+
+export interface AssocRepoMeta {
+  id: number;
+  org: string;
+  name: string;
+  grade: string;
+  cve: number;
+  risk: number | null;
+}
+
+export interface AssocAssetMeta {
+  id: number;
+  title: string;
+  source: string;
+  cat: string;
+  risk_in: number;
+}
+
+export interface AssocLink {
+  id: number;
+  conf: 'direct' | 'inferred' | 'weak';
+  rel_type: string;
+  method: string;
+  reason: string;
+  repo: AssocRepoMeta;
+  asset: AssocAssetMeta;
+}
+
+/** orphan / not_run 侧栏条目(无独立来源字段,只带 title+cat)。 */
+export interface AssocSideEntry {
+  id: number;
+  title: string;
+  cat: string;
+}
+
+export interface AssocBundle {
+  meta: {
+    total_assets: number;
+    linked_assets: number;
+    orphan_assets: number;
+    not_run_assets: number;
+    total_links: number;
+    by_confidence: { direct: number; inferred: number; weak: number };
+  };
+  links: AssocLink[];
+  orphans: AssocSideEntry[];
+  not_run: AssocSideEntry[];
+}
+
+export async function fetchAssociations(): Promise<AssocBundle> {
+  return getJson('/api/threats/associations');
+}
+
+// ============================================================================
+// 资产关联批跑 (POST/GET /api/runs) —— pipeline_name = threats.asset_association_pipeline
+// ============================================================================
+
+export type AssocRunScope = 'sample' | 'all';
+
+export interface StartAssociationRunParams {
+  scope?: AssocRunScope;
+  sample_size?: number;
+  asset_ids?: number[];
+  force?: boolean;
+}
+
+export interface RunStarted {
+  run_id: string;
+  status: string;
+  pipeline_name: string;
+  poll_url: string;
+}
+
+export interface RunDetail {
+  run_id: string;
+  pipeline_name: string;
+  domain?: string;
+  status: string;
+  started_at?: string;
+  finished_at?: string;
+  summary?: Record<string, unknown>;
+  error_message?: string;
+  tasks: Record<string, unknown>[];
+  artifacts: Record<string, unknown>[];
+  progress: {
+    completed_steps: number;
+    total_steps: number;
+    current_step: string;
+    item_progress?: { step?: string; completed?: number; total?: number; linked?: number; orphan?: number; failed?: number } | Record<string, unknown> | null;
+  };
+}
+
+export const ASSOCIATION_PIPELINE = 'threats.asset_association_pipeline';
+
+export async function startAssociationRun(params: StartAssociationRunParams = {}): Promise<RunStarted> {
+  return postJson('/api/runs', { pipeline_name: ASSOCIATION_PIPELINE, reset: false, wait: false, params });
+}
+
+export async function fetchRun(runId: string): Promise<RunDetail> {
+  return getJson(`/api/runs/${runId}`);
+}
+
+export async function fetchRunningAssociationRuns(): Promise<RunDetail[]> {
+  const { items } = await getJson<{ items: RunDetail[] }>('/api/runs');
+  return (items ?? []).filter(r => r.pipeline_name === ASSOCIATION_PIPELINE && r.status === 'running');
+}
+
+const RUN_TERMINAL = new Set(['success', 'failed', 'interrupted', 'cancelled']);
+
+export function isRunTerminal(status: string | undefined): boolean {
+  return Boolean(status && RUN_TERMINAL.has(status));
+}

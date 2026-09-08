@@ -360,6 +360,69 @@ def list_evidence(conn: sqlite3.Connection, domain: str, item_id: int) -> list[d
     return [row_to_dict(row) for row in rows]
 
 
+# ============================================================================
+# threat_links - 威胁分析 资产↔代码仓 关联边(幂等 upsert + join 列表)
+# ============================================================================
+
+
+def upsert_threat_link(
+    conn: sqlite3.Connection,
+    *,
+    asset_id: int,
+    repo_id: int,
+    confidence: str = "inferred",
+    reason: str = "",
+    rel_type: str = "related",
+    method: str = "llm",
+    human_status: str = "none",
+) -> None:
+    """按 (asset_id, repo_id, method) 幂等 upsert 一条关联边。LLM 重跑只覆写同名行,保留人工状态。"""
+    now = utc_now()
+    row = conn.execute(
+        "SELECT id FROM threat_links WHERE asset_id = ? AND repo_id = ? AND method = ?",
+        (asset_id, repo_id, method),
+    ).fetchone()
+    if row:
+        conn.execute(
+            "UPDATE threat_links SET rel_type = ?, confidence = ?, reason = ?, human_status = ?, updated_at = ? WHERE id = ?",
+            (rel_type, confidence, reason, human_status, now, row["id"]),
+        )
+    else:
+        conn.execute(
+            "INSERT INTO threat_links (asset_id, repo_id, rel_type, confidence, method, reason, human_status, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (asset_id, repo_id, rel_type, confidence, method, reason, human_status, now, now),
+        )
+
+
+def list_threat_links(conn: sqlite3.Connection, *, domain: str = "threats") -> list[dict[str, Any]]:
+    """列出全部关联边,并 join 出资产与仓库侧元数据(标题/source/score/payload 已解析)。
+
+    供 /associations bundle 一次性渲染;repo 侧元数据(grade/cve)由调用方从 repo_payload 取。
+    """
+    rows = conn.execute(
+        """
+        SELECT l.id AS link_id, l.asset_id, l.repo_id, l.rel_type, l.confidence, l.method,
+               l.reason, l.human_status, l.created_at, l.updated_at,
+               a.title AS asset_title, a.source AS asset_source, a.score AS asset_score,
+               a.payload_json AS asset_payload_json,
+               r.title AS repo_title, r.score AS repo_score, r.payload_json AS repo_payload_json
+        FROM threat_links l
+        JOIN domain_items a ON a.id = l.asset_id AND a.domain = ? AND a.item_type = 'asset'
+        JOIN domain_items r ON r.id = l.repo_id AND r.domain = ? AND r.item_type = 'target'
+        ORDER BY COALESCE(r.score, 0) DESC, l.id
+        """,
+        (domain, domain),
+    ).fetchall()
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        d = row_to_dict(row)
+        d["asset_payload"] = loads(d.pop("asset_payload_json", None), {})
+        d["repo_payload"] = loads(d.pop("repo_payload_json", None), {})
+        out.append(d)
+    return out
+
+
 def list_table(conn: sqlite3.Connection, table: str, *, domain: str | None = None, limit: int = 50) -> list[dict[str, Any]]:
     allowed = {"pipeline_runs", "task_runs", "artifacts", "data_sources", "quality_audits", "human_queue_items", "raw_artifacts", "normalized_items", "model_calls", "capability_repro_tasks"}
     if table not in allowed:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from ai4sec_platform.pipelines.base import PipelineDefinition
 from ai4sec_platform.pipelines.steps.threat_asset_import import ImportHuaweiThreatAssetsStep
+from ai4sec_platform.pipelines.steps.threat_association import AssetAssociationStep
 from ai4sec_platform.pipelines.steps.threat_cve_scout import HuaweiCveScoutStep
 from ai4sec_platform.pipelines.steps.threat_report import BuildHuaweiThreatReportStep
 from ai4sec_platform.pipelines.steps.threat_score_filter import HuaweiAttackSurfaceScoreStep
@@ -20,6 +21,15 @@ def threat_risk_pipeline() -> PipelineDefinition:
         name="threats.risk_reasoning_pipeline",
         domain="threats",
         steps=[SelectThreatRiskCandidatesStep(), ReasonThreatRiskStep()],
+    )
+
+
+def asset_association_pipeline() -> PipelineDefinition:
+    """资产↔代码仓 AI 关联批跑。手动经 POST /api/runs 触发(MVP 不上定时)。"""
+    return PipelineDefinition(
+        name="threats.asset_association_pipeline",
+        domain="threats",
+        steps=[AssetAssociationStep()],
     )
 
 

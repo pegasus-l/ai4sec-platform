@@ -232,6 +232,24 @@ CREATE TABLE IF NOT EXISTS capability_repro_tasks (
 CREATE INDEX IF NOT EXISTS idx_cap_repro_item ON capability_repro_tasks(item_id);
 CREATE INDEX IF NOT EXISTS idx_cap_repro_status ON capability_repro_tasks(status);
 CREATE INDEX IF NOT EXISTS idx_cap_repro_created ON capability_repro_tasks(created_at DESC);
+
+CREATE TABLE IF NOT EXISTS threat_links (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    asset_id INTEGER NOT NULL,
+    repo_id INTEGER NOT NULL,
+    rel_type TEXT NOT NULL DEFAULT 'related',
+    confidence TEXT NOT NULL DEFAULT 'inferred',
+    method TEXT NOT NULL DEFAULT 'llm',
+    reason TEXT NOT NULL DEFAULT '',
+    human_status TEXT NOT NULL DEFAULT 'none',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE(asset_id, repo_id, method),
+    FOREIGN KEY(asset_id) REFERENCES domain_items(id) ON DELETE CASCADE,
+    FOREIGN KEY(repo_id)  REFERENCES domain_items(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_threat_links_asset ON threat_links(asset_id);
+CREATE INDEX IF NOT EXISTS idx_threat_links_repo ON threat_links(repo_id);
 """
 
 
@@ -247,6 +265,7 @@ def init_db(conn: sqlite3.Connection) -> None:
 
 def reset_db(conn: sqlite3.Connection) -> None:
     tables = [
+        "threat_links",
         "news_daily_reports",
         "news_user_states",
         "news_item_index",
