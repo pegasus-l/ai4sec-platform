@@ -288,7 +288,8 @@ def associations(conn: sqlite3.Connection = Depends(get_db)) -> dict:
     """一次取回可渲染全集的关联 bundle:links + 三态资产 + meta。
 
     MVP 数据量小(167 资产量级)不做分页,前端客户端过滤/排序;not_run 全量返回有兜底上限。
-    risk_in = 该资产全部入边仓库风险(score)之和,与规格文档口径一致。
+    risk_in = 该资产入边仓库风险(score)之和,仅计 direct/inferred(弱关联是"无直接代码关联"的
+    hedge,计入会把镜像站类扇出资产虚高顶到汇报榜;weak 边仍随 links 返回供 C 泳道复核/计数)。
     """
     links = repo.list_threat_links(conn, domain=DOMAIN)
     asset_rows = conn.execute(
@@ -296,8 +297,11 @@ def associations(conn: sqlite3.Connection = Depends(get_db)) -> dict:
         (DOMAIN,),
     ).fetchall()
 
+    # risk_in 只累加 direct/inferred(弱关联 hedge 不计入风险数字)
     risk_in: dict[int, float] = {}
     for link in links:
+        if (link.get("confidence") or "inferred") == "weak":
+            continue
         asset_id = link["asset_id"]
         risk = link.get("repo_score")
         try:
