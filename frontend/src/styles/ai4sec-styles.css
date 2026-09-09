@@ -1158,8 +1158,6 @@ button.assoc-kpi:hover, .assoc-kpi.on { border-color: color-mix(in srgb, var(--a
 @keyframes assoc-spin { to { transform: rotate(360deg); } }
 
 /* ---- D 风险焦点 ---- */
-.assoc-focus { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); gap: 14px; align-items: start; min-width: 0; }
-.assoc-focus-col { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
 .assoc-col-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px;
   padding: 2px 2px 6px; border-bottom: 1px solid var(--line); }
 .assoc-repo-list, .assoc-asset-list { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
@@ -1251,3 +1249,58 @@ button.assoc-kpi:hover, .assoc-kpi.on { border-color: color-mix(in srgb, var(--a
 .assoc-rail-item .badge { font-size: 10px; flex-shrink: 0; }
 
 .assoc-footnote { padding: 0 2px; line-height: 1.8; }
+
+/* ---- D 风险焦点 v2:仓库卡 → 扇形连线(对齐 demo D) ----
+   两栏比例与 demo 一致:左栏固定 ~640px 放「卡+扇出」,右栏风险汇总吃满剩余宽,不留死区。
+   首列用固定 640(扇形内容全 absolute、不入流,不能靠内容撑列宽) */
+.assoc-focus { width: 100%; max-width: 1560px; margin-inline: auto;
+  display: grid; grid-template-columns: 640px minmax(0, 1fr); gap: 20px; align-items: start; min-width: 0; }
+.assoc-focus-main { display: flex; flex-direction: column; gap: 12px; min-width: 0; overflow-x: auto; padding-bottom: 4px; }
+.assoc-focus-panel { min-width: 0; }
+.assoc-focus-panel .assoc-asset-list { max-height: 74vh; overflow: auto; padding-right: 4px; }
+@media (max-width: 1180px) {
+  .assoc-focus { grid-template-columns: minmax(0, 1fr); max-width: none; margin-inline: 0; }
+  .assoc-focus-panel { order: -1; }
+  .assoc-focus-panel .assoc-asset-list { max-height: none; }
+}
+.assoc-band { position: relative; }
+.assoc-band.dim { opacity: .28; }
+.assoc-band-card { position: absolute; top: 0; left: 0; box-sizing: border-box; display: flex; flex-direction: column;
+  justify-content: center; gap: 3px; padding: 6px 12px; border: 1px solid var(--line); border-radius: 12px; cursor: pointer;
+  background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 9%, transparent), color-mix(in srgb, var(--accent) 3%, transparent));
+  box-shadow: inset 3px 0 0 var(--amber); transition: opacity .12s, border-color .12s, box-shadow .12s; }
+.assoc-band-card:hover, .assoc-band.hl .assoc-band-card { border-color: color-mix(in srgb, var(--accent) 55%, transparent); }
+.assoc-band-card .assoc-repo-name { min-width: 0; }
+.assoc-band-card .assoc-repo-name b { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.assoc-band-pill { position: absolute; box-sizing: border-box; display: flex; align-items: center; gap: 6px; padding: 0 8px;
+  border: 1px solid var(--line); border-left: 3px solid transparent; border-radius: 8px; cursor: pointer;
+  background: color-mix(in srgb, var(--accent) 6%, transparent); color: var(--text);
+  transition: opacity .12s, border-color .12s, transform .12s; }
+.assoc-band-pill:hover, .assoc-band-pill.hl { border-color: color-mix(in srgb, var(--accent) 55%, transparent); background: color-mix(in srgb, var(--accent) 16%, transparent); }
+.assoc-band-pill.dim { opacity: .16; }
+.assoc-band-pill .assoc-pill-txt { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+.assoc-band-pill i { font-style: normal; font-size: 10px; }
+.assoc-fan-more { position: absolute; }
+.assoc-focus-note { display: flex; align-items: center; gap: 10px; margin-top: 8px; flex-wrap: wrap; }
+.assoc-focus-note .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+.assoc-focus-note .dot.direct { background: #34d399; }
+.assoc-focus-note .dot.inferred { background: #f59e0b; }
+.assoc-focus-note .dot.weak { background: #fb7185; }
+
+/* ---- D v4:仓库卡内部空间(名字/ chips 分行防溢出)+ 连线 reason 条 ---- */
+.assoc-band-card { gap: 2px; overflow: hidden; }
+.assoc-band-card .assoc-repo-name { width: 100%; gap: 6px; }
+.assoc-band-card .assoc-repo-name b { flex: 1; min-width: 0; font-size: 12.5px; }
+.assoc-band-card .assoc-chips { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; width: 100%; margin-top: 1px; }
+.assoc-band-card .assoc-chips .badge { font-size: 10px; padding: 1px 6px; white-space: nowrap; }
+
+/* 光标旁理由浮层:fixed 跟随光标(页面滚动也始终可见),pointer-events:none 不挡交互 */
+.assoc-tip { position: fixed; z-index: 999; max-width: 380px; pointer-events: none;
+  display: flex; align-items: flex-start; gap: 7px; padding: 6px 10px;
+  font-size: 11.5px; line-height: 1.5; color: var(--text);
+  background: var(--panel);
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, var(--line));
+  border-radius: 9px; box-shadow: 0 6px 20px rgba(0, 0, 0, 0.38); }
+.assoc-tip .dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; margin-top: 4px; }
+.assoc-tip-body { min-width: 0; }
+.assoc-tip-body b { color: var(--text); font-weight: 600; }

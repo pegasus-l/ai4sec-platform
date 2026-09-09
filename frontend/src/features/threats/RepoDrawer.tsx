@@ -10,7 +10,7 @@
  *   2. Vuln/security线索: stats + "查看全部漏洞" button → push VulnListDrawer
  *   3. Score breakdown: breakdownFull with scoreLabels
  *   4. Linked assets: clickable to open asset
- *   5. Action buttons: 加入跟踪 / 查看全部漏洞 / 查看图谱
+ *   5. Action buttons: 加入跟踪 / 查看全部漏洞 / 查看关联
  */
 
 import type { ThreatViewModel, ThreatRepo, ThreatAsset } from '../../types/threat';
@@ -27,13 +27,13 @@ import { useToast } from '../../components/Toast';
 
 interface RepoDrawerContentProps {
   repo: ThreatRepo;
-  /** Navigate to graph view (wired by ThreatPage). */
-  onViewGraph?: () => void;
+  /** Navigate to 资产↔仓关联 view (wired by ThreatPage). */
+  onViewAssoc?: () => void;
   /** Open asset detail (currently uses old AssetDrawer — will be refactored in W3.3). */
   onOpenAsset?: (asset: ThreatAsset) => void;
 }
 
-export function RepoDrawerContent({ repo: initialRepo, onViewGraph, onOpenAsset }: RepoDrawerContentProps) {
+export function RepoDrawerContent({ repo: initialRepo, onViewAssoc, onOpenAsset }: RepoDrawerContentProps) {
   const { push } = useDrawerStack();
   const { toast } = useToast();
   // Fetch single target detail (full payload) — replaces fetchFrontendContract
@@ -208,9 +208,9 @@ export function RepoDrawerContent({ repo: initialRepo, onViewGraph, onOpenAsset 
             <button className="btn primary" onClick={handleOpenVulnList}>
               查看全部漏洞
             </button>
-            {onViewGraph && (
-              <button className="btn" onClick={onViewGraph}>
-                查看图谱
+            {onViewAssoc && (
+              <button className="btn" onClick={onViewAssoc}>
+                查看关联
               </button>
             )}
           </div>

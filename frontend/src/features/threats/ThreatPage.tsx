@@ -1,13 +1,12 @@
 import { useMemo, useState, useEffect, useRef, type ComponentType } from 'react';
 import { ThemeToggle } from '../../components/ThemeToggle';
-import { Star, Github, LayoutGrid, Database, Share2, ListChecks, Activity, RefreshCw, ShieldCheck, BrainCircuit, Link2, type LucideIcon } from 'lucide-react';
+import { Star, Github, LayoutGrid, Database, ListChecks, Activity, RefreshCw, ShieldCheck, BrainCircuit, Link2, type LucideIcon } from 'lucide-react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { fetchTargets, fetchAssets, fetchTrackingQueue, fetchSurfaceStats, trackTarget, trackAsset, postJson, getJson, type AiAssociationResult } from '../../api/client';
 import { Card, Drawer, EmptyState, MetricCard } from '../../components/ui';
 import type { ThreatAsset, ThreatRepo } from '../../types/threat';
 import { assetFromItem } from './threatAdapters';
 import { surfaces as staticSurfaces } from './threatStaticData';
-import { ThreatGraphView } from './graph/ThreatGraphView';
 import { RepoDrawerContent } from './RepoDrawer';
 import { AssocView } from './assoc/AssocView';
 import { useToast } from '../../components/Toast';
@@ -18,7 +17,7 @@ import { OpsSources } from './ops/OpsSources';
 import { OpsQuality } from './ops/OpsQuality';
 import { OpsAISummary } from './ops/OpsAISummary';
 
-export type ViewId = 'today' | 'repos' | 'surface' | 'assets' | 'graph' | 'assoc' | 'queue' | 'ops-overview' | 'ops-tasks' | 'ops-sources' | 'ops-quality' | 'ops-ai-summary';
+export type ViewId = 'today' | 'repos' | 'surface' | 'assets' | 'assoc' | 'queue' | 'ops-overview' | 'ops-tasks' | 'ops-sources' | 'ops-quality' | 'ops-ai-summary';
 
 const navGroups: Array<{ title: string; items: Array<{ id: ViewId; icon: LucideIcon; title: string }> }> = [
   { title: '开源威胁洞察', items: [
@@ -26,7 +25,6 @@ const navGroups: Array<{ title: string; items: Array<{ id: ViewId; icon: LucideI
     { id: 'repos', icon: Github, title: '代码仓' },
     { id: 'surface', icon: LayoutGrid, title: '攻击面视图' },
     { id: 'assets', icon: Database, title: '资产库' },
-    { id: 'graph', icon: Share2, title: '关联图谱' },
     { id: 'assoc', icon: Link2, title: '资产↔仓关联' },
     { id: 'queue', icon: ListChecks, title: '跟踪队列' }
   ]},
@@ -108,7 +106,7 @@ export function ThreatPage() {
     push({
       title: `${repo.org}/${repo.name}`,
       subtitle: repo.url,
-      render: () => <RepoDrawerContent repo={repo} onViewGraph={() => setView('graph')} onOpenAsset={setSelectedAsset} />,
+      render: () => <RepoDrawerContent repo={repo} onViewAssoc={() => setView('assoc')} onOpenAsset={setSelectedAsset} />,
     });
   };
 
@@ -123,7 +121,7 @@ export function ThreatPage() {
       <a href="/" style={{ display: "block", padding: "8px 12px", color: "var(--accent)", fontSize: 12, textDecoration: "none", borderBottom: "1px solid var(--line)" }}>&larr; 返回</a>
       <div className="ai4sec-sidebar-head"><div className="label"><span className="dot" /><span>威胁洞察</span></div><h2>开源目标与运营</h2><p>开源威胁洞察围绕"发现目标、判断风险、查看证据、加入跟踪"的挖洞动线组织。</p></div>
       <nav className="nav-scroll">{navGroups.map(group => <div className="nav-group" key={group.title}><div className="group-title">{group.title}</div>{group.items.map(item => { const Icon = item.icon; return <button key={item.id} className={`nav-item ${view === item.id ? 'active' : ''}`} onClick={() => setView(item.id)}><Icon size={18} /><span>{item.title}</span></button>; })}</div>)}</nav>
-      <div className="ai4sec-sidebar-note">目标详情不是单独页签；从今日关注、代码仓、关联图谱或跟踪队列点击对象后打开。资产关系默认按置信度展示，不做无证据强关联。</div>
+      <div className="ai4sec-sidebar-note">目标详情不是单独页签；从今日关注、代码仓、资产↔仓关联或跟踪队列点击对象后打开。资产关联以 AI 边为准（直连/推断/弱），逐条可追溯、可复核。</div>
     <div className="ai4sec-sidebar-footer" style={{ marginTop: "auto", padding: "8px 12px", borderTop: "1px solid var(--line)", display: "flex", alignItems: "center" }}><ThemeToggle /></div>
     </aside>
     <section className="content">
@@ -146,7 +144,6 @@ function renderView(view: ViewId, repos: ThreatRepo[], filters: FilterState, set
   if (view === 'repos') return <ThreatRepos repos={repos} filters={filters} setFilters={setFilters} openRepo={openRepo} currentPage={currentPage} totalPages={totalPages} totalRepos={totalRepos} setCurrentPage={setCurrentPage} />;
   if (view === 'surface') return <ThreatSurface repos={repos} openRepo={openRepo} setFilters={setFilters} setView={setView} />;
   if (view === 'assets') return <ThreatAssets openAsset={openAsset} />;
-  if (view === 'graph') return <ThreatGraphView openRepo={openRepo} openAsset={openAsset} />;
   if (view === 'assoc') return <AssocView openRepo={openRepo} openAsset={openAsset} />;
   if (view === 'queue') return <ThreatQueue />;
   if (view === 'ops-overview') return <OpsOverview setView={setView} />;
@@ -169,14 +166,14 @@ function ThreatToday({ repos, openRepo, setView, setFilters }: { repos: ThreatRe
     if (type === 'gradeA') { setFilters({ search: '', grade: 'A', surface: 'all', onlyCve: false, onlyHigh: false }); setView('repos'); return; }
     if (type === 'securitySignals') { setFilters({ search: '', grade: 'all', surface: 'all', onlyCve: false, onlyHigh: false }); setView('repos'); return; }
     if (type === 'assetChanges') { setView('assets'); return; }
-    if (type === 'weakRelations') { setView('graph'); return; }
+    if (type === 'weakRelations') { setView('assoc'); return; }
   };
   return <div className="grid">
     <div className="grid cols-4">
       <MetricCard label="A级仓库" value={highRisk} hint="风险评分为 A 的代码仓；点击进入代码仓并筛选 A 级。" tone="red" onClick={() => kpiJump('gradeA')} />
       <MetricCard label="安全线索项目" value={withCve} hint="命中过 CVE / SA / security issue 的代码仓；点击查看有安全线索的代码仓。" tone="amber" onClick={() => kpiJump('securitySignals')} />
       <MetricCard label="资产变化" value="—" hint="点击查看相关资产。" tone="green" onClick={() => kpiJump('assetChanges')} />
-      <MetricCard label="待复核关联" value="—" hint="点击进入关联图谱查看弱关联。" tone="violet" onClick={() => kpiJump('weakRelations')} />
+      <MetricCard label="待复核关联" value="—" hint="点击进入资产↔仓关联，筛弱关联复核。" tone="violet" onClick={() => kpiJump('weakRelations')} />
     </div>
     <div className="grid cols-2">
       {focus.map((item) => <div className="focus-card" key={`${item.type}-${item.repo.id}`} onClick={() => openRepo(item.repo)}>
@@ -575,11 +572,11 @@ function scoreLabel(key: string): string {
 }
 
 function heroTitle(view: ViewId): string {
-  return ({ today: '今天有哪些目标值得看', repos: '开源代码仓目标库', surface: '攻击面评分与分布', assets: '固件 / 镜像 / Hub 资产库', graph: '代码仓与资产关联图谱', assoc: '资产↔代码仓 AI 关联', queue: '威胁跟踪队列', 'ops-overview': '运营概览', 'ops-tasks': '采集任务', 'ops-sources': '数据源状态', 'ops-quality': '质量审计', 'ops-ai-summary': 'AI 分析汇总' } as Record<ViewId, string>)[view];
+  return ({ today: '今天有哪些目标值得看', repos: '开源代码仓目标库', surface: '攻击面评分与分布', assets: '固件 / 镜像 / Hub 资产库', assoc: '资产↔代码仓 AI 关联', queue: '威胁跟踪队列', 'ops-overview': '运营概览', 'ops-tasks': '采集任务', 'ops-sources': '数据源状态', 'ops-quality': '质量审计', 'ops-ai-summary': 'AI 分析汇总' } as Record<ViewId, string>)[view];
 }
 
 function heroCopy(view: ViewId): string {
-  return ({ today: '优先呈现高风险目标、CVE/SA/security issue 和推荐挖洞方向。', repos: '搜索、过滤、排序所有华为开源仓，并查看证据链。', surface: '按语言、输入面、历史漏洞、复杂度和安全边界拆分评分。', assets: '查看 firmware、AscendHub、mirror、OpenX Huawei 等资产线索。', graph: '用轻量关系图查看组织、仓库、CVE、攻击面和资产。', assoc: 'AI 把资产与代码仓关联成一条条可追溯的边，两种视图读同一份数据：风险焦点看影响，泳道审计对状态。', queue: '承接待研判、待代码审计、持续跟踪等行动项。', 'ops-overview': '系统状态、数据新鲜度、AI 分析进度和快捷操作。', 'ops-tasks': '触发 pipeline、追踪 step 进度和产物。', 'ops-sources': '每个源的健康、记录数和最近采集时间。', 'ops-quality': '质量审计记录与覆盖率。', 'ops-ai-summary': 'AI 研判和资产关联的汇总视图。' } as Record<ViewId, string>)[view];
+  return ({ today: '优先呈现高风险目标、CVE/SA/security issue 和推荐挖洞方向。', repos: '搜索、过滤、排序所有华为开源仓，并查看证据链。', surface: '按语言、输入面、历史漏洞、复杂度和安全边界拆分评分。', assets: '查看 firmware、AscendHub、mirror、OpenX Huawei 等资产线索。', assoc: 'AI 把资产与代码仓关联成一条条可追溯的边，两种视图读同一份数据：风险焦点看影响，泳道审计对状态。', queue: '承接待研判、待代码审计、持续跟踪等行动项。', 'ops-overview': '系统状态、数据新鲜度、AI 分析进度和快捷操作。', 'ops-tasks': '触发 pipeline、追踪 step 进度和产物。', 'ops-sources': '每个源的健康、记录数和最近采集时间。', 'ops-quality': '质量审计记录与覆盖率。', 'ops-ai-summary': 'AI 研判和资产关联的汇总视图。' } as Record<ViewId, string>)[view];
 }
 
 function unique(values: string[]): string[] { return Array.from(new Set(values)).filter(Boolean).sort(); }
