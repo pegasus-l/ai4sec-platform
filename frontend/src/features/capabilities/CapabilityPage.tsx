@@ -52,6 +52,20 @@ const reproBadgeLabel = (rs?: string) => REPRO_LABEL[rs ?? ''] ?? rs ?? '未知'
 const reproBadgeTone = (rs?: string): 'green' | 'sky' | 'slate' | 'amber' | 'red' =>
   rs === 'candidate' ? 'green' : rs === 'in_progress' ? 'sky' : rs === 'no_code' ? 'slate' : rs === 'not_supported' ? 'red' : 'amber';
 
+/** 非 web 条目按 web 把关口径不算"可复现"(与后端 is_non_web_blocked 同判据)。
+ *  已判非 web 却仍把 repro_status 留在 candidate 的, 一律不冒充"可复现"。
+ *  LOWCONF 例外: LLM 判 web 但无佐证, 分类器声明"不算真非 web", 保留其走 CLI 复现。 */
+const isNonWebBlocked = (p: CapabilityItem['payload'] | undefined): boolean => {
+  const v = p?.is_web;
+  if (v === undefined || v === null || v === true) return false;
+  return p?.web_framework !== 'LOWCONF';
+};
+/** 是否渲染"可复现"徽标: 非 web 且仍是 candidate 时不渲染 —— 同排已有「非Web」徽标承载该信息,
+ *  直接省略以免两个"非Web"并排。 */
+const showReproBadge = (p: CapabilityItem['payload'] | undefined): boolean =>
+  !(isNonWebBlocked(p) && p?.repro_status === 'candidate');
+
+
 function matchItem(item: CapabilityItem, q: string): boolean {
   const p = item.payload ?? {};
   const hay = [
@@ -187,7 +201,7 @@ function CapabilityToday({ items, stats, openDetail }: { items: CapabilityItem[]
   const [viewMode, setViewMode] = useState<'推荐' | '高可复现' | '高应用潜力' | '需人工判断'>('推荐');
 
   const filtered = useMemo(() => {
-    if (viewMode === '高可复现') return items.filter(i => (i.payload?.repro_status === 'candidate' || i.payload?.code_url) && i.payload?.repro_status !== 'not_supported');
+    if (viewMode === '高可复现') return items.filter(i => (i.payload?.repro_status === 'candidate' || i.payload?.code_url) && i.payload?.repro_status !== 'not_supported' && !isNonWebBlocked(i.payload));
     if (viewMode === '高应用潜力') return items.filter(i => (i.payload?.application_scenarios ?? []).length > 0);
     if (viewMode === '需人工判断') return items.filter(i => i.payload?.repro_status === 'no_code' || !i.payload?.code_url);
     return items;
@@ -226,7 +240,7 @@ function CapabilityCard({ item, rank, onClick, onViewRepro }: { item: Capability
       <div className="badges">
         <Badge tone={sourceType === 'github' ? 'sky' : 'violet'}>{sourceType}</Badge>
         {p.capability_type && <Badge tone="green">{p.capability_type}</Badge>}
-        <Badge tone={reproTag as 'green' | 'sky' | 'slate' | 'amber' | 'red'}>{reproText}</Badge>
+        {showReproBadge(p) && <Badge tone={reproTag as 'green' | 'sky' | 'slate' | 'amber' | 'red'}>{reproText}</Badge>}
         {p.is_web ? <Badge tone="amber">Web{p.web_framework ? `:${p.web_framework}` : ''}</Badge> : <Badge tone="slate">非Web</Badge>}
         {p.demo_url && <Badge tone="green">官方 Demo</Badge>}
       </div>
@@ -348,7 +362,7 @@ function CapabilityLibrary({ items, stats, openDetail, onViewRepro }: { items: C
         <td><div className="table-title">{p.display_title || item.title}</div><div className="table-sub">{st}</div></td>
         <td style={{maxWidth: '320px'}} className="small muted">{ov.slice(0, 120)}{ov.length > 120 ? '…' : ''}</td>
         <td><div className="score-ring">{item.score}</div></td>
-        <td><div className="badges">{p.capability_type && <Badge tone="green">{p.capability_type}</Badge>}<Badge tone={reproBadgeTone(p.repro_status)}>{reproBadgeLabel(p.repro_status)}</Badge>{p.is_web ? <Badge tone="amber">Web</Badge> : <Badge tone="slate">非Web</Badge>}{p.demo_url && <Badge tone="green">官方 Demo</Badge>}{hasReproResult(p) && <button className="btn" style={{ padding: '1px 8px', fontSize: 11 }} onClick={(e) => { e.stopPropagation(); onViewRepro(item); }}>查看复现 →</button>}</div></td>
+        <td><div className="badges">{p.capability_type && <Badge tone="green">{p.capability_type}</Badge>}{showReproBadge(p) && <Badge tone={reproBadgeTone(p.repro_status)}>{reproBadgeLabel(p.repro_status)}</Badge>}{p.is_web ? <Badge tone="amber">Web</Badge> : <Badge tone="slate">非Web</Badge>}{p.demo_url && <Badge tone="green">官方 Demo</Badge>}{hasReproResult(p) && <button className="btn" style={{ padding: '1px 8px', fontSize: 11 }} onClick={(e) => { e.stopPropagation(); onViewRepro(item); }}>查看复现 →</button>}</div></td>
       </tr>; })}
     </tbody></table>
     {pageCount > 1 && <div style={{ display: 'flex', justifyContent: 'center', gap: 8, alignItems: 'center', padding: '10px 12px', borderTop: '1px solid var(--line)' }}>
@@ -686,7 +700,7 @@ function CapabilityDetailContent({ itemId, initialItem, onRepro, onConvert, onVi
     {/* 复现 & 转化 */}
     {p.demo_url && <div className="drawer-section"><h3>官方在线演示</h3><p style={{ color: 'var(--green)' }}>项目已提供官方 Demo，按复现策略直接使用官方环境，不启动本地容器。</p><p><a href={p.demo_url} target="_blank" rel="noopener" style={{ color: 'var(--sky)' }}>{p.demo_url}</a></p></div>}
     {!p.demo_url && p.repro_summary && <div className="drawer-section"><h3>复现摘要</h3><p style={{ color: 'var(--green)' }}>{p.repro_summary}</p></div>}
-    <div className="drawer-section"><h3>复现 & 转化</h3><div className="badges"><Badge tone={reproBadgeTone(p.repro_status)}>{reproBadgeLabel(p.repro_status)}</Badge><Badge tone="violet">{p.conversion_status ?? '待评估'}</Badge>{p.is_web ? <Badge tone="amber">Web{p.web_framework ? `:${p.web_framework}` : ''}</Badge> : <Badge tone="slate">非Web</Badge>}{p.demo_url && <Badge tone="green">官方 Demo</Badge>}</div></div>
+    <div className="drawer-section"><h3>复现 & 转化</h3><div className="badges">{showReproBadge(p) && <Badge tone={reproBadgeTone(p.repro_status)}>{reproBadgeLabel(p.repro_status)}</Badge>}<Badge tone="violet">{p.conversion_status ?? '待评估'}</Badge>{p.is_web ? <Badge tone="amber">Web{p.web_framework ? `:${p.web_framework}` : ''}</Badge> : <Badge tone="slate">非Web</Badge>}{p.demo_url && <Badge tone="green">官方 Demo</Badge>}</div></div>
 
     {/* 无法复现说明: 环境不支持(Docker 等) → 已剔除复现队列 */}
     {p.repro_status === 'not_supported' && <div className="drawer-section"><h3>复现说明</h3><p style={{ color: 'var(--red)' }}>项目依赖 Docker 等本环境不支持的运行条件，已按平台规则判定为「无法复现」，不进入复现队列。</p>{reproReason && <blockquote style={{ margin: '8px 0 0', padding: '8px 12px', background: 'rgba(255,0,0,.05)', borderLeft: '3px solid var(--red)', fontSize: 12 }}>{reproReason}</blockquote>}</div>}

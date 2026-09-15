@@ -27,6 +27,7 @@ from typing import Any
 from ai4sec_platform.pipelines.context import PipelineContext
 from ai4sec_platform.pipelines.results import StepResult
 from ai4sec_platform.db import repositories as repo
+from ai4sec_platform.domains.capabilities.assessments import is_non_web_blocked
 
 
 def _env(key: str, default: str = "") -> str:
@@ -878,6 +879,11 @@ class TriggerReproStep:
             for it in items:
                 pl = it.get("payload") or {}
                 if not pl.get("code_url"):
+                    continue
+                # 非 web 把关: 非 web 条目不耗复现 token(入队口已被 StoreCapabilitiesStep 挡住, 这里
+                # 再兜一层, 防任何路径把它留在队列里)。手动指定 repro_item_id 的不受此限 —— 人明确
+                # 点名要跑就跑, 只拦自动流水线。
+                if is_non_web_blocked(pl):
                     continue
                 if pl.get("repro_status") in _PAYLOAD_ACTIVE_STATUSES:
                     continue

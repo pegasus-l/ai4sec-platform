@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from ai4sec_platform.db import repositories as repo
-from ai4sec_platform.domains.capabilities.assessments import classify_batch
+from ai4sec_platform.domains.capabilities.assessments import classify_batch, is_non_web_blocked
 from ai4sec_platform.pipelines.base import PipelineDefinition
 from ai4sec_platform.pipelines.context import PipelineContext
 from ai4sec_platform.pipelines.results import StepResult
@@ -21,6 +21,35 @@ from ai4sec_platform.pipelines.steps.capability_raw import (
 )
 from ai4sec_platform.pipelines.steps.repro import TriggerReproStep
 from ai4sec_platform.domains.capabilities.builders import build_conversion_record
+
+
+@dataclass
+class ReDemoteDriftedNonWebStep:
+    """把"已被判非 web 却又回到待复现验证"的条目重新降级 —— 自我修复, 零 LLM 调用。
+
+    起因(2026-09-15 查实): StoreCapabilitiesStep 按 code_url 复用已有行时会用 review 结论重算
+    status, 不看 is_web → 每晚资讯重扫重发现同一 repo 就把已淘汰的条目写回"待复现验证"; 而
+    SelectUnclassifiedWebCandidatesStep 只挑没有 web_classify_ts 的条目, 分类过的永不再分类 →
+    一旦漂移就再没有机会降级。此步补上这个缺口: 不看 web_classify_ts, 直接按已落库的 is_web
+    判据把漂移条目踢出队列。放在 web_classify 之后, 每晚随主 pipeline 一起兜住。
+    """
+    name: str = "redemote_drifted_non_web"
+    step_type: str = "classify"
+
+    def run(self, context: PipelineContext) -> StepResult:
+        items = repo.list_domain_items(
+            context.conn, "capabilities", item_type="capability",
+            status="待复现验证", limit=10000,
+        )
+        demoted = 0
+        for it in items:
+            if not is_non_web_blocked(it.get("payload") or {}):
+                continue
+            repo.update_domain_item(context.conn, item_id=it["id"], status="已淘汰")
+            demoted += 1
+        if demoted:
+            context.conn.commit()
+        return StepResult(metrics={"redemoted": demoted, "scanned": len(items)})
 
 
 def capability_from_raw_pipeline() -> PipelineDefinition:
@@ -37,6 +66,7 @@ def capability_from_raw_pipeline() -> PipelineDefinition:
             StoreCapabilitiesStep(),
             SelectUnclassifiedWebCandidatesStep(),
             ClassifyWebCapabilityStep(),
+            ReDemoteDriftedNonWebStep(),
         ],
     )
 
@@ -56,6 +86,7 @@ def capability_from_news_pipeline() -> PipelineDefinition:
             StoreCapabilitiesStep(),
             SelectUnclassifiedWebCandidatesStep(),
             ClassifyWebCapabilityStep(),
+            ReDemoteDriftedNonWebStep(),
         ],
     )
 
@@ -108,7 +139,7 @@ def capability_web_classify_pipeline() -> PipelineDefinition:
     return PipelineDefinition(
         name="capabilities.web_classify_pipeline",
         domain="capabilities",
-        steps=[SelectUnclassifiedWebCandidatesStep(), ClassifyWebCapabilityStep()],
+        steps=[SelectUnclassifiedWebCandidatesStep(), ClassifyWebCapabilityStep(), ReDemoteDriftedNonWebStep()],
     )
 
 

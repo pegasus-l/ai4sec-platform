@@ -11,6 +11,7 @@ from typing import Any
 from ai4sec_platform.pipelines.context import PipelineContext
 from ai4sec_platform.pipelines.results import StepResult
 from ai4sec_platform.db import repositories as repo
+from ai4sec_platform.domains.capabilities.assessments import is_non_web_blocked
 
 
 # ─────────────────── Step 1: Build（拉原始数据） ───────────────────
@@ -294,6 +295,13 @@ class StoreCapabilitiesStep:
                     payload["repro_status"] = prev_payload["repro_status"]
                 if prev_payload.get("repro_result"):
                     payload["repro_result"] = prev_payload["repro_result"]
+                # 非 web 把关(2026-09-15): 该 repo 此前已被判定非 web(且非 LOWCONF)时, 不得因资讯
+                # 重扫再次入复现队列。上面 status 是按 review.recommended 重算的, 不看 is_web, 而同一
+                # code_url 每晚都会被重新发现 → 已淘汰的条目被原样写回"待复现验证"; 又因
+                # SelectUnclassifiedWebCandidatesStep 只挑没有 web_classify_ts 的条目, 分类过的永不
+                # 再分类 → 一旦漂移就再无机会降级(实测 72 条漂移, 8/17 分类 / 9 月仍在队列)。
+                if status == "待复现验证" and is_non_web_blocked(prev_payload):
+                    status = "已淘汰"
                 repo.update_domain_item(context.conn, item_id=existing["id"], status=status, score=score, payload=payload)
                 item_ids.append(existing["id"])
                 updated += 1

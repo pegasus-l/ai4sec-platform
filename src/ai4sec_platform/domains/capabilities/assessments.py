@@ -22,6 +22,21 @@ from ai4sec_platform.core.env import load_env_file
 from ai4sec_platform.domains.capabilities.scorers import score_capability_candidate
 from ai4sec_platform.models.router import LLMRouter
 
+
+def is_non_web_blocked(payload: dict[str, Any]) -> bool:
+    """非 web 条目是否应被挡在复现队列之外(web 把关的唯一判据, 入队/取候选/重降级三处共用)。
+
+    判据: payload 已明确标了 is_web=False, 且不是 LOWCONF。
+      - LOWCONF = LLM 判 web 但无任何佐证, classify_single_item 自己声明"不算真非 web",
+        故保留其入队走 CLI 复现, 好让复现报告回写 is_web 纠正分类误判
+        (见 pipelines/steps/repro.py 的 _write_payload)。挡掉它会掐死这个自我纠正闭环。
+      - 没有 is_web 键 = 尚未分类, 不算非 web; 照常入队, 由 web_classify 步骤定夺。
+    """
+    if "is_web" not in payload or payload["is_web"]:
+        return False
+    return payload.get("web_framework") != "LOWCONF"
+
+
 # ============================================================================
 # 配置（从 .env 读，去硬编码）
 # ============================================================================
