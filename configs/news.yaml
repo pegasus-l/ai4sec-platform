@@ -155,7 +155,7 @@ sources:
         note: Google漏洞奖励计划
   asis:
     enabled: true
-    base_url: http://104.155.170.61
+    base_url: http://136.113.31.153
     fetch_limit: 500
     min_score: 70
   awesome:
