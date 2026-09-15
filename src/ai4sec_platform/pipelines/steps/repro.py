@@ -571,17 +571,21 @@ def _write_payload(item_id: int, repro_status: str, repro_result: dict[str, Any]
         payload["repro_status"] = repro_status
         payload["repro_result"] = repro_result
         # 复现报告明确给出 web 判断时同步回 payload 分类, 修正分类器误判(LOWCONF 等):
-        #   报告 is_web=True → 回写 is_web=True + web_framework + web_reclass 标记;
-        #   报告 is_web=False → 回写 is_web=False(agent 明确判定项目无 web 界面)。
-        # 报告缺省该字段(超时兜底/异常路径)则不覆盖, 保留原分类。
+        #   报告 is_web=True  → 回写 is_web=True + web_framework + web_reclass 标记;
+        #   报告 is_web=False → 回写 is_web=False + web_reclass 标记, 并**清掉分类器遗留的框架名**
+        #     (2026-09-15): 旧口径按 dep 信号强判 web 的条目会留下「非Web + web_framework=FastAPI」
+        #     自相矛盾, 报告说非 web 就以报告为准把框架名一并抹掉。
+        # 报告缺省该字段(超时兜底/异常路径)则整体不覆盖, 保留原分类。
         web_flag = (web_report or {}).get("is_web")
         if isinstance(web_flag, bool):
             payload["is_web"] = web_flag
+            payload["web_reclass"] = f"repro-corrected-{_utc_now()[:10]}"
             if web_flag:
                 fw = (web_report or {}).get("web_framework")
                 if fw:
                     payload["web_framework"] = fw
-                payload["web_reclass"] = f"repro-corrected-{_utc_now()[:10]}"
+            else:
+                payload["web_framework"] = ""
         fields: dict[str, Any] = {"payload": payload}
         if item_status:
             fields["status"] = item_status

@@ -58,6 +58,35 @@ WEB_FRAMEWORKS = {
     "express", "koa", "nest",
 }
 
+# 「自带 Web」的**正面证据**(2026-09-15 收紧): 后端框架依赖只能证明"有 HTTP 服务", 证明不了
+# "有给人看的浏览器界面"。旧口径只要 dep 里有 fastapi/uvicorn 就算证据, 于是 mcpnuke(CLI 扫描器
+# 带一个可选 FastAPI JSON API)被快速路径强判 web 塞进复现队列, 跑完 agent 又如实报"无 web 界面"
+# (item#30721 实测)。只有 UI 框架依赖 / 前端文件 / 前端语言占比才算证据。
+UI_FRAMEWORK_DEPS = {
+    "streamlit", "gradio",
+    "next", "nuxt", "vite", "react", "vue", "angular", "svelte",
+}
+# 前端产物/入口文件特征。app.py / server.py / package.json **故意不含** —— FastAPI 项目遍地都是,
+# 拿它们当"前端证据"等于没收紧。
+FRONTEND_FILE_HINTS = (
+    r"src/components/", r"src/app/", r"pages/",
+    r"index\.html$", r"index\.tsx?$", r"App\.tsx?$",
+    r"next\.config\.", r"vite\.config\.", r"streamlit_app\.py$", r"gradio_app\.py$",
+)
+
+
+def has_frontend_evidence(signals: list[str]) -> bool:
+    """规则信号里是否存在"有浏览器界面"的正面证据(供快速路径 2 判 web 用)。"""
+    for s in signals:
+        if s.startswith("dep:") and s[4:] in UI_FRAMEWORK_DEPS:
+            return True
+        if s.startswith("lang:web_frontend"):
+            return True
+        if s.startswith("file:") and any(
+                re.search(p, s[5:], re.IGNORECASE) for p in FRONTEND_FILE_HINTS):
+            return True
+    return False
+
 WEB_FILE_PATTERNS = [
     r"app\.py$", r"server\.py$",
     r"pages/", r"src/components/", r"src/app/",
@@ -465,8 +494,14 @@ def classify_batch(
                         verified_demo = u
                         break
 
-                # 快速路径 2: rule_score >= 6 且有 dep 框架命中 → 强制 is_web=True
-                rule_high = rule_score >= 6 and has_dep_signal
+                # 快速路径 2: rule_score >= 6 且有 dep 框架命中 **且前端证据成立** → 强制 is_web=True
+                # (2026-09-15 收紧: 光有 fastapi/uvicorn 这类后端依赖不算, 见 has_frontend_evidence。
+                #  口径从此与 LLM prompt 的"宁可漏判不要多判"一致 —— 拿不准就把判断权交回 LLM。)
+                rule_high = (
+                    rule_score >= 6
+                    and has_dep_signal
+                    and has_frontend_evidence(rule_signals)
+                )
 
                 # 最终决策：LLM 说了算，但 demo/rule 可覆盖
                 final_is_web = bool(llm.get("is_web"))
@@ -498,6 +533,12 @@ def classify_batch(
                 if low_conf_web:
                     final_is_web = False
                     final_framework = "LOWCONF"
+
+                # 非 web 条目不保留具体框架名(2026-09-15): 否则库里会出现
+                # 「is_web=False + web_framework=FastAPI」这种自相矛盾(全库 126 条 FastAPI 即此形态)。
+                # LOWCONF/ERROR/SKIP 是状态哨兵而非框架名, 保留 —— is_non_web_blocked 靠 LOWCONF 识别例外。
+                if not final_is_web and final_framework not in ("LOWCONF", "ERROR", "SKIP"):
+                    final_framework = ""
 
                 is_web = 1 if final_is_web else 0
                 framework = final_framework

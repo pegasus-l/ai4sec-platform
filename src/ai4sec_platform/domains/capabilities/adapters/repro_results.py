@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from ai4sec_platform.core.time import utc_now
 from ai4sec_platform.domains.capabilities.adapters.repro_runner import enforce_report_acceptance, extract_report
 
 
@@ -74,6 +75,11 @@ def update_capability_from_report(
         payload_update["web_started"] = bool(report.get("web_started", False))
         if report.get("web_framework"):
             payload_update["web_framework"] = report["web_framework"]
+        elif not payload_update["is_web"]:
+            # agent 判非 web → 清掉分类器遗留的框架名(与 pipelines/steps/repro.py 同口径),
+            # 免得库里出现「非Web + web_framework=FastAPI」自相矛盾
+            payload_update["web_framework"] = ""
+            payload_update["web_reclass"] = f"repro-corrected-{utc_now()[:10]}"
 
     # 环境信息
     env = report.get("environment", {})
