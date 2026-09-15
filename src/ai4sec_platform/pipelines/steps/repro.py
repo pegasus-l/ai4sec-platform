@@ -62,12 +62,13 @@ REPRO_WEB_URL = _env("REPRO_WEB_URL", "/insights/repro-web/")
 
 
 def _task_web_url(task_id: int) -> str:
-    """多服务分发方案: 每个复现任务有独立 URL /insights/repro-web/task/{id}, 互不覆盖。
+    """多服务分发方案: 每个复现任务有独立 URL /insights/repro-web/task/{id}/, 互不覆盖。
 
-    不带尾斜杠: ASIS 层对带斜杠目录路径会 308 剥斜杠, 无斜杠路径能直通 repro nginx
-    (nginx 有精确 location = /task/{id} 兜底分发到应用根, 不产生内部 Host 的 301)。
+    带尾斜杠: 页面(Streamlit 等)用相对路径(./static/...)引用资源, 尾斜杠让相对目录正是
+    .../task/{id}/, 即使链路某层丢了 <base> 注入也不会把 task id 解析掉(否则 ./static/... 会
+    退化成 .../task/static/... → 404)。实测各入口对带斜杠路径 200 直达, 无 308 往返。
     """
-    return f"/insights/repro-web/task/{task_id}"
+    return f"/insights/repro-web/task/{task_id}/"
 
 # 停止协作标志（线程无法强杀，用 Event 在每个心跳检查点中止）
 _STOP_FLAGS: dict[int, threading.Event] = {}
@@ -142,10 +143,10 @@ def _build_repro_prompt(code_url: str, task_id: int) -> str:
         f"全程用中文说明你在做什么——每一步、每个命令、遇到的坑都简要写出来。\n\n"
         f"环境注意: 本环境没有 Docker、没有 GPU(项目必须 Docker(部署或核心功能)请看第零步①, 直接不复现)。"
         f"但容器里已配好一个可用的云端 LLM API key(OpenAI 兼容): 配置在 /root/.local/share/opencode/auth.json(provider 名 alibaba-cn, type=api, key 为 sk- 开头)和 "
-        f"/root/.cache/opencode/models.json 里, endpoint=https://dashscope.aliyuncs.com/compatible-mode/v1, 可用模型 glm-5.2。"
+        f"/root/.cache/opencode/models.json 里, endpoint=https://dashscope.aliyuncs.com/compatible-mode/v1, 可用模型 deepseek-v4-flash-0731。"
         f"项目需要 LLM 能力(对话/agent/代码生成/审计/总结等)时, 【必须】用这个云端 key 配置项目的 LLM 设置"
         f"(LiteLLM 或 OpenAI 兼容: 通常 export OPENAI_API_KEY=$(读 auth.json 的 key) + OPENAI_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1, "
-        f"或按项目自己的 LLM provider 配置方式设置, 模型名用 glm-5.2 或项目支持的 GLM 模型名)。"
+        f"或按项目自己的 LLM provider 配置方式设置, 模型名用 deepseek-v4-flash-0731（或项目支持的其它模型名)）。"
         f"【绝对不要】因项目需要 LLM 就安装本地 Ollama/本地小模型——云端 key 现成且可用。"
         f"Web 服务必须监听 127.0.0.1:自选端口(8101~8199, 见下方启动流程)。平台 nginx 总机(常驻 8080)会按 "
         f"/task/{task_id}/ 分发到你的端口, 用户通过 http://<平台地址>:8091/insights/repro-web/task/{task_id}/ 直接打开该界面。"
