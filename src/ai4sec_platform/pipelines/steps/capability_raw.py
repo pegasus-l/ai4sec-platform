@@ -291,6 +291,7 @@ class StoreCapabilitiesStep:
             if existing:
                 # 复用已有行时保留 repro 结果,避免重置回 candidate 造成重复复现
                 prev_payload = existing.get("payload") or {}
+                nonweb = is_non_web_blocked(prev_payload)
                 if prev_payload.get("repro_status"):
                     payload["repro_status"] = prev_payload["repro_status"]
                 if prev_payload.get("repro_result"):
@@ -300,9 +301,22 @@ class StoreCapabilitiesStep:
                 # code_url 每晚都会被重新发现 → 已淘汰的条目被原样写回"待复现验证"; 又因
                 # SelectUnclassifiedWebCandidatesStep 只挑没有 web_classify_ts 的条目, 分类过的永不
                 # 再分类 → 一旦漂移就再无机会降级(实测 72 条漂移, 8/17 分类 / 9 月仍在队列)。
-                if status == "待复现验证" and is_non_web_blocked(prev_payload):
+                if status == "待复现验证" and nonweb:
                     status = "已淘汰"
+                # 非 web 条目不参与复现 → 复现状态整键摘掉(2026-09-15): 上面的入库模板无条件带
+                # "repro_status": "candidate", 而 update_domain_item 对 payload 是浅 merge(永不删键)
+                # → 只从出参里 pop 改不动落库行, 必须再对落库行 json_remove 一次, 否则每 15 分钟的
+                # 资讯重扫(capabilities.from_news_pipeline)就把已清掉的戳重新盖上。
+                # 只摘 repro_status: repro_result 是人工跑出来的结论(报告仍可看), 仍走「清理」入口。
+                if nonweb:
+                    payload.pop("repro_status", None)
                 repo.update_domain_item(context.conn, item_id=existing["id"], status=status, score=score, payload=payload)
+                if nonweb:
+                    context.conn.execute(
+                        "UPDATE domain_items SET payload_json = "
+                        "json_remove(payload_json, '$.repro_status') WHERE id = ?",
+                        (existing["id"],),
+                    )
                 item_ids.append(existing["id"])
                 updated += 1
             else:

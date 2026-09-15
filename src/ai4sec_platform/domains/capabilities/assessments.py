@@ -453,6 +453,18 @@ def classify_single_item(item: dict, *, router: LLMRouter | None = None) -> dict
     return result
 
 
+def _strip_repro_status(conn, item_id: int) -> None:
+    """非 web 条目(web 把关拦下的: is_web=False 且非 LOWCONF)不参与复现 → 抹掉入库时无条件
+    盖上的 repro_status 戳(2026-09-15)。不抹的话数据里永远是「非Web 却在待复现」自相矛盾
+    —— 全库 4208 条非 web 曾 100% 挂着 candidate(实测真正跑过复现的只有 1 条)。
+    LOWCONF 例外不在此列: 它还要留在队列跑一次 CLI 复现来自我纠正, 那个 candidate 是真状态。
+    注意 update_domain_item 对 payload 是 merge(永不删键), 所以只能走 json_remove。"""
+    conn.execute(
+        "UPDATE domain_items SET payload_json = json_remove(payload_json, '$.repro_status') WHERE id = ?",
+        (item_id,),
+    )
+
+
 def classify_batch(
     conn,
     items: list[dict],
@@ -570,6 +582,8 @@ def classify_batch(
                         status="已淘汰",
                         metrics={"web_classify_score": rule_score},
                     )
+                    # 判死为非 web → 复现状态整体不存在(2026-09-15)
+                    _strip_repro_status(conn, item_id)
                 else:
                     repo.update_domain_item(
                         conn,
@@ -584,6 +598,8 @@ def classify_batch(
                     payload={"is_web": False, "web_framework": "ERROR", "web_classify_ts": datetime.now().isoformat()},
                     status="待资料补齐",
                 )
+                # 同降级口径: is_web=False 且非 LOWCONF → 没有复现状态
+                _strip_repro_status(conn, item_id)
         else:
             # 无有效 repo: 标记为不可分类;无 web 依据 → 降为已淘汰,不进复现队列
             demoted += 1
@@ -592,6 +608,8 @@ def classify_batch(
                 payload={"is_web": False, "web_framework": "SKIP", "web_classify_ts": datetime.now().isoformat()},
                 status="已淘汰",
             )
+            # 同降级口径: is_web=False 且非 LOWCONF → 没有复现状态
+            _strip_repro_status(conn, item_id)
 
         time.sleep(1)  # GitHub API 限流
 

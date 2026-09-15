@@ -252,10 +252,30 @@ def cleanup_repro(task_id: int, conn: sqlite3.Connection = Depends(get_db)) -> d
             # 还有没清理的任务 → 结论回到它, repro_result 保持不动
             payload["repro_status"] = rest_status
             repo.update_domain_item(conn, item_id=item_id, payload=payload)
+        elif is_non_web_blocked(payload):
+            # 非 web 条目本就不参与复现(2026-09-15): 最后一条任务被清掉后, 复现状态在 payload 里
+            # 整体消失 —— 不是退回"待复现"。否则数据里永远挂着「非Web 却待复现」的自相矛盾, 而且
+            # 行状态还停在「已复现」(item#30721 实测: 行说已复现、payload 说待复现)。
+            # 行状态若正是复现结论(已复现/部分复现/复现失败)一并归「已淘汰」; 其余(待资料补齐等)不动,
+            # 免得把另一个维度的问题顺手改了。
+            payload.pop("repro_status", None)
+            row_status = item.get("status") or ""
+            repo.update_domain_item(
+                conn,
+                item_id=item_id,
+                status="已淘汰" if row_status in ("已复现", "部分复现", "复现失败") else None,
+                payload=payload,
+            )
+            # merge 不删键 → 显式 json_remove 掉 repro_status 与 repro_result
+            conn.execute(
+                "UPDATE domain_items SET payload_json = "
+                "json_remove(payload_json, '$.repro_status', '$.repro_result') WHERE id = ?",
+                (item_id,),
+            )
         else:
             # 已无有效任务 → 撤销这条 item 的复现结论(卡片随之不再显示「查看复现」)。
             # not_supported(环境不支持)是终态、本就不进复现队列, 撤销后保留该结论不退回 candidate,
-            # 否则会把它重新丢回队列白烧一次 run; 其余情况退回「待复现」。
+            # 否则会把它重新丢回队列白烧一次 run; 其余情况退回「待复现」并重新入队。
             keep_terminal = payload.get("repro_status") == "not_supported"
             if not keep_terminal:
                 payload["repro_status"] = "candidate"
@@ -263,8 +283,7 @@ def cleanup_repro(task_id: int, conn: sqlite3.Connection = Depends(get_db)) -> d
             repo.update_domain_item(
                 conn,
                 item_id=item_id,
-                # 非 web 条目不复位回待复现队列(同 is_non_web_blocked 口径), 只清 payload
-                status=None if (keep_terminal or is_non_web_blocked(payload)) else "待复现验证",
+                status=None if keep_terminal else "待复现验证",
                 payload=payload,
             )
             conn.execute(
