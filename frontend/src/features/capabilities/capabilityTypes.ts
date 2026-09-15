@@ -139,6 +139,24 @@ export interface LibraryStats {
   };
 }
 
+/** /api/capabilities/items 的响应。total 是命中总数(服务端精确计数), 供分页用。 */
+export interface LibraryItemsResponse {
+  domain: string;
+  label: string;
+  count: number;
+  total: number;
+  page: number | null;
+  page_size: number | null;
+  items: CapabilityItem[];
+}
+
+/** 形态筛选键(与后端 form 参数同名) */
+export type LibraryFormKey = 'web' | 'non_web';
+
+/** 可体验·复现筛选键: 与 /items/stats 的 repro 桶名、/items?repro= 参数三者同名 */
+export type ReproBucketKey = 'demo' | 'success' | 'partial' | 'in_progress' | 'pending' | 'failed' | 'not_supported';
+
+
 export interface CapStats {
   total: number;
   candidates: number;

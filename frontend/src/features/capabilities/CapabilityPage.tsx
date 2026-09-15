@@ -1,16 +1,16 @@
 import { useMemo, useState, useEffect, useRef, useCallback } from 'react';
 import { ThemeToggle } from '../../components/ThemeToggle';
 import { Star, ListChecks, Settings, ArrowUpRight, Activity, ShieldCheck, RefreshCw, type LucideIcon } from 'lucide-react';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Badge, MetricCard, EmptyState } from '../../components/ui';
 import { useToast } from '../../components/Toast';
 import { useDrawerStack } from '../../components/DrawerStack';
 import {
-  fetchToday, fetchLibrary, fetchLibraryStats, fetchReproRuns, fetchConversions, fetchClassifyStats,
+  fetchToday, fetchLibraryPage, fetchLibraryStats, fetchReproRuns, fetchConversions, fetchClassifyStats,
   fetchDetail, fetchReproTask, fetchReproFullLog, startRepro, stopRepro, cleanupRepro, markConversion,
   streamReproLogs, classifyLogLine, stripAnsi,
 } from './capabilityQueries';
-import type { CapabilityItem, ReproTask, ConversionRecord, CapabilityView, LibraryStats } from './capabilityTypes';
+import type { CapabilityItem, ReproTask, ConversionRecord, CapabilityView, LibraryStats, LibraryFormKey, ReproBucketKey } from './capabilityTypes';
 import { CapabilityOps, CapabilityOpsQuality, CapabilityOpsRuns } from './CapabilityOps';
 
 const navGroups: Array<{ title: string; items: Array<{ id: CapabilityView; icon: LucideIcon; title: string }> }> = [
@@ -68,7 +68,7 @@ function matchItem(item: CapabilityItem, q: string): boolean {
   const hay = [
     item.title, item.summary ?? '', item.source_url ?? '',
     p.display_title, p.display_work_name, p.display_topic, p.one_liner, p.overview,
-    p.code_url,
+    p.summary, p.code_url,
     Array.isArray(p.tech_points) ? p.tech_points.join(' ') : '',
   ].filter(Boolean).join(' ').toLowerCase();
   return hay.includes(q.toLowerCase());
@@ -84,14 +84,12 @@ export function CapabilityPage() {
   const qc = useQueryClient();
 
   const { data: todayData, isLoading: todayLoading } = useQuery({ queryKey: ['cap-today'], queryFn: fetchToday, staleTime: 300_000 });
-  const { data: libraryData } = useQuery({ queryKey: ['cap-library'], queryFn: () => fetchLibrary(2000), staleTime: 300_000 });
   const { data: libraryStatsData } = useQuery({ queryKey: ['cap-library-stats'], queryFn: fetchLibraryStats, staleTime: 300_000 });
   const { data: reproData } = useQuery({ queryKey: ['cap-repro'], queryFn: fetchReproRuns, staleTime: 1_000, refetchInterval: 5_000 });
   const { data: convData } = useQuery({ queryKey: ['cap-conversions'], queryFn: fetchConversions, staleTime: 300_000 });
   const { data: statsData } = useQuery({ queryKey: ['cap-classify-stats'], queryFn: fetchClassifyStats, staleTime: 300_000 });
 
   const todayItems = ((todayData as Record<string, unknown> | undefined)?.items ?? []) as CapabilityItem[];
-  const libraryItems = ((libraryData as Record<string, unknown> | undefined)?.items ?? []) as CapabilityItem[];
   const reproRuns = ((reproData as Record<string, unknown> | undefined)?.items ?? []) as ReproTask[];
   const conversions = ((convData as Record<string, unknown> | undefined)?.items ?? []) as ConversionRecord[];
   const stats = statsData ?? { total: 0, classified: 0, unclassified: 0, web_count: 0 };
@@ -102,10 +100,6 @@ export function CapabilityPage() {
   const filteredToday = useMemo(
     () => (trimmedSearch ? todayItems.filter(i => matchItem(i, trimmedSearch)) : todayItems),
     [todayItems, trimmedSearch],
-  );
-  const filteredLibrary = useMemo(
-    () => (trimmedSearch ? libraryItems.filter(i => matchItem(i, trimmedSearch)) : libraryItems),
-    [libraryItems, trimmedSearch],
   );
 
   const viewRef = useRef<HTMLDivElement>(null);
@@ -154,7 +148,7 @@ export function CapabilityPage() {
     <aside className="ai4sec-sidebar">
       <a href="/" style={{ display: "block", padding: "8px 12px", color: "var(--accent)", fontSize: 12, textDecoration: "none", borderBottom: "1px solid var(--line)" }}>&larr; 返回</a>
       <div className="ai4sec-sidebar-head"><div className="label"><span className="dot" /><span>能力洞察</span></div><h2>前沿项目能力化</h2><p>从资讯筛选可复现项目，到自动复现验证，再到能力转化落地。</p></div>
-      <nav className="nav-scroll">{navGroups.map(group => <div className="nav-group" key={group.title}><div className="group-title">{group.title}</div>{group.items.map(item => { const Icon = item.icon; return <button key={item.id} className={`nav-item ${view === item.id ? 'active' : ''}`} onClick={() => setView(item.id)}><Icon size={18} /><span>{item.title}</span>{item.id === 'today' && todayItems.length > 0 && <span className="badge badge-green">{todayItems.length}</span>}{item.id === 'library' && libraryItems.length > 0 && <span className="badge badge-sky">{libraryItems.length}</span>}{item.id === 'repro' && reproRuns.length > 0 && <span className="badge badge-amber">{reproRuns.length}</span>}{item.id === 'conversion' && conversions.length > 0 && <span className="badge badge-violet">{conversions.length}</span>}</button>; })}</div>)}</nav>
+      <nav className="nav-scroll">{navGroups.map(group => <div className="nav-group" key={group.title}><div className="group-title">{group.title}</div>{group.items.map(item => { const Icon = item.icon; return <button key={item.id} className={`nav-item ${view === item.id ? 'active' : ''}`} onClick={() => setView(item.id)}><Icon size={18} /><span>{item.title}</span>{item.id === 'today' && todayItems.length > 0 && <span className="badge badge-green">{todayItems.length}</span>}{item.id === 'library' && (libraryStats?.total ?? 0) > 0 && <span className="badge badge-sky">{libraryStats?.total}</span>}{item.id === 'repro' && reproRuns.length > 0 && <span className="badge badge-amber">{reproRuns.length}</span>}{item.id === 'conversion' && conversions.length > 0 && <span className="badge badge-violet">{conversions.length}</span>}</button>; })}</div>)}</nav>
       <div className="ai4sec-sidebar-note">能力洞察不重复资讯流，而是把前沿论文和开源项目推进到评分、复现和能力转化。能力详情从今日能力、能力库、复现验证或能力转化点击进入。</div>
     <div className="ai4sec-sidebar-footer" style={{ marginTop: "auto", padding: "8px 12px", borderTop: "1px solid var(--line)", display: "flex", alignItems: "center" }}><ThemeToggle /></div>
     </aside>
@@ -166,8 +160,8 @@ export function CapabilityPage() {
       <div className="content-body view" ref={viewRef}>
         {todayLoading && view === 'today' && <EmptyState title="正在加载" description="从 /api/capabilities/today 拉取数据。" />}
         {view === 'today' && <CapabilityToday items={filteredToday} stats={stats} openDetail={openDetail} />}
-        {view === 'library' && <CapabilityLibrary items={filteredLibrary} stats={libraryStats} openDetail={openDetail} onViewRepro={openReproView} />}
-        {view === 'repro' && <CapabilityRepro runs={reproRuns} openDetail={openDetail} items={libraryItems} targetItemId={reproTargetItemId} onTargetConsumed={() => setReproTargetItemId(null)} />}
+        {view === 'library' && <CapabilityLibrary stats={libraryStats} search={search} openDetail={openDetail} onViewRepro={openReproView} />}
+        {view === 'repro' && <CapabilityRepro runs={reproRuns} openDetail={openDetail} targetItemId={reproTargetItemId} onTargetConsumed={() => setReproTargetItemId(null)} />}
         {view === 'conversion' && <CapabilityConversion conversions={conversions} openConversion={openConversion} />}
         {view === 'ops-overview' && <CapabilityOps />}
         {view === 'ops-quality' && <CapabilityOpsQuality />}
@@ -250,13 +244,42 @@ function CapabilityCard({ item, rank, onClick, onViewRepro }: { item: Capability
 }
 
 // ========== 能力库（改动 1: 4 个视图 + 改动 3: classifyBatch 按钮）==========
-function CapabilityLibrary({ items, stats, openDetail, onViewRepro }: { items: CapabilityItem[]; stats?: LibraryStats; openDetail: (item: CapabilityItem) => void; onViewRepro: (item: CapabilityItem) => void }) {
+// 复现芯片名 → 后端 repro 键(与 /items/stats 的 repro 桶同名)
+const REPRO_CHIP_KEY: Record<string, ReproBucketKey> = {
+  '官方 Demo': 'demo', '完整复现': 'success', '部分复现': 'partial', '复现中': 'in_progress',
+  '待复现': 'pending', '复现失败': 'failed', '无法复现': 'not_supported',
+};
+// 桶 → 工程可用性视图的分组标题; 顺序即展示顺序
+const ENGINEERING_BUCKET_LABEL: Record<string, string> = {
+  demo: '官方 Demo', success: '完整复现', partial: '部分复现', in_progress: '复现中',
+  pending: '待 Web 复现', failed: '复现失败', not_supported: '无法复现', non_web: '非 Web(不参与复现)',
+};
+const ENGINEERING_BUCKET_ORDER = ['demo', 'success', 'partial', 'in_progress', 'pending', 'failed', 'not_supported', 'non_web'] as const;
+
+/** 单条能力卡落在哪个「可体验·复现」桶, 判据与后端 REPRO_PREDICATES 一致:
+ *  官方 Demo 是独立维度(有 demo_url 即归它, 不论 is_web); 非 web 不参与复现维度;
+ *  其余按 repro_status 落桶(缺失 / candidate / no_code → 待复现)。
+ *  前端此前另有一份自己的判据, 且漏了 'succeeded'(分组显示 1 而芯片显示 2) —— 统一到这一处。 */
+function reproBucketOf(p: CapabilityItem['payload'] | undefined): string | null {
+  const rs = p?.repro_status;
+  if (p?.demo_url) return 'demo';
+  if (!p?.is_web) return 'non_web';
+  if (rs === 'success' || rs === 'succeeded') return 'success';
+  if (rs === 'partial') return 'partial';
+  if (rs === 'in_progress') return 'in_progress';
+  if (rs === 'failed' || rs === 'error') return 'failed';
+  if (rs === 'not_supported') return 'not_supported';
+  return 'pending';
+}
+
+function CapabilityLibrary({ stats, search, openDetail, onViewRepro }: { stats?: LibraryStats; search: string; openDetail: (item: CapabilityItem) => void; onViewRepro: (item: CapabilityItem) => void }) {
   const [viewMode, setViewMode] = useState<'列表视图' | '能力分类' | '应用场景' | '工程可用性'>('列表视图');
   // 【正交双维度多选筛选】形态(Web/非Web) × 可体验·复现(官方Demo/完整复现/…)。
   // 计数全部来自 /items/stats 服务端全量聚合(不受 fetch 窗口/搜索影响)。
-  // 形态默认只选 Web(保持旧默认"隐藏非 Web 噪音");可体验默认全放开。
+  // 形态默认只选 Web(保持旧默认"隐藏非 Web 噪音"); 可体验默认全放开。
   const [formChips, setFormChips] = useState<string[]>(['Web']);
   const [reproChips, setReproChips] = useState<string[]>([]);
+  const [page, setPage] = useState(1);
   // 只看非 Web 时, 复现维度整个不适用(非 web 已被 web 把关挡在复现队列外) —— 那排 chip 整排失效,
   // 若还留着已选的复现条件会把列表筛成空, 所以一并清掉。
   const onlyNonWeb = formChips.includes('非Web') && !formChips.includes('Web');
@@ -276,69 +299,84 @@ function CapabilityLibrary({ items, stats, openDetail, onViewRepro }: { items: C
       default: return undefined;
     }
   };
-  // 谓词与 engineeringGroups(下方 工程可用性 视图)完全一致,保证两个视图数字对得上。
-  // 官方 Demo 为独立维度, repro 桶全部前置「无 demo」条件。
-  const matchesReproChip = (p: CapabilityItem['payload'] | undefined, chip: string): boolean => {
-    const hasDemo = Boolean(p?.demo_url);
-    const rs = p?.repro_status;
-    // 非 web 条目不进复现维度(2026-09-15): 它们已被 web 把关挡在复现队列外, 不该在任何复现桶里
-    // 冒充"待复现"。与后端 filter_stats_by_domain 的 repro 桶同判据, 保证 chip 数字与列表对得上。
-    // 「官方 Demo」是独立维度、不算复现结论, 不设此门槛。
-    if (chip !== '官方 Demo' && !p?.is_web) return false;
-    switch (chip) {
-      case '官方 Demo': return hasDemo;
-      case '完整复现': return !hasDemo && (rs === 'success' || rs === 'succeeded');
-      case '部分复现': return !hasDemo && rs === 'partial';
-      case '复现中': return !hasDemo && rs === 'in_progress';
-      case '待复现': return !hasDemo && (rs === 'candidate' || rs === 'no_code' || rs === undefined || rs === null);
-      case '复现失败': return !hasDemo && (rs === 'failed' || rs === 'error');
-      case '无法复现': return !hasDemo && rs === 'not_supported';
-      default: return false;
-    }
-  };
-  const filtered = useMemo(() => {
-    let list = items;
-    // 形态:恰好选一个才过滤(两个都不选/都选 = 全部)
-    const wantWeb = formChips.includes('Web');
-    const wantNonWeb = formChips.includes('非Web');
-    if (wantWeb !== wantNonWeb) list = list.filter(i => Boolean(i.payload?.is_web) === wantWeb);
-    // 可体验·复现:多选 OR
-    if (reproChips.length > 0) list = list.filter(i => reproChips.some(chip => matchesReproChip(i.payload, chip)));
-    return list;
-  }, [items, formChips, reproChips]);
-  // 【分页】列表视图分页(每页 20 条); 搜索/筛选变化时回到第 1 页
+
+  // 【搜索防抖】搜索框在页头(同时喂明日能力与能力库), 这里 250ms 防抖后再发请求 ——
+  // 每敲一键一个请求在隧道上太浪费。
+  const [dq, setDq] = useState(search);
+  useEffect(() => { const t = setTimeout(() => setDq(search), 250); return () => clearTimeout(t); }, [search]);
+
+  // 【筛选下推服务端】(2026-09-15) 此前是拉 2000 条到浏览器再本地筛: 首屏要付 10.2MB 裸 /
+  // 1.39MB gz, 而"分页"发生在下载完之后。现在列表只取 20 条/页, 筛选/搜索都在 SQL 侧做,
+  // 且与芯片计数共用同一批谓词(后端 REPRO_PREDICATES), 条数与芯片数字结构性同源。
+  const wantWeb = formChips.includes('Web');
+  const wantNonWeb = formChips.includes('非Web');
+  // 形态沿用"恰选一个才过滤"(两个都不选/都选 = 全部)
+  const formParam: LibraryFormKey | null = wantWeb === wantNonWeb ? null : (wantWeb ? 'web' : 'non_web');
+  // 排序去重后进 query key: 否则 ['Web','非Web'] 与 ['非Web','Web'] 会变成两个缓存条目
+  const reproKeys = useMemo(
+    () => Array.from(new Set(reproChips.map(c => REPRO_CHIP_KEY[c]).filter((k): k is ReproBucketKey => Boolean(k)))).sort(),
+    [reproChips],
+  );
+  const q = dq.trim();
+  const filterKey = `${q}|${formParam ?? ''}|${reproKeys.join(',')}`;
+  // 【分页重置】依赖必须是"筛选签名"而不是数据引用 —— 若依赖当前页数据, 翻页拿到新数据
+  // 会立刻把页码弹回第 1 页(第 2 页永远打不开)。
+  useEffect(() => { setPage(1); }, [filterKey]);
+
   const PAGE_SIZE = 20;
-  const [page, setPage] = useState(1);
-  const pageCount = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
-  const pageItems = useMemo(() => filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE), [filtered, page]);
-  useEffect(() => { setPage(1); }, [filtered]);
+  // 列表视图: 服务端分页, 每页 20 条
+  const pageQ = useQuery({
+    queryKey: ['cap-library', 'page', filterKey, page],
+    queryFn: () => fetchLibraryPage({ q, form: formParam, repro: reproKeys, page, page_size: PAGE_SIZE }),
+    placeholderData: keepPreviousData,   // 翻页时保留上一页内容, 不闪白
+    staleTime: 300_000,
+  });
+  // 能力分类/应用场景/工程可用性三个视图天然需要整个筛选结果集 → 切过去时才懒加载。
+  // 默认的列表视图永远不会发这个请求。
+  const showGroups = viewMode !== '列表视图';
+  const allQ = useQuery({
+    queryKey: ['cap-library', 'all', filterKey],
+    queryFn: () => fetchLibraryPage({ q, form: formParam, repro: reproKeys, limit: 10000 }),
+    enabled: showGroups,
+    placeholderData: keepPreviousData,
+    staleTime: 300_000,
+  });
+
+  const total = pageQ.data?.total ?? 0;
+  const pageItems = pageQ.data?.items ?? [];
+  const pageCount = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  // 筛选变化后页码可能越界(停在第 9 页却只剩 3 页) → 钳到末页, 否则会渲染成空表
+  useEffect(() => { if (page > pageCount) setPage(pageCount); }, [page, pageCount]);
+  const allItems = allQ.data?.items ?? [];
+  // 懒查询用 isPending || isFetching 判断: enabled=false 时 v5 的 isLoading 恒为 false,
+  // 单看 isLoading 会把"还没开始拉"显示成"空"。
+  // 不带 placeholderData 时不加 !allQ.data 条件 —— 改筛选后旧分组仍在屏上, 必须同时给出刷新提示,
+  // 否则"芯片说 2 条、面板里还是上一组"这种不一致没有任何提示。
+  const loadingAll = showGroups && (allQ.isPending || allQ.isFetching);
 
   // 【改动 1】能力分类视图：按 capability_type 分组
   const typeGroups = useMemo(() => {
     const g: Record<string, CapabilityItem[]> = {};
-    filtered.forEach(item => { const t = item.payload?.capability_type || '未分类'; (g[t] ??= []).push(item); });
+    allItems.forEach(item => { const t = item.payload?.capability_type || '未分类'; (g[t] ??= []).push(item); });
     return g;
-  }, [filtered]);
+  }, [allItems]);
 
   // 【改动 1】应用场景视图：按 application_scenarios 分组
   const scenarioGroups = useMemo(() => {
     const g: Record<string, CapabilityItem[]> = {};
-    filtered.forEach(item => { (item.payload?.application_scenarios ?? ['未标注']).forEach(s => { (g[s] ??= []).push(item); }); });
+    allItems.forEach(item => { (item.payload?.application_scenarios ?? ['未标注']).forEach(s => { (g[s] ??= []).push(item); }); });
     return g;
-  }, [filtered]);
+  }, [allItems]);
 
-  const engineeringGroups = useMemo(() => ({
-    '官方 Demo': filtered.filter(i => Boolean(i.payload?.demo_url)),
-    '完整复现': filtered.filter(i => i.payload?.is_web && !i.payload?.demo_url && i.payload?.repro_status === 'success'),
-    '部分复现': filtered.filter(i => i.payload?.is_web && !i.payload?.demo_url && i.payload?.repro_status === 'partial'),
-    '复现中': filtered.filter(i => i.payload?.is_web && !i.payload?.demo_url && i.payload?.repro_status === 'in_progress'),
-    '待 Web 复现': filtered.filter(i => i.payload?.is_web && !i.payload?.demo_url && ['candidate', 'no_code', undefined].includes(i.payload?.repro_status)),
-    '复现失败': filtered.filter(i => i.payload?.is_web && !i.payload?.demo_url && i.payload?.repro_status === 'failed'),
-    '无法复现': filtered.filter(i => i.payload?.is_web && !i.payload?.demo_url && i.payload?.repro_status === 'not_supported'),
-    // 非 web 条目已被 web 把关挡在复现队列外 → 不再叫"待命令行验证"(那名字会让人以为它们在排队),
-    // 单独成组承载, 保证此视图仍能看见它们(而非整批消失)。
-    '非 Web(不参与复现)': filtered.filter(i => !i.payload?.is_web && !i.payload?.demo_url),
-  }), [filtered]);
+  // 工程可用性视图: 按 reproBucketOf 落桶(判据与后端、与芯片一致), 顺序固定
+  const engineeringGroups = useMemo(() => {
+    const g: Record<string, CapabilityItem[]> = {};
+    for (const bucket of ENGINEERING_BUCKET_ORDER) {
+      const list = allItems.filter(i => reproBucketOf(i.payload) === bucket);
+      if (list.length > 0) g[ENGINEERING_BUCKET_LABEL[bucket]] = list;
+    }
+    return g;
+  }, [allItems]);
 
   return <div className="grid">
     <div className="view-switch">
@@ -354,16 +392,18 @@ function CapabilityLibrary({ items, stats, openDetail, onViewRepro }: { items: C
         ? <span style={{ fontSize: 12, color: 'var(--faint)', alignSelf: 'center' }}>非 Web 条目不参与复现(已被 web 把关挡在复现队列外), 该维度对其不适用</span>
         : (['官方 Demo', '完整复现', '部分复现', '复现中', '待复现', '复现失败', '无法复现'] as const).map(chip => <span key={chip} className={`view-pill ${reproChips.includes(chip) ? 'active' : ''}`} onClick={() => setReproChips(toggleValue(reproChips, chip))}>{chip}{chipCount(chip) !== undefined && <em style={{ fontSize: 11, opacity: 0.7, fontStyle: 'normal' }}> {chipCount(chip)}</em>}</span>)}
     </div>
-    {filtered.length === 0 && <EmptyState title="能力库为空" description="先跑 capabilities.from_news_pipeline 生成能力卡" />}
+    {loadingAll && <EmptyState title="正在加载全量" description="分组视图需要整个筛选结果集, 首次切换时拉取一次。" />}
+    {/* 空态只在"确实查过且命中 0"时给: 首帧 data 还没到, 单看 total===0 会先闪一下"能力库为空" */}
+    {!showGroups && pageQ.isSuccess && total === 0 && <EmptyState title="能力库为空" description="先跑 capabilities.from_news_pipeline 生成能力卡" />}
 
     {/* 列表视图 */}
-    {filtered.length > 0 && viewMode === '列表视图' && <div className="table-card">
+    {!showGroups && total > 0 && <div className="table-card">
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 12px', borderBottom: '1px solid var(--line)', fontSize: 12, color: '#8a94a6' }}>
-        <span>共 {filtered.length} 条 · 每页 {PAGE_SIZE} 条</span>
+        <span>共 {total} 条 · 每页 {PAGE_SIZE} 条</span>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-          <button className="btn" disabled={page <= 1} onClick={() => setPage(p => Math.max(1, p - 1))}>‹ 上一页</button>
+          <button className="btn" disabled={page <= 1 || pageQ.isFetching} onClick={() => setPage(p => Math.max(1, p - 1))}>‹ 上一页</button>
           <span>第 {page}/{pageCount} 页</span>
-          <button className="btn" disabled={page >= pageCount} onClick={() => setPage(p => Math.min(pageCount, p + 1))}>下一页 ›</button>
+          <button className="btn" disabled={page >= pageCount || pageQ.isFetching} onClick={() => setPage(p => Math.min(pageCount, p + 1))}>下一页 ›</button>
         </div>
       </div>
       <table className="data-table"><thead><tr><th>能力</th><th>概述</th><th>能力评分</th><th>标签</th></tr></thead><tbody>
@@ -375,14 +415,14 @@ function CapabilityLibrary({ items, stats, openDetail, onViewRepro }: { items: C
       </tr>; })}
     </tbody></table>
     {pageCount > 1 && <div style={{ display: 'flex', justifyContent: 'center', gap: 8, alignItems: 'center', padding: '10px 12px', borderTop: '1px solid var(--line)' }}>
-      <button className="btn" disabled={page <= 1} onClick={() => setPage(p => Math.max(1, p - 1))}>‹ 上一页</button>
+      <button className="btn" disabled={page <= 1 || pageQ.isFetching} onClick={() => setPage(p => Math.max(1, p - 1))}>‹ 上一页</button>
       <span style={{ fontSize: 12, color: '#8a94a6' }}>第 {page}/{pageCount} 页</span>
-      <button className="btn" disabled={page >= pageCount} onClick={() => setPage(p => Math.min(pageCount, p + 1))}>下一页 ›</button>
+      <button className="btn" disabled={page >= pageCount || pageQ.isFetching} onClick={() => setPage(p => Math.min(pageCount, p + 1))}>下一页 ›</button>
     </div>}
     </div>}
 
     {/* 能力分类视图 */}
-    {filtered.length > 0 && viewMode === '能力分类' && Object.entries(typeGroups).map(([type, groupItems]) => (
+    {allItems.length > 0 && viewMode === '能力分类' && Object.entries(typeGroups).map(([type, groupItems]) => (
       <div className="panel" key={type}>
         <div className="panel-head"><h3>{type}</h3><span>{groupItems.length} 个</span></div>
         <div className="panel-body"><div className="asis-list">
@@ -392,7 +432,7 @@ function CapabilityLibrary({ items, stats, openDetail, onViewRepro }: { items: C
     ))}
 
     {/* 应用场景视图 */}
-    {filtered.length > 0 && viewMode === '应用场景' && Object.entries(scenarioGroups).map(([scenario, groupItems]) => (
+    {allItems.length > 0 && viewMode === '应用场景' && Object.entries(scenarioGroups).map(([scenario, groupItems]) => (
       <div className="panel" key={scenario}>
         <div className="panel-head"><h3>{scenario}</h3><span>{groupItems.length} 个</span></div>
         <div className="panel-body"><div className="asis-list">
@@ -402,7 +442,7 @@ function CapabilityLibrary({ items, stats, openDetail, onViewRepro }: { items: C
     ))}
 
     {/* 工程可用性视图 */}
-    {filtered.length > 0 && viewMode === '工程可用性' && <div className="grid cols-2">
+    {allItems.length > 0 && viewMode === '工程可用性' && <div className="grid cols-2">
       {Object.entries(engineeringGroups).filter(([, groupItems]) => groupItems.length > 0).map(([label, groupItems]) => (
         <div className="panel" key={label}>
           <div className="panel-head"><h3>{label}</h3><span>{groupItems.length} 个</span></div>
@@ -417,7 +457,7 @@ function CapabilityLibrary({ items, stats, openDetail, onViewRepro }: { items: C
 }
 
 // ========== 复现验证 ==========
-function CapabilityRepro({ runs, items, openDetail, targetItemId, onTargetConsumed }: { runs: ReproTask[]; items: CapabilityItem[]; openDetail: (item: CapabilityItem) => void; targetItemId?: number | null; onTargetConsumed?: () => void }) {
+function CapabilityRepro({ runs, openDetail, targetItemId, onTargetConsumed }: { runs: ReproTask[]; openDetail: (item: CapabilityItem) => void; targetItemId?: number | null; onTargetConsumed?: () => void }) {
   const [selectedTaskId, setSelectedTaskId] = useState<number | null>(null);
   const [targetHint, setTargetHint] = useState<string | null>(null);
   // 【跳转复现】从能力库带目标能力进入: 找到对应任务并选中; 队列已加载仍无匹配则提示
@@ -438,7 +478,15 @@ function CapabilityRepro({ runs, items, openDetail, targetItemId, onTargetConsum
     }
   }, [runs, selectedTaskId]);
   const selected = runs.find(run => run.id === selectedTaskId) ?? runs[0];
-  const capabilityItem = items.find(i => i.id === selected?.item_id);
+  // 【按需取单条】(2026-09-15) 此前是从能力库那份 limit=2000 的列表里 find —— 库内非淘汰条目
+  // 已有 2264 条, 排在窗口之外的那些永远查不到, 于是「查看能力详情」按钮静默消失(实测 264 条如此)。
+  // 改成按当前选中的任务取该条详情, 只发 1 个请求, 顺带修掉这个隐藏了很久的缺口。
+  const { data: capabilityItem } = useQuery({
+    queryKey: ['cap-detail', selected?.item_id],
+    queryFn: () => fetchDetail(selected!.item_id),
+    enabled: Boolean(selected?.item_id),
+    staleTime: 300_000,
+  });
   const runningCount = runs.filter(run => run.status === 'running' || run.status === 'queued').length;
   const successCount = runs.filter(run => run.status === 'success' || run.status === 'partial').length;
   const failedCount = runs.filter(run => run.status === 'failed' || run.status === 'timeout').length;

@@ -315,25 +315,70 @@ def update_domain_item(
     conn.execute(f"UPDATE domain_items SET {', '.join(fields)} WHERE id = ?", params)
 
 
-def list_domain_items(conn: sqlite3.Connection, domain: str, *, item_type: str | None = None, limit: int = 50, status: str | None = None, exclude_status: str | None = None, since: str | None = None) -> list[dict[str, Any]]:
-    sql = "SELECT * FROM domain_items WHERE domain = ?"
-    params: list[Any] = [domain]
-    if item_type:
-        sql += " AND item_type = ?"
-        params.append(item_type)
-    if status:
-        sql += " AND status = ?"
-        params.append(status)
-    if exclude_status:
-        sql += " AND status != ?"
-        params.append(exclude_status)
-    if since:
-        # 时间下界(ISO-8601 UTC 字符串比较, 与 created_at 存储格式一致)
-        sql += " AND created_at >= ?"
-        params.append(since)
-    sql += " ORDER BY COALESCE(score, 0) DESC, primary_date DESC, id DESC LIMIT ?"
-    params.append(limit)
+def list_domain_items(conn: sqlite3.Connection, domain: str, *, item_type: str | None = None, limit: int = 50,
+                      status: str | None = None, exclude_status: str | None = None, since: str | None = None,
+                      offset: int = 0, forms: list[str] | None = None, repro_chips: list[str] | None = None,
+                      q: str | None = None) -> list[dict[str, Any]]:
+    """列 domain_items。
+
+    offset 默认 0 → 不传时行为与改动前完全一致(其它域调用方零影响)。
+    forms/repro_chips/q 见 build_item_filters: 给了就下推到 SQL, 不再把全量行拉进 Python 过滤。
+    """
+    where, params = _domain_items_where(domain, item_type=item_type, status=status,
+                                        exclude_status=exclude_status, since=since,
+                                        forms=forms, repro_chips=repro_chips, q=q)
+    sql = ("SELECT * FROM domain_items" + where
+           + " ORDER BY COALESCE(score, 0) DESC, primary_date DESC, id DESC LIMIT ? OFFSET ?")
+    params.extend([limit, offset])
     return [row_to_dict(row) for row in conn.execute(sql, params).fetchall()]
+
+
+def count_domain_items(conn: sqlite3.Connection, domain: str, *, item_type: str | None = None,
+                       status: str | None = None, exclude_status: str | None = None, since: str | None = None,
+                       forms: list[str] | None = None, repro_chips: list[str] | None = None,
+                       q: str | None = None) -> int:
+    """数命中条数(与 list_domain_items 同判据), 供分页返回精确 total。"""
+    where, params = _domain_items_where(domain, item_type=item_type, status=status,
+                                        exclude_status=exclude_status, since=since,
+                                        forms=forms, repro_chips=repro_chips, q=q)
+    return int(conn.execute("SELECT COUNT(*) FROM domain_items" + where, params).fetchone()[0])
+
+
+def classify_stats_by_domain(conn: sqlite3.Connection, domain: str) -> dict[str, Any]:
+    """Web 分类进度统计: 一条 SQL 聚合。
+
+    2026-09-15 改写: 原实现(app/api/capabilities.py)list_domain_items(limit=10000) 把全量行
+    连完整 payload 拉进 Python 只为数 4 个整数(实测 0.378s, 响应仅 75 字节)。判据与原 Python
+    逐条对齐(已在生产库比对过四个数字):
+      in_repo    = code_url 非空 或 source_url 含 'github.com'; 用 instr 保持大小写敏感
+                   (LIKE 对 ASCII 不区分大小写, 会把 'GitHub.com' 也算进来, 与原逻辑不符)
+      classified = in_repo 且 web_classify_ts 为真(非 NULL/''/0)
+      web_count  = in_repo 且 is_web 为真
+    """
+    in_repo = ("(COALESCE(json_extract(payload_json, '$.code_url'), '') != ''"
+               " OR instr(COALESCE(source_url, ''), 'github.com') > 0)")
+    classify_ts = ("(json_extract(payload_json, '$.web_classify_ts') IS NOT NULL"
+                   " AND json_extract(payload_json, '$.web_classify_ts') != ''"
+                   " AND json_extract(payload_json, '$.web_classify_ts') != 0)")
+    row = conn.execute(
+        f"""
+        SELECT
+            COUNT(*) AS total,
+            SUM(CASE WHEN {classify_ts} THEN 1 ELSE 0 END) AS classified,
+            SUM(CASE WHEN {_IS_WEB} THEN 1 ELSE 0 END) AS web_count
+        FROM domain_items
+        WHERE domain = ? AND status != ? AND {in_repo}
+        """,
+        (domain, "已淘汰"),
+    ).fetchone()
+    total = int(row["total"] or 0)
+    classified = int(row["classified"] or 0)
+    return {
+        "total": total,
+        "classified": classified,
+        "unclassified": total - classified,
+        "web_count": int(row["web_count"] or 0),
+    }
 
 
 def get_domain_item_by_repo(conn: sqlite3.Connection, domain: str, repo_url: str) -> dict[str, Any] | None:
@@ -439,6 +484,147 @@ def count_by_domain(conn: sqlite3.Connection, domain: str) -> int:
     return int(row["count"])
 
 
+# ============================================================================
+# 能力卡筛选谓词(唯一真源, 2026-09-15)
+# ============================================================================
+# 「芯片上的数字」(/items/stats 的桶计数)与「列表里的内容」(/items?form=&repro=)必须同判据,
+# 否则会出现「芯片写 1698 条、点进去却不是」这种自相矛盾。历史上前端还各有一份 Python 判据
+# (CapabilityPage.tsx 的 matchesReproChip)靠人工对齐 —— 这里收敛成一批 SQL 片段:
+# filter_stats_by_domain 用 SUM(CASE WHEN 片段) 计数, build_item_filters 用同一片段做 WHERE。
+# 改口径时只改这一处, 计数与列表会一起变。
+#
+# 参数名与 /items/stats 响应里的键一一对应(web/non_web/demo/success/partial/in_progress/
+# pending/failed/not_supported), 前端拿 stats 的键就能直接拼筛选参数。
+_IS_WEB = "json_extract(payload_json, '$.is_web') IN (1, 'true', '1')"
+_NO_DEMO = "COALESCE(json_extract(payload_json, '$.demo_url'), '') = ''"
+_HAS_DEMO = "COALESCE(json_extract(payload_json, '$.demo_url'), '') != ''"
+_REPRO_STATUS = "json_extract(payload_json, '$.repro_status')"
+
+# 形态。非 Web 必须写成 NOT COALESCE(..., 0): is_web 缺失时 `json_extract(...) IN (...)` 求值为
+# NULL, 直接 NOT 还是 NULL, WHERE 会把这些行整批丢掉 —— 而 stats 里 non_web = total - web 是把
+# 它们算作非 Web 的, 两边会当场对不上(库内目前 is_web 全有值, 但新采集的行不保证)。
+FORM_PREDICATES: dict[str, str] = {
+    "web": _IS_WEB,
+    "non_web": f"NOT COALESCE({_IS_WEB}, 0)",
+}
+
+# 可体验·复现。除 demo 外一律前置「无 demo + is_web 为真」: demo 是独立维度、不算复现结论;
+# 非 web 条目不参与复现维度(已被 web 把关挡在复现队列外, 不该在任何复现桶里冒充"待复现")。
+REPRO_PREDICATES: dict[str, str] = {
+    "demo": _HAS_DEMO,
+    "success": f"{_NO_DEMO} AND {_IS_WEB} AND {_REPRO_STATUS} IN ('success', 'succeeded')",
+    "partial": f"{_NO_DEMO} AND {_IS_WEB} AND {_REPRO_STATUS} = 'partial'",
+    "in_progress": f"{_NO_DEMO} AND {_IS_WEB} AND {_REPRO_STATUS} = 'in_progress'",
+    "pending": f"{_NO_DEMO} AND {_IS_WEB} AND ({_REPRO_STATUS} IN ('candidate', 'no_code') OR {_REPRO_STATUS} IS NULL)",
+    "failed": f"{_NO_DEMO} AND {_IS_WEB} AND {_REPRO_STATUS} IN ('failed', 'error')",
+    "not_supported": f"{_NO_DEMO} AND {_IS_WEB} AND {_REPRO_STATUS} = 'not_supported'",
+}
+REPRO_KEYS: tuple[str, ...] = ("success", "partial", "in_progress", "pending", "failed", "not_supported")
+
+# 能力卡搜索覆盖的 payload 展示键(services/domain_items._item_matches_q 也引用这一份, 避免两处清单漂移)
+CAP_SEARCH_PAYLOAD_KEYS: tuple[str, ...] = (
+    "display_title", "display_work_name", "display_topic", "one_liner", "overview",
+    "summary", "code_url",
+)
+_CAP_SEARCH_COLUMNS: tuple[str, ...] = ("title", "summary", "source_url")
+
+# 反斜杠: LIKE ... ESCAPE 用的转义字符。写成 chr(92) 而不是字面量, 免得源码里的反斜杠
+# 转义层级看错(看错一次用户搜 "50%" 就会变成通配符全表命中)。
+_LIKE_ESC = chr(92)
+
+
+def _like_escape(q: str) -> str:
+    """把关键词包成 LIKE 模式串, 并转义 % / _ / 反斜杠本身。"""
+    e = _LIKE_ESC
+    return "%" + q.replace(e, e + e).replace("%", e + "%").replace("_", e + "_") + "%"
+
+
+def cap_haystack_sql() -> str:
+    """拼接式搜索 haystack, 与 services/domain_items._item_matches_q 的 `" ".join(parts)` 同构。
+
+    为什么不能逐列 LIKE: Python 先把各字段拼成长串再找子串, 所以"标题末词 + 摘要首词"这类
+    跨字段组合能命中; 逐列 LIKE 只能命中落在单一字段内的词 —— 实测同一批真实构造的跨字段查询,
+    逐列版会漏(改拼接版后与 Python 逐条一致)。
+    拼接细节逐字对齐 Python:
+      · 三个列(title/summary/source_url)无条件入列 —— 空值也会贡献一个分隔符;
+      · 7 个 payload 展示键仅在非空时入列(`if val:`), 所以用 CASE 只在非空时补前导空格;
+      · tech_points 是 list 时无条件 group_concat 入列, 非 list 且非空时才入列。
+    LIKE 对 ASCII 默认不区分大小写, 与 Python 两侧 .lower() 等价(中文无大小写)。
+    """
+    parts = [" || ' ' || ".join(f"COALESCE({c}, '')" for c in _CAP_SEARCH_COLUMNS)]
+    for k in CAP_SEARCH_PAYLOAD_KEYS:
+        v = f"json_extract(payload_json, '$.{k}')"
+        parts.append(f"CASE WHEN COALESCE({v}, '') != '' THEN ' ' || {v} ELSE '' END")
+    tp = "json_extract(domain_items.payload_json, '$.tech_points')"
+    gc = ("(SELECT group_concat(value, ' ') FROM (SELECT value FROM "
+          "json_each(domain_items.payload_json, '$.tech_points') ORDER BY key))")
+    parts.append(
+        f"CASE WHEN json_type(domain_items.payload_json, '$.tech_points') = 'array'"
+        f" THEN ' ' || COALESCE({gc}, '')"
+        f" WHEN COALESCE({tp}, '') != '' THEN ' ' || {tp}"
+        f" ELSE '' END"
+    )
+    return "(" + " || ".join(parts) + ")"
+
+
+def search_predicate(q: str) -> tuple[str, list[Any]]:
+    """能力卡搜索的 SQL 谓词, 与 _item_matches_q 等价(2026-09-15 实测含跨字段查询逐条一致)。"""
+    return f"({cap_haystack_sql()} LIKE ? ESCAPE '{_LIKE_ESC}')", [_like_escape(q)]
+
+
+def build_item_filters(*, forms: list[str] | None = None, repro_chips: list[str] | None = None,
+                       q: str | None = None) -> tuple[str, list[Any]]:
+    """把前端芯片与搜索词翻成 SQL 条件, 返回 (" AND (...)", params); 无条件时返回 ("", [])。
+
+    形态语义与前端一致: 恰选一个才过滤(两个都不选/都选 = 全部)。复现芯片多选为 OR。
+    非 Web 与复现芯片同时给出会得到空集 —— 前端不会有这种组合(只看非 Web 时复现芯片整排失效
+    并清空), 真给出时返回空集也是诚实答案。
+    """
+    conds: list[str] = []
+    params: list[Any] = []
+    picked = [f for f in (forms or []) if f in FORM_PREDICATES]
+    if len(picked) == 1:
+        conds.append(f"({FORM_PREDICATES[picked[0]]})")
+    chips = [c for c in (repro_chips or []) if c in REPRO_PREDICATES]
+    if chips:
+        conds.append("(" + " OR ".join(f"({REPRO_PREDICATES[c]})" for c in chips) + ")")
+    q = (q or "").strip()
+    if q:
+        frag, fparams = search_predicate(q)
+        conds.append(frag)
+        params.extend(fparams)
+    if not conds:
+        return "", []
+    return " AND " + " AND ".join(conds), params
+
+
+def _domain_items_where(domain: str, *, item_type: str | None = None, status: str | None = None,
+                        exclude_status: str | None = None, since: str | None = None,
+                        forms: list[str] | None = None, repro_chips: list[str] | None = None,
+                        q: str | None = None) -> tuple[str, list[Any]]:
+    """组装 domain_items 的 WHERE(list_domain_items 与 count_domain_items 共用,
+    保证「取这一页」与「数总数」判据完全一致 —— 否则 total 与页内容会对不上)。"""
+    sql = " WHERE domain = ?"
+    params: list[Any] = [domain]
+    if item_type:
+        sql += " AND item_type = ?"
+        params.append(item_type)
+    if status:
+        sql += " AND status = ?"
+        params.append(status)
+    if exclude_status:
+        sql += " AND status != ?"
+        params.append(exclude_status)
+    if since:
+        # 时间下界(ISO-8601 UTC 字符串比较, 与 created_at 存储格式一致)
+        sql += " AND created_at >= ?"
+        params.append(since)
+    frag, fparams = build_item_filters(forms=forms, repro_chips=repro_chips, q=q)
+    sql += frag
+    params.extend(fparams)
+    return sql, params
+
+
 def filter_stats_by_domain(conn: sqlite3.Connection, domain: str) -> dict[str, Any]:
     """能力库筛选统计:全量 SQL 聚合,不受 /items 的 limit 窗口影响。
 
@@ -449,37 +635,25 @@ def filter_stats_by_domain(conn: sqlite3.Connection, domain: str) -> dict[str, A
     json_extract 对缺失键/非法 JSON 返回 NULL → 落入"不匹配"桶(非 Web / 待复现),
     与 Python 端 loads(payload_json, {}) 兜底语义一致。is_web 兼容 JSON true(=1) 与字符串 "true"/"1"。
     """
+    _r = REPRO_PREDICATES
+    _repro_sums = ",\n            ".join(
+        "SUM(CASE WHEN %s THEN 1 ELSE 0 END) AS repro_%s" % (_r[k], k) for k in REPRO_KEYS
+    )
     row = conn.execute(
         """
         SELECT
             COUNT(*) AS total,
-            SUM(CASE WHEN json_extract(payload_json, '$.is_web') IN (1, 'true', '1') THEN 1 ELSE 0 END) AS web_count,
-            SUM(CASE WHEN COALESCE(json_extract(payload_json, '$.demo_url'), '') != '' THEN 1 ELSE 0 END) AS demo_count,
-            -- repro 各桶一律前置 is_web 为真(2026-09-15): 非 web 条目已被 web 把关挡在复现队列外,
+            SUM(CASE WHEN %s THEN 1 ELSE 0 END) AS web_count,
+            SUM(CASE WHEN %s THEN 1 ELSE 0 END) AS demo_count,
+            -- 桶谓词集中在 REPRO_PREDICATES(唯一真源): 列表筛选(build_item_filters)复用同一批
+            -- 片段, 所以「芯片上的数字」与「列表里的条数」结构性同源, 不会再各算一套(2026-09-15)。
+            -- repro 各桶一律前置 is_web 为真: 非 web 条目已被 web 把关挡在复现队列外,
             -- 不该在任何复现桶里冒充"待复现"(实测旧口径 2029 条"待复现"里 1696 条是非 web)。
             -- 「官方 Demo」是独立维度, 不算复现结论, 故不设此门槛。
-            SUM(CASE WHEN COALESCE(json_extract(payload_json, '$.demo_url'), '') = ''
-                     AND json_extract(payload_json, '$.is_web') IN (1, 'true', '1')
-                     AND json_extract(payload_json, '$.repro_status') IN ('success', 'succeeded') THEN 1 ELSE 0 END) AS repro_success,
-            SUM(CASE WHEN COALESCE(json_extract(payload_json, '$.demo_url'), '') = ''
-                     AND json_extract(payload_json, '$.is_web') IN (1, 'true', '1')
-                     AND json_extract(payload_json, '$.repro_status') = 'partial' THEN 1 ELSE 0 END) AS repro_partial,
-            SUM(CASE WHEN COALESCE(json_extract(payload_json, '$.demo_url'), '') = ''
-                     AND json_extract(payload_json, '$.is_web') IN (1, 'true', '1')
-                     AND json_extract(payload_json, '$.repro_status') = 'in_progress' THEN 1 ELSE 0 END) AS repro_in_progress,
-            SUM(CASE WHEN COALESCE(json_extract(payload_json, '$.demo_url'), '') = ''
-                     AND json_extract(payload_json, '$.is_web') IN (1, 'true', '1')
-                     AND (json_extract(payload_json, '$.repro_status') IN ('candidate', 'no_code')
-                          OR json_extract(payload_json, '$.repro_status') IS NULL) THEN 1 ELSE 0 END) AS repro_pending,
-            SUM(CASE WHEN COALESCE(json_extract(payload_json, '$.demo_url'), '') = ''
-                     AND json_extract(payload_json, '$.is_web') IN (1, 'true', '1')
-                     AND json_extract(payload_json, '$.repro_status') IN ('failed', 'error') THEN 1 ELSE 0 END) AS repro_failed,
-            SUM(CASE WHEN COALESCE(json_extract(payload_json, '$.demo_url'), '') = ''
-                     AND json_extract(payload_json, '$.is_web') IN (1, 'true', '1')
-                     AND json_extract(payload_json, '$.repro_status') = 'not_supported' THEN 1 ELSE 0 END) AS repro_not_supported
+            %s
         FROM domain_items
         WHERE domain = ? AND status != ?
-        """,
+        """ % (_IS_WEB, _r["demo"], _repro_sums),
         (domain, "已淘汰"),
     ).fetchone()
     r = dict(row)

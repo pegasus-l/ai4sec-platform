@@ -68,13 +68,40 @@ def today(limit: int = Query(200, ge=1, le=500), conn: sqlite3.Connection = Depe
 
 @router.get("/items")
 def items(
-    limit: int = Query(500, ge=1, le=2000),
+    limit: int = Query(500, ge=1, le=20000),
     q: str | None = Query(None, max_length=200, description="搜索关键词(标题/仓库/技术点/概述)"),
+    form: str | None = Query(None, pattern="^(web|non_web)$",
+                             description="形态筛选: web / non_web(不传=全部)"),
+    repro: str | None = Query(None, max_length=200,
+                              description="可体验·复现筛选(逗号分隔, 多选为 OR): demo/success/partial/in_progress/pending/failed/not_supported(值与 /items/stats 的 repro 键同名)"),
     page: int | None = Query(None, ge=1, description="页码(1-based), 与 page_size 同时给出时启用分页"),
     page_size: int | None = Query(None, ge=1, le=500, description="每页条数"),
     conn: sqlite3.Connection = Depends(get_db),
 ) -> dict:
-    data = domain_items.list_items(conn, DOMAIN, limit=limit, q=q, page=page, page_size=page_size)
+    # 筛选/分页下推到 SQL(2026-09-15): form/repro 与 /items/stats 的芯片计数共用同一批谓词
+    # (db.repositories.REPRO_PREDICATES / FORM_PREDICATES), 列表条数与芯片数字结构性同源。
+    # 列表视图只取 20 条/页, 首屏不再拉 10.2MB(实测 1.39MB gz → 约 20KB)。
+    # limit 上限 2000 → 20000: 能力分类/应用场景/工程可用性三个视图天然需要整个筛选结果集
+    # (当前 2264 条), 前端已改为切过去时才懒加载, 默认列表视图不受影响。
+    repro_keys = [s for s in (repro or "").split(",") if s]
+    unknown = [s for s in repro_keys if s not in repo.REPRO_PREDICATES]
+    if unknown:
+        # 静默忽略未知键会表现为"筛选没生效", 比一个明确的 400 难查得多
+        raise HTTPException(status_code=400, detail=f"未知的 repro 取值: {unknown}; 可选: {list(repo.REPRO_PREDICATES)}")
+    data = domain_items.list_items(
+        conn, DOMAIN, limit=limit, q=q, page=page, page_size=page_size,
+        forms=[form] if form else [],
+        repro_chips=repro_keys,
+    )
+    # 列表瘦身(2026-09-15): readme(4.2MB/398 条) + review(3.2MB/2000 条) 占该响应约 40%,
+    # 而前端全站 grep 零引用(features/ 与 types/ 内都没有), 抽屉详情另有 /items/{id} 取全量 payload,
+    # 所以列表里直接摘掉 —— 实测响应 19.35MB → 11MB(再经 gzip 约 1MB)。
+    for it in data.get("items") or []:
+        payload = it.get("payload")
+        if isinstance(payload, dict):
+            payload.pop("readme", None)
+            payload.pop("review", None)
+    return data
     # 列表瘦身(2026-09-15): readme(4.2MB/398 条) + review(3.2MB/2000 条) 占该响应约 40%,
     # 而前端全站 grep 零引用(features/ 与 types/ 内都没有), 抽屉详情另有 /items/{id} 取全量 payload,
     # 所以列表里直接摘掉 —— 实测响应 19.35MB → 11MB(再经 gzip 约 1MB)。
@@ -447,24 +474,13 @@ def classify_batch_endpoint(limit: int = 50, conn: sqlite3.Connection = Depends(
 
 @router.get("/classify/stats")
 def classify_stats(conn: sqlite3.Connection = Depends(get_db)) -> dict:
-    """Web 分类统计（迁自旧 /api/classify/stats）"""
-    items = repo.list_domain_items(conn, DOMAIN, item_type="capability", limit=10000, exclude_status="已淘汰")
-    all_items = items
-    repo_filter = [
-        it for it in all_items
-        if (it.get("payload") or {}).get("code_url") or "github.com" in (it.get("source_url") or "")
-    ]
-    classified = [
-        it for it in repo_filter
-        if (it.get("payload") or {}).get("web_classify_ts")
-    ]
-    web_count = sum(1 for it in repo_filter if (it.get("payload") or {}).get("is_web"))
-    return {
-        "total": len(repo_filter),
-        "classified": len(classified),
-        "unclassified": len(repo_filter) - len(classified),
-        "web_count": web_count,
-    }
+    """Web 分类统计(迁自旧 /api/classify/stats)
+
+    2026-09-15 改写: 原实现 list_domain_items(limit=10000) 把全量行连完整 payload 拉进 Python
+    只为数 4 个整数(实测 0.378s, 而响应只有 75 字节)。改为一条 SQL 聚合, 返回结构不变,
+    具体判据见 repo.classify_stats_by_domain 的说明。
+    """
+    return repo.classify_stats_by_domain(conn, DOMAIN)
 
 
 # ============================================================================

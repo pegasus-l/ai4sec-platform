@@ -1,12 +1,29 @@
 import { getJson, postJson, BASE } from '../../api/client';
-import type { CapabilityItem, ReproTask, ConversionRecord, ClassifyStats, CapStats, LibraryStats } from './capabilityTypes';
+import type { CapabilityItem, ReproTask, ConversionRecord, ClassifyStats, CapStats, LibraryStats, LibraryItemsResponse, LibraryFormKey, ReproBucketKey } from './capabilityTypes';
 
 export function fetchToday(): Promise<{ items: CapabilityItem[] }> {
   return getJson('/api/capabilities/today?limit=200');
 }
 
-export function fetchLibrary(limit = 2000): Promise<{ items: CapabilityItem[] }> {
-  return getJson(`/api/capabilities/items?limit=${limit}`);
+/** 参数化的能力库列表: 筛选/搜索/分页全部下推服务端(2026-09-15)。
+ *  列表视图按 page/page_size 取一页; 三个分组视图传 limit 取整个筛选结果集(懒加载时)。 */
+export function fetchLibraryPage(params: {
+  q?: string;
+  form?: LibraryFormKey | null;
+  repro?: ReproBucketKey[];
+  page?: number;
+  page_size?: number;
+  limit?: number;
+}): Promise<LibraryItemsResponse> {
+  const sp = new URLSearchParams();
+  if (params.limit) sp.set('limit', String(params.limit));
+  if (params.q) sp.set('q', params.q);
+  if (params.form) sp.set('form', params.form);
+  if (params.repro && params.repro.length > 0) sp.set('repro', params.repro.join(','));
+  if (params.page) sp.set('page', String(params.page));
+  if (params.page_size) sp.set('page_size', String(params.page_size));
+  const qs = sp.toString();
+  return getJson(`/api/capabilities/items${qs ? `?${qs}` : ''}`);
 }
 
 export function fetchLibraryStats(): Promise<LibraryStats> {
