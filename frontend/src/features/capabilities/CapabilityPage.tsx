@@ -52,16 +52,13 @@ const reproBadgeLabel = (rs?: string) => REPRO_LABEL[rs ?? ''] ?? rs ?? '未知'
 const reproBadgeTone = (rs?: string): 'green' | 'sky' | 'slate' | 'amber' | 'red' =>
   rs === 'candidate' ? 'green' : rs === 'in_progress' ? 'sky' : rs === 'no_code' ? 'slate' : rs === 'not_supported' ? 'red' : 'amber';
 
-/** 非 web 条目按 web 把关口径不算"可复现"(与后端 is_non_web_blocked 同判据)。
- *  已判非 web 却仍把 repro_status 留在 candidate 的, 一律不冒充"可复现"。
- *  LOWCONF 例外: LLM 判 web 但无佐证, 分类器声明"不算真非 web", 保留其走 CLI 复现。 */
-const isNonWebBlocked = (p: CapabilityItem['payload'] | undefined): boolean => {
-  const v = p?.is_web;
-  if (v === undefined || v === null || v === true) return false;
-  return p?.web_framework !== 'LOWCONF';
-};
-/** 是否渲染"可复现"徽标: 非 web 且仍是 candidate 时不渲染 —— 同排已有「非Web」徽标承载该信息,
- *  直接省略以免两个"非Web"并排。 */
+/** 前端口径: 只要 payload 标了 is_web=false 就不算"可复现", LOWCONF 也算非 web。
+ *  与后端 is_non_web_blocked 有意不同 —— 后端给 LOWCONF 留了例外(LLM 判 web 但无佐证,
+ *  放它入队走 CLI 复现、由复现报告回写 is_web 自我纠正), 但那是**队列**口径, 不该让界面
+ *  继续对外宣称"可复现"。实测 LOWCONF 有 103 条, 用户在页面上看到的就是它们。 */
+const isNonWebBlocked = (p: CapabilityItem['payload'] | undefined): boolean => p?.is_web === false;
+/** 是否渲染"可复现"徽标: 非 web 且仍是 candidate(待复现) 时不渲染 —— 同排已有「非Web」徽标承载
+ *  该信息, 直接省略以免两个"非Web"并排。其余状态(无法复现/复现失败等)仍有信息量, 照常显示。 */
 const showReproBadge = (p: CapabilityItem['payload'] | undefined): boolean =>
   !(isNonWebBlocked(p) && p?.repro_status === 'candidate');
 
@@ -260,6 +257,10 @@ function CapabilityLibrary({ items, stats, openDetail, onViewRepro }: { items: C
   // 形态默认只选 Web(保持旧默认"隐藏非 Web 噪音");可体验默认全放开。
   const [formChips, setFormChips] = useState<string[]>(['Web']);
   const [reproChips, setReproChips] = useState<string[]>([]);
+  // 只看非 Web 时, 复现维度整个不适用(非 web 已被 web 把关挡在复现队列外) —— 那排 chip 整排失效,
+  // 若还留着已选的复现条件会把列表筛成空, 所以一并清掉。
+  const onlyNonWeb = formChips.includes('非Web') && !formChips.includes('Web');
+  useEffect(() => { if (onlyNonWeb) setReproChips([]); }, [onlyNonWeb]);
   const chipCount = (chip: string): number | undefined => {
     if (!stats) return undefined;
     switch (chip) {
@@ -280,6 +281,10 @@ function CapabilityLibrary({ items, stats, openDetail, onViewRepro }: { items: C
   const matchesReproChip = (p: CapabilityItem['payload'] | undefined, chip: string): boolean => {
     const hasDemo = Boolean(p?.demo_url);
     const rs = p?.repro_status;
+    // 非 web 条目不进复现维度(2026-09-15): 它们已被 web 把关挡在复现队列外, 不该在任何复现桶里
+    // 冒充"待复现"。与后端 filter_stats_by_domain 的 repro 桶同判据, 保证 chip 数字与列表对得上。
+    // 「官方 Demo」是独立维度、不算复现结论, 不设此门槛。
+    if (chip !== '官方 Demo' && !p?.is_web) return false;
     switch (chip) {
       case '官方 Demo': return hasDemo;
       case '完整复现': return !hasDemo && (rs === 'success' || rs === 'succeeded');
@@ -324,13 +329,15 @@ function CapabilityLibrary({ items, stats, openDetail, onViewRepro }: { items: C
 
   const engineeringGroups = useMemo(() => ({
     '官方 Demo': filtered.filter(i => Boolean(i.payload?.demo_url)),
-    '完整复现': filtered.filter(i => !i.payload?.demo_url && i.payload?.repro_status === 'success'),
-    '部分复现': filtered.filter(i => !i.payload?.demo_url && i.payload?.repro_status === 'partial'),
-    '复现中': filtered.filter(i => !i.payload?.demo_url && i.payload?.repro_status === 'in_progress'),
-    '待 Web 复现': filtered.filter(i => !i.payload?.demo_url && Boolean(i.payload?.is_web) && ['candidate', 'no_code', undefined].includes(i.payload?.repro_status)),
-    '待命令行验证': filtered.filter(i => !i.payload?.demo_url && !i.payload?.is_web && ['candidate', 'no_code', undefined].includes(i.payload?.repro_status)),
-    '复现失败': filtered.filter(i => !i.payload?.demo_url && i.payload?.repro_status === 'failed'),
-    '无法复现': filtered.filter(i => !i.payload?.demo_url && i.payload?.repro_status === 'not_supported'),
+    '完整复现': filtered.filter(i => i.payload?.is_web && !i.payload?.demo_url && i.payload?.repro_status === 'success'),
+    '部分复现': filtered.filter(i => i.payload?.is_web && !i.payload?.demo_url && i.payload?.repro_status === 'partial'),
+    '复现中': filtered.filter(i => i.payload?.is_web && !i.payload?.demo_url && i.payload?.repro_status === 'in_progress'),
+    '待 Web 复现': filtered.filter(i => i.payload?.is_web && !i.payload?.demo_url && ['candidate', 'no_code', undefined].includes(i.payload?.repro_status)),
+    '复现失败': filtered.filter(i => i.payload?.is_web && !i.payload?.demo_url && i.payload?.repro_status === 'failed'),
+    '无法复现': filtered.filter(i => i.payload?.is_web && !i.payload?.demo_url && i.payload?.repro_status === 'not_supported'),
+    // 非 web 条目已被 web 把关挡在复现队列外 → 不再叫"待命令行验证"(那名字会让人以为它们在排队),
+    // 单独成组承载, 保证此视图仍能看见它们(而非整批消失)。
+    '非 Web(不参与复现)': filtered.filter(i => !i.payload?.is_web && !i.payload?.demo_url),
   }), [filtered]);
 
   return <div className="grid">
@@ -343,7 +350,9 @@ function CapabilityLibrary({ items, stats, openDetail, onViewRepro }: { items: C
     </div>
     <div className="view-switch" style={{ marginTop: 8 }}>
       <span style={{ fontSize: 12, color: 'var(--faint)', alignSelf: 'center', whiteSpace: 'nowrap' }}>可体验·复现</span>
-      {(['官方 Demo', '完整复现', '部分复现', '复现中', '待复现', '复现失败', '无法复现'] as const).map(chip => <span key={chip} className={`view-pill ${reproChips.includes(chip) ? 'active' : ''}`} onClick={() => setReproChips(toggleValue(reproChips, chip))}>{chip}{chipCount(chip) !== undefined && <em style={{ fontSize: 11, opacity: 0.7, fontStyle: 'normal' }}> {chipCount(chip)}</em>}</span>)}
+      {onlyNonWeb
+        ? <span style={{ fontSize: 12, color: 'var(--faint)', alignSelf: 'center' }}>非 Web 条目不参与复现(已被 web 把关挡在复现队列外), 该维度对其不适用</span>
+        : (['官方 Demo', '完整复现', '部分复现', '复现中', '待复现', '复现失败', '无法复现'] as const).map(chip => <span key={chip} className={`view-pill ${reproChips.includes(chip) ? 'active' : ''}`} onClick={() => setReproChips(toggleValue(reproChips, chip))}>{chip}{chipCount(chip) !== undefined && <em style={{ fontSize: 11, opacity: 0.7, fontStyle: 'normal' }}> {chipCount(chip)}</em>}</span>)}
     </div>
     {filtered.length === 0 && <EmptyState title="能力库为空" description="先跑 capabilities.from_news_pipeline 生成能力卡" />}
 
@@ -394,7 +403,7 @@ function CapabilityLibrary({ items, stats, openDetail, onViewRepro }: { items: C
 
     {/* 工程可用性视图 */}
     {filtered.length > 0 && viewMode === '工程可用性' && <div className="grid cols-2">
-      {Object.entries(engineeringGroups).map(([label, groupItems]) => (
+      {Object.entries(engineeringGroups).filter(([, groupItems]) => groupItems.length > 0).map(([label, groupItems]) => (
         <div className="panel" key={label}>
           <div className="panel-head"><h3>{label}</h3><span>{groupItems.length} 个</span></div>
           <div className="panel-body"><div className="asis-list">

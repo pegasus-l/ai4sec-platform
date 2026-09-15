@@ -12,6 +12,7 @@ from fastapi import FastAPI, HTTPException, Request, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.middleware.gzip import GZipMiddleware
 from starlette.background import BackgroundTask
 
 from ai4sec_platform.app.api.router import api_router
@@ -270,6 +271,15 @@ def create_app() -> FastAPI:
     app.add_middleware(
         ASISSessionMiddleware,
         secret=os.environ.get("SEC_AI_SESSION_SECRET", ""),
+    )
+    # 响应压缩(2026-09-15): 能力库 /items 一条就是 19MB 裸 JSON, 经隧道要 7s。后 add = 更外层,
+    # 放在最外层把所有内层响应压掉; Starlette 默认排除 text/event-stream, 且 SSE 那条路自己在
+    # header 写死 Content-Encoding: identity(见 api/capabilities.py), GZipResponder 见既有
+    # content-encoding 会整体 bypass, 实时日志流不受影响。
+    app.add_middleware(
+        GZipMiddleware,
+        minimum_size=1024,
+        compresslevel=5,
     )
     app.include_router(api_router)
     # 复现 Web 服务反代(必须注册在 catch-all /{path:path} 之前)

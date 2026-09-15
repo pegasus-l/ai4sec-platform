@@ -33,13 +33,26 @@ from ai4sec_platform.app.dependencies import get_db
 from ai4sec_platform.db import repositories as repo
 from ai4sec_platform.domains.capabilities.adapters.repro_runner import classify_log_line
 from ai4sec_platform.pipelines.steps.repro import start_repro_task, stop_repro_task, cleanup_repro_task
-from ai4sec_platform.domains.capabilities.assessments import classify_batch
+from ai4sec_platform.domains.capabilities.assessments import classify_batch, is_non_web_blocked
 from ai4sec_platform.domains.capabilities.schemas import ReproTaskResponse
 from ai4sec_platform.domains.capabilities.selectors import pick_top_repro_candidates, _resolve_repo_url
 from ai4sec_platform.services import domain_items, operations
 
 router = APIRouter(prefix="/capabilities", tags=["capabilities"])
 DOMAIN = "capabilities"
+
+# 复现任务状态(capability_repro_tasks.status) → payload.repro_status 词表。
+# 任务表用 queued/running, 卡片词表用 candidate/in_progress; 清理任务时按它把 item 结论重算回去。
+_TASK_TO_PAYLOAD_STATUS = {
+    "queued": "in_progress",
+    "running": "in_progress",
+    "success": "success",
+    "succeeded": "success",
+    "partial": "partial",
+    "failed": "failed",
+    "error": "error",
+    "not_supported": "not_supported",
+}
 
 
 # ============================================================================
@@ -61,7 +74,16 @@ def items(
     page_size: int | None = Query(None, ge=1, le=500, description="每页条数"),
     conn: sqlite3.Connection = Depends(get_db),
 ) -> dict:
-    return domain_items.list_items(conn, DOMAIN, limit=limit, q=q, page=page, page_size=page_size)
+    data = domain_items.list_items(conn, DOMAIN, limit=limit, q=q, page=page, page_size=page_size)
+    # 列表瘦身(2026-09-15): readme(4.2MB/398 条) + review(3.2MB/2000 条) 占该响应约 40%,
+    # 而前端全站 grep 零引用(features/ 与 types/ 内都没有), 抽屉详情另有 /items/{id} 取全量 payload,
+    # 所以列表里直接摘掉 —— 实测响应 19.35MB → 11MB(再经 gzip 约 1MB)。
+    for it in data.get("items") or []:
+        payload = it.get("payload")
+        if isinstance(payload, dict):
+            payload.pop("readme", None)
+            payload.pop("review", None)
+    return data
 
 
 @router.get("/items/stats")
@@ -195,7 +217,13 @@ def stop_repro(task_id: int, conn: sqlite3.Connection = Depends(get_db)) -> dict
 
 @router.post("/repro/{task_id}/cleanup")
 def cleanup_repro(task_id: int, conn: sqlite3.Connection = Depends(get_db)) -> dict:
-    """清理复现任务（删容器 + 产物）；若清理的是该 item 最新任务且其正显示失败/进行中, 复位为待复现"""
+    """清理复现任务（删容器 + 产物）, 并按剩余任务重算该 item 的复现结论。
+
+    清理 = 这条任务作废, 不管它是不是最新的一条:
+      - 该 item 还有未清理的任务 → 结论回到其中最新那条(repro_result 不动);
+      - 已无未清理任务 → 复位「待复现」并抹掉 repro_result, 能力库卡片随之不再显示「查看复现」
+        (非 web 条目只清 payload, 不复位回待复现队列)。
+    """
     task = repo.get_repro_task(conn, task_id)
     if not task:
         raise HTTPException(status_code=404, detail="repro task not found")
@@ -207,24 +235,42 @@ def cleanup_repro(task_id: int, conn: sqlite3.Connection = Depends(get_db)) -> d
         cleaned_at=datetime.utcnow().isoformat(),
         web_url="",
     )
-    # 清理失败/运行中的任务 → 若该任务仍是该 item 的最新任务, 复位 item 的 repro_status 为 candidate(待复现),
-    # 让能力库卡片与「工程可用性」不再把它归入「复现失败」(成功/部分成功不清除)。
+    # 清理后 item 的复现结论改由「剩下还没清理的任务」重算(2026-09-15 修):
+    #   旧逻辑只在「清理的正好是最新任务」且状态属 failed/error/in_progress 时才复位 —— 清掉最新
+    #   任务但状态是 not_supported/success/partial 时啥也不做, 能力库继续挂「查看复现」(item#334 实测)。
     item_id = task["item_id"]
-    latest_id = conn.execute(
-        "SELECT MAX(id) AS m FROM capability_repro_tasks WHERE item_id = ?", (item_id,)
-    ).fetchone()["m"]
-    if latest_id == task_id:
-        item = repo.get_domain_item(conn, "capabilities", item_id)
-        if item:
-            payload = dict(item.get("payload") or {})
-            if payload.get("repro_status") in ("failed", "error", "in_progress"):
+    item = repo.get_domain_item(conn, "capabilities", item_id)
+    if item:
+        payload = dict(item.get("payload") or {})
+        rest = conn.execute(
+            "SELECT status FROM capability_repro_tasks WHERE item_id = ? AND status != 'cleaned' "
+            "ORDER BY id DESC LIMIT 1",
+            (item_id,),
+        ).fetchone()
+        rest_status = _TASK_TO_PAYLOAD_STATUS.get(rest["status"] if rest else "", None)
+        if rest_status and rest_status != "candidate":
+            # 还有没清理的任务 → 结论回到它, repro_result 保持不动
+            payload["repro_status"] = rest_status
+            repo.update_domain_item(conn, item_id=item_id, payload=payload)
+        else:
+            # 已无有效任务 → 撤销这条 item 的复现结论(卡片随之不再显示「查看复现」)。
+            # not_supported(环境不支持)是终态、本就不进复现队列, 撤销后保留该结论不退回 candidate,
+            # 否则会把它重新丢回队列白烧一次 run; 其余情况退回「待复现」。
+            keep_terminal = payload.get("repro_status") == "not_supported"
+            if not keep_terminal:
                 payload["repro_status"] = "candidate"
-                repo.update_domain_item(conn, item_id=item_id, status="待复现验证", payload=payload)
-                # update_domain_item 对 payload 是 merge(不删键), 显式 json_remove 清除 repro_result
-                conn.execute(
-                    "UPDATE domain_items SET payload_json = json_remove(payload_json, '$.repro_result') WHERE id = ?",
-                    (item_id,),
-                )
+            # update_domain_item 对 payload 是 merge(不删键), 必须显式 json_remove 清 repro_result
+            repo.update_domain_item(
+                conn,
+                item_id=item_id,
+                # 非 web 条目不复位回待复现队列(同 is_non_web_blocked 口径), 只清 payload
+                status=None if (keep_terminal or is_non_web_blocked(payload)) else "待复现验证",
+                payload=payload,
+            )
+            conn.execute(
+                "UPDATE domain_items SET payload_json = json_remove(payload_json, '$.repro_result') WHERE id = ?",
+                (item_id,),
+            )
     conn.commit()
     return {"ok": True}
 

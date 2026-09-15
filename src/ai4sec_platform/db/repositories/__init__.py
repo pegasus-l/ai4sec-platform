@@ -444,7 +444,8 @@ def filter_stats_by_domain(conn: sqlite3.Connection, domain: str) -> dict[str, A
 
     与 /items 列表同人口(domain + status != '已淘汰'),保证 chip 计数与列表一致。
     桶划分与前端 engineeringGroups 一致:官方 Demo 为独立维度(demo_url 有即归它),
-    repro 桶全部前置「无 demo」条件,各桶互斥且补齐全部人口。
+    repro 桶全部前置「无 demo + is_web 为真」条件(非 web 不参与复现维度, 见下方 SQL 注释),各桶互斥;
+    非 web 条目不落在任何 repro 桶里, 由前端「非 Web(不参与复现)」组承载。
     json_extract 对缺失键/非法 JSON 返回 NULL → 落入"不匹配"桶(非 Web / 待复现),
     与 Python 端 loads(payload_json, {}) 兜底语义一致。is_web 兼容 JSON true(=1) 与字符串 "true"/"1"。
     """
@@ -454,18 +455,27 @@ def filter_stats_by_domain(conn: sqlite3.Connection, domain: str) -> dict[str, A
             COUNT(*) AS total,
             SUM(CASE WHEN json_extract(payload_json, '$.is_web') IN (1, 'true', '1') THEN 1 ELSE 0 END) AS web_count,
             SUM(CASE WHEN COALESCE(json_extract(payload_json, '$.demo_url'), '') != '' THEN 1 ELSE 0 END) AS demo_count,
+            -- repro 各桶一律前置 is_web 为真(2026-09-15): 非 web 条目已被 web 把关挡在复现队列外,
+            -- 不该在任何复现桶里冒充"待复现"(实测旧口径 2029 条"待复现"里 1696 条是非 web)。
+            -- 「官方 Demo」是独立维度, 不算复现结论, 故不设此门槛。
             SUM(CASE WHEN COALESCE(json_extract(payload_json, '$.demo_url'), '') = ''
+                     AND json_extract(payload_json, '$.is_web') IN (1, 'true', '1')
                      AND json_extract(payload_json, '$.repro_status') IN ('success', 'succeeded') THEN 1 ELSE 0 END) AS repro_success,
             SUM(CASE WHEN COALESCE(json_extract(payload_json, '$.demo_url'), '') = ''
+                     AND json_extract(payload_json, '$.is_web') IN (1, 'true', '1')
                      AND json_extract(payload_json, '$.repro_status') = 'partial' THEN 1 ELSE 0 END) AS repro_partial,
             SUM(CASE WHEN COALESCE(json_extract(payload_json, '$.demo_url'), '') = ''
+                     AND json_extract(payload_json, '$.is_web') IN (1, 'true', '1')
                      AND json_extract(payload_json, '$.repro_status') = 'in_progress' THEN 1 ELSE 0 END) AS repro_in_progress,
             SUM(CASE WHEN COALESCE(json_extract(payload_json, '$.demo_url'), '') = ''
+                     AND json_extract(payload_json, '$.is_web') IN (1, 'true', '1')
                      AND (json_extract(payload_json, '$.repro_status') IN ('candidate', 'no_code')
                           OR json_extract(payload_json, '$.repro_status') IS NULL) THEN 1 ELSE 0 END) AS repro_pending,
             SUM(CASE WHEN COALESCE(json_extract(payload_json, '$.demo_url'), '') = ''
+                     AND json_extract(payload_json, '$.is_web') IN (1, 'true', '1')
                      AND json_extract(payload_json, '$.repro_status') IN ('failed', 'error') THEN 1 ELSE 0 END) AS repro_failed,
             SUM(CASE WHEN COALESCE(json_extract(payload_json, '$.demo_url'), '') = ''
+                     AND json_extract(payload_json, '$.is_web') IN (1, 'true', '1')
                      AND json_extract(payload_json, '$.repro_status') = 'not_supported' THEN 1 ELSE 0 END) AS repro_not_supported
         FROM domain_items
         WHERE domain = ? AND status != ?
