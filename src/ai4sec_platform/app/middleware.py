@@ -52,6 +52,15 @@ class ASISSessionMiddleware(BaseHTTPMiddleware):
     def __init__(self, app, secret: str):
         super().__init__(app)
         self._secret = secret.encode()
+        # 备用密钥(2026-09-16): 生产 ASIS(136:80) 与测试入口(136:8090)各自签发的会话用的
+        # 是不同的 SEC_AI_SESSION_SECRET, 但都要能被本平台验签。env SEC_AI_SESSION_SECRET_ALT
+        # 可用逗号分隔多个, 任一条验过即通过; 主密钥仍在首位(签名/兼容旧行为不变)。
+        _alts = [
+            s.strip()
+            for s in (os.environ.get("SEC_AI_SESSION_SECRET_ALT") or "").split(",")
+            if s.strip()
+        ]
+        self._secrets = [self._secret] + [a.encode() for a in _alts if a.encode() != self._secret]
 
     async def dispatch(self, request, call_next):
         path = request.url.path
@@ -88,10 +97,15 @@ class ASISSessionMiddleware(BaseHTTPMiddleware):
         if len(parts) != 3 or parts[0] != "v1":
             return None
         encoded_payload, signature = parts[1], parts[2]
-        expected = base64.urlsafe_b64encode(
-            hmac.new(self._secret, encoded_payload.encode(), hashlib.sha256).digest()
-        ).rstrip(b"=").decode()
-        if not hmac.compare_digest(signature, expected):
+        if not any(
+            hmac.compare_digest(
+                signature,
+                base64.urlsafe_b64encode(
+                    hmac.new(_s, encoded_payload.encode(), hashlib.sha256).digest()
+                ).rstrip(b"=").decode(),
+            )
+            for _s in self._secrets
+        ):
             return None
         try:
             padded = encoded_payload + "=" * (-len(encoded_payload) % 4)
