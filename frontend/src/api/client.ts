@@ -1,7 +1,31 @@
 export const BASE = '/insights';  // ASIS 反代挂载路径
 
+/** 入口网关(136 radar)的登录页; 与后端 SEC_AI_LOGIN_URL 保持同一取值。 */
+export const LOGIN_PATH = '/login';
+
+/** 401 时派发的全局事件: 由 AuthExpiredBanner 监听(见该组件注释)。 */
+export const AUTH_REQUIRED_EVENT = 'ai4sec:auth-required';
+
+// 会话过期后页面上会有一串轮询(复现状态每 5s 一次)同时 401 —— 事件节流, 避免横幅反复重挂。
+const AUTH_NOTICE_INTERVAL_MS = 5000;
+let lastAuthNoticeAt = 0;
+
+function notifyAuthRequired(): void {
+  const now = Date.now();
+  if (now - lastAuthNoticeAt < AUTH_NOTICE_INTERVAL_MS) return;
+  lastAuthNoticeAt = now;
+  window.dispatchEvent(new CustomEvent(AUTH_REQUIRED_EVENT));
+}
+
+/** 当前页面地址 → 登录页回跳链接(重新登录后回到用户原来看的那一页)。 */
+export function loginUrl(): string {
+  const next = window.location.pathname + window.location.search;
+  return `${LOGIN_PATH}?next=${encodeURIComponent(next)}`;
+}
+
 export async function getJson<T>(path: string): Promise<T> {
   const response = await fetch(BASE + path, { cache: 'no-store' });
+  if (response.status === 401) notifyAuthRequired();  // 会话过期: 让横幅出来(后端 401 JSON)
   if (!response.ok) {
     throw new Error(`${path}: ${response.status}`);
   }
@@ -15,6 +39,7 @@ export async function postJson<T>(path: string, body?: unknown): Promise<T> {
     cache: 'no-store',
     body: body ? JSON.stringify(body) : undefined,
   });
+  if (response.status === 401) notifyAuthRequired();  // 会话过期: 让横幅出来(后端 401 JSON)
   if (!response.ok) {
     throw new Error(`${path}: ${response.status}`);
   }

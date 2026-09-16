@@ -1304,3 +1304,12 @@ button.assoc-kpi:hover, .assoc-kpi.on { border-color: color-mix(in srgb, var(--a
 .assoc-tip .dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; margin-top: 4px; }
 .assoc-tip-body { min-width: 0; }
 .assoc-tip-body b { color: var(--text); font-weight: 600; }
+
+/* ── 登录已过期横幅 ──────────────────────────────────────────────────────────
+   出现的唯一场景: 会话过期后 /api/* 全 401 而页面(SPA)照旧在屏上。做成顶部常驻条,
+   比 toast 强 —— 它表示"数据已经不刷新了", 需要一直可见直到用户重新登录。
+   颜色走主题变量(--red 在:root 与各主题块都有定义), 深/浅色都不会失配。 */
+.auth-expired-banner { position: fixed; top: 0; left: 0; right: 0; z-index: 9998; display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 10px; padding: 8px 16px; border-bottom: 1px solid color-mix(in srgb, var(--red) 42%, var(--line)); background: color-mix(in srgb, var(--red) 16%, var(--bg)); box-shadow: 0 6px 20px rgba(0, 0, 0, 0.28); font-size: 12px; }
+.auth-expired-banner span { color: var(--muted); }
+.auth-expired-action { border: 1px solid color-mix(in srgb, var(--red) 48%, transparent); border-radius: 8px; background: color-mix(in srgb, var(--red) 14%, transparent); color: var(--red); padding: 5px 12px; font-size: 12px; font-weight: 600; text-decoration: none; }
+.auth-expired-action:hover { background: color-mix(in srgb, var(--red) 24%, transparent); }

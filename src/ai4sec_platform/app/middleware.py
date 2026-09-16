@@ -1,14 +1,51 @@
 from __future__ import annotations
-import hmac, hashlib, base64, json, time
+import hmac, hashlib, base64, json, os, time
+from urllib.parse import quote
 from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.responses import JSONResponse
+from starlette.responses import JSONResponse, RedirectResponse
 
 COOKIE_NAME = "sec_ai_hot_session"
 
 
+# 入口网关(如 136 radar nginx)把 /insights 前缀剥掉后转发到本服务, 所以重定向回跳必须
+# 按"浏览器可见路径"拼回去。两个值都可按部署覆盖, 默认值对应当前线上链路。
+LOGIN_PATH = (os.environ.get("SEC_AI_LOGIN_URL") or "/login").strip() or "/login"
+URL_PREFIX = (os.environ.get("SEC_AI_URL_PREFIX") or "/insights").strip().rstrip("/")
+
+
+def _wants_html_navigation(headers) -> bool:
+    """是否"浏览器导航"请求(地址栏/F5/点链接/iframe 文档)—— 只有这类才该被重定向到登录页。
+
+    静态资源(CSS/JS/图片)、fetch/XHR、WebSocket 都不是导航, 重定向它们会直接把页面打坏。
+    优先看 Sec-Fetch-Mode(现代浏览器必带): navigate 才是导航, cors/no-cors/same-origin 一律否;
+    老浏览器没有该头时退回 Accept 判断。
+    """
+    mode = (headers.get("sec-fetch-mode") or "").strip().lower()
+    if mode:
+        return mode == "navigate"
+    return "text/html" in (headers.get("accept") or "").lower()
+
+
+def _browser_path(path: str, query: str, headers) -> str:
+    """拼回浏览器可见的回跳路径: 优先用上游透传的 X-Original-URI, 否则 前缀 + 被剥掉的 path。"""
+    original = headers.get("x-original-uri") or ""
+    if original.startswith("/") and not original.startswith("//"):  # 防开放重定向
+        return original
+    target = f"{URL_PREFIX}{path}" if path.startswith("/") else f"{URL_PREFIX}/{path}"
+    if not target.startswith("/"):
+        target = "/" + target
+    return f"{target}?{query}" if query else target
+
+
+def login_redirect_url(path: str, query: str, headers) -> str:
+    """未认证的导航请求 → 登录页(带 next 回跳), 与入口网关自己 307 的行为一致。"""
+    return f"{LOGIN_PATH}?next={quote(_browser_path(path, query, headers), safe='')}"
+
+
 class ASISSessionMiddleware(BaseHTTPMiddleware):
     """验证 ASIS 签名的 sec_ai_hot_session cookie。
-    只对 /api/* 验证(API 鉴权), 前端页面/静态资源(非 /api/*)放行。
+    /api/* 验签失败 → 401 JSON; 非 /api/* 只在"浏览器导航"且未登录时 307 到登录页,
+    静态资源/fetch/XHR/repro-web 放行。
     格式 v1.<base64url(payload)>.<base64url(HMAC-SHA256)>
     """
 
@@ -20,17 +57,29 @@ class ASISSessionMiddleware(BaseHTTPMiddleware):
         path = request.url.path
         if request.method == "OPTIONS":
             return await call_next(request)
-        # 前端页面/静态资源(非 /api/*)放行
+        # 前端页面/静态资源(非 /api/*): 未登录时**只有浏览器导航**跳登录页, 其余
+        # (JS/CSS/图片、fetch/XHR)照旧放行 —— 给静态资源发重定向会把页面直接打坏。
+        # /repro-web/* 排除: 那是由复现容器自己鉴权的 UI, 且可能被跨站 iframe 嵌入
+        # (SameSite=Lax 下 iframe 不带 cookie), 重定向会误伤本来就正常的用法。
         if not path.startswith("/api/"):
+            if (
+                not path.startswith("/repro-web")
+                and _wants_html_navigation(request.headers)
+                and not self._verify(request.cookies.get(COOKIE_NAME) or "")
+            ):
+                return RedirectResponse(
+                    login_redirect_url(path, request.url.query, request.headers),
+                    status_code=307,
+                )
             return await call_next(request)
         # /api/health 放行(健康检查)
         if path.endswith("/health"):
             return await call_next(request)
-        # 其他 /api/* 验 cookie
+        # 其他 /api/* 验 cookie → 401 JSON(前端据此弹"登录已过期"横幅)
         cookie_val = request.cookies.get(COOKIE_NAME)
         user = self._verify(cookie_val) if cookie_val else None
         if not user:
-            return JSONResponse({"error": "auth_required", "login": "/login"}, status_code=401)
+            return JSONResponse({"error": "auth_required", "login": LOGIN_PATH}, status_code=401)
         request.state.user = user
         return await call_next(request)
 
