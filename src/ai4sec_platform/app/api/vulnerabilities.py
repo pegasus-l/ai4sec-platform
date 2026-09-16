@@ -193,7 +193,8 @@ def today(limit: int = Query(200, ge=1, le=500), conn: sqlite3.Connection = Depe
 
 @router.get("/materials")
 def materials(limit: int = Query(50, ge=1, le=200), conn: sqlite3.Connection = Depends(get_db)) -> dict:
-    return domain_items.list_items(conn, DOMAIN, item_type="material", limit=limit)
+    # 走 service.materials: 列表剥掉整页原文(单条可达 1.7MB), 详见 slim_material
+    return vuln_service.materials(conn, limit=limit)
 
 
 @router.get("/candidates")

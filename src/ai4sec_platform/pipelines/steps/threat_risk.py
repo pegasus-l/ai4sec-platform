@@ -54,6 +54,7 @@ class ReasonThreatRiskStep:
         router = LLMRouter()
         reasoned = 0
         tracked = 0
+        failed: list[dict[str, Any]] = []
         for item_id in ids:
             row = context.conn.execute("SELECT * FROM domain_items WHERE id = ? AND domain = ?", (item_id, "threats")).fetchone()
             if not row:
@@ -61,7 +62,25 @@ class ReasonThreatRiskStep:
             target = repo.row_to_dict(row)
             prompt = _semantic_review_prompt()
             review_payload = _semantic_review_payload(target)
-            output = router.complete_json(profile=self.model_profile, prompt=prompt, payload=review_payload)
+            try:
+                output = router.complete_json(profile=self.model_profile, prompt=prompt, payload=review_payload)
+            except Exception as exc:  # noqa: BLE001 —— 单条模型输出异常不该带崩整条 pipeline
+                # 只跳过这一条。前面几步已经导入/归并了几千条资产, 让整条 run 判 failed 会让
+                # 这些成果在记录里显示成"未完成"(09-15 的实况: 前 8 步全 success, 只这一步
+                # 报 "model returned invalid JSON")。原因留档, 供人工挑出来重跑。
+                failed.append({"item_id": item_id, "error": str(exc)[:200]})
+                repo.create_model_call(
+                    context.conn,
+                    run_id=context.run_id,
+                    agent_name="risk_reasoning",
+                    model_profile=self.model_profile,
+                    provider=self.model_profile,
+                    status="failed",
+                    input_payload={"item": review_payload, "prompt": prompt},
+                    output_payload={},
+                    error_message=str(exc)[:500],
+                )
+                continue
             repo.create_model_call(
                 context.conn,
                 run_id=context.run_id,
@@ -121,23 +140,26 @@ class ReasonThreatRiskStep:
                 )
                 tracked += 1
             reasoned += 1
+        if failed and not reasoned:
+            # 全军覆没 = 模型侧系统性故障(而非单条抖动), 仍要显式失败, 不能静默通过
+            raise RuntimeError(f"风险研判全部失败({len(failed)} 条), 首条原因: {failed[0]['error']}")
         artifact = context.artifact_store.write_json(
             context.conn,
             run_id=context.run_id,
             artifact_type="threat_risk_assessments",
             name="threats/risk_assessments.json",
-            data={"reasoned": reasoned, "tracked": tracked, "model_profile": self.model_profile},
+            data={"reasoned": reasoned, "tracked": tracked, "failed": failed, "model_profile": self.model_profile},
         )
         repo.create_quality_audit(
             context.conn,
             domain="threats",
             audit_type="risk_reasoning",
-            status="pass" if reasoned else "warn",
-            score=0.8 if reasoned else 0.2,
-            summary=f"威胁风险研判 {reasoned} 条，高优先级跟踪 {tracked} 条，已通过 configured_model/local_rules 进行语义复核。",
-            details={"run_id": context.run_id},
+            status="pass" if reasoned and not failed else "warn",
+            score=0.8 if reasoned and not failed else 0.4 if reasoned else 0.2,
+            summary=f"威胁风险研判 {reasoned} 条，高优先级跟踪 {tracked} 条，模型输出异常 {len(failed)} 条，已通过 configured_model/local_rules 进行语义复核。",
+            details={"run_id": context.run_id, "failed_item_ids": [item["item_id"] for item in failed]},
         )
-        return StepResult(metrics={"reasoned": reasoned, "tracked": tracked}, artifacts=[artifact])
+        return StepResult(metrics={"reasoned": reasoned, "tracked": tracked, "failed": len(failed)}, artifacts=[artifact])
 
 
 def _score(target: dict[str, Any]) -> float:

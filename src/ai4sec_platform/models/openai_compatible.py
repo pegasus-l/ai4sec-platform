@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import socket
 import time
 import urllib.error
@@ -35,29 +36,31 @@ class OpenAICompatibleProvider:
             "temperature": 0,
         }
         data = self._post(body)
-        content = data.get("choices", [{}])[0].get("message", {}).get("content", "{}")
+        content = _message_content(data, default="{}")
         if not str(content).strip():
             retry_body = dict(body)
             retry_body.pop("response_format", None)
             retry_body["max_tokens"] = min(self.max_output_tokens * 2, 65536)
             data = self._post(retry_body)
-            content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+            content = _message_content(data)
         content = str(content).strip()
-        # 去掉 markdown 代码块标记
-        if content.startswith("```"):
-            content = content.removeprefix("```json").removeprefix("```").removesuffix("```").strip()
-        # 如果还不是JSON开头，提取第一个{到最后一个}之间的内容
-        if not content.startswith("{"):
-            start = content.find("{")
-            end = content.rfind("}")
-            if start != -1 and end != -1 and end > start:
-                content = content[start:end+1]
         if not content:
             raise RuntimeError("model returned empty content")
-        try:
-            parsed = json.loads(content)
-        except json.JSONDecodeError as exc:
-            raise RuntimeError("model returned invalid JSON") from exc
+        parsed = _parse_json_object(content)
+        if parsed is None or not isinstance(parsed, dict):
+            # 模型偶发给出非法 JSON(截断 / 尾逗号 / 裸换行)。再要一次, 并明确只回 JSON。
+            # 不做这层兜底的话调用方直接抛错, 一条坏输出会带崩整条 pipeline —— 09-15 的
+            # threats.huawei_full_migration_pipeline 就是这样: 前 8 步全 success,
+            # 只有 reason_threat_risk 报 "model returned invalid JSON" 整条判 failed。
+            repair_body = dict(body)
+            repair_body["max_tokens"] = min(self.max_output_tokens * 2, 65536)
+            repair_body["messages"] = [
+                {"role": "system", "content": f"{prompt}\n\n上一次输出不是合法 JSON。只输出一个 JSON 对象, 不要 markdown 代码块, 不要任何解释文字。"},
+                {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
+            ]
+            parsed = _parse_json_object(_message_content(self._post(repair_body)))
+        if parsed is None:
+            raise RuntimeError("model returned invalid JSON")
         if not isinstance(parsed, dict):
             raise RuntimeError("model returned non-object JSON")
         return {"provider": self.provider_name, "status": "success", "model": self.model, "parsed": parsed, "result": parsed}
@@ -100,6 +103,37 @@ class OpenAICompatibleProvider:
                     break
                 chunks.append(chunk)
             return json.loads(b"".join(chunks).decode("utf-8"))
+
+
+def _message_content(data: dict[str, Any], default: str = "") -> str:
+    """从 chat/completions 响应里取 message.content。"""
+    return data.get("choices", [{}])[0].get("message", {}).get("content", default)
+
+
+def _parse_json_object(content: Any) -> Any:
+    """把模型输出解析成 JSON; 解不出来返回 None(由调用方决定重试还是报错)。
+
+    比裸 json.loads 多三层容忍, 都是线上真见过的形态:
+      1. markdown 代码块包裹;
+      2. 前后带解释文字 → 截取首个 { 到末个 };
+      3. 对象/数组尾部的多余逗号。
+    返回非 dict 的合法 JSON(如数组)也照原样返回, 由调用方判 "non-object"。
+    """
+    text = str(content or "").strip()
+    if not text:
+        return None
+    if text.startswith("```"):
+        text = text.removeprefix("```json").removeprefix("```").removesuffix("```").strip()
+    if not text.startswith("{"):
+        start, end = text.find("{"), text.rfind("}")
+        if start != -1 and end != -1 and end > start:
+            text = text[start:end + 1]
+    for candidate in (text, re.sub(r",(\s*[}\]])", r"\1", text)):
+        try:
+            return json.loads(candidate)
+        except json.JSONDecodeError:
+            continue
+    return None
 
 
 def _set_response_socket_timeout(response: Any, timeout_seconds: float) -> None:
