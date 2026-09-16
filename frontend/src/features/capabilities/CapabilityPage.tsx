@@ -273,6 +273,7 @@ function reproBucketOf(p: CapabilityItem['payload'] | undefined): string | null 
 }
 
 function CapabilityLibrary({ stats, search, openDetail, onViewRepro }: { stats?: LibraryStats; search: string; openDetail: (item: CapabilityItem) => void; onViewRepro: (item: CapabilityItem) => void }) {
+  const qc = useQueryClient();   // 【预取下一页】
   const [viewMode, setViewMode] = useState<'列表视图' | '能力分类' | '应用场景' | '工程可用性'>('列表视图');
   // 【正交双维度多选筛选】形态(Web/非Web) × 可体验·复现(官方Demo/完整复现/…)。
   // 计数全部来自 /items/stats 服务端全量聚合(不受 fetch 窗口/搜索影响)。
@@ -347,6 +348,22 @@ function CapabilityLibrary({ stats, search, openDetail, onViewRepro }: { stats?:
   const pageCount = Math.max(1, Math.ceil(total / PAGE_SIZE));
   // 筛选变化后页码可能越界(停在第 9 页却只剩 3 页) → 钳到末页, 否则会渲染成空表
   useEffect(() => { if (page > pageCount) setPage(pageCount); }, [page, pageCount]);
+
+  // 【预取下一页】(2026-09-16) 用户走隧道, 一次翻页要付 ~32KB 传输 + 0.2~0.4s 新建连接, 点「下一页」
+  // 必等约 2 秒。你还在看第 N 页时, 延后 1.2s(让本页的详情/轮询等前台请求先走)再把第 N+1 页拉进缓存,
+  // 点「下一页」就直接从缓存渲染。**只预取一页** —— 不做"把剩下的全拉下来"(那会占满隧道数分钟)。
+  useEffect(() => {
+    if (showGroups || page >= pageCount) return;
+    const timer = setTimeout(() => {
+      void qc.prefetchQuery({
+        queryKey: ['cap-library', 'page', filterKey, page + 1],   // 必须与 pageQ 的 key 完全一致才会命中缓存
+        queryFn: () => fetchLibraryPage({ q, form: formParam, repro: reproKeys, page: page + 1, page_size: PAGE_SIZE }),
+        staleTime: 300_000,
+      });
+    }, 1200);
+    return () => clearTimeout(timer);
+  }, [showGroups, page, pageCount, filterKey, q, formParam, reproKeys, qc]);
+
   const allItems = allQ.data?.items ?? [];
   // 懒查询用 isPending || isFetching 判断: enabled=false 时 v5 的 isLoading 恒为 false,
   // 单看 isLoading 会把"还没开始拉"显示成"空"。
@@ -621,7 +638,7 @@ function ReproDetailContent({ task, capabilityItem, openDetail }: { task: ReproT
     </div>
     <section className="repro-section">
       <div className="repro-section-title"><span>执行日志</span><small>{streaming && logs.length > 0 ? 'SSE LIVE' : `全文 ${displayedLogs.length} 行`}</small></div>
-      <div className="log-stream" ref={logRef}>{displayedLogs.map((log, index) => <div key={`${index}-${log.line}`} className={`log-line log-${log.kind}`}>{log.line}</div>)}{displayedLogs.length === 0 && <div className="muted small">{liveStatus === 'queued' ? '任务已排队，等待复现调度…' : '等待日志输出…'}</div>}</div>
+      <div className="log-stream" ref={logRef}>{displayedLogs.map((log, index) => <div key={`${index}-${log.line}`} className={`log-line log-${log.kind}`}>{log.line}</div>)}{displayedLogs.length === 0 && <div className="muted small">{liveStatus === 'queued' ? '任务已排队，等待复现调度…' : (!taskDetail && !fullLog ? '正在载入日志…' : '等待日志输出…')}</div>}</div>
     </section>
     {report && <>
       <section className="repro-section">

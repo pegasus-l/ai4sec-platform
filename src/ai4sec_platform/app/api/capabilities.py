@@ -54,6 +54,55 @@ _TASK_TO_PAYLOAD_STATUS = {
     "not_supported": "not_supported",
 }
 
+# ============================================================================
+# 列表/轮询响应瘦身(2026-09-16)
+# ============================================================================
+# 判据只有一条:**只摘"前端全站零引用"或"另有端点逐字节带回"的重字段**,两处都已逐条实测核对。
+# 用户走 SSH 隧道(约 20KB/s、每次请求新建连接),每 5s 一次的 repro-runs 轮询与每次翻页的 items
+# 直接决定他的等待时间 —— 而这些字段无人读却占大头。
+#
+# 1) 列表 item 的 payload(_ITEM_PAYLOAD_DROP_KEYS):
+#    readme/review 已在 2026-09-15 摘除;本次再摘 16 个"前端全站 grep 零引用"(或只出现在类型声明、
+#    无运行期读取)的重键。实测每页 20 条: 裸字节 191,327 → 120,254(-37%)、gzip 41,864 → 32,455(-22%)。
+#    ⚠️ 详情抽屉用列表项做首帧(CapabilityPage.tsx CapabilityDetailContent 的 initialData),
+#       所以卡片/表格/抽屉首帧会读的键一律保留: overview / display_* / score_reason / security_value /
+#       reproducibility_assessment / code_quality / application_advice / usage / tech_points /
+#       application_scenarios / highlight / repro_status / repro_result / repro_summary / conversion_status…
+#    ⚠️ assessment 在前端只被 threats/RepoDrawer 读(aiReview.assessment, 不是能力域);
+#       repro_report 走 /repro/{task_id} 与 /items/{id}(能力详情抽屉仍能拿到)。
+#
+# 2) repro-runs 的 log_excerpt/result/report(_REPRO_RUN_DROP_KEYS):
+#    列表页只渲染 id/status/title/repo_url/created_at;这三个重字段只在复现视图里当
+#    "详情返回前的兜底"读(CapabilityPage.tsx ReproDetailContent),而 /repro/{task_id} 对它们
+#    与列表**逐字节相同**(实测 3/3 任务一致),该端点本来就会拉。
+#    摘掉后轮询 17,500B → 836B gzip(-95%), 即 20KB/s 隧道里长期被占的约 17% 带宽释放。
+_ITEM_PAYLOAD_DROP_KEYS = (
+    "readme", "review",  # 2026-09-15 摘除, 保持
+    "assessment", "source_news_item", "capability_scoring", "rule_breakdown",
+    "implementation_depth", "promo_line", "highlight_line", "review_status",
+    "rule_score", "security_flag", "security_topics", "web_classify_ts",
+    "web_reclass", "source_news_score", "repro_report",
+)
+_REPRO_RUN_DROP_KEYS = ("log_excerpt", "result", "report")
+
+
+def _slim_items(items: Any) -> None:
+    """能力列表(/items、/today)就地瘦身: 只摘 payload 内前端零引用的重键, 顶层字段全部保留。"""
+    for it in items or []:
+        payload = it.get("payload") if isinstance(it, dict) else None
+        if isinstance(payload, dict):
+            for key in _ITEM_PAYLOAD_DROP_KEYS:
+                payload.pop(key, None)
+
+
+def _slim_repro_runs(items: Any) -> None:
+    """复现任务列表就地瘦身: 摘掉只由 /repro/{task_id} 逐字节带回的重字段(列表页一个都不渲染)。"""
+    for task in items or []:
+        if isinstance(task, dict):
+            for key in _REPRO_RUN_DROP_KEYS:
+                task.pop(key, None)
+
+
 
 # ============================================================================
 # 已有端点（保留）
@@ -63,7 +112,10 @@ def today(limit: int = Query(200, ge=1, le=500), conn: sqlite3.Connection = Depe
     """今日能力: 只返回当日(UTC)新产出的能力卡, 不再返回历史高分 TOP-N。
     created_at >= 今日零点; 当天新增不足 limit 就显示实际数量, 不硬凑高分旧项目。"""
     today_start = f"{datetime.now(timezone.utc):%Y-%m-%d}T00:00:00Z"
-    return domain_items.today(conn, DOMAIN, limit=limit, since=today_start)
+    data = domain_items.today(conn, DOMAIN, limit=limit, since=today_start)
+    # 今日能力与能力库列表同形(卡片/表格读同一批键), 同样摘零引用重键 —— 见 _ITEM_PAYLOAD_DROP_KEYS
+    _slim_items(data.get("items"))
+    return data
 
 
 @router.get("/items")
@@ -93,23 +145,8 @@ def items(
         forms=[form] if form else [],
         repro_chips=repro_keys,
     )
-    # 列表瘦身(2026-09-15): readme(4.2MB/398 条) + review(3.2MB/2000 条) 占该响应约 40%,
-    # 而前端全站 grep 零引用(features/ 与 types/ 内都没有), 抽屉详情另有 /items/{id} 取全量 payload,
-    # 所以列表里直接摘掉 —— 实测响应 19.35MB → 11MB(再经 gzip 约 1MB)。
-    for it in data.get("items") or []:
-        payload = it.get("payload")
-        if isinstance(payload, dict):
-            payload.pop("readme", None)
-            payload.pop("review", None)
-    return data
-    # 列表瘦身(2026-09-15): readme(4.2MB/398 条) + review(3.2MB/2000 条) 占该响应约 40%,
-    # 而前端全站 grep 零引用(features/ 与 types/ 内都没有), 抽屉详情另有 /items/{id} 取全量 payload,
-    # 所以列表里直接摘掉 —— 实测响应 19.35MB → 11MB(再经 gzip 约 1MB)。
-    for it in data.get("items") or []:
-        payload = it.get("payload")
-        if isinstance(payload, dict):
-            payload.pop("readme", None)
-            payload.pop("review", None)
+    # 列表瘦身: 见 _ITEM_PAYLOAD_DROP_KEYS(2026-09-15 摘 readme/review; 2026-09-16 再摘 16 个零引用重键)
+    _slim_items(data.get("items"))
     return data
 
 
@@ -148,6 +185,8 @@ def repro_runs(conn: sqlite3.Connection = Depends(get_db)) -> dict:
             "artifacts": [],
         })
         items.append(task_data)
+    # 轮询瘦身: 见 _REPRO_RUN_DROP_KEYS(详情端点逐字节带回, 每 5s 的轮询 17.5KB → 0.8KB gzip)
+    _slim_repro_runs(items)
     return {
         "domain": DOMAIN,
         "items": items,
