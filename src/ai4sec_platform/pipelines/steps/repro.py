@@ -82,7 +82,13 @@ def stop_repro_task(task_id: int) -> None:
 
 
 def cleanup_repro_task(task_id: int) -> None:
-    """新链路无容器/产物可清理；仅中止运行中的任务。"""
+    """中止任务(不删产物)。
+
+    复现产物在另一个容器的卷里(/workspace/repo-{id}), 平台既没有 docker CLI/套接字, 也没有
+    共享文件系统, 因此删不掉。真正的回收由 repro 侧看门狗按 DB 状态完成: 它每 10s 拉
+    GET /api/internal/repro-gc(见 app/api/internal.py), 对「已作废」的任务注销 nginx 分发、
+    杀掉目录内的服务进程、rm -rf 目录。这里只需把任务停掉, DB 状态由调用方置 cleaned。
+    """
     stop_repro_task(task_id)
 
 

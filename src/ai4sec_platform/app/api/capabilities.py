@@ -283,7 +283,7 @@ def stop_repro(task_id: int, conn: sqlite3.Connection = Depends(get_db)) -> dict
 
 @router.post("/repro/{task_id}/cleanup")
 def cleanup_repro(task_id: int, conn: sqlite3.Connection = Depends(get_db)) -> dict:
-    """清理复现任务（删容器 + 产物）, 并按剩余任务重算该 item 的复现结论。
+    """清理复现任务（作废该任务; 复现卷里的 clone/venv/服务进程由 repro 看门狗 ≤2 分钟回收）, 并按剩余任务重算该 item 的复现结论。
 
     清理 = 这条任务作废, 不管它是不是最新的一条:
       - 该 item 还有未清理的任务 → 结论回到其中最新那条(repro_result 不动);

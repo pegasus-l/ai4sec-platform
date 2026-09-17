@@ -66,6 +66,10 @@ class ASISSessionMiddleware(BaseHTTPMiddleware):
         path = request.url.path
         if request.method == "OPTIONS":
             return await call_next(request)
+        # /api/internal/*: 容器间调用(复现容器看门狗轮询回收名单)。调用方是容器不是浏览器,
+        # 故不参与用户会话(cookie)校验; 由路由自身用共享令牌 REPRO_PASSWORD 校验, 不对即 401。
+        if path.startswith("/api/internal/"):
+            return await call_next(request)
         # 前端页面/静态资源(非 /api/*): 未登录时**只有浏览器导航**跳登录页, 其余
         # (JS/CSS/图片、fetch/XHR)照旧放行 —— 给静态资源发重定向会把页面直接打坏。
         # /repro-web/* 排除: 那是由复现容器自己鉴权的 UI, 且可能被跨站 iframe 嵌入
