@@ -9,6 +9,7 @@ import type {
   KeywordProfile,
   ListResponse,
   MaterialPayload,
+  PagedListResponse,
   PatternPayload,
   PipelineRunDetail,
   PipelineRunSummary,
@@ -22,8 +23,31 @@ export function fetchVulnerabilityToday(): Promise<VulnerabilityTodayResponse> {
   return getJson('/api/vulnerabilities/today?limit=200');
 }
 
-export function fetchVulnerabilityMaterials(): Promise<ListResponse<DomainItem<MaterialPayload>>> {
-  return getJson('/api/vulnerabilities/materials?limit=200');
+export interface MaterialListParams {
+  q?: string;
+  chip?: string | null;
+  sort?: 'score' | 'recent';
+  page?: number;
+  page_size?: number;
+}
+
+/**
+ * 素材列表(服务端分页)。chip/sort/q/page 都下推给服务端。
+ * 响应里 total = 命中总数(精确), chip_counts = 全量芯片计数(不受 q/chip 影响)。
+ * 2026-09-17 之前是写死的 `?limit=200` —— 库里可展示素材已经 300+ 条, 分数最低的那批在页面上
+ * 永远不可达, 而页面上又看不出"还有更多"。
+ */
+export function fetchVulnerabilityMaterials(
+  params: MaterialListParams = {},
+): Promise<PagedListResponse<DomainItem<MaterialPayload>>> {
+  const sp = new URLSearchParams();
+  if (params.q) sp.set('q', params.q);
+  if (params.chip && params.chip !== 'all') sp.set('chip', params.chip);
+  if (params.sort) sp.set('sort', params.sort);
+  if (params.page) sp.set('page', String(params.page));
+  if (params.page_size) sp.set('page_size', String(params.page_size));
+  const qs = sp.toString();
+  return getJson(`/api/vulnerabilities/materials${qs ? `?${qs}` : ''}`);
 }
 
 /** 单条素材一键下载地址：<a href> 直接跳转，服务器按 Content-Disposition 触发下载。 */
@@ -31,12 +55,24 @@ export function materialDownloadUrl(itemId: number): string {
   return `${BASE}/api/vulnerabilities/materials/${itemId}/download`;
 }
 
-/** 批量下载：POST 打包 zip 后通过临时 <a> 保存为文件。返回是否成功。 */
-export async function downloadMaterialZip(itemIds: number[]): Promise<boolean> {
+/**
+ * 批量下载：POST 打包 zip 后通过临时 <a> 保存为文件。返回是否成功。
+ *
+ * 服务端分页后前端手里只有当前页 20 条, 所以改为把**筛选条件**发过去, 由服务端按同一套谓词
+ * 取"命中的全部" —— 否则这个按钮会静默退化成"只下载当前页", 而 zip 里少了哪些文件是看不出来的。
+ * item_ids 仍保留(按 id 精确打包), 但页面不再用那条路径。
+ */
+export async function downloadMaterialZip(
+  params: { item_ids?: number[]; q?: string; chip?: string | null },
+): Promise<boolean> {
   const response = await fetch(`${BASE}/api/vulnerabilities/materials/bulk-download`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ item_ids: itemIds }),
+    body: JSON.stringify({
+      item_ids: params.item_ids,
+      q: params.q || null,
+      chip: params.chip && params.chip !== 'all' ? params.chip : null,
+    }),
   });
   if (!response.ok) return false;
   const blob = await response.blob();

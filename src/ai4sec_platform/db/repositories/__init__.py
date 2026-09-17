@@ -318,29 +318,54 @@ def update_domain_item(
 def list_domain_items(conn: sqlite3.Connection, domain: str, *, item_type: str | None = None, limit: int = 50,
                       status: str | None = None, exclude_status: str | None = None, since: str | None = None,
                       offset: int = 0, forms: list[str] | None = None, repro_chips: list[str] | None = None,
-                      q: str | None = None) -> list[dict[str, Any]]:
+                      q: str | None = None, material_chips: list[str] | None = None,
+                      haystack: str = "capability", sort: str | None = None) -> list[dict[str, Any]]:
     """列 domain_items。
 
-    offset 默认 0 → 不传时行为与改动前完全一致(其它域调用方零影响)。
-    forms/repro_chips/q 见 build_item_filters: 给了就下推到 SQL, 不再把全量行拉进 Python 过滤。
+    offset 默认 0 / sort 默认 None → 不传时行为与改动前完全一致(其它域调用方零影响)。
+    forms/repro_chips/material_chips/q 见 build_item_filters: 给了就下推到 SQL, 不再把全量行拉进
+    Python 过滤。sort 只认 SORT_PREDICATES 白名单(键名, 不是 SQL 片段)。
     """
     where, params = _domain_items_where(domain, item_type=item_type, status=status,
                                         exclude_status=exclude_status, since=since,
-                                        forms=forms, repro_chips=repro_chips, q=q)
+                                        forms=forms, repro_chips=repro_chips, q=q,
+                                        material_chips=material_chips, haystack=haystack)
     sql = ("SELECT * FROM domain_items" + where
-           + " ORDER BY COALESCE(score, 0) DESC, primary_date DESC, id DESC LIMIT ? OFFSET ?")
+           + " ORDER BY " + sort_predicate(sort) + " LIMIT ? OFFSET ?")
     params.extend([limit, offset])
     return [row_to_dict(row) for row in conn.execute(sql, params).fetchall()]
+
+
+# 默认排序 = 服务端分页之前那条写死在 list_domain_items 里的 ORDER BY, 逐字保留。
+_DEFAULT_ORDER_BY = "COALESCE(score, 0) DESC, primary_date DESC, id DESC"
+
+
+def sort_predicate(sort: str | None) -> str:
+    """把排序键翻成 ORDER BY 片段。**SQL 文本进 ORDER BY 的唯一通道**。
+
+    不传(None)→ 默认"分数优先"(与改动前逐字一致); 传了但不认识 → 明确报错, 不静默退回默认:
+    静默退回会表现为"排序没生效", 比一个明确的报错难查得多(与 /items 对未知筛选取值报 400 同理)。
+    """
+    if sort is None:
+        return SORT_PREDICATES.get(DEFAULT_SORT, _DEFAULT_ORDER_BY)
+    if sort in SORT_PREDICATES:
+        return SORT_PREDICATES[sort]
+    raise ValueError(f"Unsupported sort: {sort!r} (可选: {sorted(SORT_PREDICATES)})")
 
 
 def count_domain_items(conn: sqlite3.Connection, domain: str, *, item_type: str | None = None,
                        status: str | None = None, exclude_status: str | None = None, since: str | None = None,
                        forms: list[str] | None = None, repro_chips: list[str] | None = None,
-                       q: str | None = None) -> int:
-    """数命中条数(与 list_domain_items 同判据), 供分页返回精确 total。"""
+                       q: str | None = None, material_chips: list[str] | None = None,
+                       haystack: str = "capability") -> int:
+    """数命中条数(与 list_domain_items 同判据), 供分页返回精确 total。
+
+    不接 sort: 数总数与顺序无关。
+    """
     where, params = _domain_items_where(domain, item_type=item_type, status=status,
                                         exclude_status=exclude_status, since=since,
-                                        forms=forms, repro_chips=repro_chips, q=q)
+                                        forms=forms, repro_chips=repro_chips, q=q,
+                                        material_chips=material_chips, haystack=haystack)
     return int(conn.execute("SELECT COUNT(*) FROM domain_items" + where, params).fetchone()[0])
 
 
@@ -567,18 +592,115 @@ def cap_haystack_sql() -> str:
     return "(" + " || ".join(parts) + ")"
 
 
-def search_predicate(q: str) -> tuple[str, list[Any]]:
-    """能力卡搜索的 SQL 谓词, 与 _item_matches_q 等价(2026-09-15 实测含跨字段查询逐条一致)。"""
-    return f"({cap_haystack_sql()} LIKE ? ESCAPE '{_LIKE_ESC}')", [_like_escape(q)]
+# ============================================================================
+# 漏洞素材筛选谓词与搜索 haystack(唯一真源, 2026-09-17)
+# ============================================================================
+# 与能力库那一批同构: 芯片计数(material_chip_counts)与列表筛选(build_item_filters)共用同一批
+# 片段, 于是「芯片上的数字」与「列表里的条数」结构性同源, 不会各算一套。
+#
+# 判据的事实来源是前端 VulnerabilityPage.tsx 的 materialType() / MaterialsView 的 matchesFilter /
+# vulnSearchMatch —— 这三处原先在浏览器里跑, 服务端分页后必须下推到 SQL, 所以这里逐字镜像它们。
+# 改这边就必须同时改那边, 反之亦然(差分测试见 tests 里素材搜索那段)。
+_MATERIAL_TYPE_EXPR = (
+    "COALESCE("
+    "NULLIF(json_extract(payload_json, '$.material_type'), ''), "
+    "NULLIF(json_extract(payload_json, '$.classification.category'), ''), "
+    "status, 'unknown')"
+)
+
+# 「待」必须用 LIKE 而不是精确匹配 '待知识提取': 前端判据是 String(status).includes('待'), 而
+# domains/vulnerabilities/builders.py 还会写「低相关待复核」(当前 0 行, 但代码路径存在)。
+# 精确匹配会在它一旦出现时静默漏掉 —— 那时表现为"需人工确认"芯片少数了几条, 很难查。
+MATERIAL_CHIP_PREDICATES: dict[str, str] = {
+    "all": "1=1",
+    "poc_exploit": f"{_MATERIAL_TYPE_EXPR} = 'poc_exploit'",
+    "tech_analysis": f"{_MATERIAL_TYPE_EXPR} = 'tech_analysis'",
+    "needs": "status LIKE '%待%'",
+    "confirmed": "NOT (status LIKE '%待%')",
+}
+# 除 "all"(= COUNT(*))以外的芯片键; 顺序即前端 ViewPills 的顺序。
+MATERIAL_CHIP_KEYS: tuple[str, ...] = ("poc_exploit", "tech_analysis", "needs", "confirmed")
+
+# 知识候选计数: 替前端 QueueConsole 的 `status?.includes('知识')`(那是从已加载列表里数的,
+# 服务端分页后会退化成"只数当前页")。它不是一个芯片, 但同一次聚合顺手算出来。
+_MATERIAL_KNOWLEDGE = "status LIKE '%知识%'"
+
+# 排序白名单。**只查表, 绝不拼接用户输入** —— SQL 文本进 ORDER BY 的唯一通道是下面这个 dict。
+# "score" 逐字保持服务端分页之前的写法, 所以不传 sort 时行为与改动前完全一致。
+SORT_PREDICATES: dict[str, str] = {
+    "score": "COALESCE(score, 0) DESC, primary_date DESC, id DESC",
+    "recent": "created_at DESC, id DESC",
+}
+DEFAULT_SORT = "score"
+
+# 素材搜索覆盖的字段, 逐字对齐前端 vulnSearchMatch: 四个列 + 五个 payload 键 + 两个数组键。
+_MATERIAL_SEARCH_COLUMNS: tuple[str, ...] = ("title", "summary", "source", "source_url")
+_MATERIAL_SEARCH_PAYLOAD_KEYS: tuple[str, ...] = (
+    "source_url", "root_cause_summary", "root_cause_pattern", "one_liner", "display_title",
+)
+# cve_ids/cwe_ids 在前端是被 spread 成独立元素的(`...asStringArray(p.cve_ids)`), 所以这里也逐元素
+# group_concat: JSON 文本 `["CVE-A","CVE-B"]` 直接 LIKE 只能命中单个 id, 搜跨元素的
+# "CVE-A CVE-B" 会漏(照抄 cap_haystack_sql 里 tech_points 那段 json_each 的判法)。
+_MATERIAL_SEARCH_ARRAY_KEYS: tuple[str, ...] = ("cve_ids", "cwe_ids")
+
+
+def material_haystack_sql() -> str:
+    """漏洞素材搜索的拼接 haystack, 逐字镜像前端 vulnSearchMatch(VulnerabilityPage.tsx:161-172)。
+
+    与 cap_haystack_sql 的两处差异都是照前端来的, 别"顺手对齐"成能力库那套:
+      · 前端是 `.filter(Boolean).join(' ')` —— 空值不入列, 不会留下连续空格; 所以这里的列也走
+        CASE 分支(能力库那边三个列是无条件入列的)。
+      · 前端把 cve_ids/cwe_ids 的元素 spread 成独立片段, 所以走 json_each + group_concat。
+    """
+    parts = [
+        f"CASE WHEN COALESCE({c}, '') != '' THEN ' ' || {c} ELSE '' END"
+        for c in _MATERIAL_SEARCH_COLUMNS
+    ]
+    for k in _MATERIAL_SEARCH_PAYLOAD_KEYS:
+        v = f"json_extract(payload_json, '$.{k}')"
+        parts.append(f"CASE WHEN COALESCE({v}, '') != '' THEN ' ' || {v} ELSE '' END")
+    for k in _MATERIAL_SEARCH_ARRAY_KEYS:
+        v = f"json_extract(domain_items.payload_json, '$.{k}')"
+        gc = (f"(SELECT group_concat(value, ' ') FROM (SELECT value FROM "
+              f"json_each(domain_items.payload_json, '$.{k}') ORDER BY key))")
+        parts.append(
+            f"CASE WHEN json_type(domain_items.payload_json, '$.{k}') = 'array'"
+            f" THEN ' ' || COALESCE({gc}, '')"
+            f" WHEN COALESCE({v}, '') != '' THEN ' ' || {v}"
+            f" ELSE '' END"
+        )
+    return "(" + " || ".join(parts) + ")"
+
+
+# haystack 注册表: search_predicate/build_item_filters 通过键名选用, 默认 "capability" 保证
+# 既有调用方(能力库)零影响。加新域时在这里加一项, 而不是给 search_predicate 加分支。
+HAYSTACK_SQL: dict[str, Any] = {
+    "capability": cap_haystack_sql,
+    "material": material_haystack_sql,
+}
+
+
+def search_predicate(q: str, haystack: str = "capability") -> tuple[str, list[Any]]:
+    """搜索的 SQL 谓词。
+
+    能力库那份与 services/domain_items._item_matches_q 等价(2026-09-15 实测含跨字段查询逐条一致);
+    素材那份与前端 vulnSearchMatch 等价(haystack 见 material_haystack_sql)。
+    """
+    if haystack not in HAYSTACK_SQL:
+        raise ValueError(f"Unsupported haystack: {haystack!r} (可选: {sorted(HAYSTACK_SQL)})")
+    return f"({HAYSTACK_SQL[haystack]()} LIKE ? ESCAPE '{_LIKE_ESC}')", [_like_escape(q)]
 
 
 def build_item_filters(*, forms: list[str] | None = None, repro_chips: list[str] | None = None,
-                       q: str | None = None) -> tuple[str, list[Any]]:
+                       q: str | None = None, material_chips: list[str] | None = None,
+                       haystack: str = "capability") -> tuple[str, list[Any]]:
     """把前端芯片与搜索词翻成 SQL 条件, 返回 (" AND (...)", params); 无条件时返回 ("", [])。
 
-    形态语义与前端一致: 恰选一个才过滤(两个都不选/都选 = 全部)。复现芯片多选为 OR。
+    形态语义与前端一致: 恰选一个才过滤(两个都不选/都选 = 全部)。复现芯片/素材芯片多选为 OR。
     非 Web 与复现芯片同时给出会得到空集 —— 前端不会有这种组合(只看非 Web 时复现芯片整排失效
     并清空), 真给出时返回空集也是诚实答案。
+    material_chips/haystack 是漏洞素材那套(见 MATERIAL_CHIP_PREDICATES / material_haystack_sql);
+    不传时与改动前逐字一致。
     """
     conds: list[str] = []
     params: list[Any] = []
@@ -588,9 +710,12 @@ def build_item_filters(*, forms: list[str] | None = None, repro_chips: list[str]
     chips = [c for c in (repro_chips or []) if c in REPRO_PREDICATES]
     if chips:
         conds.append("(" + " OR ".join(f"({REPRO_PREDICATES[c]})" for c in chips) + ")")
+    mchips = [c for c in (material_chips or []) if c in MATERIAL_CHIP_PREDICATES]
+    if mchips:
+        conds.append("(" + " OR ".join(f"({MATERIAL_CHIP_PREDICATES[c]})" for c in mchips) + ")")
     q = (q or "").strip()
     if q:
-        frag, fparams = search_predicate(q)
+        frag, fparams = search_predicate(q, haystack=haystack)
         conds.append(frag)
         params.extend(fparams)
     if not conds:
@@ -601,7 +726,8 @@ def build_item_filters(*, forms: list[str] | None = None, repro_chips: list[str]
 def _domain_items_where(domain: str, *, item_type: str | None = None, status: str | None = None,
                         exclude_status: str | None = None, since: str | None = None,
                         forms: list[str] | None = None, repro_chips: list[str] | None = None,
-                        q: str | None = None) -> tuple[str, list[Any]]:
+                        q: str | None = None, material_chips: list[str] | None = None,
+                        haystack: str = "capability") -> tuple[str, list[Any]]:
     """组装 domain_items 的 WHERE(list_domain_items 与 count_domain_items 共用,
     保证「取这一页」与「数总数」判据完全一致 —— 否则 total 与页内容会对不上)。"""
     sql = " WHERE domain = ?"
@@ -619,10 +745,44 @@ def _domain_items_where(domain: str, *, item_type: str | None = None, status: st
         # 时间下界(ISO-8601 UTC 字符串比较, 与 created_at 存储格式一致)
         sql += " AND created_at >= ?"
         params.append(since)
-    frag, fparams = build_item_filters(forms=forms, repro_chips=repro_chips, q=q)
+    frag, fparams = build_item_filters(forms=forms, repro_chips=repro_chips, q=q,
+                                       material_chips=material_chips, haystack=haystack)
     sql += frag
     params.extend(fparams)
     return sql, params
+
+
+def material_chip_counts(conn: sqlite3.Connection, domain: str) -> dict[str, int]:
+    """漏洞素材的芯片计数: 一条聚合 SQL, 与列表筛选共用 MATERIAL_CHIP_PREDICATES。
+
+    口径**不带搜索词、也不带芯片**: 前端算「需确认」「PoC / Exploit」这两个数字用的是未过滤的
+    全量列表(MaterialsView 里 needsReview/pocCount 算在 filtered 之外), 这里复刻的正是那个语义。
+    `knowledge` 不是芯片, 是替 QueueConsole 那个"知识候选"计数(同样从全量里数)。
+    与 /items 同人口(domain + item_type + status != '已淘汰'), 所以 all == 列表可达的总数。
+
+    ⚠️ `item_type = 'material'` 必须显式带上: vulnerabilities 域里混着 candidate / crawled_page /
+    event 等十几种 item_type(合计 3.8 万行), 只按 domain 过滤会把它们全算进来 —— 芯片数字会变成
+    3 万+, 而列表只有 3 百条。(capabilities 域是 1:1 的, 所以 filter_stats_by_domain 少这一条不影响。)
+    """
+    sums = ",\n            ".join(
+        "SUM(CASE WHEN %s THEN 1 ELSE 0 END) AS chip_%s" % (MATERIAL_CHIP_PREDICATES[k], k)
+        for k in MATERIAL_CHIP_KEYS
+    )
+    row = conn.execute(
+        """
+        SELECT
+            COUNT(*) AS chip_all,
+            %s,
+            SUM(CASE WHEN %s THEN 1 ELSE 0 END) AS chip_knowledge
+        FROM domain_items
+        WHERE domain = ? AND item_type = ? AND status != ?
+        """ % (sums, _MATERIAL_KNOWLEDGE),
+        (domain, "material", "已淘汰"),
+    ).fetchone()
+    r = dict(row)
+    counts = {k: int(r[f"chip_{k}"] or 0) for k in ("all",) + MATERIAL_CHIP_KEYS}
+    counts["knowledge"] = int(r["chip_knowledge"] or 0)
+    return counts
 
 
 def filter_stats_by_domain(conn: sqlite3.Connection, domain: str) -> dict[str, Any]:

@@ -51,6 +51,9 @@ class FieldReviewRequest(BaseModel):
 
 class BulkDownloadRequest(BaseModel):
     item_ids: list[int] | None = None
+    # 服务端分页后前端不再持有"全部命中的 id", 改成把筛选条件发过来(见 materials_bulk_download)
+    q: str | None = None
+    chip: str | None = None
 
 
 def _str_list(value: object) -> list[str]:
@@ -192,9 +195,33 @@ def today(limit: int = Query(200, ge=1, le=500), conn: sqlite3.Connection = Depe
 
 
 @router.get("/materials")
-def materials(limit: int = Query(50, ge=1, le=200), conn: sqlite3.Connection = Depends(get_db)) -> dict:
-    # 走 service.materials: 列表剥掉整页原文(单条可达 1.7MB), 详见 slim_material
-    return vuln_service.materials(conn, limit=limit)
+def materials(
+    q: str | None = Query(None, max_length=200,
+                          description="搜索关键词(标题/摘要/来源/根因/一句话/CVE/CWE)"),
+    chip: str | None = Query(None,
+                             description="芯片筛选: all/poc_exploit/tech_analysis/needs/confirmed(不传或 all = 全部)"),
+    sort: str = Query("score", description="排序: score(分数优先, 默认) / recent(最新优先)"),
+    page: int = Query(1, ge=1, description="页码(1-based)"),
+    page_size: int = Query(20, ge=1, le=500, description="每页条数"),
+    limit: int | None = Query(None, ge=1, le=500, deprecated=True,
+                              description="已废弃: 请用 page_size。保留仅为兼容旧调用方, 给出时覆盖 page_size"),
+    conn: sqlite3.Connection = Depends(get_db),
+) -> dict:
+    # 2026-09-17: 去掉 200 上限, 改服务端分页。库里有 313 条非「已淘汰」素材, 原先前端写死
+    # limit=200 且排序是分数优先 —— 被砍掉的 113 条是**分数最低**的(横跨 08-20~09-15, 含昨晚新
+    # 产出但分低的), 不是"旧素材", 页面上永远不可达。
+    # 筛选/排序/分页都下推到 SQL, 谓词与 chip_counts 共用 db.repositories.MATERIAL_CHIP_PREDICATES,
+    # 所以「芯片上的数字」「列表里的条数」「批量下载的条数」三者结构性同源。
+    # 列表剥掉整页原文(单条可达 1.7MB), 详见 slim_material —— 分页后只需处理当页, 反而更省。
+    if chip and chip not in repo.MATERIAL_CHIP_PREDICATES:
+        # 静默忽略未知取值会表现为"筛选没生效", 比一个明确的 400 难查得多
+        raise HTTPException(status_code=400,
+                            detail=f"未知的 chip 取值: {chip!r}; 可选: {list(repo.MATERIAL_CHIP_PREDICATES)}")
+    if sort not in repo.SORT_PREDICATES:
+        raise HTTPException(status_code=400,
+                            detail=f"未知的 sort 取值: {sort!r}; 可选: {list(repo.SORT_PREDICATES)}")
+    return vuln_service.materials(conn, q=q, chip=chip, sort=sort, page=page,
+                                  page_size=limit or page_size)
 
 
 @router.get("/candidates")
@@ -250,24 +277,36 @@ def material_download(item_id: int, conn: sqlite3.Connection = Depends(get_db)) 
 
 @router.post("/materials/bulk-download")
 def materials_bulk_download(request: BulkDownloadRequest, conn: sqlite3.Connection = Depends(get_db)) -> Response:
-    """漏洞素材批量下载：按 item_ids 打包 zip；不传 ids 时下载全部素材。"""
+    """漏洞素材批量下载：按 item_ids 打包 zip；不传 ids 时按筛选条件打包命中的全部素材。
+
+    2026-09-17: 素材列表改服务端分页后, 前端手里只剩"当前页 20 条"。若不动这里, 那个「批量下载
+    (N)」按钮会**静默地**从"下载全部命中"退化成"只下载当前页" —— 改了哪些文件进 zip 是看不出来的。
+    所以把筛选条件(q/chip)也收进来, 谓词与列表**共用同一套**
+    (repo.MATERIAL_CHIP_PREDICATES + material haystack), 按钮上写的条数与打包出的条数同源。
+    无筛选时 = 全部非「已淘汰」素材(与改前"不传 ids 下载全部素材"同义, 只是上限从 200 放开到 313)。
+    """
     if request.item_ids:
         placeholders = ",".join("?" for _ in request.item_ids)
-        rows = conn.execute(
+        rows = [repo.row_to_dict(row) for row in conn.execute(
             f"SELECT * FROM domain_items WHERE domain = ? AND item_type = ? AND id IN ({placeholders}) ORDER BY id",
             (DOMAIN, "material", *request.item_ids),
-        ).fetchall()
+        ).fetchall()]
     else:
-        rows = conn.execute(
-            "SELECT * FROM domain_items WHERE domain = ? AND item_type = ? ORDER BY id",
-            (DOMAIN, "material"),
-        ).fetchall()
+        chip = request.chip if request.chip != "all" else None
+        if chip and chip not in repo.MATERIAL_CHIP_PREDICATES:
+            raise HTTPException(status_code=400,
+                                detail=f"未知的 chip 取值: {chip!r}; 可选: {list(repo.MATERIAL_CHIP_PREDICATES)}")
+        # limit=-1: SQLite 语义里负 LIMIT 就是不限(与改前那条无 LIMIT 的裸 SQL 等价),
+        # 走 repo 而不是裸 SQL 是为了拿到与列表逐字相同的 WHERE。
+        rows = repo.list_domain_items(conn, DOMAIN, item_type="material", limit=-1,
+                                      exclude_status="已淘汰",
+                                      material_chips=[chip] if chip else None,
+                                      haystack="material", q=request.q)
     if not rows:
         raise HTTPException(status_code=404, detail="no materials found")
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
-        for row in rows:
-            item = repo.row_to_dict(row)
+        for item in rows:
             archive.writestr(_download_filename(item, "vuln_material"), _material_markdown(item))
     buffer.seek(0)
     return Response(

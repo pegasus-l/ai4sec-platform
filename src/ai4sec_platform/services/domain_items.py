@@ -54,8 +54,9 @@ def _item_matches_q(item: dict[str, Any], q: str) -> bool:
 def list_items(conn: sqlite3.Connection, domain: str, *, item_type: str | None = None, limit: int = 50,
                q: str | None = None, page: int | None = None, page_size: int | None = None,
                since: str | None = None, forms: list[str] | None = None,
-               repro_chips: list[str] | None = None) -> dict[str, Any]:
-    """列能力卡。支持搜索(q)、芯片筛选(forms/repro_chips)与分页(page/page_size)。
+               repro_chips: list[str] | None = None, material_chips: list[str] | None = None,
+               haystack: str = "capability", sort: str | None = None) -> dict[str, Any]:
+    """列能力卡。支持搜索(q)、芯片筛选(forms/repro_chips/material_chips)与分页(page/page_size)。
 
     2026-09-15 起: 给了 q/forms/repro_chips/page 就走「SQL 过滤 + LIMIT/OFFSET + COUNT(*)」。
     此前是 fetch_limit=10000, 把全部行连完整 payload 拉进 Python 再过滤、切片 —— 服务端开销
@@ -63,21 +64,26 @@ def list_items(conn: sqlite3.Connection, domain: str, *, item_type: str | None =
     筛选谓词与 /items/stats 的芯片计数共用 db.repositories 里同一批常量, 两者结构性同源。
     不带这些参数时保持旧路径(其它域调用方零影响)。
     since: created_at 时间下界(ISO-8601 UTC), 如「今日零点」→ 只返回该时刻之后产出的条目。
+    material_chips/haystack/sort: 漏洞素材那套(2026-09-17)。haystack 选搜索字段表
+    (db.repositories.HAYSTACK_SQL), sort 只认白名单键名。默认值下与改动前逐字一致。
     返回: {domain, label, count, total, page, page_size, items}; total = 命中总数(精确计数)。
     """
     q = (q or "").strip()
     forms = [f for f in (forms or []) if f]
     repro_chips = [c for c in (repro_chips or []) if c]
-    if q or forms or repro_chips or page is not None:
+    material_chips = [c for c in (material_chips or []) if c]
+    if q or forms or repro_chips or material_chips or sort or page is not None:
         eff_limit, offset = limit, 0
         if page is not None and page_size is not None and page_size > 0:
             eff_limit = page_size
             offset = (page - 1) * page_size
         paged = repo.list_domain_items(conn, domain, item_type=item_type, limit=eff_limit, offset=offset,
                                        exclude_status="已淘汰", since=since,
-                                       forms=forms, repro_chips=repro_chips, q=q)
+                                       forms=forms, repro_chips=repro_chips, q=q,
+                                       material_chips=material_chips, haystack=haystack, sort=sort)
         total = repo.count_domain_items(conn, domain, item_type=item_type, exclude_status="已淘汰",
-                                        since=since, forms=forms, repro_chips=repro_chips, q=q)
+                                        since=since, forms=forms, repro_chips=repro_chips, q=q,
+                                        material_chips=material_chips, haystack=haystack)
     else:
         items = repo.list_domain_items(conn, domain, item_type=item_type, limit=limit,
                                        exclude_status="已淘汰", since=since)

@@ -50,9 +50,24 @@ def _today_start() -> str:
     return f"{midnight_cst.astimezone(timezone.utc):%Y-%m-%dT%H:%M:%SZ}"
 
 
-def materials(conn: sqlite3.Connection, limit: int = 50) -> dict:
-    data = domain_items.list_items(conn, DOMAIN, item_type="material", limit=limit)
+def materials(conn: sqlite3.Connection, *, limit: int = 50, q: str | None = None,
+              chip: str | None = None, sort: str | None = None,
+              page: int | None = None, page_size: int | None = None) -> dict:
+    """素材列表: 筛选(芯片 + 搜索)、排序、分页全部下推到 SQL。
+
+    2026-09-17 之前这里只吃 limit, 上限 200 —— 库里有 313 条非「已淘汰」素材, 于是分数最低的
+    113 条在页面上永远不可达(且因为排序是分数优先, 被砍掉的根本不是"旧素材")。
+    现在筛选谓词与 chip_counts 共用 db.repositories 里同一批常量, 所以「芯片上的数字」与
+    「列表里的条数」结构性同源; 未知 sort 由 repo 报错、未知 chip 由路由报 400, 都不静默忽略。
+    """
+    data = domain_items.list_items(
+        conn, DOMAIN, item_type="material", limit=limit, q=q,
+        # "all" 是全量口径(1=1), 不必真下一个恒真条件
+        material_chips=[chip] if chip and chip != "all" else None,
+        haystack="material", sort=sort, page=page, page_size=page_size,
+    )
     data["items"] = [slim_material(item) for item in data["items"]]
+    data["chip_counts"] = repo.material_chip_counts(conn, DOMAIN)
     return data
 
 
