@@ -14,6 +14,8 @@
  */
 
 import type { ThreatViewModel, ThreatRepo, ThreatAsset } from '../../types/threat';
+import { clamp, CONF_LABEL, CONF_STROKE, confTone, SOURCE_KEY_LABEL, sourceKey } from './assoc/shared';
+import { resolveAsset, useAssetLookup, useRepoLinks } from './assoc/useAssocData';
 import { useDrawerStack } from '../../components/DrawerStack';
 import { VulnListDrawer } from './VulnListDrawer';
 import { VulnDetailDrawer } from './VulnDetailDrawer';
@@ -64,6 +66,11 @@ export function RepoDrawerContent({ repo: initialRepo, onViewAssoc, onOpenAsset 
   const [aiError, setAiError] = useState<string | null>(null);
   const queryClient = useQueryClient();
 
+  // 关联资产:与「资产↔仓关联」共用 ['threats-associations'] 缓存。
+  // 之前这里读的是 model.assets,而它被写死成 [](单目标详情接口只返回仓库行) → 任何仓都显示「暂无关联资产」。
+  const { links: repoLinks, meta: assocMeta, isLoading: linksLoading, isError: linksError } = useRepoLinks(repo.id);
+  const assetMap = useAssetLookup();
+
   // On mount, try to fetch cached AI review (GET, no LLM trigger)
   useEffect(() => {
     getJson<AiReviewResult>(`/api/threats/${repo.id}/ai-review`)
@@ -104,10 +111,6 @@ export function RepoDrawerContent({ repo: initialRepo, onViewAssoc, onOpenAsset 
     });
   };
 
-  // Find linked assets by repo.id in asset.repos array
-  const linkedAssets = (model?.assets ?? []).filter(
-    (a) => a.repos?.includes(repo.id) || a.repos?.includes(repo.name),
-  );
 
   return (
     <div className="drawer-grid">
@@ -178,27 +181,36 @@ export function RepoDrawerContent({ repo: initialRepo, onViewAssoc, onOpenAsset 
           </div>
         </Card>
 
-        {/* 4. Linked assets */}
+        {/* 4. Linked assets —— 数据来自 /api/threats/associations(见 useRepoLinks) */}
         <Card className="detail-card">
-          <h3>关联资产</h3>
-          {linkedAssets.length > 0 ? (
-            <div className="timeline">
-              {linkedAssets.map((asset) => (
+          <h3>关联资产{repoLinks.length > 0 && <span className="muted small"> · {repoLinks.length} 条</span>}</h3>
+          {linksLoading ? (
+            <p className="muted small">正在加载关联数据…</p>
+          ) : repoLinks.length > 0 ? (
+            <div className="assoc-edge-list">
+              {repoLinks.map((l) => (
                 <div
-                  key={asset.id}
-                  className="timeline-item clickable"
-                  onClick={() => onOpenAsset?.(asset)}
+                  key={l.id}
+                  className="assoc-edge-item"
+                  style={{ borderLeftColor: CONF_STROKE[l.conf] ?? '#94a3b8' }}
+                  onClick={() => onOpenAsset?.(resolveAsset(l.asset, assetMap))}
+                  title={`${l.asset.title} · ${CONF_LABEL[l.conf]}: ${l.reason}`}
                 >
-                  <b>{asset.title}</b>
-                  <br />
-                  <span className="muted small">
-                    {asset.label ?? asset.source} · {asset.confidence ?? 'unknown'}
+                  <span className="assoc-edge-pair">
+                    <b>{clamp(l.asset.title, 24)}</b>
+                    <span className={`badge ${confTone(l.conf)}`}>{CONF_LABEL[l.conf]}</span>
+                    <span className="badge">{SOURCE_KEY_LABEL[sourceKey(l.asset.source)] ?? (l.asset.source || l.asset.cat)}</span>
                   </span>
+                  <span className="muted small assoc-edge-reason">{l.reason}</span>
                 </div>
               ))}
             </div>
           ) : (
-            <p className="muted">暂无关联资产。</p>
+            <p className="muted">
+              {linksError ? '关联数据加载失败,稍后再试。'
+                : assocMeta?.total_links === 0 ? '后台还没跑过 AI 资产关联 —— 去「资产↔仓关联」跑一次抽样。'
+                : '暂无关联资产。'}
+            </p>
           )}
           {/* 5. Action buttons */}
           <div className="split" style={{ marginTop: 10 }}>

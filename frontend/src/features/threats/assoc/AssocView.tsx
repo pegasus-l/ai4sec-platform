@@ -1,17 +1,15 @@
 import { useMemo, useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
 import {
-  fetchAssociations, fetchAssets,
   type AssocAssetMeta, type AssocBundle, type AssocRepoMeta,
 } from '../../../api/client';
 import type { ThreatAsset, ThreatRepo } from '../../../types/threat';
-import { assetFromItem } from '../threatAdapters';
 import { Card, EmptyState } from '../../../components/ui';
 import { useToast } from '../../../components/Toast';
 import { AssocToolbar, type RailTab, type ViewMode } from './AssocToolbar';
 import { RiskFocusView } from './RiskFocusView';
 import { LaneView } from './LaneView';
 import { useAssociationRun } from './useAssociationRun';
+import { resolveAsset, useAssetLookup, useAssocBundle } from './useAssocData';
 import { deriveNodes, SOURCE_KEY_LABEL, sourceKey, type AssocFilters } from './shared';
 
 interface Props {
@@ -25,13 +23,8 @@ export function AssocView({ openRepo, openAsset }: Props) {
   const { toast, confirm } = useToast();
   const { run, start } = useAssociationRun();
 
-  const { data: bundle, isLoading } = useQuery({
-    queryKey: ['threats-associations'],
-    queryFn: fetchAssociations,
-    staleTime: 60_000,
-    refetchInterval: 60_000,
-  });
-  const { data: assetData } = useQuery({ queryKey: ['threats-assets-lookup'], queryFn: fetchAssets, staleTime: 300_000 });
+  const { data: bundle, isLoading } = useAssocBundle(60_000);
+  const assetMap = useAssetLookup();
 
   const [viewMode, setViewMode] = useState<ViewMode>('focus');
   const [filters, setFilters] = useState<AssocFilters>({ grade: 'ALL', conf: 'ALL', cat: 'ALL', q: '' });
@@ -39,26 +32,7 @@ export function AssocView({ openRepo, openAsset }: Props) {
 
   const derived = useMemo(() => (bundle ? deriveNodes(bundle, filters) : null), [bundle, filters]);
 
-  const assetMap = useMemo(() => {
-    const m = new Map<string, ThreatAsset>();
-    for (const item of assetData?.items ?? []) {
-      const a = assetFromItem(item);
-      m.set(a.id, a);
-    }
-    return m;
-  }, [assetData]);
-
-  const openAssetId = (meta: AssocAssetMeta) => {
-    const full = assetMap.get(String(meta.id));
-    if (full) { openAsset(full); return; }
-    const fallback: ThreatAsset = {
-      id: String(meta.id), title: meta.title, source: meta.source || meta.cat,
-      sourceType: '', category: meta.cat, url: '', summary: '', score: 0,
-      status: 'active', tags: [], raw: {},
-      type: sourceKey(meta.source), confidence: 'unknown', evidence: '',
-    };
-    openAsset(fallback);
-  };
+  const openAssetId = (meta: AssocAssetMeta) => openAsset(resolveAsset(meta, assetMap));
 
   const openRepoId = (meta: AssocRepoMeta) => {
     const name = meta.name || meta.org;

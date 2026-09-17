@@ -27,6 +27,11 @@ export function gradeRank(grade: string): number { return GRADE_RANK[grade] ?? 9
 const CONF_RANK: Record<string, number> = { direct: 0, inferred: 1, weak: 2 };
 export function confRank(conf: string): number { return CONF_RANK[conf] ?? 3; }
 
+/** 置信度描边色(扇区连线 / pill 左边框 / 图例 / 抽屉边条共用)。原先 RiskFocusView 与 LaneView 各存一份。 */
+export const CONF_STROKE: Record<string, string> = {
+  direct: '#34d399', inferred: '#f59e0b', weak: '#fb7185',
+};
+
 /** 归一资产来源 → 品类键(与 ThreatAssets 页 type 口径一致)。 */
 export function sourceKey(source: string): string {
   const s = source.toLowerCase();
@@ -51,10 +56,31 @@ export interface Derived {
   repos: RepoNode[];
 }
 
+/** 置信度排序:direct > inferred > weak;同级按该资产的 risk_in 降序;再相同按链路 id。
+ *
+ * 为什么需要:扇出只画前 MAX_PILLS 个,若按后端返回顺序截断,被藏起来的可能是 inferred 而露出来的是 weak
+ * (线上实测 mindspore/mindspore 12 条 = 3 inferred + 9 weak,前 7 里 5 条 weak,隐藏的 5 里有 1 条 inferred)。
+ * 排序在 deriveNodes 里做一次 → 扇出/泳道/详情卡看到的顺序天然一致(泳道连线几何按行 y 算,与 links 顺序无关),
+ * 并且 `links[0].conf` 这类「取最强证据」的读法(两个视图的徽标)从此才有意义。
+ * 末位用 id 兜底是为了让顺序与后端返回顺序无关 —— 60s 轮询回来时 pill 不会跳位。 */
+export function sortLinksByConfidence(links: readonly AssocLink[]): AssocLink[] {
+  return [...links].sort((a, b) =>
+    confRank(a.conf) - confRank(b.conf)
+    || ((b.asset.risk_in ?? 0) - (a.asset.risk_in ?? 0))
+    || (a.id - b.id));
+}
+
+/** 某个仓的全部关联边(不吃 D/C 视图的过滤器;供抽屉等复用)。
+ *  repoId 用 String 比较:ThreatRepo.id 是 string,而 AssocRepoMeta.id 是 number,实际都是 domain_items.id。 */
+export function repoLinksOf(bundle: AssocBundle | undefined, repoId: string): AssocLink[] {
+  if (!bundle) return [];
+  return sortLinksByConfidence(bundle.links.filter(l => String(l.repo.id) === repoId));
+}
+
 /** 按过滤条件筛 links,并按 asset/repo 各聚成节点。 */
 export function deriveNodes(bundle: AssocBundle, f: AssocFilters): Derived {
   const q = f.q.trim().toLowerCase();
-  const links = bundle.links.filter(l => {
+  const links = sortLinksByConfidence(bundle.links.filter(l => {
     if (f.conf !== 'ALL' && l.conf !== f.conf) return false;
     if (f.grade !== 'ALL' && (l.repo.grade || '') !== f.grade) return false;
     if (f.cat !== 'ALL' && sourceKey(l.asset.source) !== f.cat) return false;
@@ -63,7 +89,7 @@ export function deriveNodes(bundle: AssocBundle, f: AssocFilters): Derived {
       if (!text.includes(q)) return false;
     }
     return true;
-  });
+  }));
   const assetMap = new Map<number, AssetNode>();
   const repoMap = new Map<number, RepoNode>();
   for (const l of links) {

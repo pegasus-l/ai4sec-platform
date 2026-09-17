@@ -1237,6 +1237,13 @@ button.assoc-kpi:hover, .assoc-kpi.on { border-color: color-mix(in srgb, var(--a
 .assoc-edge-pair { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 12px; flex-shrink: 0; }
 .assoc-edge-reason { flex: 1; min-width: 200px; }
 
+/* 抽屉里的关联资产行(仓库详情 → 关联资产):栏宽只有 ~688px,
+   .assoc-edge-pair 的 flex-shrink:0 会把 reason 挤成一条缝 → 改成上下两行,reason 占满整宽。
+   注意抽屉不在 .assoc-view 里,所以那里用 .small(全局 12px),不能用 .tiny(只作用于 .assoc-view)。 */
+.drawer-body .assoc-edge-item { flex-direction: column; align-items: stretch; gap: 4px; }
+.drawer-body .assoc-edge-pair { flex-shrink: 1; }
+.drawer-body .assoc-edge-reason { min-width: 0; line-height: 1.5; }
+
 /* ---- 孤儿 / 未跑 rail ---- */
 .assoc-rail { }
 .assoc-rail-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 6px;
@@ -1256,12 +1263,21 @@ button.assoc-kpi:hover, .assoc-kpi.on { border-color: color-mix(in srgb, var(--a
 .assoc-focus { width: 100%; max-width: 1560px; margin-inline: auto;
   display: grid; grid-template-columns: 640px minmax(0, 1fr); gap: 20px; align-items: start; min-width: 0; }
 .assoc-focus-main { display: flex; flex-direction: column; gap: 12px; min-width: 0; overflow-x: auto; padding-bottom: 4px; }
-.assoc-focus-panel { min-width: 0; }
-.assoc-focus-panel .assoc-asset-list { max-height: 74vh; overflow: auto; padding-right: 4px; }
+/* 右栏常驻:左栏(扇出)会随关联数长到几千 px,右栏若不定高,往下滑就是半屏空白。
+   吸顶 + 自身定高内滚 → 汇总面板整块始终在视口里(表头/列表/图例一起)。
+   calc 里扣掉的 224px 是滚动容器 .view 之上被占掉的高度(.content padding 24×2 + 边框 2 +
+   .content-head ≈114+24 + sticky top 12 + 底部留白 ≈16);偏大的唯一后果是面板略矮(列表内滚),
+   偏小才会把图例挤出可视区,所以宁可偏大。若 .content-head 文案换行变高,只改这一个数。 */
+.assoc-focus-panel { min-width: 0; min-height: 0;  /* 必须:grid item 的 min-height:auto 会顶开 max-height */
+  position: sticky; top: 12px; max-height: calc(100vh - 224px);
+  display: flex; flex-direction: column; }
+.assoc-focus-panel > .assoc-col-head { flex: 0 0 auto; }
+.assoc-focus-panel .assoc-asset-list { flex: 1 1 auto; min-height: 0; overflow: auto; padding-right: 4px; }
+.assoc-focus-panel .assoc-focus-note { flex: 0 0 auto; }
 @media (max-width: 1180px) {
   .assoc-focus { grid-template-columns: minmax(0, 1fr); max-width: none; margin-inline: 0; }
-  .assoc-focus-panel { order: -1; }
-  .assoc-focus-panel .assoc-asset-list { max-height: none; }
+  .assoc-focus-panel { order: -1; position: static; max-height: none; }
+  .assoc-focus-panel .assoc-asset-list { flex: 0 0 auto; max-height: none; }
 }
 .assoc-band { position: relative; }
 .assoc-band.dim { opacity: .28; }
@@ -1280,7 +1296,15 @@ button.assoc-kpi:hover, .assoc-kpi.on { border-color: color-mix(in srgb, var(--a
 .assoc-band-pill.dim { opacity: .16; }
 .assoc-band-pill .assoc-pill-txt { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
 .assoc-band-pill i { font-style: normal; font-size: 10px; }
-.assoc-fan-more { position: absolute; }
+/* 溢出档的「+N 个资产 · 展开全部」/「收起」。高度必须与 RiskFocusView 的 LABEL_H 一致(几何按它算),
+   max-width 防止横向顶出 .assoc-focus-main 的横向滚动条(640 左栏 − PILL_X 408 = 232)。 */
+.assoc-fan-more { position: absolute; box-sizing: border-box; display: inline-flex; align-items: center;
+  height: 22px; max-width: 232px; padding: 0 8px;
+  border: 1px dashed var(--line); border-radius: 999px; background: transparent; color: var(--muted);
+  font-size: 11px; line-height: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  cursor: pointer; transition: color .12s, border-color .12s, background .12s; }
+.assoc-fan-more:hover { color: var(--text); border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+  background: color-mix(in srgb, var(--accent) 8%, transparent); }
 .assoc-focus-note { display: flex; align-items: center; gap: 10px; margin-top: 8px; flex-wrap: wrap; }
 .assoc-focus-note .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
 .assoc-focus-note .dot.direct { background: #34d399; }

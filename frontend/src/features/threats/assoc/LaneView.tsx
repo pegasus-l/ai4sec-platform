@@ -3,7 +3,7 @@ import type { AssocAssetMeta, AssocRepoMeta } from '../../../api/client';
 import { Card } from '../../../components/ui';
 import { ArrowUpRight, X } from 'lucide-react';
 import {
-  clamp, CONF_LABEL, confTone, gradeRank, riskLabel,
+  clamp, CONF_LABEL, CONF_STROKE, confTone, gradeRank, riskLabel,
   SOURCE_KEY_LABEL, sourceKey,
   type Derived,
 } from './shared';
@@ -25,10 +25,6 @@ const GAP = 8;
 const STRIDE = ROW_H + GAP;
 const GAP_W = 56;
 const midY = (i: number) => HEADER_H + GAP + i * STRIDE + ROW_H / 2;
-
-const CONF_STROKE: Record<string, string> = {
-  direct: '#34d399', inferred: '#f59e0b', weak: '#fb7185',
-};
 
 type Active = { kind: 'asset' | 'repo'; id: number } | null;
 
