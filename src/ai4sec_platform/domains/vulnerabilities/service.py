@@ -41,13 +41,75 @@ def slim_material(item: dict[str, Any]) -> dict[str, Any]:
 def _today_start() -> str:
     """今日起点 = 北京时间零点, 换算成 UTC 的 ISO 串(与 created_at 存储格式一致, 可直接字符串比较)。
 
-    流水线每天 14:00Z(=北京 22:00)起跑、跑 2.5-5 小时, 产出落在 16:30-19:20Z
-    = 北京次日 00:30-03:20。按 UTC 零点切的话这批产出会被算进"UTC 昨天":
-    北京 08:00-24:00 打开"今日"永远是空的, 只有凌晨那段窗口才有内容。
-    按北京零点切, 白天打开就能看到当晚那批。
+    现在只是**兜底**: 库里查不到任何跑批记录时才用它(正常情况下窗口由 _batch_window 圈)。
+    2026-09-16 起这一页用的就是它, 但它的前提是"跑批 2.5-5 小时、产出落在北京 00:30-03:20";
+    实际跑批时长随抓取量变, 09-18/09-19 在 22:57/22:52 就跑完了 —— 产出全在零点之前,
+    于是这个窗口里一条都没有, 白天打开永远是空的(**跑得越快越空**)。
     """
     midnight_cst = datetime.now(CST).replace(hour=0, minute=0, second=0, microsecond=0)
     return f"{midnight_cst.astimezone(timezone.utc):%Y-%m-%dT%H:%M:%SZ}"
+
+
+# 素材/事件/知识只有这一条流水线在产(comprehension_probe 之类只做验证, 不产出情报)。
+_BATCH_PIPELINE = "vulnerabilities.full_knowledge_discovery_pipeline"
+
+
+def _to_cst(value: str | None) -> datetime | None:
+    """库里的 UTC ISO 串 → 北京时间(datetime 对象); 解析不了就返回 None。"""
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(CST)
+    except ValueError:
+        return None
+
+
+def _window_payload(row: tuple, *, source: str) -> dict[str, Any]:
+    run_id, started_at, finished_at, status = row
+    start, end = _to_cst(started_at), _to_cst(finished_at)
+    if source == "running" or end is None:
+        label = f"本批({start:%m-%d %H:%M} 起, 跑批中)" if start else "本批(跑批中)"
+    else:
+        label = f"本批({start:%m-%d %H:%M}-{end:%H:%M})" if start else "本批"
+    return {
+        "since": started_at, "source": source, "label": label, "run_id": run_id,
+        "started_at": started_at, "finished_at": finished_at, "status": status,
+    }
+
+
+def _batch_window(conn: sqlite3.Connection) -> dict[str, Any]:
+    """今日情报的窗口 = **最近一批跑批**的开始时间, 而不是日历上的"今天零点"。
+
+    2026-09-20 的改动: 按日历切会把"跑得快"变成一个 bug —— 09-18/09-19 两晚都在北京零点
+    之前跑完, 产出落进"昨天", 这一页整天为空。按"上一批"圈窗口后, 这一页显示的就是最近
+    一批的产出, 与跑批耗时无关。
+    优先取**正在跑的那批**(跑批过程中页面跟着长); 没有在跑的, 取最近一次**成功**的批次。
+    失败/中断的批次不当窗口(它们可能只跑了几分钟, 按它们切会让页面近乎清空) —— 这条规则
+    顺带就是兜底: 今晚跑挂了, 页面退回昨天那批, 而不会变空。
+    """
+    running = conn.execute(
+        "SELECT run_id, started_at, finished_at, status FROM pipeline_runs "
+        "WHERE pipeline_name = ? AND started_at IS NOT NULL AND finished_at IS NULL "
+        "ORDER BY started_at DESC LIMIT 1",
+        (_BATCH_PIPELINE,),
+    ).fetchone()
+    if running is not None:
+        started = _to_cst(running[1])
+        # 兜底: 疑似僵尸 running(重启打断后没被启动恢复收掉)不认, 否则窗口会被它永久钉住。
+        if started is not None and (datetime.now(CST) - started) <= timedelta(hours=12):
+            return _window_payload(running, source="running")
+    done = conn.execute(
+        "SELECT run_id, started_at, finished_at, status FROM pipeline_runs "
+        "WHERE pipeline_name = ? AND status = 'success' AND started_at IS NOT NULL AND finished_at IS NOT NULL "
+        "ORDER BY finished_at DESC LIMIT 1",
+        (_BATCH_PIPELINE,),
+    ).fetchone()
+    if done is not None:
+        return _window_payload(done, source="batch")
+    return {
+        "since": _today_start(), "source": "calendar", "label": "当天零点(北京时间)",
+        "run_id": None, "started_at": None, "finished_at": None, "status": None,
+    }
 
 
 def materials(conn: sqlite3.Connection, *, limit: int = 50, q: str | None = None,
@@ -72,15 +134,18 @@ def materials(conn: sqlite3.Connection, *, limit: int = 50, q: str | None = None
 
 
 def today(conn: sqlite3.Connection, limit: int = 12) -> dict[str, Any]:
-    # 今日情报 = 北京时间当天零点之后产出的素材/事件/知识
-    today_start = _today_start()
-    materials_data = domain_items.list_items(conn, DOMAIN, item_type="material", limit=limit, since=today_start)
+    # 今日情报 = 最近一批跑批(或正在跑的那批)产出的素材/事件/知识, 见 _batch_window
+    window = _batch_window(conn)
+    batch_start = window["since"]
+    materials_data = domain_items.list_items(conn, DOMAIN, item_type="material", limit=limit, since=batch_start)
     materials_data["items"] = [slim_material(item) for item in materials_data["items"]]
-    events_data = _active_events(conn, limit, since=today_start)
-    knowledge_data = domain_items.list_items(conn, DOMAIN, item_type="knowledge", limit=limit, since=today_start)
+    events_data = _active_events(conn, limit, since=batch_start)
+    knowledge_data = domain_items.list_items(conn, DOMAIN, item_type="knowledge", limit=limit, since=batch_start)
     pending_fields = _pending_field_count(knowledge_data["items"])
     return {
         "domain": DOMAIN,
+        # 窗口自述: 前端用它说明"这一页是哪一批", 免得再出现"空了但不知道为什么"
+        "window": window,
         "kpis": {
             "new_poc_count": sum(1 for item in materials_data["items"] if (item.get("payload") or {}).get("material_type") == "poc_exploit"),
             "new_or_updated_event_count": len(events_data["items"]),
