@@ -1,10 +1,12 @@
 #!/bin/bash
 # 比对 deploy/ 与 119 线上文件; 默认只检查, --apply 才回写(密钥类文件永不回写)。
-# 比对时把长度 >=20 的 token 掩掉再比, 避免"密钥不同"被误报为漂移。
+# 比对前只归一化「已知密钥键的值」: OPENCODE_SERVER_PASSWORD=<任意> → <SECRET>。
+# 线上那份带硬编码兜底口令(${REPRO_PASSWORD:-...}), 仓里那份脱敏成纯 ${REPRO_PASSWORD},
+# 这种故意差异不该报漂移。注意别泛化到所有 ${VAR}、也别掩掉变量名 —— 那会掩盖真实改动。
 set -u
 REPO_DEP="$(cd "$(dirname "$0")" && pwd)"
 HOST_DIR="${HOST_DIR:-/opt/ai-security-fusion-v2}"
-MASK='s/[A-Za-z0-9+\/=_-]\{20,\}/<TOKEN>/g'
+MASK='s/\(OPENCODE_SERVER_PASSWORD=\)[^[:space:]]*/\1<SECRET>/g;s/\([=:][[:space:]]*\"\?\)[A-Za-z0-9+\/=_-]\{20,\}/\1<TOKEN>/g'
 
 MAP=(
   "docker-compose.yml:docker-compose.yml"

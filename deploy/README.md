@@ -31,6 +31,10 @@
 
 ## 已知坑
 
-- `repro-web/Dockerfile.repro` 与 `repro-web/docker-compose.yml` 这两个 09-01 的历史副本**已于 09-18 删除**:它们早已与线上分叉(线上更新过两轮),留着只会误导。真源见本目录顶层同名文件。
+- 线上 `docker-compose.yml` 的 `OPENCODE_SERVER_PASSWORD` 带一个**硬编码兜底口令**
+  (`${REPRO_PASSWORD:-<字面量>}`);本目录入库时脱敏为纯 `${REPRO_PASSWORD}` —— 两边因此**故意不同**,
+  漂移检测已把这种写法归一化,不会误报。
+
+- `repro-web/Dockerfile.repro` 与 `repro-web/docker-compose.yml` 这两个 09-01 的历史副本**已删除**:它们早已与线上分叉(线上更新过两轮),留着只会误导。真源见本目录顶层同名文件。
 - `Dockerfile.repro` 的 `COPY repro-auth.json` / `COPY repro-model.json` 依赖顶层同名文件存在。
 - 重建 repro 镜像:`cd /opt/ai-security-fusion-v2 && docker compose build repro`(注意 compose 项目名是 `fusion-v2`)。
