@@ -57,24 +57,59 @@ class Crawl4aiConnector:
             selected.append(candidate)
 
         prefer_url_fetch = bool(params.get("prefer_url_fetch", False))
-        # idle timeout: if NO page completes within this window, remaining are stuck
-        idle_timeout = policy.slow_site_timeout_seconds + 30
-        executor = ThreadPoolExecutor(max_workers=min(max_concurrency, len(selected) or 1))
-        pending = {executor.submit(_crawl_candidate, candidate, policy=policy, prefer_url_fetch=prefer_url_fetch): candidate for candidate in selected}
+        # idle timeout: 在飞的那几页若这么久都没一页完成, 就认定它们卡死了。
+        # 可用 crawl_idle_timeout_seconds 覆盖(默认 = 慢站超时 + 30s, 上限 30 分钟), 便于按站点调整与测试。
+        idle_timeout = _bounded_int(params.get("crawl_idle_timeout_seconds"), policy.slow_site_timeout_seconds + 30, maximum=1800)
+        # 卡死时**只放弃在飞的那几页**(逐条记成 idle_timeout), 换一个新执行器继续抓剩下的 ——
+        # 2026-09-20 之前这里是把剩下全部 cancel 后整轮 break, 于是一个卡住的站点就能带走整批:
+        # 09-17/18/19 分别只抓到 216/86/86 篇(候选 359/377/363), step 与 run 仍是 success,
+        # 唯一痕迹只有 errors 里一条 idle_timeout —— 静默丢了约 3/4 的候选。
+        # stall_limit 是最后一道闸: 连续卡死到上限就判定站点/浏览器整体异常, 剩下的不再试(但留下明确痕迹)。
+        stall_limit = _bounded_int(params.get("crawl_stall_limit"), 10, maximum=50)
+        workers = max(1, min(max_concurrency, len(selected) or 1))
+        remaining = list(selected)
+        stalled_urls: list[str] = []
+        stall_events = 0
+        abandoned = 0
+        executor = ThreadPoolExecutor(max_workers=workers)
+        pending: dict[Any, dict[str, Any]] = {}
+
+        def _submit_next() -> None:
+            """保持 workers 个任务在飞(滚动提交, 而不是一次性投满队列)。"""
+            while remaining and len(pending) < workers:
+                candidate = remaining.pop(0)
+                pending[executor.submit(_crawl_candidate, candidate, policy=policy, prefer_url_fetch=prefer_url_fetch)] = candidate
+
         try:
+            _submit_next()
             while pending:
                 done, _ = wait(list(pending.keys()), timeout=idle_timeout, return_when=FIRST_COMPLETED)
                 if not done:
-                    # No page completed within idle_timeout — kill remaining stuck futures
-                    for future in pending:
-                        future.cancel()
-                    candidate = pending[future]
-                    item = _failed(candidate, "crawl_idle_timeout", failure_reason="idle_timeout")
-                    items.append(item)
-                    if callable(on_item):
-                        on_item(item, len(items), len(selected))
-                    errors.append(f"{candidate.get('url')}: idle_timeout")
-                    break
+                    # 在飞的这几页在 idle_timeout 内一页都没完成 —— 放弃它们, 继续抓剩下的。
+                    stuck = list(pending.values())
+                    pending.clear()
+                    executor.shutdown(wait=False, cancel_futures=True)
+                    stall_events += 1
+                    for candidate in stuck:
+                        item = _failed(candidate, "crawl_idle_timeout", failure_reason="idle_timeout")
+                        items.append(item)
+                        stalled_urls.append(str(candidate.get("url") or ""))
+                        if callable(on_item):
+                            on_item(item, len(items), len(selected))
+                        errors.append(f"{candidate.get('url')}: idle_timeout")
+                    if stall_events >= stall_limit:
+                        abandoned = len(remaining)
+                        for candidate in remaining:
+                            item = _failed(candidate, "crawl_idle_stall_limit", failure_reason="idle_stall_limit")
+                            items.append(item)
+                            if callable(on_item):
+                                on_item(item, len(items), len(selected))
+                            errors.append(f"{candidate.get('url')}: idle_stall_limit")
+                        remaining.clear()
+                        break
+                    executor = ThreadPoolExecutor(max_workers=workers)
+                    _submit_next()
+                    continue
                 for future in done:
                     candidate = pending.pop(future)
                     try:
@@ -86,6 +121,7 @@ class Crawl4aiConnector:
                         on_item(item, len(items), len(selected))
                     if not item.get("success"):
                         errors.append(f"{item.get('url')}: {item.get('failure_reason') or item.get('error')}")
+                    _submit_next()
         finally:
             executor.shutdown(wait=False, cancel_futures=True)
 
@@ -101,6 +137,11 @@ class Crawl4aiConnector:
                 "max_retries": policy.max_retries,
                 "max_concurrency": max_concurrency,
                 "deduplicated": len(candidates[:max_items]) - len(selected),
+                # 卡死/放弃的痕迹(以前只有 errors 里一条文本, 现在可以量化):
+                "idle_stall_events": stall_events,
+                "idle_stalled": len(stalled_urls),
+                "idle_abandoned": abandoned,
+                "idle_stalled_urls": stalled_urls[:10],
             },
             errors=errors,
         )
