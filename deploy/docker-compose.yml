@@ -1,0 +1,83 @@
+services:
+  # ─── ASIS 单容器 ───
+  asis:
+    build:
+      context: ./asis
+      dockerfile: Dockerfile
+      args:
+        AI4SEC_API_URL: http://ai4sec:8100
+        BACKEND_API_URL: http://127.0.0.1:8000
+    ports:
+      - 8091:3000
+      - 8004:8000
+    env_file:
+      - ./asis/.env
+      - ./.env
+    environment:
+      AI4SEC_API_URL: http://ai4sec:8100
+      BACKEND_API_URL: http://127.0.0.1:8000
+      DATABASE_URL: sqlite:///./data/asis.db
+      REDIS_URL: 
+    volumes:
+      - asis-data:/app/data
+    depends_on:
+      - ai4sec
+    restart: unless-stopped
+    networks:
+      - fusion-net
+
+  # ─── ai4sec 单容器 ───
+  ai4sec:
+    build:
+      context: ./ai4sec
+      dockerfile: Dockerfile
+    ports:
+      - 8101:8100
+    env_file:
+      - ./ai4sec/.env
+      - ./.env
+    environment:
+      # 2026-09-16 切到 136 生产 ASIS; 旧值(测试容器): http://136.113.31.153:8090
+      ASIS_API_URL: http://136.113.31.153:8092
+      REPRO_API_URL: http://repro:4096
+    volumes:
+      - ai4sec-data:/app/output
+    restart: unless-stopped
+    networks:
+      - fusion-net
+
+  # ─── 复现 单容器 ───
+  repro:
+    build:
+      context: .
+      dockerfile: Dockerfile.repro
+    ports:
+      - 4097:4096
+    environment:
+      - OPENCODE_SERVER_PASSWORD=${REPRO_PASSWORD}
+    command: >
+      sh -c "mkdir -p /workspace/.repro-web/nginx &&
+             cp -n /opt/repro-web/register.py /opt/repro-web/watchdog.py /workspace/.repro-web/ 2>/dev/null;
+             cp -n /opt/repro-web/nginx/nginx.conf /opt/repro-web/nginx/tasks.conf /workspace/.repro-web/nginx/ 2>/dev/null;
+             cp -f /opt/repro-web/watchdog.sh /workspace/.repro-web-watchdog.sh 2>/dev/null;
+             chmod +x /workspace/.repro-web-watchdog.sh 2>/dev/null;
+             setsid sh /workspace/.repro-web-watchdog.sh >> /workspace/.repro-web/watchdog.log 2>&1 &
+             opencode serve --hostname 0.0.0.0 --port 4096"
+    volumes:
+      - repro-workspace:/workspace
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 2g
+    cpus: 2.0
+    restart: unless-stopped
+    networks:
+      - fusion-net
+
+volumes:
+  asis-data:
+  ai4sec-data:
+  repro-workspace:
+
+networks:
+  fusion-net:
+    driver: bridge

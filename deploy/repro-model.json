@@ -1,0 +1,12 @@
+{
+  "recent": [
+    {
+      "providerID": "alibaba-cn",
+      "modelID": "deepseek-v4-flash-0731"
+    }
+  ],
+  "favorite": [],
+  "variant": {
+    "alibaba-cn/deepseek-v4-flash-0731": "default"
+  }
+}

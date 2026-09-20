@@ -1,0 +1,8 @@
+# 含密钥, 永不入库(线上真文件在同目录, 被此规则排除)
+.env
+repro-auth.json
+repro-opencode.jsonc
+# 备份/临时
+*.bak
+*.bak.*
+*.bak-*

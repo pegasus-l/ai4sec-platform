@@ -1,0 +1,46 @@
+// 脱敏示例: 真实 apiKey 不入库(该文件被 .gitignore 排除)。
+// 线上真文件: /opt/ai-security-fusion-v2/repro-opencode.jsonc
+// 改真 key 后需重建 repro 镜像(Dockerfile.repro COPY 该文件)。
+{
+  "$schema": "https://opencode.ai/config.json",
+  "permission": "allow",
+  "provider": {
+    "alibaba-cn": {
+      "options": {
+        "baseURL": "https://az.gptplus5.com/v1",
+        "apiKey": "REPLACE_WITH_REAL_KEY"
+      },
+      "models": {
+        "deepseek-v4-flash-0731": {
+          "id": "deepseek-v4-flash-0731",
+          "name": "DeepSeek V4 Flash 0731",
+          "family": "deepseek-flash",
+          "attachment": false,
+          "reasoning": true,
+          "tool_call": true,
+          "interleaved": {
+            "field": "reasoning_content"
+          },
+          "structured_output": true,
+          "temperature": true,
+          "modalities": {
+            "input": [
+              "text"
+            ],
+            "output": [
+              "text"
+            ]
+          },
+          "limit": {
+            "context": 1000000,
+            "output": 384000
+          },
+          "cost": {
+            "input": 0.14,
+            "output": 0.28
+          }
+        }
+      }
+    }
+  }
+}
