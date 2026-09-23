@@ -200,7 +200,7 @@ function CapabilityToday({ items, stats, openDetail }: { items: CapabilityItem[]
 
   return <div className="grid">
     <div className="grid cols-4">
-      <MetricCard label="今日能力" value={items.length} hint="高潜力候选" tone="green" />
+      <MetricCard label="今日能力" value={items.length} hint="最近 24 小时新增" tone="green" />
       <MetricCard label="能力库" value={stats.total} hint="已评分能力资产" tone="sky" />
       <MetricCard label="Web 项目" value={stats.web_count} hint="自带 Web 界面" tone="amber" />
       <MetricCard label="未分类" value={stats.unclassified} hint="待 Web 分类" tone="violet" />

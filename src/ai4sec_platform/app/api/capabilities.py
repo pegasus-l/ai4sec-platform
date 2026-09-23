@@ -22,7 +22,7 @@ import asyncio
 import json
 import socket
 import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -109,10 +109,16 @@ def _slim_repro_runs(items: Any) -> None:
 # ============================================================================
 @router.get("/today")
 def today(limit: int = Query(200, ge=1, le=500), conn: sqlite3.Connection = Depends(get_db)) -> dict:
-    """今日能力: 只返回当日(UTC)新产出的能力卡, 不再返回历史高分 TOP-N。
-    created_at >= 今日零点; 当天新增不足 limit 就显示实际数量, 不硬凑高分旧项目。"""
-    today_start = f"{datetime.now(timezone.utc):%Y-%m-%d}T00:00:00Z"
-    data = domain_items.today(conn, DOMAIN, limit=limit, since=today_start)
+    """今日能力: 窗口 = **最近 24 小时滚动**, 不再按日历上的"今天"切。
+
+    2026-09-23: 原口径是 UTC 零点(= 北京时间 08:00), 于是北京凌晨 0-8 点产出的条目
+    被算进"昨天"而消失(实测 2026-09-23 09:10 北京时: UTC 窗口只剩 2 条, 北京日应有 9 条)。
+    这条线每 15 分钟跑一次(近 24h 跑 81 次, 其中 61 次新增 0 条), 所以不能照搬漏洞页
+    「最近一批跑批」的口径 —— 单次产出中位数是 0, 页面会基本为空; 滚动 24h 任何时候都有内容。
+    """
+    since = f"{datetime.now(timezone.utc) - timedelta(hours=24):%Y-%m-%dT%H:%M:%SZ}"
+    data = domain_items.today(conn, DOMAIN, limit=limit, since=since)
+    data["window"] = {"since": since, "hours": 24, "label": "最近 24 小时"}
     # 今日能力与能力库列表同形(卡片/表格读同一批键), 同样摘零引用重键 —— 见 _ITEM_PAYLOAD_DROP_KEYS
     _slim_items(data.get("items"))
     return data
