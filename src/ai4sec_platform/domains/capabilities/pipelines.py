@@ -158,10 +158,15 @@ class SelectConversionCandidatesStep:
 
     def run(self, context: PipelineContext) -> StepResult:
         limit = int(context.params.get("conversion_limit", 20))
-        items = repo.list_domain_items(context.conn, "capabilities", item_type="capability", limit=limit * 2)
+        # 取数窗口必须覆盖全表: 分数排序发生在 SQL 里, 而 repro_status 过滤在 Python 里,
+        # 窗口若按 limit*2 提前截断, 排名靠后的"复现成功"条目永远进不了候选。
+        # 实测 2026-09-24: 默认参数下窗口=分数前 40 名(门槛 83.25), 而当时 3 条 success
+        # 有 2 条排在第 175 / 675 名 → 候选恒为空。整表写法同本文件上方两处。
+        items = repo.list_domain_items(context.conn, "capabilities", item_type="capability",
+                                       limit=10000, sort="score")
         candidates = [
             it for it in items
-            if (it.get("payload") or {}).get("repro_status") == "success"
+            if (it.get("payload") or {}).get("repro_status") in ("success", "succeeded")
             and not (it.get("payload") or {}).get("conversion_status", "").startswith(("持续观察", "已转化"))
         ][:limit]
         context.outputs["conversion_candidates"] = candidates

@@ -164,7 +164,7 @@ export function RepoDrawerContent({ repo: initialRepo, onViewAssoc, onOpenAsset 
         )}
       </Card>
 
-      <div className="grid cols-2">
+      <div className="grid">
         {/* 3. Score breakdown */}
         <Card className="detail-card">
           <h3>评分拆解</h3>
