@@ -329,7 +329,7 @@
     .tree-node-row .node-count { color: var(--faint); font-size: 10px; }
     .tree-empty { padding: 8px 9px; color: var(--faint); font-size: 12px; }
     .relation-note { border: 1px dashed rgba(245,158,11,.32); background: rgba(245,158,11,.08); border-radius: 14px; padding: 11px; color: #fde68a; font-size: 12px; line-height: 1.55; }
-    .drawer-mask { position: fixed; inset: 0; z-index: 20; background: rgba(0, 0, 0, 0.3); opacity: 0; pointer-events: none; transition: opacity .18s; }
+    .drawer-mask { position: fixed; inset: 0; z-index: 20; background: rgba(0, 0, 0, 0.12); opacity: 0; pointer-events: none; transition: opacity .18s; }
     .drawer-mask.open { opacity: 1; pointer-events: auto; }
     .drawer { position: fixed; top: 0; right: 0; z-index: 21; height: 100%; width: min(720px, 92vw); padding: 16px; transform: translateX(102%); transition: transform .2s ease; }
     .drawer.open { transform: translateX(0); }
@@ -525,7 +525,7 @@
 .drawer-detail .field-grid > .field b { margin-top: 7px; }
 .drawer-timeline { margin-top: 2px; }
 .drawer-detail .timeline-item { display: grid; gap: 5px; min-width: 0; }
-.vuln-page .drawer-mask { background: rgba(0, 0, 0, 0.3); backdrop-filter: blur(3px); }
+.vuln-page .drawer-mask { background: rgba(0, 0, 0, 0.12); }
 .vuln-page .drawer { top: 14px; right: 14px; bottom: 14px; width: min(720px,calc(100vw - 28px)); height: auto; padding: 0; }
 .vuln-page .drawer-panel { height: 100%; border-color: rgba(148,163,184,.24); background: linear-gradient(180deg,var(--panel),rgba(0, 0, 0, 0.85)); box-shadow: 0 28px 90px rgba(0,0,0,.58); }
 .vuln-page .drawer-head { padding: 18px 18px 14px; }
@@ -1097,7 +1097,7 @@
 :root.light .table-card,
 :root.light .table-shell,
 :root.light .data-table { background: #ffffff !important; }
-:root.light .drawer-mask { background: rgba(0, 0, 0, 0.3) !important; }
+:root.light .drawer-mask { background: rgba(0, 0, 0, 0.12) !important; }
 :root.light .drawer,
 :root.light .drawer-panel,
 :root.light .drawer-head { background: #ffffff !important; color: var(--text) !important; }
