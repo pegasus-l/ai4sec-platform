@@ -476,7 +476,8 @@ def list_threat_links(conn: sqlite3.Connection, *, domain: str = "threats") -> l
                l.reason, l.human_status, l.created_at, l.updated_at,
                a.title AS asset_title, a.source AS asset_source, a.score AS asset_score,
                a.payload_json AS asset_payload_json,
-               r.title AS repo_title, r.score AS repo_score, r.payload_json AS repo_payload_json
+               r.title AS repo_title, r.score AS repo_score, r.source_url AS repo_source_url,
+               r.payload_json AS repo_payload_json
         FROM threat_links l
         JOIN domain_items a ON a.id = l.asset_id AND a.domain = ? AND a.item_type = 'asset'
         JOIN domain_items r ON r.id = l.repo_id AND r.domain = ? AND r.item_type = 'target'

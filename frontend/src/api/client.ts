@@ -46,6 +46,15 @@ export async function postJson<T>(path: string, body?: unknown): Promise<T> {
   return response.json() as Promise<T>;
 }
 
+export async function deleteJson<T>(path: string): Promise<T> {
+  const response = await fetch(BASE + path, { method: 'DELETE', cache: 'no-store' });
+  if (response.status === 401) notifyAuthRequired();  // 会话过期: 让横幅出来(后端 401 JSON)
+  if (!response.ok) {
+    throw new Error(`${path}: ${response.status}`);
+  }
+  return response.json() as Promise<T>;
+}
+
 export async function fetchAssets(): Promise<{ items: Record<string, unknown>[]; count: number }> {
   return getJson('/api/threats/assets?limit=9999');
 }
@@ -54,24 +63,13 @@ export async function fetchToday(): Promise<{ items: Record<string, unknown>[] }
   return getJson('/api/threats/today?limit=30');
 }
 
-export async function fetchTargets(page: number = 1, perPage: number = 50, surface: string = '', grade: string = '', search: string = ''): Promise<{ items: Record<string, unknown>[]; total: number; page: number; per_page: number; pages: number }> {
+export async function fetchTargets(page: number = 1, perPage: number = 50, surface: string = '', grade: string = '', search: string = '', includeFiltered: boolean = false): Promise<{ items: Record<string, unknown>[]; total: number; page: number; per_page: number; pages: number; filtered_hidden: number }> {
   const params = new URLSearchParams({ page: String(page), per_page: String(perPage), fields: 'summary' });
   if (surface) params.set('surface', surface);
   if (grade) params.set('grade', grade);
   if (search) params.set('search', search);
+  if (includeFiltered) params.set('include_filtered', 'true');
   return getJson(`/api/threats/targets?${params.toString()}`);
-}
-
-export async function fetchTrackingQueue(): Promise<{ items: Record<string, unknown>[] }> {
-  return getJson('/api/threats/tracking-queue');
-}
-
-export async function trackTarget(itemId: string | number, priority: string = 'P1', reason: string = ''): Promise<{ status: string; title: string }> {
-  return postJson(`/api/threats/targets/${itemId}/track`, { priority, reason });
-}
-
-export async function trackAsset(itemId: string | number, priority: string = 'P1', reason: string = ''): Promise<{ status: string; title: string }> {
-  return postJson(`/api/threats/assets/${itemId}/track`, { priority, reason });
 }
 
 export async function fetchTargetDetail(itemId: string | number): Promise<Record<string, unknown>> {
@@ -134,6 +132,8 @@ export interface AssocRepoMeta {
   grade: string;
   cve: number;
   risk: number | null;
+  /** 仓库链接(来自 domain_items.source_url),让关联页打开的抽屉副标题与代码仓页一致。 */
+  url?: string;
 }
 
 export interface AssocAssetMeta {

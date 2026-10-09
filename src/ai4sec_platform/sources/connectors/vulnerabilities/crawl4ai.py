@@ -11,6 +11,7 @@ from html import unescape
 from typing import Any, Callable
 
 from ai4sec_platform.domains.vulnerabilities.crawl_policies import VulnerabilityCrawlPolicy
+from ai4sec_platform.proc_reaper import reap_and_report, reap_browser_zombies, reaped_total
 from ai4sec_platform.schemas.sources import SourceFetchRequest, SourceHealth
 from ai4sec_platform.sources.result import SourceFetchResult
 
@@ -57,6 +58,8 @@ class Crawl4aiConnector:
             selected.append(candidate)
 
         prefer_url_fetch = bool(params.get("prefer_url_fetch", False))
+        # 本轮回收量的起点(见文件末尾的 zombies_reaped)
+        reaped_before = reaped_total()
         # idle timeout: 在飞的那几页若这么久都没一页完成, 就认定它们卡死了。
         # 可用 crawl_idle_timeout_seconds 覆盖(默认 = 慢站超时 + 30s, 上限 30 分钟), 便于按站点调整与测试。
         idle_timeout = _bounded_int(params.get("crawl_idle_timeout_seconds"), policy.slow_site_timeout_seconds + 30, maximum=1800)
@@ -125,6 +128,13 @@ class Crawl4aiConnector:
         finally:
             executor.shutdown(wait=False, cancel_futures=True)
 
+        # 收尸 + 快照: 浏览器子进程正常退出后没人 wait(PID 1 就是平台自己, 无 tini),
+        # 不回收会一直占着容器 cgroup pids 名额, 攒满后威胁跑批 can't start new thread。
+        # 逐页回收发生在 _crawl4ai_sync,所以这里报的是"本轮累计回收量"(用累计计数器算差值,
+        # 而不是此刻又收了几个 —— 每页都收过了, 快照必然是 0)。
+        reap = reap_and_report()
+        reaped_this_fetch = reaped_total() - reaped_before
+
         return SourceFetchResult(
             source_name=request.source_name,
             connector_name=self.connector_name,
@@ -142,6 +152,11 @@ class Crawl4aiConnector:
                 "idle_stalled": len(stalled_urls),
                 "idle_abandoned": abandoned,
                 "idle_stalled_urls": stalled_urls[:10],
+                # 进程卫生: 本轮回收了几个浏览器僵尸、还剩几个、pids 占用(顶到 max 就是事故前兆)
+                "zombies_reaped": reaped_this_fetch,
+                "zombies_left": reap.get("zombies", 0),
+                "pids_current": reap.get("pids_current", 0),
+                "pids_max": reap.get("pids_max", 0),
             },
             errors=errors,
         )
@@ -239,7 +254,13 @@ def _crawl4ai_sync(candidate: dict[str, Any], *, policy: VulnerabilityCrawlPolic
             )
             return _success(candidate, markdown=markdown, mode="crawl4ai", metadata=metadata)
 
-    return asyncio.run(run())
+    try:
+        return asyncio.run(run())
+    finally:
+        # 每一页抓完立刻收尸: 一页会留下约 4 个 node/chromium 僵尸, 整轮抓几百页就是几百个,
+        # 等整轮结束再收太晚(中途就可能把 pids 顶满)。回收只按 pid 认自己名下、名字像
+        # 浏览器/驱动的进程, 不碰其它子进程 —— 详见 ai4sec_platform/proc_reaper.py。
+        reap_browser_zombies()
 
 
 def _construct_supported(factory: Any, **kwargs: Any) -> Any:

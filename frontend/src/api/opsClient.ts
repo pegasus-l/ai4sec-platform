@@ -1,4 +1,4 @@
-import { getJson } from './client';
+import { getJson, postJson, deleteJson } from './client';
 
 export interface OpsOverviewData {
   db_stats: { repos: number; assets: number; today: number; queue: number; cve_unique: number; pipeline_runs: number; evidence_items: number; quality_audits: number };
@@ -8,23 +8,49 @@ export interface OpsOverviewData {
   ai_associations: Array<{ item_id: number; title: string; source: string; association_count: number; summary: string; associations: unknown[] }>;
 }
 
-export interface OpsSourceItem {
-  source: string;
+/** 一个采集目标(组织 / hub id / 站点),内置或人工添加。 */
+export interface OpsSourceTarget {
+  id: number | null;
+  source_key: string;
+  target_type: string;
+  /** 组织名 / hub_id / 站点 URL,采集时真正用的标识。 */
+  identifier: string;
+  label: string;
+  enabled: boolean;
+  /** 人工添加者(取自入口网关会话;为空表示内置目标,代码里带的)。 */
+  created_by: string;
+  created_at: string;
+  /** true = 代码里内置(不可删,只能停用);false = 人工添加。 */
+  builtin: boolean;
+}
+
+/** 一个数据源(具体到网站/接口),页面主体就是它。 */
+export interface OpsSourceGroup {
+  key: string;
+  name: string;
+  /** repo / asset / vuln / material */
+  kind: string;
+  /** 具体站点,如 gitcode.com、atomgit.com、hiascend.com。 */
+  site: string;
+  entry_url: string;
+  collector: string;
+  note: string;
+  targets: OpsSourceTarget[];
   records: number;
   last_sync: string;
   days_ago: number | null;
-  total_items: number;
+  /** ok=今日有采集 / stale=超过 2 天 / never=从未采集 / pending=人工登记待接入 */
+  status: 'ok' | 'stale' | 'never' | 'pending';
+  builtin: boolean;
 }
 
-export interface OpsQualityItem {
-  id: number;
-  domain: string;
-  audit_type: string;
-  status: string;
-  score: number;
-  summary: string;
-  details: Record<string, unknown>;
-  created_at: string;
+export interface OpsSourcesData {
+  groups: OpsSourceGroup[];
+  /** 人工登记但还没有对应采集器的新站点(需要开发接入)。 */
+  pending_sources: OpsSourceTarget[];
+  total_records: number;
+  /** 可添加采集目标的既有数据源 key(下拉选项)。 */
+  addable_keys: Array<{ key: string; name: string; target_type: string; hint: string }>;
 }
 
 export interface OpsAISummaryData {
@@ -70,12 +96,26 @@ export async function fetchOpsOverview(): Promise<OpsOverviewData> {
   return getJson('/api/ops/overview');
 }
 
-export async function fetchOpsSources(): Promise<{ items: OpsSourceItem[] }> {
+export async function fetchOpsSources(): Promise<OpsSourcesData> {
   return getJson('/api/ops/sources');
 }
 
-export async function fetchOpsQuality(): Promise<{ items: OpsQualityItem[]; kpis: { total: number; passed: number; warned: number; failed: number } }> {
-  return getJson('/api/ops/quality');
+/** 人工添加采集目标(仓库组织 / hub id)。立即生效:下一轮采集就会带上。 */
+export async function addSourceTarget(input: { source_key: string; identifier: string; label?: string; target_type?: string }): Promise<{ status: string; target: OpsSourceTarget }> {
+  return postJson('/api/ops/sources/targets', input);
+}
+
+/** 人工登记一个全新数据源(站点)。落库为待接入,需要开发采集器后才会有数据。 */
+export async function addSourceSite(input: { site_url: string; label: string; note?: string }): Promise<{ status: string; source: OpsSourceTarget }> {
+  return postJson('/api/ops/sources/sites', input);
+}
+
+export async function setSourceTargetEnabled(id: number, enabled: boolean): Promise<{ status: string; id: number; enabled: boolean }> {
+  return postJson(`/api/ops/sources/targets/${id}/${enabled ? 'enable' : 'disable'}`);
+}
+
+export async function deleteSourceTarget(id: number): Promise<{ status: string; id: number }> {
+  return deleteJson(`/api/ops/sources/targets/${id}`);
 }
 
 export async function fetchOpsAISummary(): Promise<OpsAISummaryData> {

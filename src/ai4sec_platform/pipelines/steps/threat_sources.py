@@ -3,7 +3,10 @@ from __future__ import annotations
 import sys
 from dataclasses import dataclass
 
+from ai4sec_platform.domains.threats import source_registry
 from ai4sec_platform.domains.threats.adapters.huawei_sources import (
+    DEFAULT_ASCENDHUB_TARGETS,
+    DEFAULT_LIVE_ORGS,
     _collect_repo_records,
     _collect_live_assets,
     _requested_sources,
@@ -14,13 +17,34 @@ from ai4sec_platform.pipelines.results import StepResult
 from ai4sec_platform.sources.registry import SourceRegistry
 
 
+def merge_manual_targets(conn, params: dict) -> dict:
+    """把「数据源页」人工添加的采集目标并进 params(2026-10-08 领导反馈 #5)。
+
+    约定:**显式传入的 params 优先**。pipeline 里写死了 orgs/ascendhub_targets 就按它跑,
+    只有没给时才 = 代码内建默认值 + 库里启用的人工目标 —— 这样既让页面上的添加"下一轮就生效",
+    又不改变任何既有 pipeline 的行为(不传参数的调用完全等价于改动前)。
+    """
+    try:
+        extra = source_registry.load_collect_params(conn)
+    except Exception:  # 建表/库异常不能拖垮采集主流程
+        return params
+    if not extra.get("orgs") and not extra.get("ascendhub_targets"):
+        return params
+    merged = dict(params)
+    if extra["orgs"] and not merged.get("orgs"):
+        merged["orgs"] = [*DEFAULT_LIVE_ORGS, *extra["orgs"]]
+    if extra["ascendhub_targets"] and not merged.get("ascendhub_targets"):
+        merged["ascendhub_targets"] = [*DEFAULT_ASCENDHUB_TARGETS, *extra["ascendhub_targets"]]
+    return merged
+
+
 @dataclass
 class CollectHuaweiSourcesStep:
     name: str = "collect_huawei_sources"
     step_type: str = "collect_sources"
 
     def run(self, context: PipelineContext) -> StepResult:
-        params = context.params
+        params = merge_manual_targets(context.conn, context.params)
 
         # Always use live path with incremental DB writes — cache path had no incremental progress
         # and refresh_source_cache=true means cache is re-fetched anyway (cache files are pointless)

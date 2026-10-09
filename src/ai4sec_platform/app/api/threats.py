@@ -3,13 +3,12 @@ from __future__ import annotations
 import sqlite3
 from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel
 
 from ai4sec_platform.app.dependencies import get_db
 from ai4sec_platform.domains.threats import linkage as threat_linkage
+from ai4sec_platform.domains.threats import repo_filter
 from ai4sec_platform.domains.threats import service as threat_service
 from ai4sec_platform.services import domain_items
-from ai4sec_platform.services import operations
 from ai4sec_platform.db import repositories as repo
 from ai4sec_platform.models.router import LLMRouter
 from ai4sec_platform.pipelines.steps.threat_risk import _semantic_review_prompt, _semantic_review_payload, _build_assessment
@@ -31,34 +30,66 @@ def targets(
     surface: str = Query("", description="filter by attack surface"),
     grade: str = Query("", description="filter by grade (A/B/C/D)"),
     search: str = Query("", description="search in title/org"),
+    include_filtered: bool = Query(False, description="true=连同被规则判为无效的仓一起返回(前端「显示已过滤」开关)"),
     conn: sqlite3.Connection = Depends(get_db),
 ) -> dict:
-    """Paginated targets with optional filtering. Returns lightweight summary by default."""
-    offset = (page - 1) * limit
+    """Paginated targets with optional filtering. Returns lightweight summary by default.
 
-    # Build query with filters
-    where_clauses = ["domain = ?", "item_type = ?"]
+    默认隐藏被 repo_filter 判为无效的仓(空壳/样例/镜像/文档…),并在 filtered_hidden 里给出
+    隐藏条数;include_filtered=true 时全量返回,每行带 filtered / filtered_reason / filtered_code。
+    判定表还没有数据时整个过滤逻辑自动退化为原行为(等价于 include_filtered=true)。
+    """
+    offset = (page - 1) * limit
+    filtering = repo_filter.table_ready(conn)
+
+    # Build query with filters(加了 JOIN 之后所有列名都要带 d. 前缀,否则列名歧义)
+    where_clauses = ["d.domain = ?", "d.item_type = ?"]
     params = [DOMAIN, "target"]
     if surface:
-        where_clauses.append("json_extract(payload_json, '$.attack_surface.signals.primary_attack_surface') = ?")
+        where_clauses.append("json_extract(d.payload_json, '$.attack_surface.signals.primary_attack_surface') = ?")
         params.append(surface)
     if grade:
-        where_clauses.append("json_extract(payload_json, '$.attack_surface.grade') = ?")
+        where_clauses.append("json_extract(d.payload_json, '$.attack_surface.grade') = ?")
         params.append(grade)
     if search:
-        where_clauses.append("(title LIKE ? OR source LIKE ?)")
+        where_clauses.append("(d.title LIKE ? OR d.source LIKE ?)")
         params.extend([f"%{search}%", f"%{search}%"])
     where_sql = " AND ".join(where_clauses)
 
-    # Get total count
-    total = conn.execute(f"SELECT COUNT(*) FROM domain_items WHERE {where_sql}", params).fetchone()[0]
+    join_sql, join_params, visible_sql, hidden_sql = "", [], "", ""
+    if filtering:
+        # 判定表为空时 f.filtered 恒为 NULL → COALESCE 成 0 → 一行都不会被隐藏
+        join_sql = " LEFT JOIN threat_repo_filters f ON f.item_id = d.id AND f.domain = ?"
+        join_params = [DOMAIN]
+        visible_sql = " AND COALESCE(f.filtered, 0) = 0"
+        hidden_sql = " AND COALESCE(f.filtered, 0) = 1"
+    where_filtered = where_sql + ("" if include_filtered else visible_sql)
+
+    # Get total count(隐藏条数与可见条数分别统计,前端要显示"已隐藏 N 个")
+    base_from = f"FROM domain_items d{join_sql}"
+    base_params = [*join_params, *params]
+    total = conn.execute(f"SELECT COUNT(*) {base_from} WHERE {where_filtered}", base_params).fetchone()[0]
+    filtered_hidden = 0
+    if filtering:
+        filtered_hidden = conn.execute(
+            f"SELECT COUNT(*) {base_from} WHERE {where_sql}{hidden_sql}", base_params
+        ).fetchone()[0]
 
     # Get items
     rows = conn.execute(
-        f"SELECT * FROM domain_items WHERE {where_sql} ORDER BY score DESC LIMIT ? OFFSET ?",
-        [*params, limit, offset],
+        f"SELECT d.* {base_from} WHERE {where_filtered} ORDER BY d.score DESC LIMIT ? OFFSET ?",
+        [*base_params, limit, offset],
     ).fetchall()
     items = [repo.row_to_dict(row) for row in rows]
+
+    # Attach per-row filter verdict
+    verdicts = repo_filter.load_verdicts(conn, [item["id"] for item in items]) if filtering else {}
+    for item in items:
+        verdict = verdicts.get(item["id"]) or {}
+        item["filtered"] = bool(verdict.get("filtered"))
+        item["filtered_code"] = verdict.get("code") or ""
+        item["filtered_reason"] = verdict.get("reason") or ""
+        item["filtered_soft"] = bool(verdict.get("soft"))
 
     # Strip payload for summary mode (list view doesn't need full payload)
     if fields == "summary":
@@ -97,7 +128,16 @@ def targets(
                 # AI calibrated flag (badge in list view)
                 item["aiCalibrated"] = bool(calibrated_surface or ai_cal.get("calibrated_attack_surface") or semantic.get("attack_surface_calibration"))
 
-    return {"items": items, "total": total, "page": page, "per_page": limit, "pages": (total + limit - 1) // limit}
+    return {
+        "items": items,
+        "total": total,
+        "page": page,
+        "per_page": limit,
+        "pages": (total + limit - 1) // limit,
+        # 被规则隐藏的仓数(只统计当前 surface/grade/search 口径下的);include_filtered=true 时为 0
+        "filtered_hidden": filtered_hidden,
+        "filtering_active": filtering,
+    }
 
 
 @router.get("/targets/{item_id}")
@@ -105,79 +145,19 @@ def target_detail(item_id: int, conn: sqlite3.Connection = Depends(get_db)) -> d
     item = domain_items.detail(conn, DOMAIN, item_id)
     if not item:
         raise HTTPException(status_code=404, detail="target not found")
+    # 详情页也可能从「已被过滤」的入口进来(抽屉/深链),所以这里同样把判定带上
+    verdict = repo_filter.load_verdicts(conn, [item_id]).get(item_id) if repo_filter.table_ready(conn) else None
+    item["filtered"] = bool((verdict or {}).get("filtered"))
+    item["filtered_code"] = (verdict or {}).get("code") or ""
+    item["filtered_reason"] = (verdict or {}).get("reason") or ""
+    item["filtered_soft"] = bool((verdict or {}).get("soft"))
     return item
 
 
-@router.get("/tracking-queue")
-def tracking_queue(conn: sqlite3.Connection = Depends(get_db)) -> dict:
-    """User-initiated tracking items only (queue_source='user')."""
-    rows = conn.execute(
-        """
-        SELECT h.*, d.title as target_title, d.source_url as target_url, d.score as target_score,
-               d.source as target_source, d.item_type as target_type
-        FROM human_queue_items h
-        LEFT JOIN domain_items d ON h.item_id = d.id
-        WHERE h.domain=? AND (h.queue_source='user' OR (h.queue_source IS NULL AND h.queue_type LIKE 'user%'))
-        ORDER BY h.id DESC
-        """,
-        (DOMAIN,),
-    ).fetchall()
-    items = []
-    for row in rows:
-        item = repo.row_to_dict(row)
-        # Add target info from JOIN
-        item["title"] = item.pop("target_title", "") or item.get("reason", "")
-        item["url"] = item.pop("target_url", "")
-        item["score"] = item.pop("target_score", 0)
-        item["source"] = item.pop("target_source", "")
-        item["type"] = item.pop("target_type", "")
-        items.append(item)
-    return {"items": items}
-
-
-class TrackRequest(BaseModel):
-    priority: str = "P1"
-    reason: str = ""
-
-
-@router.post("/targets/{item_id}/track")
-def track_target(item_id: int, request: TrackRequest, conn: sqlite3.Connection = Depends(get_db)) -> dict:
-    """Add a target to the user's tracking queue."""
-    item = conn.execute("SELECT title FROM domain_items WHERE id=? AND domain=?", (item_id, DOMAIN)).fetchone()
-    if not item:
-        raise HTTPException(status_code=404, detail="target not found")
-    now = datetime.now().isoformat()
-    conn.execute(
-        "INSERT INTO human_queue_items (domain, item_id, queue_type, status, priority, reason, assignee, payload_json, created_at, updated_at, queue_source) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        (DOMAIN, item_id, "user_track", "待研判", request.priority, request.reason, "", "{}", now, now, "user"),
-    )
-    conn.commit()
-    return {"status": "tracked", "item_id": item_id, "title": item[0], "priority": request.priority, "reason": request.reason}
-
-
-@router.post("/assets/{item_id}/track")
-def track_asset(item_id: int, request: TrackRequest, conn: sqlite3.Connection = Depends(get_db)) -> dict:
-    """Add an asset to the user's tracking queue."""
-    item = conn.execute("SELECT title FROM domain_items WHERE id=? AND domain=?", (item_id, DOMAIN)).fetchone()
-    if not item:
-        raise HTTPException(status_code=404, detail="asset not found")
-    now = datetime.now().isoformat()
-    conn.execute(
-        "INSERT INTO human_queue_items (domain, item_id, queue_type, status, priority, reason, assignee, payload_json, created_at, updated_at, queue_source) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        (DOMAIN, item_id, "user_track", "待研判", request.priority, request.reason, "", "{}", now, now, "user"),
-    )
-    conn.commit()
-    return {"status": "tracked", "item_id": item_id, "title": item[0], "priority": request.priority, "reason": request.reason}
-
-
-@router.get("/audits")
-def audits(conn: sqlite3.Connection = Depends(get_db)) -> dict:
-    return operations.audits(conn, DOMAIN)
-
-
-@router.get("/tracking")
-def tracking(conn: sqlite3.Connection = Depends(get_db)) -> dict:
-    return operations.human_queue(conn, DOMAIN)
+# 2026-10-08 领导反馈 #1/#3:跟踪队列与质量审计两个页面已下线,
+# 相应的写接口(POST /targets/{id}/track、POST /assets/{id}/track)与只读接口
+# (GET /tracking-queue、GET /audits、GET /tracking)一并移除,不留半开的写入口。
+# 前端入口(加入跟踪按钮、侧边栏)已同步删除。
 
 
 @router.get("/risk-assessments")
@@ -249,6 +229,24 @@ def _asset_category(asset_payload: dict) -> str:
     return str(asset_payload.get("source_type") or asset_payload.get("source") or "")
 
 
+def _repo_url(link: dict) -> str:
+    """仓库主页 URL。优先取 domain_items.source_url(2026-10-08 起 list_threat_links 已带出),
+    退回 payload 里的 url/html_url,再退回按组织名拼 gitcode —— 关联抽屉要给得出链接(R2)。"""
+    direct = link.get("repo_source_url")
+    if direct:
+        return str(direct)
+    rp = link.get("repo_payload") or {}
+    raw = rp.get("raw") if isinstance(rp.get("raw"), dict) else {}
+    for value in (rp.get("source_url"), rp.get("url"), raw.get("url"), raw.get("html_url"), raw.get("web_url")):
+        if value:
+            return str(value)
+    org = (rp.get("org") if isinstance(rp.get("org"), str) else "") or raw.get("org") or ""
+    name = (rp.get("name") if isinstance(rp.get("name"), str) else "") or raw.get("name") or ""
+    if org and name:
+        return f"https://gitcode.com/{org}/{name}"
+    return ""
+
+
 def _repo_meta(link: dict) -> dict:
     rp = link.get("repo_payload") or {}
     attack = rp.get("attack_surface") or {}
@@ -269,6 +267,7 @@ def _repo_meta(link: dict) -> dict:
         "grade": grade or "",
         "cve": cve,
         "risk": link.get("repo_score"),
+        "url": _repo_url(link),
     }
 
 

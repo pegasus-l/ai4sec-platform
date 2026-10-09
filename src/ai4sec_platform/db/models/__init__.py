@@ -250,6 +250,39 @@ CREATE TABLE IF NOT EXISTS threat_links (
 );
 CREATE INDEX IF NOT EXISTS idx_threat_links_asset ON threat_links(asset_id);
 CREATE INDEX IF NOT EXISTS idx_threat_links_repo ON threat_links(repo_id);
+
+-- 仓库有效性判定结果(威胁洞察 R4:过滤样例/空壳/镜像仓)。
+-- 单独建表而不是改写 domain_items.payload_json:8118 行 payload 各约 100KB,
+-- 改写要重写近 800MB,而这里一行只有几十字节;表可由 DROP TABLE 一键回滚。
+-- 判定口径的唯一实现在 domains/threats/repo_filter.py,本表只存结论。
+CREATE TABLE IF NOT EXISTS threat_repo_filters (
+    item_id INTEGER PRIMARY KEY,
+    domain TEXT NOT NULL DEFAULT 'threats',
+    filtered INTEGER NOT NULL DEFAULT 0,
+    code TEXT NOT NULL DEFAULT '',
+    reason TEXT NOT NULL DEFAULT '',
+    soft INTEGER NOT NULL DEFAULT 0,
+    soft_code TEXT NOT NULL DEFAULT '',
+    computed_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_threat_repo_filters_filtered ON threat_repo_filters(domain, filtered);
+
+-- 威胁洞察 R5:人工添加的采集目标(kind='target',挂到某个既有数据源)
+-- 与人工登记、待接入的新数据源(kind='site',还没有采集器,只落库)。
+-- 前者会在下一轮采集被 pipelines/steps/threat_sources.py 注入到采集参数里立刻生效。
+CREATE TABLE IF NOT EXISTS threat_source_targets (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind TEXT NOT NULL DEFAULT 'target',
+    source_key TEXT NOT NULL,
+    identifier TEXT NOT NULL,
+    label TEXT NOT NULL DEFAULT '',
+    note TEXT NOT NULL DEFAULT '',
+    enabled INTEGER NOT NULL DEFAULT 1,
+    created_by TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    UNIQUE(kind, source_key, identifier)
+);
+CREATE INDEX IF NOT EXISTS idx_threat_source_targets_kind ON threat_source_targets(kind, source_key, enabled);
 """
 
 
@@ -266,6 +299,8 @@ def init_db(conn: sqlite3.Connection) -> None:
 def reset_db(conn: sqlite3.Connection) -> None:
     tables = [
         "threat_links",
+        "threat_repo_filters",
+        "threat_source_targets",
         "news_daily_reports",
         "news_user_states",
         "news_item_index",

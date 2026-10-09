@@ -3,11 +3,13 @@
  *
  * Port of demo v12's openVulnDetail (line 5870).
  * Renders all 11 fields: title/severity/kind/source_type, description, analysis,
- * source_path, published_date, matched_keywords, patch_refs links,
- * plus action buttons.
+ * source_path, published_date, matched_keywords, patch_refs links.
+ *
+ * 2026-10-09:原有的「加入跟踪」按钮只是 `W2.2 will wire addTrack` 的空壳(点了没反应),
+ * 写接口与跟踪队列页已随领导反馈 #1 一并下线,这里也一并去掉,不留半开的写入口。
  */
 
-import type { ThreatViewModel, ThreatVulnDetail, ThreatRepo } from '../../types/threat';
+import type { ThreatViewModel, ThreatVulnDetail } from '../../types/threat';
 import { severityBadgeClass } from './severityBadge';
 
 interface VulnDetailDrawerProps {
@@ -20,7 +22,6 @@ export function VulnDetailDrawer({ repoId, vulnId, model }: VulnDetailDrawerProp
   const vuln: ThreatVulnDetail | undefined = model.vulnDetails?.[repoId]?.find(
     (v) => v.id === vulnId,
   );
-  const repo: ThreatRepo | undefined = model.repos.find((r) => r.id === repoId);
 
   if (!vuln) {
     return <p className="muted">漏洞不存在。</p>;
@@ -89,14 +90,6 @@ export function VulnDetailDrawer({ repoId, vulnId, model }: VulnDetailDrawerProp
           <p className="muted small">
             旧数据没有 source_url，只提供 source_path 或补丁描述。
           </p>
-        )}
-      </div>
-
-      <div className="split">
-        {repo && (
-          <button className="btn primary" onClick={() => { /* W2.2 will wire addTrack */ }}>
-            加入跟踪
-          </button>
         )}
       </div>
     </>

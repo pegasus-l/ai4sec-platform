@@ -11,6 +11,7 @@ import { LaneView } from './LaneView';
 import { useAssociationRun } from './useAssociationRun';
 import { resolveAsset, useAssetLookup, useAssocBundle } from './useAssocData';
 import { deriveNodes, SOURCE_KEY_LABEL, sourceKey, type AssocFilters } from './shared';
+import { exportAssocCsv, exportAssocJson } from './assocExport';
 
 interface Props {
   openRepo: (repo: ThreatRepo) => void;
@@ -34,11 +35,13 @@ export function AssocView({ openRepo, openAsset }: Props) {
 
   const openAssetId = (meta: AssocAssetMeta) => openAsset(resolveAsset(meta, assetMap));
 
+  // 这里的 repo 只用来给抽屉定标题/副标题 —— 详情正文由 RepoDrawer 按 id 现拉
+  // (/api/threats/targets/{id}),所以不用也不能在这里拼正文数据。
   const openRepoId = (meta: AssocRepoMeta) => {
     const name = meta.name || meta.org;
     const repo: ThreatRepo = {
       id: String(meta.id), title: `${meta.org || '?'}/${name}`, org: meta.org, name,
-      url: '', summary: '', score: meta.risk ?? 0, grade: meta.grade, status: 'active',
+      url: meta.url || '', summary: '', score: meta.risk ?? 0, grade: meta.grade, status: 'active',
       surface: '', stars: 0, cve: meta.cve, sa: 0, sec: meta.cve,
       filtered: false, breakdown: {}, reasons: [], evidence: [], assets: [], raw: {},
     };
@@ -47,6 +50,18 @@ export function AssocView({ openRepo, openAsset }: Props) {
 
   const openSideId = (row: { id: number; title: string; cat: string }) =>
     openAssetId({ id: row.id, title: row.title, source: '', cat: row.cat, risk_in: 0 });
+
+  // 导出的是「当前过滤后」的结果(与屏幕上的条数一致),不是后端全量 bundle
+  const handleExportCsv = () => {
+    if (!derived) return;
+    const rows = exportAssocCsv(derived, filters);
+    toast(`已导出 ${rows} 条关联边(CSV)`, rows ? 'success' : 'error');
+  };
+  const handleExportJson = () => {
+    if (!derived) return;
+    const rows = exportAssocJson(derived, filters);
+    toast(`已导出 ${rows} 条关联边(JSON)`, rows ? 'success' : 'error');
+  };
 
   const handleStartSample = async () => {
     await start('sample', 30);
@@ -78,6 +93,9 @@ export function AssocView({ openRepo, openAsset }: Props) {
         onStartAll={handleStartAll}
         rail={rail}
         setRail={setRail}
+        onExportCsv={handleExportCsv}
+        onExportJson={handleExportJson}
+        exportCount={derived.links.length}
       />
 
       {rail !== 'none' && (

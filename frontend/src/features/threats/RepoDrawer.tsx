@@ -5,41 +5,52 @@
  * Rendered inside DrawerStack (drawer container is handled by DrawerStack,
  * this component only provides the body content).
  *
+ * 数据来源:只接受 repoId,正文一律现拉 GET /api/threats/targets/{id}(全量 payload)。
+ * 历史坑(2026-10-08 领导反馈 #2):本组件曾以调用方传入的 ThreatRepo 为兜底渲染,
+ * 而「资产↔仓关联」和「资产抽屉」两处调用方是手搓的 stub(url/summary 写死空串),
+ * 于是从关联页打开的仓详情没有仓库链接和介绍,与「代码仓」页不一致。
+ * 现在兜底对象只用于抽屉标题,详情没到位就显示加载态,绝不用 stub 冒充正文。
+ * 2026-10-09:头部第二行(仓库链接)也改成由本组件在详情到位后回写(update(drawerId, …)),
+ * 于是「资产抽屉 → AI 关联 → 点仓」这条 url 为空的链路照样有链接;正文不再重复渲染链接。
+ *
  * Sections:
- *   1. Risk overview: Grade badge + surface + score + CVE + Sec + description
+ *   0. 仓库介绍:抽屉头部之下的引导段(不放进任何卡片);仓库 URL 只由抽屉头部显示一次
+ *   1. 风险概览: Grade + surface + score + CVE + Sec + 组织/仓库/Star/状态
  *   2. Vuln/security线索: stats + "查看全部漏洞" button → push VulnListDrawer
  *   3. Score breakdown: breakdownFull with scoreLabels
  *   4. Linked assets: clickable to open asset
- *   5. Action buttons: 加入跟踪 / 查看全部漏洞 / 查看关联
+ *   5. AI 研判
  */
 
-import type { ThreatViewModel, ThreatRepo, ThreatAsset } from '../../types/threat';
+import type { ThreatViewModel, ThreatAsset } from '../../types/threat';
 import { clamp, CONF_LABEL, CONF_STROKE, confTone, SOURCE_KEY_LABEL, sourceKey } from './assoc/shared';
 import { resolveAsset, useAssetLookup, useRepoLinks } from './assoc/useAssocData';
 import { useDrawerStack } from '../../components/DrawerStack';
 import { VulnListDrawer } from './VulnListDrawer';
 import { VulnDetailDrawer } from './VulnDetailDrawer';
 import { severityBadgeClass } from './severityBadge';
+import { filterReasonLabel } from './filterLabels';
 import { Card } from '../../components/ui';
 import { useState, useEffect, useMemo } from 'react';
 import { useQueryClient, useQuery } from '@tanstack/react-query';
-import { postJson, getJson, trackTarget, fetchTargetDetail, type AiReviewResult } from '../../api/client';
+import { postJson, getJson, fetchTargetDetail, type AiReviewResult } from '../../api/client';
 import { repoFromItem, vulnDetailsFromItem } from './threatAdapters';
-import { useToast } from '../../components/Toast';
 
 interface RepoDrawerContentProps {
-  repo: ThreatRepo;
+  /** 目标 item id(唯一必需参数)。 */
+  repoId: string;
+  /** 所在抽屉 id(DrawerStack 传给 render 的入参),用来把仓库链接回写到抽屉头部。 */
+  drawerId?: string;
   /** Navigate to 资产↔仓关联 view (wired by ThreatPage). */
   onViewAssoc?: () => void;
   /** Open asset detail (currently uses old AssetDrawer — will be refactored in W3.3). */
   onOpenAsset?: (asset: ThreatAsset) => void;
 }
 
-export function RepoDrawerContent({ repo: initialRepo, onViewAssoc, onOpenAsset }: RepoDrawerContentProps) {
-  const { push } = useDrawerStack();
-  const { toast } = useToast();
+export function RepoDrawerContent({ repoId, drawerId, onViewAssoc, onOpenAsset }: RepoDrawerContentProps) {
+  const { push, update } = useDrawerStack();
   // Fetch single target detail (full payload) — replaces fetchFrontendContract
-  const { data: detailData } = useQuery({ queryKey: ['threats-target-detail', initialRepo.id], queryFn: () => fetchTargetDetail(initialRepo.id) });
+  const { data: detailData, isLoading: detailLoading, error: detailError } = useQuery({ queryKey: ['threats-target-detail', repoId], queryFn: () => fetchTargetDetail(repoId) });
   // Build local model from the single item (repos + vulnDetails only)
   const model = useMemo<ThreatViewModel | null>(() => {
     if (!detailData) return null;
@@ -58,9 +69,9 @@ export function RepoDrawerContent({ repo: initialRepo, onViewAssoc, onOpenAsset 
       vulnDetails: { [r.id]: v },
     };
   }, [detailData]);
-  // Always use latest repo from model (updates after AI calibration)
-  const repo = model?.repos.find(r => r.id === initialRepo.id) ?? initialRepo;
-  const vulns = model?.vulnDetails?.[repo.id] ?? [];
+  // 只用详情接口回来的数据;拿不到就是 null(渲染加载/失败态),不退回调用方的种子数据
+  const repo = model?.repos.find(r => r.id === repoId) ?? null;
+  const vulns = (repo && model?.vulnDetails?.[repo.id]) ?? [];
   const [aiReview, setAiReview] = useState<AiReviewResult | null>(null);
   const [aiLoading, setAiLoading] = useState(false);
   const [aiError, setAiError] = useState<string | null>(null);
@@ -68,23 +79,36 @@ export function RepoDrawerContent({ repo: initialRepo, onViewAssoc, onOpenAsset 
 
   // 关联资产:与「资产↔仓关联」共用 ['threats-associations'] 缓存。
   // 之前这里读的是 model.assets,而它被写死成 [](单目标详情接口只返回仓库行) → 任何仓都显示「暂无关联资产」。
-  const { links: repoLinks, meta: assocMeta, isLoading: linksLoading, isError: linksError } = useRepoLinks(repo.id);
+  const { links: repoLinks, meta: assocMeta, isLoading: linksLoading, isError: linksError } = useRepoLinks(repoId);
   const assetMap = useAssetLookup();
+
+  // 抽屉头部第二行 = 仓库链接,且整页只此一处(2026-10-09 用户反馈:正文不必再重复一遍链接)。
+  // URL 只能取自现拉的 payload —— 调用方的种子数据靠不住:「资产抽屉 → AI 关联 → 点仓」那条
+  // 链路传进来的 stub 里 url 恒为空串,拿它渲染头部就等于没有链接了(与文件开头声明一致)。
+  useEffect(() => {
+    if (!drawerId || !repo) return;
+    update(drawerId, {
+      subtitle: repo.url
+        ? <a className="repo-link" href={repo.url} target="_blank" rel="noreferrer">{repo.url}</a>
+        : '数据里没有该仓库的 URL。',
+    });
+  }, [drawerId, update, repo]);
 
   // On mount, try to fetch cached AI review (GET, no LLM trigger)
   useEffect(() => {
-    getJson<AiReviewResult>(`/api/threats/${repo.id}/ai-review`)
+    setAiReview(null);
+    getJson<AiReviewResult>(`/api/threats/${repoId}/ai-review`)
       .then(setAiReview)
       .catch(() => {});  // 404 = no cached review, show button
-  }, [repo.id]);
+  }, [repoId]);
 
   const handleAiReview = async () => {
     setAiLoading(true);
     setAiError(null);
     try {
-      const result = await postJson<AiReviewResult>(`/api/threats/${repo.id}/ai-review`);
+      const result = await postJson<AiReviewResult>(`/api/threats/${repoId}/ai-review`);
       setAiReview(result);
-      queryClient.invalidateQueries({ queryKey: ['threats-target-detail', repo.id] });
+      queryClient.invalidateQueries({ queryKey: ['threats-target-detail', repoId] });
       queryClient.invalidateQueries({ queryKey: ['threats-targets'] });
     } catch (e) {
       setAiError(String(e));
@@ -94,7 +118,7 @@ export function RepoDrawerContent({ repo: initialRepo, onViewAssoc, onOpenAsset 
   };
 
   const handleOpenVulnList = () => {
-    if (!model) return;
+    if (!repo || !model) return;
     push({
       title: '漏洞 / 安全线索',
       subtitle: `${repo.org}/${repo.name}`,
@@ -103,7 +127,7 @@ export function RepoDrawerContent({ repo: initialRepo, onViewAssoc, onOpenAsset 
   };
 
   const handleOpenVulnDetail = (vulnId: string) => {
-    if (!model) return;
+    if (!repo || !model) return;
     push({
       title: '漏洞详情',
       subtitle: vulnId,
@@ -111,9 +135,29 @@ export function RepoDrawerContent({ repo: initialRepo, onViewAssoc, onOpenAsset 
     });
   };
 
+  if (!repo) {
+    return (
+      <div className="drawer-grid">
+        <Card>
+          <h3>{detailLoading ? '正在加载代码仓详情…' : '代码仓详情加载失败'}</h3>
+          <p className="muted small">
+            {detailLoading
+              ? `从 /api/threats/targets/${repoId} 拉取完整 payload。`
+              : `接口未返回该目标(${repoId}):${detailError ? String(detailError) : '未知错误'}`}
+          </p>
+        </Card>
+      </div>
+    );
+  }
 
   return (
     <div className="drawer-grid">
+      {/* 0. 仓库介绍 —— 抽屉头部已经显示 org/name 和仓库链接(可点),介绍紧贴它下面单独一段,
+          不再塞进「风险概览」卡片里,也不在正文里重复一遍仓库链接(2026-10-09 用户反馈) */}
+      <p className="repo-lead">
+        {repo.summary || '暂无仓库介绍。'}
+      </p>
+
       {/* 1. Risk overview */}
       <Card>
         <h3>风险概览</h3>
@@ -123,10 +167,19 @@ export function RepoDrawerContent({ repo: initialRepo, onViewAssoc, onOpenAsset 
           <span className="badge">score {Math.round(repo.score)}</span>
           <span className="badge">CVE {repo.cve}</span>
           <span className="badge">Sec {repo.sec}</span>
+          {repo.aiCalibrated && <span className="badge badge-sky">AI 校准</span>}
         </div>
-        <p className="muted small" style={{ marginTop: 10 }}>
-          {repo.summary}
-        </p>
+        {repo.filtered && (
+          <p className="filtered-note" style={{ marginTop: 10 }}>
+            该仓库被过滤规则命中:<b>{filterReasonLabel(repo.filteredReason)}</b> —— 默认不在「代码仓」列表显示,勾选「显示已过滤」可见。
+          </p>
+        )}
+        <div className="asset-meta" style={{ marginTop: 10 }}>
+          <div><b>{repo.org || '-'}</b><span>组织</span></div>
+          <div><b>{repo.name || '-'}</b><span>仓库</span></div>
+          <div><b>{repo.stars}</b><span>Star</span></div>
+          <div><b>{repo.status || '-'}</b><span>状态</span></div>
+        </div>
       </Card>
 
       {/* 2. Vuln / security线索 — inline timeline like demo v12 renderVulnList */}
@@ -212,11 +265,7 @@ export function RepoDrawerContent({ repo: initialRepo, onViewAssoc, onOpenAsset 
                 : '暂无关联资产。'}
             </p>
           )}
-          {/* 5. Action buttons */}
           <div className="split" style={{ marginTop: 10 }}>
-            <button className="btn primary" onClick={() => trackTarget(repo.id).then(() => toast(`已加入跟踪: ${repo.org}/${repo.name}`, 'success')).catch(e => toast(`跟踪失败: ${e}`, 'error'))}>
-              加入跟踪
-            </button>
             <button className="btn primary" onClick={handleOpenVulnList}>
               查看全部漏洞
             </button>
@@ -228,7 +277,7 @@ export function RepoDrawerContent({ repo: initialRepo, onViewAssoc, onOpenAsset 
           </div>
         </Card>
       </div>
-      {/* 6. AI 研判 */}
+      {/* 5. AI 研判 */}
       <Card>
         <h3>AI 研判</h3>
         {aiReview ? (

@@ -4,10 +4,12 @@ import sqlite3
 from datetime import datetime, timezone
 from typing import Any
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
 
-from ai4sec_platform.app.dependencies import get_db
+from ai4sec_platform.app.dependencies import current_user, get_db
 from ai4sec_platform.db import repositories as repo
+from ai4sec_platform.domains.threats import source_registry
 
 router = APIRouter(prefix="/ops", tags=["ops"])
 
@@ -130,53 +132,93 @@ def overview(conn: sqlite3.Connection = Depends(get_db)) -> dict:
 
 @router.get("/sources")
 def sources(conn: sqlite3.Connection = Depends(get_db)) -> dict:
-    """Source health from raw_artifacts, grouped by source."""
-    rows = conn.execute(
-        "SELECT source, COUNT(*) as records, MAX(created_at) as last_sync, item_count "
-        "FROM raw_artifacts WHERE domain='threats' GROUP BY source ORDER BY source"
-    ).fetchall()
-    items = []
-    for r in rows:
-        items.append({
-            "source": r[0],
-            "records": r[1],
-            "last_sync": r[2],
-            "days_ago": _days_ago(r[2] or ""),
-            "total_items": r[3] or 0,
-        })
-    return {"items": items}
+    """数据源清单(2026-10-08 领导反馈 #5 重做)。
+
+    旧实现是 `SELECT source, COUNT(*) ... GROUP BY source`,把内部标识(repos/firmware/…)
+    当数据源列出来 —— 既看不出"从哪个网站取",也不能添加。现在改由
+    domains/threats/source_registry.py 登记站点/采集器/类型/采集目标,页面直接渲染。
+    """
+    return source_registry.sources_payload(conn)
 
 
-@router.get("/quality")
-def quality(conn: sqlite3.Connection = Depends(get_db)) -> dict:
-    """Quality audits from quality_audits table."""
-    rows = conn.execute(
-        "SELECT id, domain, audit_type, status, score, summary, details_json, created_at "
-        "FROM quality_audits ORDER BY id DESC LIMIT 50"
-    ).fetchall()
-    items = []
-    for r in rows:
-        import json
-        details = {}
-        try:
-            details = json.loads(r[6]) if r[6] else {}
-        except Exception:
-            details = {}
-        items.append({
-            "id": r[0],
-            "domain": r[1],
-            "audit_type": r[2],
-            "status": r[3],
-            "score": r[4],
-            "summary": (r[5] or "")[:200],
-            "details": details,
-            "created_at": r[7],
-        })
-    total = len(items)
-    passed = len([i for i in items if i["status"] == "pass"])
-    warned = len([i for i in items if i["status"] in ("warn", "warning")])
-    failed = len([i for i in items if i["status"] in ("fail", "failed")])
-    return {"items": items, "kpis": {"total": total, "passed": passed, "warned": warned, "failed": failed}}
+class AddTargetRequest(BaseModel):
+    source_key: str
+    identifier: str
+    label: str = ""
+
+
+class AddSiteRequest(BaseModel):
+    site_url: str
+    label: str = ""
+    note: str = ""
+
+
+@router.post("/sources/targets")
+def add_source_target(
+    request: AddTargetRequest,
+    conn: sqlite3.Connection = Depends(get_db),
+    user: dict = Depends(current_user),
+) -> dict:
+    """人工添加采集目标(组织名 / hub id)。下一轮采集即生效。"""
+    try:
+        return source_registry.add_target(
+            conn,
+            source_key=request.source_key,
+            identifier=request.identifier,
+            label=request.label,
+            created_by=str(user.get("username") or ""),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.post("/sources/sites")
+def add_source_site(
+    request: AddSiteRequest,
+    conn: sqlite3.Connection = Depends(get_db),
+    user: dict = Depends(current_user),
+) -> dict:
+    """登记一个待接入的新数据源(仅落库;平台不会自动发现新站点)。"""
+    try:
+        return source_registry.add_site(
+            conn,
+            site_url=request.site_url,
+            label=request.label,
+            note=request.note,
+            created_by=str(user.get("username") or ""),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.post("/sources/targets/{target_id}/enable")
+def enable_source_target(target_id: int, conn: sqlite3.Connection = Depends(get_db)) -> dict:
+    # 不带请求体:前端按 enabled 选 /enable 或 /disable 两个路径,浏览器探测/重放都不会因为
+    # 少了 JSON body 变成 422(带 body 的写法在这条路径上只会引入一个没必要的不一致)。
+    return _toggle_target(conn, target_id, True)
+
+
+@router.post("/sources/targets/{target_id}/disable")
+def disable_source_target(target_id: int, conn: sqlite3.Connection = Depends(get_db)) -> dict:
+    return _toggle_target(conn, target_id, False)
+
+
+def _toggle_target(conn: sqlite3.Connection, target_id: int, enabled: bool) -> dict:
+    try:
+        return source_registry.set_target_enabled(conn, target_id, enabled)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+
+@router.delete("/sources/targets/{target_id}")
+def remove_source_target(target_id: int, conn: sqlite3.Connection = Depends(get_db)) -> dict:
+    if not source_registry.delete_target(conn, target_id):
+        raise HTTPException(status_code=404, detail="记录不存在")
+    return {"status": "deleted", "id": target_id}
+
+
+# 2026-10-08 领导反馈 #1:质量审计页面下线,GET /api/ops/quality 一并移除。
+# quality_audits **表保留** —— 资讯域(domains/news)与能力审计仍在写它,删表会连带打坏那两个模块。
 
 
 @router.get("/ai-summary")
@@ -256,7 +298,7 @@ def available_pipelines() -> dict:
 
 def _pipeline_description(name: str) -> str:
     descs = {
-        "threats.huawei_full_migration_pipeline": "从采集到报告全链路（采集+CVE侦察+攻击面+导入+评分+资产+风险推理+报告）",
+        "threats.huawei_full_migration_pipeline": "从采集到报告全链路（采集+CVE侦察+攻击面+导入+评分+资产+风险推理+报告+仓库过滤落库）",
         "threats.huawei_raw_pipeline": "快速刷新：导入 raw 数据 + 标准化 + 构建威胁条目 + 风险评分",
         "threats.huawei_cve_scout_pipeline": "CVE/SA 侦察：刷新 security repo pool 与项目匹配",
         "threats.huawei_attack_surface_pipeline": "攻击面评分：对 repos 做 5 维度攻击面打分",

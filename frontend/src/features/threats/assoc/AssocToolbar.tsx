@@ -1,6 +1,6 @@
 import type { AssocBundle } from '../../../api/client';
 import { Card } from '../../../components/ui';
-import { PlayCircle, RefreshCw, Link2, FilterX } from 'lucide-react';
+import { PlayCircle, RefreshCw, Link2, FilterX, Download, FileJson } from 'lucide-react';
 import { SOURCE_KEY_LABEL, SOURCE_KEY_OPTIONS, type AssocFilters, type GradeSel, type ConfSel } from './shared';
 
 export const isEmptyFilters = (f: AssocFilters): boolean =>
@@ -23,9 +23,13 @@ interface Props {
   onStartAll: () => void;
   rail: RailTab;
   setRail: (r: RailTab) => void;
+  /** 导出当前过滤结果(屏幕上有多少条就导出多少条)。 */
+  onExportCsv: () => void;
+  onExportJson: () => void;
+  exportCount: number;
 }
 
-export function AssocToolbar({ bundle, filters, setFilters, viewMode, setViewMode, run, onStartSample, onStartAll, rail, setRail }: Props) {
+export function AssocToolbar({ bundle, filters, setFilters, viewMode, setViewMode, run, onStartSample, onStartAll, rail, setRail, onExportCsv, onExportJson, exportCount }: Props) {
   const meta = bundle.meta;
   const needRun = meta.not_run_assets > 0;
   const conf = meta.by_confidence;
@@ -112,6 +116,15 @@ export function AssocToolbar({ bundle, filters, setFilters, viewMode, setViewMod
             <FilterX size={13} /> 重置
           </button>
         )}
+
+        <div className="assoc-seg assoc-export" aria-label="导出">
+          <button onClick={onExportCsv} disabled={exportCount === 0} title={`导出当前过滤结果(${exportCount} 条关联边)为 CSV`}>
+            <Download size={13} /> 导出CSV
+          </button>
+          <button onClick={onExportJson} disabled={exportCount === 0} title={`导出当前过滤结果(${exportCount} 条关联边)为 JSON 快照`}>
+            <FileJson size={13} /> JSON
+          </button>
+        </div>
 
         <div className="assoc-run">
           {run.active ? (

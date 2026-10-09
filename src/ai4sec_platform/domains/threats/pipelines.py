@@ -5,6 +5,7 @@ from ai4sec_platform.pipelines.steps.threat_asset_import import ImportHuaweiThre
 from ai4sec_platform.pipelines.steps.threat_association import AssetAssociationStep
 from ai4sec_platform.pipelines.steps.threat_cve_scout import HuaweiCveScoutStep
 from ai4sec_platform.pipelines.steps.threat_report import BuildHuaweiThreatReportStep
+from ai4sec_platform.pipelines.steps.threat_repo_filter import PersistRepoFilterVerdictsStep
 from ai4sec_platform.pipelines.steps.threat_score_filter import HuaweiAttackSurfaceScoreStep
 from ai4sec_platform.pipelines.steps.threat_sources import CollectHuaweiSourcesStep
 from ai4sec_platform.pipelines.steps.threat_raw import BuildHuaweiThreatItemsStep, ImportHuaweiRawStep, NormalizeHuaweiRawStep
@@ -60,5 +61,7 @@ def huawei_full_migration_pipeline() -> PipelineDefinition:
             SelectThreatRiskCandidatesStep(),
             ReasonThreatRiskStep(),
             BuildHuaweiThreatReportStep(),
+            # 收尾:给本轮新进/还没结论的仓补过滤结论(列表页的"已隐藏"靠这张表)
+            PersistRepoFilterVerdictsStep(),
         ],
     )

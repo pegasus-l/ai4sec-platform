@@ -19,13 +19,11 @@ export function OpsOverview({ setView }: Props) {
 
   return (
     <div className="grid" style={{ paddingBottom: 48 }}>
-      <div className="grid" style={{ gridTemplateColumns: 'repeat(6, minmax(0, 1fr))' }}>
+      <div className="grid" style={{ gridTemplateColumns: 'repeat(4, minmax(0, 1fr))' }}>
         <Card className="kpi"><span>代码仓</span><strong>{stats.repos}</strong></Card>
         <Card className="kpi"><span>资产</span><strong>{stats.assets}</strong></Card>
         <Card className="kpi"><span>今日高风险</span><strong>{stats.today}</strong></Card>
-        <Card className="kpi"><span>跟踪队列</span><strong>{stats.queue}</strong></Card>
         <Card className="kpi"><span>证据条目</span><strong>{stats.evidence_items}</strong></Card>
-        <Card className="kpi"><span>质量审计</span><strong>{stats.quality_audits}</strong></Card>
       </div>
 
       <div className="grid cols-2" style={{ marginTop: 12, alignItems: 'stretch' }}>
@@ -57,8 +55,7 @@ export function OpsOverview({ setView }: Props) {
           <h3>快捷操作</h3>
           <div style={{ display: 'grid', gap: 8, marginTop: 10 }}>
             <button className="btn primary" onClick={() => setView('ops-tasks')}>跑 Pipeline</button>
-            <button className="btn" onClick={() => setView('ops-sources')}>数据源状态</button>
-            <button className="btn" onClick={() => setView('ops-quality')}>质量审计</button>
+            <button className="btn" onClick={() => setView('ops-sources')}>数据源与采集目标</button>
           </div>
         </Card>
         {data.ai_reviews.length > 0 && (

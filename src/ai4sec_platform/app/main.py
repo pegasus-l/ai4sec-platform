@@ -326,6 +326,19 @@ def create_app() -> FastAPI:
         except Exception as e:  # noqa: BLE001 - 回收失败不阻断调度器
             print(f'[repro-reap] error: {e}', flush=True)
 
+    def _reap_zombies():
+        # 周期看门狗: 回收浏览器/驱动类僵尸子进程。本容器 PID 1 就是平台自己(无 tini),
+        # 浏览器子进程正常退出后没人收尸,会一直占着 cgroup pids 名额 → 攒满后
+        # 威胁跑批 can't start new thread、docker exec 起不来。见 proc_reaper 模块说明。
+        try:
+            from ai4sec_platform.proc_reaper import reap_and_report
+            report = reap_and_report()
+            if report.get("reaped"):
+                print(f"[zombie-reap] reaped {report['reaped']} zombie browser process(es); "
+                      f"zombies left={report['zombies']} pids={report['pids_current']}/{report['pids_max']}", flush=True)
+        except Exception as e:  # noqa: BLE001 - 回收失败不阻断调度器
+            print(f'[zombie-reap] error: {e}', flush=True)
+
     def _reap_stale_pipeline_runs():
         # 周期看门狗: 回收悬挂的 pipeline_run(心跳停滞/超时未完成, 状态卡 running 的僵尸)。
         # 与启动时的 recover_orphaned_pipeline_runs 互补: 后者清重启遗留, 前者清运行中挂死。
@@ -344,6 +357,10 @@ def create_app() -> FastAPI:
     scheduler.add_job(_run_pipeline_job, CronTrigger(hour=22, minute=0, timezone="Asia/Shanghai"), args=['vulnerabilities.full_knowledge_discovery_pipeline', {'keyword_profile': 'daily_watch', 'skip_existing_urls': True}], id='vuln', name='vuln(daily 22:00)', replace_existing=True)
     scheduler.add_job(_reap_repro_tasks, IntervalTrigger(minutes=5), id='repro-reap', name='repro-watchdog(5min)', replace_existing=True)
     scheduler.add_job(_reap_stale_pipeline_runs, IntervalTrigger(minutes=5), id='pipeline-reap', name='pipeline-watchdog(5min)', replace_existing=True)
+    # 僵尸回收(60s):浏览器子进程正常退出却没人 wait,会一直占着容器的 pids 名额,
+    # 攒几天顶死 pids.max → 威胁跑批 can't start new thread、docker exec 起不来进程。
+    # 详见 ai4sec_platform/proc_reaper.py 的实测记录。
+    scheduler.add_job(_reap_zombies, IntervalTrigger(seconds=60), id='zombie-reap', name='zombie-reap(60s)', replace_existing=True)
 
     @app.on_event('startup')
     def _start_scheduler():
@@ -365,7 +382,15 @@ def create_app() -> FastAPI:
             print(f'[pipeline-recover] {n} orphaned pipeline run(s) recovered', flush=True)
         except Exception as e:  # noqa: BLE001 - 清扫失败不影响启动
             print(f'[pipeline-recover] error: {e}', flush=True)
-        print('[scheduler] started: capability(15min), threat(daily 05:00), vuln(daily 22:00), repro-watchdog(5min), pipeline-watchdog(5min)', flush=True)
+        print('[scheduler] started: capability(15min), threat(daily 05:00), vuln(daily 22:00), repro-watchdog(5min), pipeline-watchdog(5min), zombie-reap(60s)', flush=True)
+        # 启动先扫一遍:容器上次运行攒下的浏览器僵尸在重启后不会自动消失(重启只是换了父进程)。
+        try:
+            from ai4sec_platform.proc_reaper import reap_and_report
+            report = reap_and_report()
+            print(f"[zombie-reap] startup: reaped={report.get('reaped')} zombies={report['zombies']} "
+                  f"pids={report['pids_current']}/{report['pids_max']}", flush=True)
+        except Exception as e:  # noqa: BLE001 - 扫不动不影响启动
+            print(f'[zombie-reap] startup error: {e}', flush=True)
 
     @app.on_event('shutdown')
     def _stop_scheduler():
