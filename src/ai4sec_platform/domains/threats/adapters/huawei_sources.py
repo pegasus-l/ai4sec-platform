@@ -284,10 +284,14 @@ def _collect_org_repos(registry: SourceRegistry, entry: Any, params: dict[str, A
 def _enrich_project_issues(registry: SourceRegistry, repos: list[dict[str, Any]], params: dict[str, Any]) -> list[dict[str, Any]]:
     if not repos or not params.get("fetch_project_issues", True):
         return repos
-    star_threshold = int(params.get("project_issue_star_threshold", 10))
-    issue_pages = int(params.get("project_issue_pages", 2 if _full_scan(params) else 1))
-    pr_pages = int(params.get("project_pr_pages", 1 if _full_scan(params) else 0))
-    repo_limit = int(params.get("project_issue_repo_limit", 300 if _full_scan(params) else 30))
+    # 2026-10-09:日常档不再截断。原先日常只给 star 最高的前 30 个仓挂 issue,PR 更是一页都不取
+    # (project_pr_pages=0),而 star≥10(与 cve_scout.STAR_SCAN_THRESHOLD 同一个门槛)的仓实测有 231 个
+    # —— 约 200 个「本该被扫」的仓拿不到本地 issue/PR 线索,cve_scout 只能落到 from_pool 或直接不扫。
+    # 现在条数不限(只有显式传正数才截断),页数取原全量档的值;0 仍然表示「这一项不取」。
+    star_threshold = _int_param(params.get("project_issue_star_threshold"), 10)
+    issue_pages = _int_param(params.get("project_issue_pages"), 2)
+    pr_pages = _int_param(params.get("project_pr_pages"), 1)
+    repo_limit = _opt_limit(params.get("project_issue_repo_limit"))
     candidates = [repo for repo in repos if int(repo.get("star_count") or 0) >= star_threshold and not repo.get("is_security_repo")]
     candidates.sort(key=lambda item: (-(int(item.get("star_count") or 0)), str(item.get("org") or ""), str(item.get("name") or "")))
     def enrich_repo(repo: dict[str, Any]) -> dict[str, Any]:
@@ -303,8 +307,8 @@ def _enrich_project_issues(registry: SourceRegistry, repos: list[dict[str, Any]]
         repo["project_issue_scanned"] = True
         return repo
 
-    max_workers = int(params.get("issue_max_workers", params.get("max_workers", 6 if _full_scan(params) else 4)))
-    bounded_map(candidates[:repo_limit], enrich_repo, max_workers=max_workers)
+    max_workers = _int_param(params.get("issue_max_workers") or params.get("max_workers"), 6)
+    bounded_map(_limited(candidates, repo_limit), enrich_repo, max_workers=max_workers)
     return repos
 
 
@@ -477,6 +481,16 @@ def _opt_limit(value: Any) -> int | None:
 
 def _limited(values: list[Any], limit: int | None) -> list[Any]:
     return values if limit is None else values[:limit]
+
+
+def _int_param(value: Any, default: int) -> int:
+    """整数参数;没传(None/空串)时才用默认值 —— 显式传 0 要保留(0 = 该项不取)。"""
+    if value in (None, ""):
+        return default
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
 
 
 def _collect_firmware_assets(registry: SourceRegistry, params: dict[str, Any]) -> dict[str, Any]:
