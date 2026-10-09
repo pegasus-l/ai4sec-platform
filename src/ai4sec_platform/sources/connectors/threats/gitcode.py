@@ -30,6 +30,11 @@ class GitCodeConnector(LiveJsonConnector):
             return with_query(f"{self.api_base}/repos/{owner}/{repo}/issues", {"state": "all", "page": page, "per_page": per_page})
         if resource in {"pull_requests", "prs"}:
             return with_query(f"{self.api_base}/repos/{owner}/{repo}/pull_requests", {"state": "all", "page": page, "per_page": per_page})
+        if resource in {"tree", "trees"}:
+            # 2026-10-09:拿全量文件树。根目录列表(contents 不带路径)会持续 401,
+            # 而 git/trees 正常,且一次就能给出递归条目,分页 100 条/页。
+            ref = request.params.get("ref") or request.config.get("ref") or "master"
+            return with_query(f"{self.api_base}/repos/{owner}/{repo}/git/trees/{ref}", {"recursive": 1, "page": page, "per_page": per_page})
         if resource == "contents":
             suffix = f"/{path}" if path else ""
             return f"{self.api_base}/repos/{owner}/{repo}/contents{suffix}"

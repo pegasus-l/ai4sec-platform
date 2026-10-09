@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import base64
+import time
+import urllib.error
 import urllib.parse
 import urllib.request
 from typing import Any
@@ -15,6 +17,8 @@ class LiveJsonConnector(JsonFileConnector):
     connector_name = "live_json"
     source_type = "live_json"
     base_url = ""
+    # 值得退避重试的 HTTP 状态:限流/鉴权抖动/网关临时故障。400/404 是「真的没有」,重试没有意义。
+    RETRY_STATUS = frozenset({401, 403, 408, 425, 429, 500, 502, 503, 504})
 
     def health_check(self, config: dict) -> SourceHealth:
         return SourceHealth(status="ok", message=self.base_url)
@@ -38,14 +42,38 @@ class LiveJsonConnector(JsonFileConnector):
     def build_url(self, request: SourceFetchRequest) -> str:
         return self.base_url
 
-    def get_json(self, url: str, *, timeout: int = 30) -> Any:
-        req = urllib.request.Request(url, headers=self.request_headers())
-        with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310 - explicit configured source
-            return json.loads(resp.read().decode("utf-8"))
+    def get_json(self, url: str, *, timeout: int = 30, attempts: int = 3) -> Any:
+        # 2026-10-09:活接口统一加退避重试。GitCode/AtomGit 的 contents(列目录)与 file(取正文)
+        # 这两个资源原先一次都不重试,而它们对连续请求会间歇返 401(实测同一个 URL 成功/401 交替);
+        # 目录遍历只要丢一个目录,上游 _discover_security_file_paths 就少一片候选,正文一条都拿不回来
+        # (实测 opengauss/security 发现 5 个候选、抓回 0 篇)。明确「不存在」的 400/404 不重试,
+        # 重试只会白等;401/403/408/425/429 与 5xx、以及网络层异常退避后重试。
+        total = max(1, attempts)
+        last_exc: Exception | None = None
+        for attempt in range(total):
+            try:
+                req = urllib.request.Request(url, headers=self.request_headers())
+                with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310 - explicit configured source
+                    return json.loads(resp.read().decode("utf-8"))
+            except urllib.error.HTTPError as exc:
+                last_exc = exc
+                if exc.code not in self.RETRY_STATUS or attempt >= total - 1:
+                    raise
+            except Exception as exc:  # noqa: BLE001 - 网络层/超时/解码失败都退避重试
+                last_exc = exc
+                if attempt >= total - 1:
+                    raise
+            time.sleep(self._retry_delay(attempt, last_exc))
+        raise last_exc  # pragma: no cover - 循环内必然 return 或 raise
+
+    def _retry_delay(self, attempt: int, exc: Exception | None) -> float:
+        """限流/鉴权类错误退避更久(实测 401 要等几秒才恢复),其余 1s/3s。"""
+        code = getattr(exc, "code", None)
+        base = 5.0 if code in {401, 403, 429} else 1.0
+        return base * (3**attempt)
 
     def get_text(self, url: str, *, timeout: int = 30, retries: int = 3) -> str:
         import ssl
-        import time
         ctx = ssl.create_default_context()
         ctx.check_hostname = False
         ctx.verify_mode = ssl.CERT_NONE
@@ -70,7 +98,8 @@ class LiveJsonConnector(JsonFileConnector):
         if isinstance(raw, list):
             return [item for item in raw if isinstance(item, dict)]
         if isinstance(raw, dict):
-            for key in ["projects", "items", "results", "data", "repositories", "list"]:
+            # "tree" = git/trees 的全量文件树条目(见 huawei_sources._discover_paths_from_tree)。
+            for key in ["projects", "items", "results", "data", "repositories", "list", "tree"]:
                 value = raw.get(key)
                 if isinstance(value, list):
                     return [item for item in value if isinstance(item, dict)]

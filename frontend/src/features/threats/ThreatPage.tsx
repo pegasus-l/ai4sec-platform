@@ -258,7 +258,7 @@ function ThreatAssets({ openAsset }: { openAsset: (asset: ThreatAsset) => void }
     // Merge ascendhub: combine detail items (with name/publisher) and tags items (with versionTags) by hubId
     const ascendhubMap = new Map<string, ThreatAsset>();
     const result: ThreatAsset[] = [];
-    // Dedupe firmware by modelName, merge cannVersion from cann entries
+    // 固件：一条 = 一个唯一下载包（后端按 downloadUrl 已合并）；这里只做兜底去重，并把型号并起来
     const firmwareMap = new Map<string, ThreatAsset>();
     all.forEach(a => {
       if (a.source === 'ascendhub' && a.hubId) {
@@ -279,9 +279,11 @@ function ThreatAssets({ openAsset }: { openAsset: (asset: ThreatAsset) => void }
           result.push(a);
         }
       } else if (a.source === 'firmware') {
-        const key = a.model || a.title;
-        if (firmwareMap.has(key)) {
-          const existing = firmwareMap.get(key)!;
+        const key = a.packageName || a.title;
+        const existing = firmwareMap.get(key);
+        if (existing) {
+          const merged = new Set([...(existing.models ?? []), ...(a.models ?? [])]);
+          if (merged.size) existing.models = Array.from(merged);
           if (a.cannVersion && !existing.cannVersion) existing.cannVersion = a.cannVersion;
         } else {
           firmwareMap.set(key, a);
@@ -295,22 +297,37 @@ function ThreatAssets({ openAsset }: { openAsset: (asset: ThreatAsset) => void }
   }, [assetData]);
   const [assetType, setAssetType] = useState('all');
   const [confidence, setConfidence] = useState('all');
-  const filtered = assets.filter(a => (assetType === 'all' || a.type === assetType) && (confidence === 'all' || a.confidence === confidence));
+  const [firmwareKind, setFirmwareKind] = useState('all');
+  const firmwareKinds = useMemo(
+    () => Array.from(new Set(assets.filter(a => a.type === 'firmware').map(a => a.category || 'unknown'))),
+    [assets],
+  );
+  const filtered = assets.filter(a =>
+    (assetType === 'all' || a.type === assetType)
+    && (confidence === 'all' || a.confidence === confidence)
+    && (firmwareKind === 'all' || a.type !== 'firmware' || (a.category || 'unknown') === firmwareKind),
+  );
   if (isLoading) return <EmptyState title="资产加载中..." />;
   return <div className="grid">
     <div className="split">
       <select className="select" value={assetType} onChange={e => setAssetType(e.target.value)}><option value="all">全部资产</option><option value="firmware">固件</option><option value="image">镜像</option><option value="mirror">软件源</option><option value="openx_firmware">OpenX固件</option></select>
       <select className="select" value={confidence} onChange={e => setConfidence(e.target.value)}><option value="all">全部置信度</option><option value="direct">direct</option><option value="inferred">inferred</option><option value="weak">weak</option><option value="unknown">unknown</option></select>
-      <span className="muted small">共 {filtered.length} 个资产{assetType !== 'all' ? ` · ${assetType}` : ''}{confidence !== 'all' ? ` · ${confidence}` : ''}</span>
+      {firmwareKinds.length > 1 && <select className="select" value={firmwareKind} onChange={e => setFirmwareKind(e.target.value)}><option value="all">全部组件类型</option>{firmwareKinds.map(k => <option key={k} value={k}>{FIRMWARE_KIND_LABELS[k] || k}</option>)}</select>}
+      <span className="muted small">共 {filtered.length} 个资产{assetType !== 'all' ? ` · ${assetType}` : ''}{confidence !== 'all' ? ` · ${confidence}` : ''}{firmwareKind !== 'all' ? ` · ${FIRMWARE_KIND_LABELS[firmwareKind] || firmwareKind}` : ''}</span>
     </div>
     <div className="grid cols-2">
       {(() => {
         const openxAssets = filtered.filter(a => a.type === 'openx_firmware');
-        const otherAssets = filtered.filter(a => a.type !== 'openx_firmware');
+        const firmwareAssets = filtered.filter(a => a.type === 'firmware');
+        const otherAssets = filtered.filter(a => a.type !== 'openx_firmware' && a.type !== 'firmware');
         const groups = new Map<string, ThreatAsset[]>();
         openxAssets.forEach(a => { const key = a.deviceModel || a.category || '未知设备'; if (!groups.has(key)) groups.set(key, []); groups.get(key)!.push(a); });
+        // 固件按组件类型(NPU/CPLD/BMC/BIOS/驱动…)分组，一组一张卡，展开看包
+        const firmwareGroups = new Map<string, ThreatAsset[]>();
+        firmwareAssets.forEach(a => { const key = a.category || 'unknown'; if (!firmwareGroups.has(key)) firmwareGroups.set(key, []); firmwareGroups.get(key)!.push(a); });
         return <>
           {Array.from(groups.entries()).map(([model, files]) => <OpenxGroupCard key={model} deviceModel={model} files={files} onClick={openAsset} />)}
+          {Array.from(firmwareGroups.entries()).map(([kind, files]) => <FirmwareGroupCard key={kind} kind={kind} files={files} onClick={openAsset} />)}
           {otherAssets.map(asset => <AssetCard key={asset.id} asset={asset} onClick={() => openAsset(asset)} />)}
         </>;
       })()}
@@ -346,6 +363,53 @@ function OpenxGroupCard({ deviceModel, files, onClick }: { deviceModel: string; 
         })}
       </div>
     ) : <p className="muted small" style={{ marginTop: 8 }}>点击展开 {files.length} 个固件文件</p>}
+  </div>;
+}
+
+/** 固件按组件类型分组的显示名。NPU 是驱动/工具链大堆头，CPLD/BMC/BIOS 才是硬件攻击面。 */
+const FIRMWARE_KIND_LABELS: Record<string, string> = {
+  NPU: 'NPU 固件/驱动',
+  MCU: 'MCU 固件',
+  CPLD: 'CPLD 固件',
+  BMC: 'BMC 固件',
+  iBMC: 'iBMC 固件',
+  BIOS: 'BIOS 固件',
+  iDriver: '驱动',
+  CDR: 'CDR 固件',
+  commercial: '商业固件（需登录下载）',
+  unknown: '未分类固件',
+};
+
+/** 固件组卡：一张卡 = 一个组件类型，卡内是去重后的唯一下载包。 */
+function FirmwareGroupCard({ kind, files, onClick }: { kind: string; files: ThreatAsset[]; onClick: (a: ThreatAsset) => void }) {
+  const [expanded, setExpanded] = useState(false);
+  const label = FIRMWARE_KIND_LABELS[kind] || kind;
+  const latest = files.reduce((max, f) => (f.latest || '') > max ? (f.latest || '') : max, '');
+  const models = new Set<string>();
+  files.forEach(f => (f.models?.length ? f.models : [f.model || '']).forEach(m => { if (m && m !== '-') models.add(m); }));
+  return <div className="card asset-card">
+    <div className="row-title" style={{ cursor: 'pointer' }} onClick={() => setExpanded(!expanded)}><span className="badge">{label}</span><span className="badge">{files.length} 个固件包</span><span className="badge">{expanded ? '▼' : '▶'}</span></div>
+    <h3>{label}</h3>
+    <div className="asset-meta">
+      <div><b>{files.length}</b><span>固件包数</span></div>
+      <div><b>{models.size}</b><span>涉及型号</span></div>
+      <div><b>{latest || '-'}</b><span>最新发布</span></div>
+    </div>
+    {expanded ? (
+      <div className="timeline" style={{ marginTop: 10 }}>
+        {files.map((f, i) => {
+          const modelText = (f.models?.length ? f.models : [f.model]).filter(m => m && m !== '-').join(' / ') || '-';
+          const info = [modelText, f.version && f.version !== '-' ? f.version : '', f.size || '', f.latest || ''].filter(Boolean).join(' | ');
+          return (
+            <div key={i} className="timeline-item clickable" onClick={() => onClick(f)}>
+              <div className="row-title"><b style={{ wordBreak: 'break-all' }}>{f.packageName || f.title}</b><span className="badge">{f.fileType || '-'}</span></div>
+              <span className="muted small">{info || '-'}</span>
+              {f.link || f.url ? <span className="muted small" style={{ wordBreak: 'break-all', display: 'block' }}>{f.link || f.url}</span> : null}
+            </div>
+          );
+        })}
+      </div>
+    ) : <p className="muted small" style={{ marginTop: 8 }}>点击展开 {files.length} 个固件包</p>}
   </div>;
 }
 

@@ -79,6 +79,10 @@ export interface ThreatAsset {
   softwareVersion?: string;
   fileType?: string;
   hubId?: string;
+  /** 固件下载包名（一条资产 = 一个唯一下载包，采集侧按 downloadUrl 已合并）。 */
+  packageName?: string;
+  /** 该固件包涉及的产品型号（同一个包可能挂多个型号）。 */
+  models?: string[];
   versionTags?: Array<{ tag: string; size: string; update_time: string; architectures: string[] }>;
 }
 

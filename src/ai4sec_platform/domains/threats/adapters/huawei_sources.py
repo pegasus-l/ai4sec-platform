@@ -39,6 +39,10 @@ DEFAULT_LIVE_ORGS = [
     {"platform": "gitcode", "org": "opentiny"},
 ]
 SECURITY_FILE_SUFFIXES = (".md", ".markdown", ".yml", ".yaml", ".json")
+# git/trees 全量文件树的抓取上限(100 条/页)。原来逐目录 BFS 最多要 200 次目录请求,
+# 这里最多 20 次就能覆盖 2000 个条目 —— openharmony/security 实际 755 条,8 页足够。
+TREE_PAGE_SIZE = 100
+TREE_MAX_PAGES = 20
 SECURITY_FILE_TERMS = ["security", "advisory", "cve", "vulnerability", "vuln", "漏洞", "安全公告", "安全披露"]
 SECURITY_SOURCE_CODE_REPO_NAMES = {"cve-manager", "cve-manage", "cve-manage-bot", "cve-ease"}
 DEFAULT_ASCENDHUB_TARGETS = [
@@ -408,6 +412,74 @@ def _fetch_security_files(connector, platform: str, owner: str, repo_name: str, 
 
 
 def _discover_security_file_paths(connector, platform: str, owner: str, repo_name: str, *, max_files: int, max_dirs: int) -> list[str]:
+    """先走 git/trees(一次拿全量文件树),拿不到再退回逐目录 BFS。
+
+    2026-10-09:GitCode/AtomGit 的 `GET /repos/{o}/{r}/contents`(不带路径的根目录列表)
+    与 `GET /repos/{o}/{r}` 会持续返 401(实测两个平台、两个不同出口 IP、三种 UA 全是
+    401,且 30 秒后不恢复;而同一时刻 `/git/trees/{ref}?recursive=1`、`/contents/{具体路径}`、
+    `/orgs/{org}/repos` 都是 200)。BFS 从根目录起步,根目录一 401 就整仓 0 候选 ——
+    原先那些「安全仓抓回 0 篇」正是这个原因,不是没有公告。
+    git/trees 一条 recursive 请求给全量条目(分页 100 条/页),既绕开 401,又把原来
+    最多 max_dirs 次目录请求压到几页,顺带不再受 BFS 深度 4 的限制。
+    """
+    candidates = _discover_paths_from_tree(connector, platform, owner, repo_name, max_files=max_files)
+    if candidates is not None:
+        return candidates
+    return _discover_security_file_paths_bfs(connector, platform, owner, repo_name, max_files=max_files, max_dirs=max_dirs)
+
+
+def _discover_paths_from_tree(connector, platform: str, owner: str, repo_name: str, *, max_files: int) -> list[str] | None:
+    """tree 路线成功就返回候选(可能是空列表 —— 空代表「这个仓确实没有安全公告文件」),
+    只有整条 tree 路线用不了(两种 ref 都拿不到条目)时才返回 None 让上游退回 BFS。
+    区分这两件事很重要:否则「仓里没有」会被当成「抓取失败」,又去逐目录 BFS 空跑二十几秒。
+    """
+    for ref in ("master", "main"):
+        entries: list[dict[str, Any]] = []
+        for page in range(1, TREE_MAX_PAGES + 1):
+            result = connector.fetch(SourceFetchRequest(source_name=f"{platform}:{owner}/{repo_name}:tree:{ref}:{page}", params={"resource": "tree", "owner": owner, "repo": repo_name, "ref": ref, "page": page, "per_page": TREE_PAGE_SIZE, "timeout_seconds": 20}))
+            if result.errors or not result.items:
+                break
+            entries.extend(result.items)
+            if len(result.items) < TREE_PAGE_SIZE:
+                break
+            # 日常模式只要 3 篇正文,候选攒够就不必再翻页(大仓能翻 20 页)。
+            if len(_security_candidate_paths(entries, max_files=max_files)) >= max_files:
+                break
+        if entries:
+            return _security_candidate_paths(entries, max_files=max_files)
+    return None
+
+
+def _security_candidate_paths(entries: list[dict[str, Any]], *, max_files: int) -> list[str]:
+    """从扁平文件树里挑安全公告类文件 —— 判据与原 BFS 等价:
+
+    文件路径的后缀要命中 SECURITY_FILE_SUFFIXES,并且「自身路径命中安全关键词」或
+    「落在某个安全目录(路径含安全关键词,或是 4 位年份目录)之下」。原 BFS 是把
+    under_security 沿目录链传递,这里改成对每个文件回看它的所有祖先目录,结果一致。
+    """
+    security_dirs = {
+        str(entry.get("path") or "")
+        for entry in entries
+        if str(entry.get("type") or "") in {"tree", "dir"} and (_is_security_path(str(entry.get("path") or "")) or _is_year_dir(str(entry.get("path") or "").rsplit("/", 1)[-1]))
+    }
+    candidates: list[str] = []
+    for entry in entries:
+        if str(entry.get("type") or "") not in {"blob", "file"}:
+            continue
+        path = str(entry.get("path") or "")
+        if not path.lower().endswith(SECURITY_FILE_SUFFIXES):
+            continue
+        parent = path.rsplit("/", 1)[0] if "/" in path else ""
+        under_security = any(parent == directory or parent.startswith(directory + "/") for directory in security_dirs)
+        if not under_security and not _is_security_path(path):
+            continue
+        candidates.append(path)
+        if len(candidates) >= max_files:
+            break
+    return candidates
+
+
+def _discover_security_file_paths_bfs(connector, platform: str, owner: str, repo_name: str, *, max_files: int, max_dirs: int) -> list[str]:
     candidates: list[str] = []
     visited: set[str] = set()
     queue: list[tuple[str, int, bool]] = [("", 0, False)]
@@ -546,7 +618,56 @@ def _collect_firmware_assets(registry: SourceRegistry, params: dict[str, Any]) -
         commercial_items, commercial_errors = _collect_commercial_firmware(connector, params)
         items.extend(commercial_items)
         errors.extend(commercial_errors)
+    items = _dedupe_firmware_packages(items)
     return {"source": "firmware", "path": "connector:hiascend", "exists": not bool(errors), "items": items, "raw": {"metadata": products.metadata, "errors": errors, "mode": "live"}, "mode": "live"}
+
+
+def _dedupe_firmware_packages(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """把「同一个下载包在 型号 × CANN 版本 组合下反复出现」合并成唯一一条(2026-10-09)。
+
+    实测全量 4437 条里资源级 3825 条只有 373 个不同的 downloadUrl —— 同一个包平均挂在 2.4 个型号下,
+    而落库按 title(原来等于型号名)upsert 时又把「有哪些包」整个抹掉:页面只剩型号,看不出包、版本、
+    大小、日期;每轮还往 normalized_items/evidence_items 白写约 4400 行近乎重复的记录。
+    现在按 downloadUrl(拿不到就退到包名)合并成「唯一下载包」,型号/CANN/固件版本收成列表留在字段里,
+    并补 category = productType 供页面按组件类型(NPU/CPLD/BMC/BIOS/驱动…)分组。
+
+    型号级、CANN 级、固件版本级条目是导航层级、本身没有下载物,不再单独成条目(信息已并进包上);
+    产品级条目只在「该产品一个型号都没有」时出现,是兜底,原样保留。
+    """
+    packages: dict[str, dict[str, Any]] = {}
+    order: list[str] = []
+    passthrough: list[dict[str, Any]] = []
+    for item in items:
+        if str(item.get("source_type") or "") in {"firmware_model", "firmware_cann", "firmware_package"}:
+            continue
+        key = _firmware_package_key(item)
+        if not key:
+            passthrough.append(item)
+            continue
+        if key not in packages:
+            packages[key] = {**item, "category": _firmware_category(item), "models": [], "cannVersions": [], "firmwareVersions": []}
+            order.append(key)
+        target = packages[key]
+        for field, bucket in (("modelName", "models"), ("cannVersion", "cannVersions"), ("firmwareVersion", "firmwareVersions")):
+            value = str(item.get(field) or "").strip()
+            if value and value not in target[bucket]:
+                target[bucket].append(value)
+    return [*passthrough, *(packages[key] for key in order)]
+
+
+def _firmware_package_key(item: dict[str, Any]) -> str:
+    url = str(item.get("downloadUrl") or "").strip()
+    if url:
+        return url
+    name = str(item.get("packageName") or item.get("matchingVersionNo") or "").strip()
+    return f"{name}|{item.get('modelName') or ''}" if name else ""
+
+
+def _firmware_category(item: dict[str, Any]) -> str:
+    """页面分组用的组件类型:社区版取 productType,商用版单独一类。"""
+    if str(item.get("source_type") or "") == "firmware_commercial":
+        return "commercial"
+    return str(item.get("productType") or "").strip() or "unknown"
 
 
 def _collect_commercial_firmware(connector, params: dict[str, Any]) -> tuple[list[dict[str, Any]], list[str]]:

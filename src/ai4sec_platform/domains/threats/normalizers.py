@@ -78,21 +78,29 @@ def normalize_cve_project(source: str, item: dict[str, Any]) -> dict[str, Any]:
 
 
 def normalize_firmware(source: str, item: dict[str, Any]) -> dict[str, Any]:
+    """固件资产归一化。
+
+    2026-10-09:一条 = 一个唯一下载包,不再是型号。原先所有层级 title 都等于型号名,
+    domain_items 按 title upsert → 4437 条固件线索塌成 35 行型号,页面上「有哪些包、什么版本、
+    多大、什么时候发的」全看不见(采集侧已按 downloadUrl 合并,见 huawei_sources._dedupe_firmware_packages)。
+    """
     model = item.get("productModel") or item.get("modelName") or item.get("name") or item.get("productModel") or "unknown"
+    package_name = str(item.get("packageName") or item.get("matchingVersionNo") or "").strip()
     fw_type = item.get("source_type", "community")
+    identity = package_name or model
     result = {
-        "item_key": f"firmware:{model}:{fw_type}".lower(),
+        "item_key": f"firmware:{identity}:{fw_type}".lower(),
         "source": source,
         "source_type": f"firmware_{fw_type}",
-        "title": model,
+        "title": identity,
         "url": item.get("downloadUrl") or "",
         "summary": item.get("softwareExplain") or item.get("description") or f"固件/型号线索：{model}。",
         "risk_score": item.get("packageCount") or item.get("downloadCount") or 0,
         "raw": item,
     }
     # Package-level fields from 3-level API query
-    if item.get("packageName"):
-        result["package_name"] = item["packageName"]
+    if package_name:
+        result["package_name"] = package_name
         result["file_size"] = item.get("fileSize", "")
         result["release_time"] = item.get("releaseTime", "")
         result["software_explain"] = item.get("softwareExplain", "")
@@ -101,6 +109,10 @@ def normalize_firmware(source: str, item: dict[str, Any]) -> dict[str, Any]:
         result["firmware_version"] = item.get("firmwareVersion", "")
         result["product_series"] = item.get("productSeries", "")
         result["firmware_origin"] = fw_type  # community or commercial
+        # 页面按组件类型分组用的分类;型号可能是多个(同一个包挂几个型号),收成列表。
+        result["category"] = item.get("category") or item.get("productType") or ""
+        result["models"] = item.get("models") or ([model] if model and model != "unknown" else [])
+        result["cann_versions"] = item.get("cannVersions") or ([item["cannVersion"]] if item.get("cannVersion") else [])
     return result
 
 

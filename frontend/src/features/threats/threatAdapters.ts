@@ -250,21 +250,25 @@ export function assetFromItem(item: Record<string, unknown>): ThreatAsset {
 
   // version: only ascendhub.tag is a real version (e.g. "3.0.0-800I-A3")
   // mirrors.tag is a category label ("gitcode"), NOT a version — skip it
+  // firmware: 固件包版本（"Ascend HDK 25.5.2" 这类）
   const versionField = isAscendhub
     ? asString(raw.tag)
-    : isMirror
-      ? (raw.releaseCount && raw.releaseCount !== 0 ? String(raw.releaseCount) : '')
-      : '';
+    : isFirmware
+      ? asString(raw.firmwareVersion)
+      : isMirror
+        ? (raw.releaseCount && raw.releaseCount !== 0 ? String(raw.releaseCount) : '')
+        : '';
 
   // count: mirrors→packageCount, ascendhub→downloads (different field name!)
   const packageCount = isMirror ? asNumber(raw.packageCount) : 0;
   const downloadCount = isMirror ? asNumber(raw.downloadCount) : isAscendhub ? asNumber(raw.downloads) : 0;
   const storageBytes = isMirror ? asNumber(raw.storageSize) : 0;
 
-  // latest: mirrors→validateTime, ascendhub→updateTime, openx→last_modified
+  // latest: mirrors→validateTime, ascendhub→updateTime, openx→last_modified, firmware→releaseTime
   const latestField = isMirror ? asString(raw.validateTime)
     : isAscendhub ? asString(raw.updateTime)
     : isOpenx ? asString(raw.last_modified)
+    : isFirmware ? asString(raw.releaseTime)
     : '';
 
   return {
@@ -286,8 +290,8 @@ export function assetFromItem(item: Record<string, unknown>): ThreatAsset {
     version: asString(versionField) || '-',
     count: packageCount > 0 ? String(packageCount) : (storageBytes > 0 ? formatBytes(storageBytes) : '-'),
     latest: asString(latestField) || '-',
-    meta: asString(raw.msg ?? raw.description),
-    link: asString(raw.mirrorPath ?? raw.webUrl ?? raw.url),
+    meta: asString(raw.msg ?? raw.description ?? raw.softwareExplain),
+    link: isFirmware ? asString(raw.downloadUrl ?? raw.mirrorPath ?? raw.webUrl ?? raw.url) : asString(raw.mirrorPath ?? raw.webUrl ?? raw.url),
     confidence: inferAssetConfidence(raw),
     repos: (() => {
       // If AI association was done, use those repo_ids
@@ -306,16 +310,21 @@ export function assetFromItem(item: Record<string, unknown>): ThreatAsset {
     mirrorPath: isMirror ? asString(raw.mirrorPath) : '',
     publisher: isAscendhub ? asString(raw.publisher) : '',
     labelNames: isAscendhub ? asArray<string>(raw.labelNames) : [],
-    size: isAscendhub ? asString(raw.size) : isOpenx ? asString(raw.size) : '',
+    size: isAscendhub ? asString(raw.size) : isOpenx ? asString(raw.size) : isFirmware ? asString(raw.fileSize) : '',
     fullDescription: isAscendhub ? asString(raw.fullDescription ?? raw.description) : '',
-    cannVersion: isFirmware ? asString(raw.cannVersion) : '',
+    cannVersion: isFirmware ? asArray<string>(raw.cannVersions)[0] ?? asString(raw.cannVersion) : '',
     online: isMirror ? Boolean(raw.online) : isAscendhub ? Boolean(raw.open) : undefined,
     official: isMirror ? Boolean(raw.official) : undefined,
-    downloadCount: isMirror ? (asNumber(raw.downloadCount) || undefined) : isAscendhub ? (asNumber(raw.downloads) || undefined) : undefined,
+    downloadCount: isMirror ? (asNumber(raw.downloadCount) || undefined) : isAscendhub ? (asNumber(raw.downloads) || undefined) : isFirmware ? (asNumber(raw.downloadNum) || undefined) : undefined,
     deviceModel: isOpenx ? asString(payload.device_model) : (isFirmware ? asString(raw.modelName) : ''),
     softwareVersion: isOpenx ? asString(payload.software_version) : '',
-    fileType: isOpenx ? asString(payload.file_type) : '',
+    fileType: isOpenx ? asString(payload.file_type) : isFirmware ? asString(raw.softwareType) : '',
     hubId: isAscendhub ? asString(payload.hub_id ?? raw.hub_id) : '',
+    // 固件包：一条资产 = 一个唯一下载包（采集侧已按 downloadUrl 合并），型号可能不止一个
+    packageName: isFirmware ? asString(raw.packageName ?? raw.matchingVersionNo) : '',
+    models: isFirmware
+      ? (asArray<string>(raw.models).length ? asArray<string>(raw.models) : (raw.modelName ? [asString(raw.modelName)] : []))
+      : [],
     versionTags: isAscendhub ? asArray<Record<string, unknown>>(payload.version_tags).map((t) => ({
       tag: asString(t.tag), size: asString(t.size), update_time: asString(t.update_time),
       architectures: asArray<string>(t.architectures),
