@@ -25,7 +25,16 @@ class HiAscendConnector(LiveJsonConnector):
         if isinstance(raw, dict):
             data = raw.get("data")
             if isinstance(data, list):
-                return [item for item in data if isinstance(item, dict)]
+                # 2026-10-09:原先只保留 dict,把「data 是字符串数组」的接口整级丢空 ——
+                # softwareCenter/getFirmwareVersion 返回的就是 ["Ascend HDK 25.5.2", "Ascend HDK 25.5.1"],
+                # 被过滤成 0 条 → 固件包这一级(以及嵌在它里面的固件资源级)永远采不到。
+                # SourceFetchResult.items 的契约是 dict 列表,所以标量要包一层;
+                # 本网关目前只有这一个接口返回字符串数组(即固件版本号),故用 firmwareVersion 作键。
+                return [
+                    item if isinstance(item, dict) else {"firmwareVersion": str(item)}
+                    for item in data
+                    if isinstance(item, (dict, str))
+                ]
             if isinstance(data, dict):
                 for key in ["list", "items", "records", "repositories", "tags"]:
                     value = data.get(key)

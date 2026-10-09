@@ -517,9 +517,10 @@ def _collect_firmware_assets(registry: SourceRegistry, params: dict[str, Any]) -
                 packages = connector.fetch(SourceFetchRequest(source_name=f"hiascend:firmware_packages:{model_id}:{cann_id}", params={"endpoint": "softwareCenter/getFirmwareVersion", "lang": "zh", "type": "community", "modelId": model_id, "cannId": cann_id, "timeout_seconds": params.get("timeout_seconds", 20)}))
                 errors.extend(packages.errors)
                 for package in _limited(packages.items, package_limit):
-                    firmware_version = package if isinstance(package, str) else package.get("firmwareName") or package.get("version") or package.get("name") or ""
-                    package_payload = package if isinstance(package, dict) else {"firmwareVersion": firmware_version}
-                    items.append({**base_model, **package_payload, "cannId": cann_id, "cannVersion": cann_version, "firmwareVersion": firmware_version, "source_type": "firmware_package"})
+                    # 这个接口返回的是版本号字符串数组,连接器已包成 {"firmwareVersion": "Ascend HDK 25.5.2"}
+                    # (旧代码这里的 isinstance(package, str) 分支永远走不到,因为 items 契约只收 dict)。
+                    firmware_version = package.get("firmwareName") or package.get("version") or package.get("name") or package.get("firmwareVersion") or ""
+                    items.append({**base_model, **package, "cannId": cann_id, "cannVersion": cann_version, "firmwareVersion": firmware_version, "source_type": "firmware_package"})
                     if not firmware_version:
                         continue
                     resources = connector.fetch(SourceFetchRequest(source_name=f"hiascend:firmware_resources:{model_id}:{firmware_version}", params={"endpoint": "softwareCenter/queryResourceCenterList", "lang": "zh", "type": "community", "modelId": model_id, "version": firmware_version, "productType": "", "cpuArchitecture": "", "softwareType": "", "timeout_seconds": params.get("timeout_seconds", 20)}))
