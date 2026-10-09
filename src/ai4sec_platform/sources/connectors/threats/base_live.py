@@ -46,7 +46,9 @@ class LiveJsonConnector(JsonFileConnector):
         last_exc: Exception | None = None
         for attempt in range(retries):
             try:
-                req = urllib.request.Request(url, headers={"Accept": "text/html,*/*"})
+                # 2026-10-09:原先写死 Accept,连接器自定义的 UA 传不下来(openx_huawei 站改版后需要常规 UA)。
+                headers = {**self.request_headers(), "Accept": "text/html,*/*"}
+                req = urllib.request.Request(url, headers=headers)
                 with urllib.request.urlopen(req, timeout=timeout, context=ctx) as resp:  # noqa: S310
                     return resp.read().decode("utf-8", errors="replace")
             except Exception as exc:
