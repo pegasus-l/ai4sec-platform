@@ -20,7 +20,13 @@ class LiveJsonConnector(JsonFileConnector):
         return SourceHealth(status="ok", message=self.base_url)
 
     def fetch(self, request: SourceFetchRequest) -> SourceFetchResult:
-        if request.config.get("path") or request.params.get("path"):
+        # 2026-10-09:带 resource 的请求一定是打活接口,不能走下面这个「本地 JSON 快照」分支。
+        # 目录遍历和抓正文这两个调用(gitcode/atomgit 的 contents、file 资源)是用 params["path"]
+        # 传**仓库内路径**的,原来一律被当成「读本地文件」→ 除根目录列表(path="")外全部返回
+        # missing_path,安全仓的公告正文因此一条都采不到(BFS 永远停在根目录)。
+        # 真正的本地快照模式(source_records_path / resume_from_run_id)不走连接器 fetch,
+        # 见 domains/threats/adapters/huawei_sources.py:_load_source_records_from_path。
+        if not request.params.get("resource") and (request.config.get("path") or request.params.get("path")):
             return super().fetch(request)
         url = self.build_url(request)
         try:
