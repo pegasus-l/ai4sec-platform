@@ -17,6 +17,12 @@ from ai4sec_platform.pipelines.results import StepResult
 from ai4sec_platform.sources.registry import SourceRegistry
 
 
+def _fresh(manual: list[dict], builtin: list[dict], key: str) -> list[dict]:
+    """人工目标里剔掉内建已有的(用户在页面上加了本来就内建的,不去重就会重复采两遍)。"""
+    seen = {str(item.get(key) or "") for item in builtin}
+    return [item for item in manual if str(item.get(key) or "") not in seen]
+
+
 def merge_manual_targets(conn, params: dict) -> dict:
     """把「数据源页」人工添加的采集目标并进 params(2026-10-08 领导反馈 #5)。
 
@@ -31,10 +37,16 @@ def merge_manual_targets(conn, params: dict) -> dict:
     if not extra.get("orgs") and not extra.get("ascendhub_targets"):
         return params
     merged = dict(params)
+    # 人工添加的排在内建前面(2026-10-09):原来追加在末尾,一旦采集侧还有截断(日常档的
+    # 「只采前 N 个」),新加的目标永远轮不到,页面上显示"启用"却采不到,很难排查。
+    # 采集侧现在默认不截断,这里再保证一次顺序,免得以后重新引入上限时又踩同一个坑。
     if extra["orgs"] and not merged.get("orgs"):
-        merged["orgs"] = [*DEFAULT_LIVE_ORGS, *extra["orgs"]]
+        merged["orgs"] = [*_fresh(extra["orgs"], DEFAULT_LIVE_ORGS, "org"), *DEFAULT_LIVE_ORGS]
     if extra["ascendhub_targets"] and not merged.get("ascendhub_targets"):
-        merged["ascendhub_targets"] = [*DEFAULT_ASCENDHUB_TARGETS, *extra["ascendhub_targets"]]
+        merged["ascendhub_targets"] = [
+            *_fresh(extra["ascendhub_targets"], DEFAULT_ASCENDHUB_TARGETS, "hub_id"),
+            *DEFAULT_ASCENDHUB_TARGETS,
+        ]
     return merged
 
 

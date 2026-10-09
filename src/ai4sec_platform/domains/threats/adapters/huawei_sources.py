@@ -459,17 +459,38 @@ def _collect_live_assets(registry: SourceRegistry, params: dict[str, Any], reque
     return bounded_map(collectors, lambda collector: collector(), max_workers=int(params.get("asset_max_workers", 4 if _full_scan(params) else 2)))
 
 
+def _opt_limit(value: Any) -> int | None:
+    """把「可选的截断条数」参数解析成 limit;没传 / 传 0 / 传非法值 = 不限制(None)。
+
+    2026-10-09:资产类采集原来按 _full_scan 分日常/全量两套上限,日常那套是浅采样
+    (固件 2 产品、Ascend Hub 前 2 个 hub…),导致资产库长期只装得下开头一小截,
+    后加的采集目标永远轮不到。现在默认不限制,只保留「显式传正数才截断」的调试口子。
+    """
+    if value in (None, ""):
+        return None
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return None
+    return number if number > 0 else None
+
+
+def _limited(values: list[Any], limit: int | None) -> list[Any]:
+    return values if limit is None else values[:limit]
+
+
 def _collect_firmware_assets(registry: SourceRegistry, params: dict[str, Any]) -> dict[str, Any]:
     connector = registry.get("hiascend")
     products = connector.fetch(SourceFetchRequest(source_name="hiascend:firmware_products", params={"endpoint": "softwareCenter/queryResourceProductList", "lang": "zh", "type": "community", "timeout_seconds": params.get("timeout_seconds", 20)}))
     items = []
     errors = list(products.errors)
-    product_limit = int(params.get("firmware_product_limit", 20 if _full_scan(params) else 2))
-    model_limit = int(params.get("firmware_model_limit", 200 if _full_scan(params) else 5))
-    cann_limit = int(params.get("firmware_cann_limit", 10 if _full_scan(params) else 1))
-    package_limit = int(params.get("firmware_package_limit", 50 if _full_scan(params) else 3))
-    resource_limit = int(params.get("firmware_resource_limit", 200 if _full_scan(params) else 20))
-    for product in products.items[:product_limit]:
+    # 默认全量:社区版产品/型号本来就不多,浅采样省下的那点时间换来的是资产库长期缺条目。
+    product_limit = _opt_limit(params.get("firmware_product_limit"))
+    model_limit = _opt_limit(params.get("firmware_model_limit"))
+    cann_limit = _opt_limit(params.get("firmware_cann_limit"))
+    package_limit = _opt_limit(params.get("firmware_package_limit"))
+    resource_limit = _opt_limit(params.get("firmware_resource_limit"))
+    for product in _limited(products.items, product_limit):
         product_id = product.get("productId") or product.get("id")
         if not product_id:
             items.append({**product, "source_type": "firmware_product"})
@@ -479,7 +500,7 @@ def _collect_firmware_assets(registry: SourceRegistry, params: dict[str, Any]) -
         if not models.items:
             items.append({**product, "source_type": "firmware_product"})
             continue
-        for model in models.items[:model_limit]:
+        for model in _limited(models.items, model_limit):
             model_id = model.get("modelId") or model.get("id")
             base_model = {**model, "productId": product_id, "productName": product.get("productName"), "source_type": "firmware_model"}
             items.append(base_model)
@@ -487,7 +508,7 @@ def _collect_firmware_assets(registry: SourceRegistry, params: dict[str, Any]) -
                 continue
             cann_versions = connector.fetch(SourceFetchRequest(source_name=f"hiascend:cann:{model_id}", params={"endpoint": "softwareCenter/getCannVersion", "lang": "zh", "type": "community", "modelId": model_id, "timeout_seconds": params.get("timeout_seconds", 20)}))
             errors.extend(cann_versions.errors)
-            for cann in cann_versions.items[:cann_limit]:
+            for cann in _limited(cann_versions.items, cann_limit):
                 cann_id = cann.get("cannId") or cann.get("id")
                 cann_version = cann.get("cannVersion") or cann.get("version") or ""
                 items.append({**base_model, **cann, "cannId": cann_id, "cannVersion": cann_version, "source_type": "firmware_cann"})
@@ -495,7 +516,7 @@ def _collect_firmware_assets(registry: SourceRegistry, params: dict[str, Any]) -
                     continue
                 packages = connector.fetch(SourceFetchRequest(source_name=f"hiascend:firmware_packages:{model_id}:{cann_id}", params={"endpoint": "softwareCenter/getFirmwareVersion", "lang": "zh", "type": "community", "modelId": model_id, "cannId": cann_id, "timeout_seconds": params.get("timeout_seconds", 20)}))
                 errors.extend(packages.errors)
-                for package in packages.items[:package_limit]:
+                for package in _limited(packages.items, package_limit):
                     firmware_version = package if isinstance(package, str) else package.get("firmwareName") or package.get("version") or package.get("name") or ""
                     package_payload = package if isinstance(package, dict) else {"firmwareVersion": firmware_version}
                     items.append({**base_model, **package_payload, "cannId": cann_id, "cannVersion": cann_version, "firmwareVersion": firmware_version, "source_type": "firmware_package"})
@@ -503,9 +524,10 @@ def _collect_firmware_assets(registry: SourceRegistry, params: dict[str, Any]) -
                         continue
                     resources = connector.fetch(SourceFetchRequest(source_name=f"hiascend:firmware_resources:{model_id}:{firmware_version}", params={"endpoint": "softwareCenter/queryResourceCenterList", "lang": "zh", "type": "community", "modelId": model_id, "version": firmware_version, "productType": "", "cpuArchitecture": "", "softwareType": "", "timeout_seconds": params.get("timeout_seconds", 20)}))
                     errors.extend(resources.errors)
-                    for resource in resources.items[:resource_limit]:
+                    for resource in _limited(resources.items, resource_limit):
                         items.append({**base_model, **resource, "cannId": cann_id, "cannVersion": cann_version, "firmwareVersion": firmware_version, "productTypeFilter": "", "cpuArchitectureFilter": "", "softwareTypeFilter": "", "source_type": "firmware_resource"})
-    if params.get("include_commercial_firmware", _full_scan(params)):
+    # 商用版固件与社区版同属「昇腾固件与驱动」这一组,默认一起采(原来只有全量档才带)。
+    if params.get("include_commercial_firmware", True):
         commercial_items, commercial_errors = _collect_commercial_firmware(connector, params)
         items.extend(commercial_items)
         errors.extend(commercial_errors)
@@ -516,17 +538,19 @@ def _collect_commercial_firmware(connector, params: dict[str, Any]) -> tuple[lis
     products = connector.fetch(SourceFetchRequest(source_name="hiascend:commercial_products", params={"endpoint": "softwareCenter/queryResourceProductList", "lang": "zh", "type": "business", "timeout_seconds": params.get("timeout_seconds", 20)}))
     items: list[dict[str, Any]] = []
     errors = list(products.errors)
-    product_limit = int(params.get("commercial_product_limit", 20 if _full_scan(params) else 2))
-    model_limit = int(params.get("commercial_model_limit", 200 if _full_scan(params) else 5))
-    page_size = int(params.get("commercial_page_size", 15))
-    page_limit = int(params.get("commercial_page_limit", 20 if _full_scan(params) else 1))
-    for product in products.items[:product_limit]:
+    # 同上:默认全量。page_size 保持 15 —— 这是站点的分页粒度,擅自调大若后端仍按
+    # 15 条返回,下面「不满一页即停」的判断会误以为到底了,反而少采。
+    product_limit = _opt_limit(params.get("commercial_product_limit"))
+    model_limit = _opt_limit(params.get("commercial_model_limit"))
+    page_size = int(params.get("commercial_page_size") or 15)
+    page_limit = _opt_limit(params.get("commercial_page_limit")) or 200
+    for product in _limited(products.items, product_limit):
         product_id = product.get("productId") or product.get("id")
         if not product_id:
             continue
         models = connector.fetch(SourceFetchRequest(source_name=f"hiascend:commercial_models:{product_id}", params={"endpoint": "softwareCenter/queryProductModelList", "lang": "zh", "type": "business", "productId": product_id, "timeout_seconds": params.get("timeout_seconds", 20)}))
         errors.extend(models.errors)
-        for model in models.items[:model_limit]:
+        for model in _limited(models.items, model_limit):
             model_id = model.get("modelId") or model.get("id")
             if not model_id:
                 continue
@@ -543,10 +567,13 @@ def _collect_commercial_firmware(connector, params: dict[str, Any]) -> tuple[lis
 def _collect_ascendhub_assets(registry: SourceRegistry, params: dict[str, Any]) -> dict[str, Any]:
     connector = registry.get("hiascend")
     targets = params.get("ascendhub_targets") or DEFAULT_ASCENDHUB_TARGETS
-    limit = int(params.get("ascendhub_limit", len(targets) if _full_scan(params) else min(2, len(targets))))
+    # 2026-10-09:原先日常档只采 targets 的前 min(2, …) 个 hub(1aee491「默认扫描为了可完成」),
+    # 而人工添加的目标是追加在内建 86 个后面的 → 永远排不进前两个,加了等于没加。
+    # 实测 86 个 hub 全量只要 103 秒(日常整条威胁链路本来就要 12~16 分钟),不值得为这点时间丢数据。
+    limit = _opt_limit(params.get("ascendhub_limit"))
     items = []
     errors = []
-    for target in targets[:limit]:
+    for target in _limited(targets, limit):
         hub_id = target.get("hub_id") or target.get("id")
         if not hub_id:
             continue
@@ -555,8 +582,9 @@ def _collect_ascendhub_assets(registry: SourceRegistry, params: dict[str, Any]) 
         if detail.items:
             for item in detail.items:
                 items.append({**item, "hub_id": hub_id, "name": item.get("name") or target.get("name"), "source_type": "ascendhub"})
-        tag_pages = int(params.get("ascendhub_tag_pages", 2 if _full_scan(params) else 1))
-        tag_page_size = int(params.get("ascendhub_tag_page_size", 50 if _full_scan(params) else 10))
+        # 标签翻页:每页 50 条,不满一页即到底(下面的 break),20 页只是防「服务端每页都返回满页」的死循环上限。
+        tag_pages = int(params.get("ascendhub_tag_pages") or 20)
+        tag_page_size = int(params.get("ascendhub_tag_page_size") or 50)
         for page in range(1, tag_pages + 1):
             tags = connector.fetch(SourceFetchRequest(source_name=f"hiascend:ascendhub_tags:{hub_id}:{page}", params={"endpoint": "ascendHub/repositories/tags", "id": hub_id, "lang": "zh", "pageNo": page, "pageSize": tag_page_size, "timeout_seconds": params.get("timeout_seconds", 20)}))
             errors.extend(tags.errors)
@@ -580,8 +608,9 @@ def _collect_openx_huawei_assets(registry: SourceRegistry, params: dict[str, Any
     connector = registry.get("openx_huawei")
     root = connector.fetch(SourceFetchRequest(source_name="openx_huawei:root", params={"timeout_seconds": params.get("timeout_seconds", 20)}))
     errors = list(root.errors)
-    max_files = int(params.get("openx_file_limit", 500 if _full_scan(params) else 30))
-    items = [it for it in root.items if not it.get("is_dir")][:max_files]
+    # 全站就那么几十个文件(实测 51 个 / 6.6 秒),日常档截 30 个同样属于白丢数据,一并放开。
+    max_files = _opt_limit(params.get("openx_file_limit"))
+    items = _limited([it for it in root.items if not it.get("is_dir")], max_files)
     for it in items:
         it.setdefault("source_type", "openx_huawei")
     return {"source": "openx_huawei", "path": "connector:openx_huawei", "exists": not bool(errors), "items": items,
