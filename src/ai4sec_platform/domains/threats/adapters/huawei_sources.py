@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -40,9 +41,22 @@ DEFAULT_LIVE_ORGS = [
 ]
 SECURITY_FILE_SUFFIXES = (".md", ".markdown", ".yml", ".yaml", ".json")
 # git/trees 全量文件树的抓取上限(100 条/页)。原来逐目录 BFS 最多要 200 次目录请求,
-# 这里最多 20 次就能覆盖 2000 个条目 —— openharmony/security 实际 755 条,8 页足够。
+# 20 页(2000 条目)就够覆盖 openharmony/security(755 条)。
+# 2026-10-10:上限定成 20 页后,`openharmony/security_selinux_adapter` 实测正好返回 2000 条 ——
+# 撞在页数上限上,文件数更多的仓会被**静默截掉尾部**(分页到上限就停,不会报错),所以提到 100 页。
 TREE_PAGE_SIZE = 100
-TREE_MAX_PAGES = 20
+TREE_MAX_PAGES = 100
+# 「翻到不满一页为止」的分页上限(防呆):实测最大的仓 8~20 页,正常仓碰不到 200。
+PAGE_LIMIT_UNBOUNDED = 200
+# 单个安全仓抓多少篇正文。2026-10-10 实测 50 个安全仓共 417 个候选文件,唯一的大头是
+# `openkylin/kylin-system-security-checker` —— 4394 个 `poc/info/<年>/CVE-*.json`
+# (1999~2023 的 CVE PoC 索引,每篇约 2 KB 的 GitHub 仓元数据,不是 writeup,内容不再变),
+# 全抓要 ~45 分钟/晚、+4394 条素材且每晚重复入库,所以留 500 篇当默认上限。
+# 候选是先按日期倒序再截断的,所以截到的是**最新**的 500 篇,不是路径字典序的前 500 个。
+SECURITY_FILE_LIMIT = 500
+# BFS 回退路线的目录上限。tree 路线不用它,只有整个 tree 路线不可用时才生效。
+BFS_MAX_DIRS = 200
+BFS_MAX_FILES = 2000
 SECURITY_FILE_TERMS = ["security", "advisory", "cve", "vulnerability", "vuln", "漏洞", "安全公告", "安全披露"]
 SECURITY_SOURCE_CODE_REPO_NAMES = {"cve-manager", "cve-manage", "cve-manage-bot", "cve-ease"}
 DEFAULT_ASCENDHUB_TARGETS = [
@@ -333,11 +347,20 @@ def _enrich_security_repos(registry: SourceRegistry, repos: list[dict[str, Any]]
         return repos, []
     grouped = group_projects_by_org(repos)
     security = discover_security_repos(grouped)
-    issue_pages = int(params.get("security_issue_pages", 20 if _full_scan(params) else 1))
-    pr_pages = int(params.get("security_pr_pages", 1 if _full_scan(params) else 0))
-    max_files = int(params.get("security_file_limit", 200 if _full_scan(params) else 3))
-    max_security_repos = int(params.get("security_repo_limit", 50 if _full_scan(params) else 2))
-    max_content_dirs = int(params.get("security_content_dir_limit", 200 if _full_scan(params) else 20))
+    # 2026-10-10:安全仓采集原来按 _full_scan 分日常/全量两套上限:
+    #   日常档 = 每组织只展开 2 个安全仓、每仓 3 篇正文、议题 1 页、PR 0 页;
+    #   全量档 = 50 仓 / 200 篇 / 20 页 / 1 页。
+    # 而调度器调这个 pipeline 时**不传任何参数** → _full_scan 恒为 False → 永远走日常档,
+    # scan_profile=full 那条路一个调用方都没有(死代码)。实测后果(10-09 21:00Z 那轮):
+    # 全场 50 个安全仓(6 个组织)只展开 11 个,正文只落 14 篇 98 KB;而且候选当时按路径顺序截断,
+    # 所以拿到的永远是仓库里**最老**的那几篇(openharmony/security 命中的是 2021-03/08/09)。
+    # 现在:仓数与议题/PR 页数不截断,正文按 SECURITY_FILE_LIMIT(见常量注释)封顶;
+    # 全部走 _int_param,保留「显式传正数覆盖、显式传 0 = 该项不取」的统一调试口子。
+    issue_pages = _int_param(params.get("security_issue_pages"), PAGE_LIMIT_UNBOUNDED)
+    pr_pages = _int_param(params.get("security_pr_pages"), PAGE_LIMIT_UNBOUNDED)
+    max_files = _int_param(params.get("security_file_limit"), SECURITY_FILE_LIMIT)
+    max_security_repos = _opt_limit(params.get("security_repo_limit"))
+    max_content_dirs = _opt_limit(params.get("security_content_dir_limit")) or BFS_MAX_DIRS
     by_key = {(repo.get("platform"), repo.get("org"), repo.get("name")): repo for repo in repos}
     org_security_materials: list[dict[str, Any]] = []
     for org, sec_data in security.items():
@@ -400,10 +423,10 @@ def _is_security_source_code_repo(repo_name: str) -> bool:
     return str(repo_name or "").lower() in SECURITY_SOURCE_CODE_REPO_NAMES
 
 
-def _fetch_security_files(connector, platform: str, owner: str, repo_name: str, *, max_files: int, max_dirs: int) -> list[dict[str, Any]]:
+def _fetch_security_files(connector, platform: str, owner: str, repo_name: str, *, max_files: int | None, max_dirs: int) -> list[dict[str, Any]]:
     candidates = _discover_security_file_paths(connector, platform, owner, repo_name, max_files=max_files, max_dirs=max_dirs)
     files = []
-    for path in candidates[:max_files]:
+    for path in candidates if max_files is None else candidates[:max_files]:
         result = connector.fetch(SourceFetchRequest(source_name=f"{platform}:{owner}/{repo_name}:file", params={"resource": "file", "owner": owner, "repo": repo_name, "path": path, "timeout_seconds": 15}))
         if result.errors:
             continue
@@ -411,7 +434,7 @@ def _fetch_security_files(connector, platform: str, owner: str, repo_name: str, 
     return files
 
 
-def _discover_security_file_paths(connector, platform: str, owner: str, repo_name: str, *, max_files: int, max_dirs: int) -> list[str]:
+def _discover_security_file_paths(connector, platform: str, owner: str, repo_name: str, *, max_files: int | None, max_dirs: int) -> list[str]:
     """先走 git/trees(一次拿全量文件树),拿不到再退回逐目录 BFS。
 
     2026-10-09:GitCode/AtomGit 的 `GET /repos/{o}/{r}/contents`(不带路径的根目录列表)
@@ -425,15 +448,27 @@ def _discover_security_file_paths(connector, platform: str, owner: str, repo_nam
     candidates = _discover_paths_from_tree(connector, platform, owner, repo_name, max_files=max_files)
     if candidates is not None:
         return candidates
-    return _discover_security_file_paths_bfs(connector, platform, owner, repo_name, max_files=max_files, max_dirs=max_dirs)
+    # BFS 是回退路线,不接受 None —— 它用 max_files 当循环条件,得给个具体的数。
+    return _discover_security_file_paths_bfs(
+        connector,
+        platform,
+        owner,
+        repo_name,
+        max_files=max_files if max_files is not None else BFS_MAX_FILES,
+        max_dirs=max_dirs,
+    )
 
 
-def _discover_paths_from_tree(connector, platform: str, owner: str, repo_name: str, *, max_files: int) -> list[str] | None:
+def _discover_paths_from_tree(connector, platform: str, owner: str, repo_name: str, *, max_files: int | None) -> list[str] | None:
     """tree 路线成功就返回候选(可能是空列表 —— 空代表「这个仓确实没有安全公告文件」),
-    只有整条 tree 路线用不了(两种 ref 都拿不到条目)时才返回 None 让上游退回 BFS。
+    只有整条 tree 路线用不了(所有 ref 都拿不到条目)时才返回 None 让上游退回 BFS。
     区分这两件事很重要:否则「仓里没有」会被当成「抓取失败」,又去逐目录 BFS 空跑二十几秒。
+
+    2026-10-10:ref 先试 `HEAD`。原来只试 master/main,而 GitCode 上默认分支不是这两个的仓
+    (实测 openkylin 四个仓)**不报错、直接返回空树** —— 于是被判成「这个仓没有安全文件」,
+    静默漏掉。`HEAD` 由服务端解析成默认分支,一条请求就够,试不到再退回 master/main。
     """
-    for ref in ("master", "main"):
+    for ref in ("HEAD", "master", "main"):
         entries: list[dict[str, Any]] = []
         for page in range(1, TREE_MAX_PAGES + 1):
             result = connector.fetch(SourceFetchRequest(source_name=f"{platform}:{owner}/{repo_name}:tree:{ref}:{page}", params={"resource": "tree", "owner": owner, "repo": repo_name, "ref": ref, "page": page, "per_page": TREE_PAGE_SIZE, "timeout_seconds": 20}))
@@ -442,20 +477,26 @@ def _discover_paths_from_tree(connector, platform: str, owner: str, repo_name: s
             entries.extend(result.items)
             if len(result.items) < TREE_PAGE_SIZE:
                 break
-            # 日常模式只要 3 篇正文,候选攒够就不必再翻页(大仓能翻 20 页)。
-            if len(_security_candidate_paths(entries, max_files=max_files)) >= max_files:
-                break
+            # 2026-10-10:这里原来有个「候选攒够 max_files 就不翻页了」的提前收工,删掉了。
+            # tree 是按路径字典序返回的,所以前 N 个候选永远是仓库里**最老**的;先攒够再排序
+            # 已经晚了 —— 截断必须发生在按日期排序之后(_security_candidate_paths 里)。
+            # 全树本来也不贵:50 个仓 249 个请求 / 3 分钟。
         if entries:
             return _security_candidate_paths(entries, max_files=max_files)
     return None
 
 
-def _security_candidate_paths(entries: list[dict[str, Any]], *, max_files: int) -> list[str]:
+def _security_candidate_paths(entries: list[dict[str, Any]], *, max_files: int | None) -> list[str]:
     """从扁平文件树里挑安全公告类文件 —— 判据与原 BFS 等价:
 
     文件路径的后缀要命中 SECURITY_FILE_SUFFIXES,并且「自身路径命中安全关键词」或
     「落在某个安全目录(路径含安全关键词,或是 4 位年份目录)之下」。原 BFS 是把
     under_security 沿目录链传递,这里改成对每个文件回看它的所有祖先目录,结果一致。
+
+    2026-10-10:结果按**路径里的日期倒序**排,截断只截尾部。改之前是按 tree 返回的
+    路径顺序取前 N 个 —— GitCode 的 tree 是字典序,所以 openharmony/security 命中
+    的全是 `en/security-disclosure/2021/2021-03.md` 这种**最老**的公告,最新的永远
+    排在被砍掉的那一段。倒序后前 N 个就是最新的 N 篇。
     """
     security_dirs = {
         str(entry.get("path") or "")
@@ -474,9 +515,35 @@ def _security_candidate_paths(entries: list[dict[str, Any]], *, max_files: int) 
         if not under_security and not _is_security_path(path):
             continue
         candidates.append(path)
-        if len(candidates) >= max_files:
-            break
-    return candidates
+    candidates.sort(key=_recency_key, reverse=True)
+    return candidates if max_files is None else candidates[:max_files]
+
+
+# 路径里的日期:优先认 "2024-03"/"2024_03" 这种连写,其次认 "/2024/" 这种年份目录。
+_YEAR_MONTH_RE = re.compile(r"(\d{4})[-_](\d{1,2})")
+_YEAR_DIR_RE = re.compile(r"/(\d{4})/")
+
+
+def _recency_key(path: str) -> tuple[int, int]:
+    """从路径里猜这篇公告的新旧,返回 (年, 月) 可比较元组;猜不出就是 (0, 0) 排最后。
+
+    只认 1990~2100 的年份:`link.springer.com/.../s42400-024-00244-6` 这种 DOI 里
+    的 "2400-02" 会被正则当成 2400 年 2 月,不设范围的话它反而排到最前面。
+    """
+    match = _YEAR_MONTH_RE.search(path)
+    if match:
+        year, month = int(match.group(1)), int(match.group(2))
+        if 1990 <= year <= 2100:
+            # 月份非法(比如 2024-99)时年份仍然可信,保住年份、月份按未知处理。
+            return (year, month if 1 <= month <= 12 else 0)
+    match = _YEAR_DIR_RE.search(path + "/")
+    if match:
+        year = int(match.group(1))
+        if 1990 <= year <= 2100:
+            # 月份补 0 而不是 12:月份未知的文件不该越过同一年里月份明确的文件,
+            # 截断时宁可丢掉"猜不出时间"的,也别丢掉"确定更新"的。
+            return (year, 0)
+    return (0, 0)
 
 
 def _discover_security_file_paths_bfs(connector, platform: str, owner: str, repo_name: str, *, max_files: int, max_dirs: int) -> list[str]:
