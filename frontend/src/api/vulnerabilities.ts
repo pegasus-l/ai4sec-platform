@@ -1,4 +1,4 @@
-import { BASE, getJson, postJson } from './client';
+import { BASE, deleteJson, getJson, postJson } from './client';
 import type {
   ComprehensionProbePayload,
   ComprehensionSummary,
@@ -8,6 +8,8 @@ import type {
   KnowledgePayload,
   KeywordProfile,
   ListResponse,
+  ManualKeyword,
+  ManualKeywordListResponse,
   MaterialPayload,
   PagedListResponse,
   PatternPayload,
@@ -107,8 +109,43 @@ export function fetchVulnerabilityEvaluations(): Promise<ListResponse<DomainItem
   return getJson('/api/vulnerabilities/evaluations?limit=20');
 }
 
-export function fetchVulnerabilityKeywordProfiles(): Promise<{ items: KeywordProfile[] }> {
+export function fetchVulnerabilityKeywordProfiles(): Promise<{ items: KeywordProfile[]; max_manual_queries?: number; wildcard_manual_queries?: number }> {
   return getJson('/api/vulnerabilities/keyword-profiles');
+}
+
+// ============================================================================
+// 人工检索关键词 (GET/POST/DELETE /api/vulnerabilities/manual-keywords)
+// ============================================================================
+
+export function fetchManualKeywords(profile = ''): Promise<ManualKeywordListResponse> {
+  const query = profile ? `?profile=${encodeURIComponent(profile)}` : '';
+  return getJson(`/api/vulnerabilities/manual-keywords${query}`);
+}
+
+export function addManualKeyword(input: { profile_name: string; keyword: string; label?: string; note?: string }): Promise<{ keyword: ManualKeyword; created: boolean }> {
+  return postJson('/api/vulnerabilities/manual-keywords', input);
+}
+
+export function setManualKeywordEnabled(id: number, enabled: boolean): Promise<{ keyword: ManualKeyword }> {
+  // 不带 body —— 后端按 /enable 或 /disable 两个路径区分(与 ops 的采集目标同一约定)。
+  return postJson(`/api/vulnerabilities/manual-keywords/${id}/${enabled ? 'enable' : 'disable'}`);
+}
+
+export function deleteManualKeyword(id: number): Promise<{ status: string; id: number }> {
+  return deleteJson(`/api/vulnerabilities/manual-keywords/${id}`);
+}
+
+// ============================================================================
+// 人工投喂素材 (POST /api/vulnerabilities/materials/manual)
+// ============================================================================
+
+/**
+ * 投喂一篇漏洞文章。**异步**:后端立刻返回 run_id,抓取/抽取/评审在后台跑(30s 起)。
+ * 拿 run_id 去轮询现成的进度组件即可;投喂的素材强制入库(模型判 reject 也进,
+ * 模型结论保留为元数据),正文短于 200 字会被后端 400 拒绝。
+ */
+export function ingestManualMaterial(input: { url: string; title?: string; body?: string; note?: string }): Promise<PipelineRunStartResponse> {
+  return postJson('/api/vulnerabilities/materials/manual', input);
 }
 
 export function runVulnerabilityDiscovery(input: { keywordProfile: string; maxQueries: number; maxResults: number; crawlLimit: number; queryBatchSize: number; timeRangeMode: string; recentDays: number; startDate: string; endDate: string }): Promise<PipelineRunStartResponse> {

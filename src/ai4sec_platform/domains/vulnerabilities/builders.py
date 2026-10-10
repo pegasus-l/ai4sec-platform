@@ -13,6 +13,23 @@ def build_material(item: dict) -> dict:
     return {"item_type": "material", "title": item.get("title", "未命名漏洞素材"), "payload": item}
 
 
+def as_material_payload(item: dict) -> dict:
+    """把一条评审结果整理成 `build_vulnerability_items` 认的素材 payload。
+
+    2026-10-10 从 pipelines/steps/vulnerability_discovery.py 的私有 `_as_material_payload`
+    挪到这里并公开:人工投喂(pipelines/steps/vulnerability_manual.py)也要用同一份整理
+    逻辑,否则人工素材与自动素材的 payload 结构会分叉。逻辑逐字未改。
+    """
+    markdown = str(item.get("cleaned_text") or item.get("markdown") or "")
+    return {
+        **item,
+        "published_at": item.get("published_at") or item.get("primary_date") or "",
+        "summary": item.get("summary") or item.get("reason") or markdown[:500],
+        "crawl_info": {**(item.get("crawl_info") or {}), "markdown_length": item.get("markdown_length") or len(markdown), "success": item.get("success", False)},
+        "raw": {"candidate": item.get("raw") or {}, "crawl_info": item.get("crawl_info") or {}, "markdown": markdown, "review": item.get("review") or {}},
+    }
+
+
 def build_vulnerability_items(conn: sqlite3.Connection, items: list[dict], *, run_id: str) -> dict[str, int | list[int]]:
     materials = 0
     knowledge_candidates = 0

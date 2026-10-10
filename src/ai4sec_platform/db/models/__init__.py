@@ -283,6 +283,28 @@ CREATE TABLE IF NOT EXISTS threat_source_targets (
     UNIQUE(kind, source_key, identifier)
 );
 CREATE INDEX IF NOT EXISTS idx_threat_source_targets_kind ON threat_source_targets(kind, source_key, enabled);
+
+-- 人工添加的漏洞检索关键词(2026-10-10)。
+-- **为什么要这张表**:漏洞域此前**没有任何写入口** —— 想加检索词只能手改
+-- configs/vulnerability_keywords.yaml 再重启容器,而那个 YAML 是 Dockerfile COPY 进镜像的,
+-- `compose recreate` 就丢。落库后由 pipelines 在解析完 keyword profile 后**前置合并**
+-- (见 domains/vulnerabilities/manual_keywords.py 的 merge_manual_queries)。
+-- 与轮换游标(checkpoints/*.json)一样都在 output_dir 卷里,两者都扛 recreate;
+-- 选表是因为列表/启停/幂等/留痕都要做,表比 JSON 省事,且 init_db 每次 get_db 都跑,
+-- 不需要版本化迁移。
+CREATE TABLE IF NOT EXISTS vulnerability_manual_keywords (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    profile_name TEXT NOT NULL,
+    keyword TEXT NOT NULL COLLATE NOCASE,
+    label TEXT NOT NULL DEFAULT '',
+    note TEXT NOT NULL DEFAULT '',
+    enabled INTEGER NOT NULL DEFAULT 1,
+    created_by TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    UNIQUE(profile_name, keyword)
+);
+CREATE INDEX IF NOT EXISTS idx_vulnerability_manual_keywords_profile
+    ON vulnerability_manual_keywords(profile_name, enabled);
 """
 
 
@@ -301,6 +323,7 @@ def reset_db(conn: sqlite3.Connection) -> None:
         "threat_links",
         "threat_repo_filters",
         "threat_source_targets",
+        "vulnerability_manual_keywords",
         "news_daily_reports",
         "news_user_states",
         "news_item_index",

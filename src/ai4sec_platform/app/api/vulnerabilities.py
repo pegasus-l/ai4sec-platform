@@ -8,9 +8,11 @@ import zipfile
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel
 
-from ai4sec_platform.app.dependencies import get_db
+from ai4sec_platform.app.dependencies import current_user, get_db
+from ai4sec_platform.app.api.runs import start_pipeline_run
 from ai4sec_platform.db import repositories as repo
 from ai4sec_platform.core.config import load_settings
+from ai4sec_platform.domains.vulnerabilities import manual_ingest, manual_keywords
 from ai4sec_platform.domains.vulnerabilities.keyword_profiles import list_keyword_profiles
 from ai4sec_platform.domains.vulnerabilities.comprehension_probers import aggregate_feedback, render_probe_markdown
 from ai4sec_platform.domains.vulnerabilities.pattern_synthesizers import render_pattern_markdown
@@ -120,9 +122,131 @@ def _download_filename(item: dict, prefix: str) -> str:
 
 
 @router.get("/keyword-profiles")
-def keyword_profiles() -> dict:
+def keyword_profiles(conn: sqlite3.Connection = Depends(get_db)) -> dict:
     settings = load_settings()
-    return {"items": list_keyword_profiles(settings.project_root, settings.output_dir)}
+    items = list_keyword_profiles(settings.project_root, settings.output_dir)
+    # 顺带回带"每个 profile 已存几条人工关键词"(2026-10-10),省前端一次请求 ——
+    # 页面上"这个 profile 配了 60 个词"和"其中 3 个是人工加的"要一起看到。
+    # `*`(所有 profile 通用)的词对每个 profile 都算数。
+    counts = manual_keywords.count_by_profile(conn)
+    wildcard = counts.get(manual_keywords.WILDCARD_PROFILE, 0)
+    for item in items:
+        item["manual_queries"] = counts.get(str(item.get("name") or ""), 0) + wildcard
+    return {
+        "items": items,
+        "wildcard_manual_queries": wildcard,
+        "max_manual_queries": manual_keywords.MAX_PER_PROFILE,
+    }
+
+
+class AddManualKeywordRequest(BaseModel):
+    profile_name: str = ""
+    keyword: str = ""
+    label: str = ""
+    note: str = ""
+
+
+@router.get("/manual-keywords")
+def list_manual_keywords(profile: str = Query(default=""), conn: sqlite3.Connection = Depends(get_db)) -> dict:
+    """人工添加的漏洞检索关键词(停用的也返回,页面显示为删除线)。"""
+    return {
+        "items": manual_keywords.list_keywords(conn, profile_name=profile or None),
+        "max_per_profile": manual_keywords.MAX_PER_PROFILE,
+        "wildcard_profile": manual_keywords.WILDCARD_PROFILE,
+    }
+
+
+@router.post("/manual-keywords")
+def add_manual_keyword(
+    request: AddManualKeywordRequest,
+    conn: sqlite3.Connection = Depends(get_db),
+    user: dict = Depends(current_user),
+) -> dict:
+    """人工添加检索关键词。**下一轮采集立即生效**,常驻(直到在本页停用)。"""
+    try:
+        return manual_keywords.add_keyword(
+            conn,
+            profile_name=request.profile_name,
+            keyword=request.keyword,
+            label=request.label,
+            note=request.note,
+            created_by=str(user.get("username") or ""),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.post("/manual-keywords/{keyword_id}/enable")
+def enable_manual_keyword(keyword_id: int, conn: sqlite3.Connection = Depends(get_db)) -> dict:
+    # 不带请求体:前端按 enabled 选 /enable 或 /disable 两个路径(与 ops.py 的
+    # /sources/targets/{id}/enable 同一约定,避免少一个 JSON body 就 422)。
+    return _toggle_manual_keyword(conn, keyword_id, True)
+
+
+@router.post("/manual-keywords/{keyword_id}/disable")
+def disable_manual_keyword(keyword_id: int, conn: sqlite3.Connection = Depends(get_db)) -> dict:
+    return _toggle_manual_keyword(conn, keyword_id, False)
+
+
+def _toggle_manual_keyword(conn: sqlite3.Connection, keyword_id: int, enabled: bool) -> dict:
+    try:
+        return manual_keywords.set_keyword_enabled(conn, keyword_id, enabled)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+
+@router.delete("/manual-keywords/{keyword_id}")
+def remove_manual_keyword(keyword_id: int, conn: sqlite3.Connection = Depends(get_db)) -> dict:
+    if not manual_keywords.delete_keyword(conn, keyword_id):
+        raise HTTPException(status_code=404, detail="记录不存在")
+    return {"status": "deleted", "id": keyword_id}
+
+
+class ManualMaterialRequest(BaseModel):
+    url: str = ""
+    title: str = ""
+    body: str = ""
+    note: str = ""
+
+
+@router.post("/materials/manual")
+def ingest_manual_material(
+    request: ManualMaterialRequest,
+    user: dict = Depends(current_user),
+) -> dict:
+    """人工投喂一篇漏洞文章(URL 必填,正文可选;正文给了就不去抓页面)。
+
+    **异步**:抓取 + 正文抽取 + 模型评审实测 30s 起,同步跑会撞上网关对非流式请求的 120s
+    总时长上限 —— 同步就是大概率 502,而且活干了一半、连个 run 行都没有。这里立刻返回
+    `{run_id, status, poll_url}`,前端拿 run_id 去轮询现成的进度组件。
+
+    走的流水线是 `vulnerabilities.manual_material_ingest_pipeline`(入库 → 选知识候选 →
+    抽知识),所以投喂完**当场**就能在知识库里看到候选,不用等当晚 22:00 的跑批。
+    """
+    try:
+        url = manual_ingest.validate_url(request.url)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    body = str(request.body or "").strip()
+    if body and len(body) < manual_ingest.MIN_PROVIDED_BODY_CHARS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"正文过短(至少 {manual_ingest.MIN_PROVIDED_BODY_CHARS} 字);只想让平台自己抓的话请把正文留空",
+        )
+    return start_pipeline_run(
+        "vulnerabilities.manual_material_ingest_pipeline",
+        {
+            "manual_items": [{
+                "url": url,
+                "title": request.title,
+                "body": body,
+                "note": request.note,
+                "created_by": str(user.get("username") or ""),
+            }],
+            # 兜底排空是给定时跑批用的:喂一条 URL 却连带抽 20 条无关积压,既费模型又费解。
+            "pending_drain_limit": 0,
+        },
+    )
 
 
 @router.get("/runs/{run_id}/results")

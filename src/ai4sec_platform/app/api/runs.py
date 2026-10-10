@@ -39,64 +39,75 @@ def pipelines() -> dict:
     return {"items": default_registry().list()}
 
 
-@router.post("")
-def start_run(request: RunPipelineRequest) -> dict:
-    """Reserve a run ID, then execute synchronously or in a background thread."""
-    params = dict(request.params)
-    params["reset"] = request.reset
+def start_pipeline_run(
+    pipeline_name: str,
+    params: dict[str, Any] | None = None,
+    *,
+    reset: bool = False,
+    wait: bool = False,
+) -> dict:
+    """异步启动一条流水线,立刻返回 {run_id, status, poll_url}。
 
+    2026-10-10 从 `start_run` 里抽出成公开入口:人工投喂 URL(api/vulnerabilities.py 的
+    POST /materials/manual)需要"由别的接口发起一条流水线并马上拿到 run_id"。**不能**在
+    那个接口里同步跑完 —— 抓取 + 正文抽取 + 模型评审实测 30s 起,而网关对非流式请求有
+    120s 总时长上限,同步就是大概率 502,而且活干了一半、没有 run 行可查。
+
+    入参为 `params`(不含 reset),`reset` 单独传 —— 免得每个调用方都要自己往 params 里
+    塞一个 reset 键。行为与抽出前逐字一致。
+    """
+    merged_params = {**(params or {}), "reset": reset}
     # Validate pipeline exists
     try:
-        registry = default_registry()
-        definition = registry.get(request.pipeline_name)
+        definition = default_registry().get(pipeline_name)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
-    if not _reserve_pipeline(request.pipeline_name):
-        raise HTTPException(status_code=409, detail=f"pipeline already running: {request.pipeline_name}")
+    if not _reserve_pipeline(pipeline_name):
+        raise HTTPException(status_code=409, detail=f"pipeline already running: {pipeline_name}")
 
     run_id = new_id("run")
     try:
-        _reserve_run_slot(run_id, reset=request.reset)
+        _reserve_run_slot(run_id, reset=reset)
         _create_queued_run(
             run_id=run_id,
             domain=definition.domain,
             pipeline_name=definition.name,
-            params=params,
+            params=merged_params,
             total_steps=len(definition.steps),
         )
     except Exception:
         _release_run_slot(run_id)
-        _release_pipeline(request.pipeline_name)
+        _release_pipeline(pipeline_name)
         raise
 
     def execute() -> dict[str, Any]:
         import sys
-        print(f"[BG] Starting pipeline: {request.pipeline_name}", file=sys.stderr, flush=True)
+        print(f"[BG] Starting pipeline: {pipeline_name}", file=sys.stderr, flush=True)
         try:
             runner = PipelineRunner()
-            result = runner.run(request.pipeline_name, params, run_id=run_id)
+            result = runner.run(pipeline_name, merged_params, run_id=run_id)
             print(f"[BG] Pipeline finished: {result.get('status', '?')}", file=sys.stderr, flush=True)
             return result
         except Exception as exc:
-            _mark_run_failed(run_id, definition.domain, definition.name, params, str(exc))
+            _mark_run_failed(run_id, definition.domain, definition.name, merged_params, str(exc))
             print(f"[BG] Pipeline CRASHED: {exc}", file=sys.stderr, flush=True)
             traceback.print_exc()
-            return {"run_id": run_id, "pipeline_name": definition.name, "domain": definition.domain, "status": "failed", "summary": {"params": params, "status": "failed", "error_message": str(exc)}}
+            return {"run_id": run_id, "pipeline_name": definition.name, "domain": definition.domain, "status": "failed", "summary": {"params": merged_params, "status": "failed", "error_message": str(exc)}}
         finally:
             _release_run_slot(run_id)
-            _release_pipeline(request.pipeline_name)
+            _release_pipeline(pipeline_name)
 
-    if request.wait:
+    if wait:
         return execute()
 
     thread = threading.Thread(target=execute, daemon=True, name=f"pipeline-{run_id}")
     try:
         thread.start()
     except Exception as exc:
-        _mark_run_failed(run_id, definition.domain, definition.name, params, str(exc))
+        _mark_run_failed(run_id, definition.domain, definition.name, merged_params, str(exc))
         _release_run_slot(run_id)
-        _release_pipeline(request.pipeline_name)
+        _release_pipeline(pipeline_name)
         raise
 
     return {
@@ -106,6 +117,12 @@ def start_run(request: RunPipelineRequest) -> dict:
         "domain": definition.domain,
         "poll_url": f"/api/runs/{run_id}",
     }
+
+
+@router.post("")
+def start_run(request: RunPipelineRequest) -> dict:
+    """Reserve a run ID, then execute synchronously or in a background thread."""
+    return start_pipeline_run(request.pipeline_name, request.params, reset=request.reset, wait=request.wait)
 
 
 def _reserve_pipeline(pipeline_name: str) -> bool:
