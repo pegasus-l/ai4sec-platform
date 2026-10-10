@@ -211,6 +211,10 @@ async def repro_web_ws_proxy(websocket: WebSocket) -> None:
 _PIPELINE_RETRY_WHITELIST = {
     "threats.huawei_full_migration_pipeline",
     "vulnerabilities.full_knowledge_discovery_pipeline",
+    # 模式合成(2026-10-10 起挂每日 03:30):它必须排在漏洞跑批**之后** —— 跑批要 5-6h,
+    # 03:30 时通常还占着锁。加进白名单就等于"锁一空就跑",不需要另造链式触发
+    # (代码里没有 on_complete/chain 这类原语,硬链接要凭空造)。
+    "vulnerabilities.pattern_synthesis_pipeline",
 }
 _PIPELINE_RETRY_DELAY_SECONDS = 10 * 60
 _PIPELINE_RETRY_MAX = 24  # 10min x 24 = 4h 重试窗口, 仍无锁则放弃当日
@@ -355,6 +359,12 @@ def create_app() -> FastAPI:
     scheduler.add_job(_run_pipeline_job, IntervalTrigger(minutes=15), args=['capabilities.from_news_pipeline'], id='cap', name='capability(15min)', replace_existing=True)
     scheduler.add_job(_run_pipeline_job, CronTrigger(hour=5, minute=0, timezone="Asia/Shanghai"), args=['threats.huawei_full_migration_pipeline'], id='threat', name='threat(daily 05:00)', replace_existing=True)
     scheduler.add_job(_run_pipeline_job, CronTrigger(hour=22, minute=0, timezone="Asia/Shanghai"), args=['vulnerabilities.full_knowledge_discovery_pipeline', {'keyword_profile': 'daily_watch', 'skip_existing_urls': True}], id='vuln', name='vuln(daily 22:00)', replace_existing=True)
+    # 模式合成(2026-10-10 新增)。此前它**只跑过一次**(2026-08-26,当时 157 条知识,
+    # 归纳出 28 个模式覆盖 66%),此后知识涨到 384,模式库一次都没更新,覆盖率掉到 27%。
+    # 定在 03:30 是"抢跑批交出的锁":正常夜跑批 02:42 结束,直接开跑(约 10 分钟,05:00
+    # 威胁任务前收尾);超长夜则每 10 分钟重试、锁一释放就跑(见 _PIPELINE_RETRY_WHITELIST)。
+    # 排在 05:00 而非更晚,是为了给威胁任务留出它自己的重试窗口。
+    scheduler.add_job(_run_pipeline_job, CronTrigger(hour=3, minute=30, timezone="Asia/Shanghai"), args=['vulnerabilities.pattern_synthesis_pipeline', {'limit': 120}], id='vuln-pattern', name='vuln-pattern(daily 03:30)', replace_existing=True)
     scheduler.add_job(_reap_repro_tasks, IntervalTrigger(minutes=5), id='repro-reap', name='repro-watchdog(5min)', replace_existing=True)
     scheduler.add_job(_reap_stale_pipeline_runs, IntervalTrigger(minutes=5), id='pipeline-reap', name='pipeline-watchdog(5min)', replace_existing=True)
     # 僵尸回收(60s):浏览器子进程正常退出却没人 wait,会一直占着容器的 pids 名额,
