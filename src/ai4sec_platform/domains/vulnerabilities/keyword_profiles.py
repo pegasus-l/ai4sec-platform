@@ -43,7 +43,7 @@ def list_keyword_profiles(project_root: Path, output_dir: Path | None = None) ->
         core_queries = [*explicit_queries, *category_queries]
         rotation = profile.get("rotation") if isinstance(profile.get("rotation"), dict) else {}
         rotation_categories = [str(value) for value in rotation.get("categories") or []]
-        rotation_queries = _category_queries(str(name), rotation_categories, categories_config)
+        rotation_queries = _interleaved_category_queries(str(name), rotation_categories, categories_config)
         core_keys = {query.casefold() for query in core_queries}
         rotation_queries = [query for query in rotation_queries if query.casefold() not in core_keys]
         rotation_batch_size = min(_positive_int(rotation.get("batch_size"), len(rotation_queries)), len(rotation_queries))
@@ -87,7 +87,7 @@ def resolve_keyword_profile(params: dict[str, Any], project_root: Path) -> Resol
     core_query_count = len(queries)
     rotation = profile.get("rotation") if isinstance(profile.get("rotation"), dict) else {}
     rotation_categories = [str(value) for value in rotation.get("categories") or []]
-    rotation_pool = _category_queries(profile_name, rotation_categories, categories_config)
+    rotation_pool = _interleaved_category_queries(profile_name, rotation_categories, categories_config)
     core_keys = {query.casefold() for query in queries}
     rotation_pool = [query for query in rotation_pool if query.casefold() not in core_keys]
     rotation_batch_size = min(_positive_int(rotation.get("batch_size"), len(rotation_pool)), len(rotation_pool))
@@ -173,6 +173,31 @@ def _category_queries(profile_name: str, category_names: list[str], categories_c
         if not isinstance(category_queries, list):
             raise ValueError(f"keyword profile '{profile_name}' references unknown category '{category_name}'")
         queries.extend(str(value).strip() for value in category_queries if str(value).strip())
+    return queries
+
+
+def _interleaved_category_queries(profile_name: str, category_names: list[str], categories_config: dict[str, Any]) -> list[str]:
+    """按类别轮转交错地拼接,使连续的一段切片天然横跨多个类别。
+
+    与 ``_category_queries`` 的差别**只在顺序**:那边是"一个类别整块接一个类别"
+    (daily_watch 的 kernel 有 110 个词,排在最前),切 40 个出来就是纯内核 —— 这正是
+    "采回来的素材大多是内核"的来源。这里改成第 1 个词取各类别的第 1 个、第 2 个词取
+    各类别的第 2 个……于是任意 40 个词的切片都覆盖全部 11 个类别(每类 3-4 个)。
+
+    集合与总数完全不变(仍是 1276 个词),只是重新排列,所以已经存下的游标不需要迁移。
+    类别词数不等时,靠前的类别会多分到一个,但对整圈而言每个类别都被完整消费一次。
+    """
+    buckets: list[list[str]] = []
+    for category_name in category_names:
+        category_queries = categories_config.get(category_name)
+        if not isinstance(category_queries, list):
+            raise ValueError(f"keyword profile '{profile_name}' references unknown category '{category_name}'")
+        buckets.append([str(value).strip() for value in category_queries if str(value).strip()])
+    queries: list[str] = []
+    for index in range(max((len(bucket) for bucket in buckets), default=0)):
+        for bucket in buckets:
+            if index < len(bucket):
+                queries.append(bucket[index])
     return queries
 
 
