@@ -34,7 +34,7 @@ def merge_manual_targets(conn, params: dict) -> dict:
         extra = source_registry.load_collect_params(conn)
     except Exception:  # 建表/库异常不能拖垮采集主流程
         return params
-    if not extra.get("orgs") and not extra.get("ascendhub_targets"):
+    if not extra.get("orgs") and not extra.get("ascendhub_targets") and not extra.get("manual_repos"):
         return params
     merged = dict(params)
     # 人工添加的排在内建前面(2026-10-09):原来追加在末尾,一旦采集侧还有截断(日常档的
@@ -47,6 +47,10 @@ def merge_manual_targets(conn, params: dict) -> dict:
             *_fresh(extra["ascendhub_targets"], DEFAULT_ASCENDHUB_TARGETS, "hub_id"),
             *DEFAULT_ASCENDHUB_TARGETS,
         ]
+    # 人工添加的单个仓(2026-10-10)。没有内建对应物,不存在"跟内建去重"的问题;
+    # 显式传了 manual_repos 的调用方优先(与 orgs/ascendhub_targets 同一约定)。
+    if extra["manual_repos"] and not merged.get("manual_repos"):
+        merged["manual_repos"] = extra["manual_repos"]
     return merged
 
 

@@ -159,7 +159,7 @@ def add_source_target(
     conn: sqlite3.Connection = Depends(get_db),
     user: dict = Depends(current_user),
 ) -> dict:
-    """人工添加采集目标(组织名 / hub id)。下一轮采集即生效。"""
+    """人工添加采集目标(组织名 / hub id / 单个仓地址)。下一轮采集即生效。"""
     try:
         return source_registry.add_target(
             conn,

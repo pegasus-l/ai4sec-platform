@@ -25,6 +25,7 @@ from urllib.parse import urlparse
 from ai4sec_platform.domains.threats.adapters.huawei_sources import (
     DEFAULT_ASCENDHUB_TARGETS,
     DEFAULT_LIVE_ORGS,
+    parse_repo_url,
 )
 
 # 人工登记的两种形态
@@ -124,6 +125,17 @@ SOURCE_GROUPS: list[dict[str, Any]] = [
         "note": "第三方巴西镜像站的华为固件归档,递归爬完整棵目录树",
         "target_label": "",
     },
+    {
+        "key": "repos_manual",
+        "name": "代码仓 · 单个仓",
+        "site": "gitcode.com / atomgit.com",
+        "entry_url": "https://gitcode.com",
+        "collector": "GitCode/AtomGitConnector(单个仓库)",
+        "kind": "repo",
+        "stats_source": "repos",
+        "note": "人工指定单个仓库,只抓这一个仓;组织不在默认清单(25 个)里的仓用这里加",
+        "target_label": "仓库",
+    },
 ]
 
 # 可人工添加采集目标的数据源(表单里的下拉)。hint 直接当输入框 placeholder。
@@ -131,6 +143,7 @@ ADDABLE_KEYS: list[dict[str, str]] = [
     {"key": "repos_gitcode", "name": "代码仓 · GitCode", "hint": "gitcode 组织名,如 openGauss"},
     {"key": "repos_atomgit", "name": "代码仓 · AtomGit", "hint": "atomgit 组织名,如 mindspore"},
     {"key": "ascendhub", "name": "Ascend Hub 镜像仓库", "hint": "hub id(32 位十六进制)"},
+    {"key": "repos_manual", "name": "代码仓 · 单个仓", "hint": "仓地址,如 https://gitcode.com/openkylin/kylin-system-security-checker"},
 ]
 
 _ASCENDHUB_DETAIL = "https://www.hiascend.com/developer/ascendhub/detail/"
@@ -300,7 +313,13 @@ def add_target(conn: sqlite3.Connection, *, source_key: str, identifier: str, la
         raise ValueError("标识不能为空")
     if len(clean) > _MAX_IDENTIFIER or any(ch.isspace() for ch in clean):
         raise ValueError("标识不合法:不能含空白,且长度不超过 120")
-    if "/" in clean:
+    if source_key == "repos_manual":
+        # 单个仓收的是**仓地址**,不是组织名 —— 落库前归一成 platform:org/name。
+        # 归一化的意义:带不带 https、带不带 .git、带不带尾斜杠都塌成同一行,
+        # 于是"重复添加同一条地址"天然幂等(下面的 exists 查询用的是 identifier)。
+        platform, org, name = parse_repo_url(clean)
+        clean = f"{platform}:{org}/{name}"
+    elif "/" in clean:
         raise ValueError("只填名称本身,不要带平台域名或路径")
     if source_key == "ascendhub" and (len(clean) != 32 or any(c not in "0123456789abcdefABCDEF" for c in clean)):
         raise ValueError("Ascend Hub 的标识必须是 32 位十六进制 hub id")
@@ -385,11 +404,11 @@ def delete_target(conn: sqlite3.Connection, target_id: int) -> bool:
 
 
 def load_collect_params(conn: sqlite3.Connection) -> dict[str, list[dict[str, Any]]]:
-    """把人工添加的启用目标变成采集器认得的 params(orgs / ascendhub_targets)。
+    """把人工添加的启用目标变成采集器认得的 params(orgs / ascendhub_targets / manual_repos)。
 
     内建默认值不在这里重复下发 —— 采集器自己会兜底 DEFAULT_*,这里只补"人工新增"的部分。
     """
-    out: dict[str, list[dict[str, Any]]] = {"orgs": [], "ascendhub_targets": []}
+    out: dict[str, list[dict[str, Any]]] = {"orgs": [], "ascendhub_targets": [], "manual_repos": []}
     if not table_ready(conn):
         return out
     rows = conn.execute(
@@ -415,6 +434,16 @@ def load_collect_params(conn: sqlite3.Connection) -> dict[str, list[dict[str, An
                     "url": f"{_ASCENDHUB_DETAIL}{identifier}",
                 }
             )
+        elif source_key == "repos_manual":
+            # 落库时已归一成 platform:org/name(见 add_target)。老行或手工改过的行可能不合规,
+            # 解析失败就跳过 —— 一行脏数据不该让整条采集挂掉。
+            try:
+                platform, repo_slug = identifier.split(":", 1)
+                org, name = repo_slug.split("/", 1)
+            except ValueError:
+                continue
+            if platform and org and name:
+                out["manual_repos"].append({"platform": platform, "org": org, "name": name, "label": label})
     return out
 
 

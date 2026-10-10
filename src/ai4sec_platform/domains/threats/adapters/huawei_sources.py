@@ -5,6 +5,7 @@ import json
 import re
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 from ai4sec_platform.core.concurrency import bounded_map
 from ai4sec_platform.domains.threats.security_repo_discovery import discover_security_repos, group_projects_by_org
@@ -244,6 +245,7 @@ def _load_huawei_sources_with_source_cache(settings, params: dict[str, Any]) -> 
 
 def _collect_repo_records(registry: SourceRegistry, params: dict[str, Any]) -> list[dict[str, Any]]:
     repos = _collect_live_repos(registry, params)
+    repos = _merge_manual_repos(repos, params)
     repos, org_security_materials = _enrich_security_repos(registry, repos, params)
     repos = _enrich_project_issues(registry, repos, params)
     records = [{"source": "repos", "path": "connector:repos", "exists": True, "items": repos, "raw": {"projects": repos, "mode": "live"}, "mode": "live"}]
@@ -299,6 +301,49 @@ def _collect_org_repos(registry: SourceRegistry, entry: Any, params: dict[str, A
     return repos
 
 
+def _merge_manual_repos(repos: list[dict[str, Any]], params: dict[str, Any]) -> list[dict[str, Any]]:
+    """把页面人工添加的单个仓并进本轮的仓列表(2026-10-10)。
+
+    人工仓大概率**已经在**组织扫描的结果里(它所属组织就在 25 个默认组织内)—— 那种情况只打标记,
+    不再插一条:domain_items 是按 LOWER(title) upsert 的,插重复没有意义,还会让 enrich 阶段的
+    (platform, org, name) 归并出现两条。
+
+    打上 `manual=True` 的仓有两处额外待遇(见 _enrich_security_repos / repo_filter / attack_surface_scoring):
+    强制当安全仓抓正文;豁免 F1「空壳仓」硬过滤 —— 单仓元数据端点(`/repos/{o}/{r}`)恒 401,
+    描述和 star 都拿不到,不豁免就会被当成空壳从列表里隐藏,变成"加了却查无此仓"。
+    """
+    specs = params.get("manual_repos") or []
+    if not specs:
+        return repos
+    by_key = {(repo.get("platform"), repo.get("org"), repo.get("name")): repo for repo in repos}
+    for spec in specs:
+        platform = str(spec.get("platform") or "")
+        org = str(spec.get("org") or "")
+        name = str(spec.get("name") or "")
+        label = str(spec.get("label") or "")
+        if not platform or not org or not name:
+            continue
+        existing = by_key.get((platform, org, name))
+        if existing is not None:
+            existing["manual"] = True
+            continue
+        # label 当描述用:它会成为页面上这个仓的摘要,也能帮资产↔仓关联的关键词匹配。
+        # name/url/description/star_count 四个键必须齐全 —— validators.validate_repo_projects 会做键存在性审计。
+        repo = {
+            "name": name,
+            "url": f"{_web_base(platform)}/{org}/{name}",
+            "description": label,
+            "star_count": 0,
+            "org": org,
+            "platform": platform,
+            "raw": {"manual": True, "name": name, "org": org, "description": label, "star_count": 0},
+            "manual": True,
+        }
+        repos.append(repo)
+        by_key[(platform, org, name)] = repo
+    return repos
+
+
 def _enrich_project_issues(registry: SourceRegistry, repos: list[dict[str, Any]], params: dict[str, Any]) -> list[dict[str, Any]]:
     if not repos or not params.get("fetch_project_issues", True):
         return repos
@@ -342,6 +387,26 @@ def _fetch_paginated_repo_items(connector, platform: str, owner: str, repo_name:
     return items
 
 
+def _promote_manual_repos(security: dict[str, dict[str, Any]], by_key: dict[tuple, dict[str, Any]], params: dict[str, Any]) -> None:
+    """人工添加的仓一律当安全仓(2026-10-10 用户拍板),哪怕名字里没有 security/cve/vuln。
+
+    插到 security_repos 的**第 0 位**:安全仓数是可以截断的(security_repo_limit),人工加的排在
+    前面才不会被"取前 N 个"挤掉 —— 这和 merge_manual_targets 那句"人工的排在内建前面"是同一个教训。
+    """
+    for spec in params.get("manual_repos") or []:
+        key = (str(spec.get("platform") or ""), str(spec.get("org") or ""), str(spec.get("name") or ""))
+        repo = by_key.get(key)
+        if repo is None:
+            continue
+        bucket = security.setdefault(key[1] or "unknown", {"has_security_repo": False, "primary_repo": {}, "security_repos": [], "security_repo_count": 0})
+        present = {(item.get("platform"), item.get("org"), item.get("name")) for item in bucket.get("security_repos") or []}
+        if key in present:
+            continue
+        bucket["security_repos"] = [{**repo, "is_primary": False, "name_keyword_match": False, "discovery_reason": "manual"}, *(bucket.get("security_repos") or [])]
+        bucket["has_security_repo"] = True
+        bucket["security_repo_count"] = len(bucket["security_repos"])
+
+
 def _enrich_security_repos(registry: SourceRegistry, repos: list[dict[str, Any]], params: dict[str, Any]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     if not repos or not params.get("fetch_security_details", True):
         return repos, []
@@ -362,6 +427,7 @@ def _enrich_security_repos(registry: SourceRegistry, repos: list[dict[str, Any]]
     max_security_repos = _opt_limit(params.get("security_repo_limit"))
     max_content_dirs = _opt_limit(params.get("security_content_dir_limit")) or BFS_MAX_DIRS
     by_key = {(repo.get("platform"), repo.get("org"), repo.get("name")): repo for repo in repos}
+    _promote_manual_repos(security, by_key, params)
     org_security_materials: list[dict[str, Any]] = []
     for org, sec_data in security.items():
         for sec_repo in (sec_data.get("security_repos") or [])[:max_security_repos]:
@@ -390,7 +456,10 @@ def _enrich_security_repos(registry: SourceRegistry, repos: list[dict[str, Any]]
                     break
             org_security_materials.extend(_security_pr_materials(pull_requests, platform=platform, org=owner, repo=repo_name))
             security_files = []
-            if params.get("parse_security_source_repos", False) or not _is_security_source_code_repo(repo_name):
+            # 人工添加的仓强制走文件正文抓取(2026-10-10 用户拍板):用户既然点名加它,
+            # 就按安全仓对待,不管它名字像不像。_is_security_source_code_repo 那条豁免是给
+            # "仓本身就是安全工具源码"用的,人工仓不该被它挡掉公告正文。
+            if sec_repo.get("manual") or params.get("parse_security_source_repos", False) or not _is_security_source_code_repo(repo_name):
                 security_files = _fetch_security_files(connector, platform, owner, repo_name, max_files=max_files, max_dirs=max_content_dirs)
                 org_security_materials.extend(_security_file_materials(security_files, platform=platform, org=owner, repo=repo_name))
             key = (platform, owner, repo_name)
@@ -847,3 +916,40 @@ def _platform_from_url(url: str) -> str:
 
 def _web_base(platform: str) -> str:
     return "https://atomgit.com" if platform == "atomgit" else "https://gitcode.com"
+
+
+# 人工添加「单个仓」时认的域名(2026-10-10)。**故意不用 _platform_from_url** ——
+# 那个是"上游给的 url 兜底猜平台",非 atomgit 一律当 gitcode,github.com 的仓会被误判。
+# 人工输入必须严格:不认识的域名直接拒绝,不给猜的机会(err on 拒绝侧)。
+REPO_HOSTS = {
+    "gitcode.com": "gitcode",
+    "www.gitcode.com": "gitcode",
+    "atomgit.com": "atomgit",
+    "www.atomgit.com": "atomgit",
+}
+
+
+def parse_repo_url(value: str) -> tuple[str, str, str]:
+    """仓地址 → (platform, org, name)。非法输入 raise ValueError(带可读原因)。
+
+    容忍粘贴进来的各种形态:补 scheme、去尾斜杠、去 `.git`、带 `/blob/<分支>/<路径>` 尾巴
+    (只取前两段路径)。
+    """
+    raw = str(value or "").strip()
+    if not raw:
+        raise ValueError("请填写仓库地址")
+    if "://" not in raw:
+        raw = f"https://{raw}"
+    parsed = urlparse(raw)
+    platform = REPO_HOSTS.get(str(parsed.netloc or "").lower())
+    if not platform:
+        raise ValueError("只支持 gitcode.com / atomgit.com 的代码仓,如 https://gitcode.com/openkylin/xxx")
+    segments = [part for part in str(parsed.path or "").split("/") if part]
+    if len(segments) < 2:
+        raise ValueError("请填到具体仓库,如 https://gitcode.com/openkylin/xxx")
+    org, name = segments[0], segments[1]
+    if name.endswith(".git"):
+        name = name[: -len(".git")]
+    if not org or not name:
+        raise ValueError("请填到具体仓库,如 https://gitcode.com/openkylin/xxx")
+    return platform, org, name

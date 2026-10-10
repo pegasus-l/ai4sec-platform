@@ -86,8 +86,13 @@ _RE_F10 = re.compile(r"^(readme|license|changelog|contributing|\.github)")
 _RE_S1 = re.compile(r"^sig-|-sig")
 
 
-def hard_matches(*, name: str = "", description: str = "", stars: int = 0, cve_count: int = 0) -> list[str]:
-    """该仓命中的所有硬过滤规则(按判定优先级排序)。干跑时用它统计"单规则命中数"。"""
+def hard_matches(*, name: str = "", description: str = "", stars: int = 0, cve_count: int = 0, manual: bool = False) -> list[str]:
+    """该仓命中的所有硬过滤规则(按判定优先级排序)。干跑时用它统计"单规则命中数"。
+
+    ``manual`` = 页面人工添加的仓(2026-10-10),豁免 F1 一条:单仓元数据端点恒 401,
+    描述和 star 根本取不到,不豁免就会被当空壳从列表里隐藏,变成"加了却查无此仓"。
+    其余 F 码判的是仓的**内容形态**(第三方/测试/示例/文档…),照旧生效。
+    """
     lowered = (name or "").lower()
     codes: list[str] = []
     if _RE_F2_SUB.search(lowered) or _RE_F2_PREFIX.match(lowered):
@@ -109,7 +114,7 @@ def hard_matches(*, name: str = "", description: str = "", stars: int = 0, cve_c
     if _SEG_TEMPLATE.search(lowered):
         codes.append("F9")
     # F1 空壳:上游没写描述 + 无 Star + 无 CVE。放最后 —— 集合不变,但理由更具体。
-    if not (description or "").strip() and int(stars or 0) <= 0 and int(cve_count or 0) <= 0:
+    if not manual and not (description or "").strip() and int(stars or 0) <= 0 and int(cve_count or 0) <= 0:
         codes.append("F1")
     return codes
 
@@ -129,13 +134,15 @@ def classify(
     description: str = "",
     stars: int = 0,
     cve_count: int = 0,
+    manual: bool = False,
 ) -> dict[str, Any]:
     """判一个仓是否该被过滤。
 
     返回 ``{filtered, code, reason, soft, soft_code}``。命中的多条硬规则里取优先级最高的那条作为
     ``code``(理由更具体的那条通常排前面),``filtered_reason`` 就是给人看的理由。
+    ``manual`` 见 ``hard_matches``。
     """
-    codes = hard_matches(name=name, description=description, stars=stars, cve_count=cve_count)
+    codes = hard_matches(name=name, description=description, stars=stars, cve_count=cve_count, manual=manual)
     filter_code = codes[0] if codes else ""
     soft_code = "" if filter_code else is_soft(name=name)
     return {
@@ -179,6 +186,7 @@ def extract_fields(payload: dict[str, Any], *, item_summary: str = "", item_url:
         "stars": _as_int(stars),
         "cve_count": _as_int(cve_count),
         "url": str(item_url or payload.get("url") or raw.get("url") or ""),
+        "manual": bool(raw.get("manual")),
     }
 
 
@@ -285,6 +293,7 @@ def render_verdict(fields: dict[str, Any]) -> dict[str, Any]:
         description=fields["description"],
         stars=fields["stars"],
         cve_count=fields["cve_count"],
+        manual=bool(fields.get("manual")),
     )
 
 
@@ -307,7 +316,7 @@ def dry_run(conn: sqlite3.Connection, *, limit_mis_hits: int = 40) -> dict[str, 
     for item_id, _title, summary, payload in iter_targets(conn):
         total += 1
         fields = extract_fields(payload, item_summary=summary)
-        matches = hard_matches(name=fields["name"], description=fields["description"], stars=fields["stars"], cve_count=fields["cve_count"])
+        matches = hard_matches(name=fields["name"], description=fields["description"], stars=fields["stars"], cve_count=fields["cve_count"], manual=bool(fields.get("manual")))
         for code in matches:
             per_rule_independent[code] = per_rule_independent.get(code, 0) + 1
         verdict = render_verdict(fields)

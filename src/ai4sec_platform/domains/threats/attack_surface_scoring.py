@@ -45,7 +45,7 @@ def score_attack_surface(item: dict[str, Any]) -> ScoreResult:
     complexity = _star_score(stars)
     security_boundary = _security_boundary_score(name, desc)
     total = min(100.0, language + input_surface + historical_cve + complexity + security_boundary)
-    filter_info = filter_project(name, desc, stars)
+    filter_info = filter_project(name, desc, stars, manual=bool(raw.get("manual")))
     priority = "high" if total >= 70 else "medium" if total >= 50 else "low" if total >= 30 else "reject"
     grade = "A" if total >= 70 else "B" if total >= 50 else "C" if total >= 30 else "D"
     reasons = [
@@ -75,7 +75,12 @@ def score_attack_surface(item: dict[str, Any]) -> ScoreResult:
     )
 
 
-def filter_project(name: str, desc: str, stars: int) -> dict[str, Any]:
+def filter_project(name: str, desc: str, stars: int, *, manual: bool = False) -> dict[str, Any]:
+    """``manual`` = 页面人工添加的仓(2026-10-10),只豁免 ``empty_shell`` 这一条。
+
+    空壳规则判的是"信息不足,只能当垃圾";人工仓恰好拿不到描述和 star(单仓元数据端点恒 401),
+    不豁免就会被判空壳、状态变"平台规则过滤",连风险研判都进不去。其余规则判内容形态,照旧。
+    """
     lowered_name = (name or "").lower()
     haystack = f"{name} {desc}".lower()
     if not name:
@@ -86,7 +91,7 @@ def filter_project(name: str, desc: str, stars: int) -> dict[str, Any]:
         return {"filtered": True, "filtered_reason": "doc_or_mirror_no_desc", "deprioritized": False}
     if any(lowered_name.startswith(prefix) for prefix in DROP_PREFIX_BOARD) and stars < 20:
         return {"filtered": True, "filtered_reason": "board_config_no_community", "deprioritized": False}
-    if not desc and stars == 0:
+    if not manual and not desc and stars == 0:
         return {"filtered": True, "filtered_reason": "empty_shell", "deprioritized": False}
     return {"filtered": False, "filtered_reason": "", "deprioritized": any(keyword in haystack for keyword in KEEP_BUT_DEPRIORITIZE)}
 
