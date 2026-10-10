@@ -367,18 +367,28 @@ def missing_target_ids(conn: sqlite3.Connection) -> set[int]:
     return {int(_row_get(row, "id", 0)) for row in rows}
 
 
+def is_manual_target(payload: dict[str, Any]) -> bool:
+    """这条仓是不是页面「代码仓 · 单个仓」人工添加的(打标在 ``payload.raw.manual``)。"""
+    raw = payload.get("raw") if isinstance(payload.get("raw"), dict) else {}
+    return bool(raw.get("manual") or payload.get("manual"))
+
+
 def backfill(conn: sqlite3.Connection, *, only_missing: bool = False) -> dict[str, Any]:
     """把判定结果写入 threat_repo_filters(幂等,写一次事务)。
 
     ``only_missing=True`` 只算**还没有结论**的仓 —— 采集流水线每天都在加新仓,收尾时用它把
     新仓补上(通常每晚几十个,毫秒级),否则新进的空壳/样例仓不会被过滤,页面上的"已隐藏"
     会一天天失真。**改规则之后必须跑默认的整表重算**,增量模式不会刷新已有行。
+
+    例外:**人工添加的仓每次都重算**(2026-10-10)。它们的典型形态恰恰是"组织扫描早就抓回来
+    过、上一轮已判过 F1 空壳"的仓,增量模式会把那条旧结论一直留着 —— 用户在页面上加了仓,
+    手动豁免永远落不了地,他要的那个仓还是被隐藏。所以增量模式下也把这类仓捞出来重判。
     """
     ensure_table(conn)
     targets = iter_targets(conn)
     if only_missing:
         missing = missing_target_ids(conn)
-        targets = [t for t in targets if t[0] in missing]
+        targets = [t for t in targets if t[0] in missing or is_manual_target(t[3])]
     now = _now()
     rows: list[tuple[int, str, int, str, str, int, str, str]] = []
     for item_id, _title, summary, payload in targets:
