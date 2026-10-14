@@ -20,7 +20,11 @@ class ArtifactStore:
     def write_json(self, conn, *, run_id: str, artifact_type: str, name: str, data: Any) -> dict[str, Any]:
         path = self.run_dir(run_id) / name
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(data, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+        # 边生成边写盘: json.dumps 会先把整个对象图拼成一个 str, write_text 再编一份等长 bytes,
+        # 单次调用峰值约 2.3 倍(威胁线 repos.json 单文件 634MB → 峰值 1.3GB+)。逐个 chunk
+        # 落 file 对象后峰值降到约 1 倍, 输出字节完全不变(仍 indent=2)。
+        with path.open("w", encoding="utf-8") as fh:
+            json.dump(data, fh, ensure_ascii=False, indent=2, default=str)
         stat = path.stat()
         digest = sha256_file(path)
         repo.create_artifact(

@@ -343,6 +343,23 @@ def create_app() -> FastAPI:
         except Exception as e:  # noqa: BLE001 - 回收失败不阻断调度器
             print(f'[zombie-reap] error: {e}', flush=True)
 
+    def _trim_memory():
+        # 周期内存看门狗: 把已释放的堆顶还给 OS。Python 释放大对象后, glibc 的非主 arena 堆
+        # 常把空位攥在手里不还给内核(RSS 只涨不跌)。2026-10-13 那次 uvicorn 吃到 9.41GB 被
+        # 宿主全局 OOM 杀掉, 取证结果是进程里约 50 个 64MB 对齐的 arena 堆、且没有任何活对象
+        # 引用它们 —— 即碎片而非泄漏。malloc_trim(0) 正是把"连成片的空堆顶"交还内核。
+        # 返回值本身就是诊断: 1=确实还了内存(碎片确认), 0=没得还(说明有活对象仍被引用)。
+        try:
+            import ctypes
+            libc = ctypes.CDLL("libc.so.6")
+            libc.malloc_trim.argtypes = [ctypes.c_size_t]
+            libc.malloc_trim.restype = ctypes.c_int
+            released = libc.malloc_trim(0)
+            if released:
+                print("[mem-trim] released free heap back to OS", flush=True)
+        except Exception as e:  # noqa: BLE001 - 回收失败不阻断调度器
+            print(f'[mem-trim] error: {e}', flush=True)
+
     def _reap_stale_pipeline_runs():
         # 周期看门狗: 回收悬挂的 pipeline_run(心跳停滞/超时未完成, 状态卡 running 的僵尸)。
         # 与启动时的 recover_orphaned_pipeline_runs 互补: 后者清重启遗留, 前者清运行中挂死。
@@ -371,6 +388,10 @@ def create_app() -> FastAPI:
     # 攒几天顶死 pids.max → 威胁跑批 can't start new thread、docker exec 起不来进程。
     # 详见 ai4sec_platform/proc_reaper.py 的实测记录。
     scheduler.add_job(_reap_zombies, IntervalTrigger(seconds=60), id='zombie-reap', name='zombie-reap(60s)', replace_existing=True)
+    # 内存回收(30min): 与僵尸回收同类的看门狗, 30 分钟一次开销可忽略(一次系统调用)。
+    # 详见 _trim_memory 上方说明; 它只把"已经没人引用"的堆顶交还内核, 不会动活对象。
+    # 启动时 MALLOC_ARENA_MAX=2(见 start-api.sh)从源头减少 arena 数量, 两者配合使用。
+    scheduler.add_job(_trim_memory, IntervalTrigger(minutes=30), id='mem-trim', name='mem-trim(30min)', replace_existing=True)
 
     @app.on_event('startup')
     def _start_scheduler():
@@ -392,7 +413,7 @@ def create_app() -> FastAPI:
             print(f'[pipeline-recover] {n} orphaned pipeline run(s) recovered', flush=True)
         except Exception as e:  # noqa: BLE001 - 清扫失败不影响启动
             print(f'[pipeline-recover] error: {e}', flush=True)
-        print('[scheduler] started: capability(15min), threat(daily 05:00), vuln(daily 22:00), repro-watchdog(5min), pipeline-watchdog(5min), zombie-reap(60s)', flush=True)
+        print('[scheduler] started: capability(15min), threat(daily 05:00), vuln(daily 22:00), vuln-pattern(daily 03:30), repro-watchdog(5min), pipeline-watchdog(5min), zombie-reap(60s), mem-trim(30min)', flush=True)
         # 启动先扫一遍:容器上次运行攒下的浏览器僵尸在重启后不会自动消失(重启只是换了父进程)。
         try:
             from ai4sec_platform.proc_reaper import reap_and_report
