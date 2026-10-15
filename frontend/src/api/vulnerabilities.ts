@@ -6,6 +6,7 @@ import type {
   FieldReviewRequest,
   FieldReviewResponse,
   KnowledgePayload,
+  KeywordCategory,
   KeywordProfile,
   ListResponse,
   ManualKeyword,
@@ -111,6 +112,11 @@ export function fetchVulnerabilityEvaluations(): Promise<ListResponse<DomainItem
 
 export function fetchVulnerabilityKeywordProfiles(): Promise<{ items: KeywordProfile[]; max_manual_queries?: number; wildcard_manual_queries?: number }> {
   return getJson('/api/vulnerabilities/keyword-profiles');
+}
+
+/** 词表里 18 个漏洞大类的全部关键词(2026-10-15 新增端点)。 */
+export function fetchKeywordCategories(): Promise<{ items: KeywordCategory[] }> {
+  return getJson('/api/vulnerabilities/keyword-categories');
 }
 
 // ============================================================================

@@ -637,6 +637,18 @@
 .ops-profile-row > span { color: var(--muted); font-size: 12px; white-space: nowrap; }
 @media (max-width: 1100px) { .ops-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); } .ops-layout { grid-template-columns: 1fr; } }
 @media (max-width: 620px) { .ops-kpis, .run-launch-grid { grid-template-columns: 1fr; } .ops-profile-row, .ops-source-row { grid-template-columns: 1fr; gap: 6px; } }
+/* 规则配置页:profile / 类别逐条展开看关键词(2026-10-15)。<details> 的边框沿用 .tech-tree 那一套。 */
+.keyword-details { border: 1px solid var(--line); border-radius: 11px; background: var(--panel-2); }
+.keyword-details > .ops-profile-row { position: relative; padding: 11px 14px 11px 24px; border-bottom: 0; }
+.keyword-details > summary { list-style: none; cursor: pointer; }
+.keyword-details > summary::-webkit-details-marker { display: none; }
+.keyword-details > summary:before { content: '▸'; position: absolute; left: 8px; top: 12px; color: var(--faint); font-size: 11px; }
+.keyword-details[open] > summary:before { content: '▾'; color: var(--sky); }
+.keyword-details[open] > summary { border-bottom: 1px solid var(--line); }
+.keyword-detail-body { display: grid; gap: 12px; padding: 12px 14px; }
+.keyword-block { display: grid; gap: 7px; }
+.keyword-words { display: flex; flex-wrap: wrap; gap: 6px; }
+.keyword-chip { border: 1px solid var(--line); border-radius: 6px; color: var(--muted); background: var(--bg-2); padding: 3px 7px; font-size: 11px; }
 .evidence-snippet { margin-bottom: 10px; padding: 10px; border-left: 3px solid var(--sky); background: color-mix(in srgb, var(--accent) 6%, transparent); }
 .evidence-snippet p { margin-bottom: 0; white-space: pre-wrap; }
 @media (max-width: 1180px) {
