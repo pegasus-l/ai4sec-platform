@@ -1,13 +1,17 @@
 // 脱敏示例: 真实 apiKey 不入库(该文件被 .gitignore 排除)。
 // 线上真文件: /opt/ai-security-fusion-v2/repro-opencode.jsonc
-// 改真 key 后需重建 repro 镜像(Dockerfile.repro COPY 该文件)。
+// 改真 key 后**不必重建镜像**也可以生效(推荐, 重建会因 repro-runner:v3 缺失而失败):
+//   docker exec -i fusion-v2-repro-1 sh -c 'cat > /root/.config/opencode/opencode.jsonc' < repro-opencode.jsonc
+//   docker exec -i fusion-v2-repro-1 sh -c 'cat > /root/.local/share/opencode/auth.json'   < repro-auth.json
+//   docker restart fusion-v2-repro-1     # 只有 restart 才会重读配置
+// 下次重建镜像时本文件才会被用到(Dockerfile.repro COPY 它)。
 {
   "$schema": "https://opencode.ai/config.json",
   "permission": "allow",
   "provider": {
     "alibaba-cn": {
       "options": {
-        "baseURL": "https://az.gptplus5.com/v1",
+        "baseURL": "https://st8tp3ajl0df3n8b8l8qu.apigateway-cn-beijing.volceapi.com/v1",
         "apiKey": "REPLACE_WITH_REAL_KEY"
       },
       "models": {

@@ -38,3 +38,11 @@
 - `repro-web/Dockerfile.repro` 与 `repro-web/docker-compose.yml` 这两个 09-01 的历史副本**已删除**:它们早已与线上分叉(线上更新过两轮),留着只会误导。真源见本目录顶层同名文件。
 - `Dockerfile.repro` 的 `COPY repro-auth.json` / `COPY repro-model.json` 依赖顶层同名文件存在。
 - 重建 repro 镜像:`cd /opt/ai-security-fusion-v2 && docker compose build repro`(注意 compose 项目名是 `fusion-v2`)。
+
+- `repro-runner:v3` 镜像**已从 119 上消失**(2026-10-15 查实), 而 `Dockerfile.repro` 第 13 行是
+  `COPY --from=repro-runner:v3 ...` → **`docker compose build repro` 现在会失败**。
+  不影响复现本身:复现走的是 repro 容器里的 `opencode serve`(`REPRO_API_URL=http://repro:4096`),
+  `repro_runner.py` 里那段 `docker run repro-runner:v3` 是遗留代码(只被 import 了 `classify_log_line`/`extract_report`)。
+  改 repro 的模型配置请走 "exec 写文件 + `docker restart fusion-v2-repro-1`", 别重建镜像。
+
+- 119 的 `docker cp` 恒失败(Docker29+containerd), 快照回填只能用 `docker exec -i ... sh -c 'cat > 路径'`。
