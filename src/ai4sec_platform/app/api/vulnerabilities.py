@@ -13,7 +13,7 @@ from ai4sec_platform.app.api.runs import start_pipeline_run
 from ai4sec_platform.db import repositories as repo
 from ai4sec_platform.core.config import load_settings
 from ai4sec_platform.domains.vulnerabilities import manual_ingest, manual_keywords
-from ai4sec_platform.domains.vulnerabilities.keyword_profiles import list_keyword_profiles
+from ai4sec_platform.domains.vulnerabilities.keyword_profiles import list_keyword_categories, list_keyword_profiles
 from ai4sec_platform.domains.vulnerabilities.comprehension_probers import aggregate_feedback, render_probe_markdown
 from ai4sec_platform.domains.vulnerabilities.pattern_synthesizers import render_pattern_markdown
 from ai4sec_platform.domains.vulnerabilities import service as vuln_service
@@ -137,6 +137,17 @@ def keyword_profiles(conn: sqlite3.Connection = Depends(get_db)) -> dict:
         "wildcard_manual_queries": wildcard,
         "max_manual_queries": manual_keywords.MAX_PER_PROFILE,
     }
+
+
+@router.get("/keyword-categories")
+def keyword_categories() -> dict:
+    """词表里 18 个漏洞大类各自的全部关键词(2026-10-15)。
+
+    页面问"每个类别的关键词都是啥"就走这条;`/keyword-profiles` 只回计数。
+    与 profile 一样,不在这里过滤 `hidden` —— 收起与否是页面的决定。
+    """
+    settings = load_settings()
+    return {"items": list_keyword_categories(settings.project_root)}
 
 
 class AddManualKeywordRequest(BaseModel):

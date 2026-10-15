@@ -61,6 +61,52 @@ def list_keyword_profiles(project_root: Path, output_dir: Path | None = None) ->
             "rotation_cursor": int(state["cursor"]) % len(rotation_queries) if rotation_queries else 0,
             "rotation_round": int(state["round"]),
             "rotation_cycle_runs": math.ceil(len(rotation_queries) / rotation_batch_size) if rotation_batch_size else 0,
+            # 2026-10-15:规则配置页要能看到"到底搜哪些词"。原来只回计数,页面只能显示
+            # "本次关键词 60 条",看不到词本身。这三项都是纯追加,老前端忽略即可。
+            "queries": core_queries,
+            "rotation_categories": rotation_categories,
+            # 未启用的 profile:只在页面上收起,不影响 resolve_keyword_profile 的解析。
+            "hidden": bool(profile.get("hidden")),
+        })
+    return result
+
+
+def list_keyword_categories(project_root: Path) -> list[dict[str, Any]]:
+    """词表里全部类别及其关键词,并标出每个类别被哪些 profile 用到(2026-10-15)。
+
+    `list_keyword_profiles` 只回每个 profile 的类别**名**和词**数**;页面上要回答
+    "每个类别到底有哪些词",得把 ``categories`` 段原样摊开。这里不读任何运行状态,
+    也不复用 ``_interleaved_category_queries`` —— 那个是给跑批排序用的,顺序在此无意义。
+    """
+    config_path = project_root / "configs" / "vulnerability_keywords.yaml"
+    if not config_path.exists():
+        raise ValueError(f"keyword profile config not found: {config_path}")
+    config = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+    categories_config = config.get("categories") or {}
+    profiles = config.get("profiles") or {}
+    core_profiles: dict[str, list[str]] = {}
+    rotation_profiles: dict[str, list[str]] = {}
+    for name, profile in profiles.items():
+        if not isinstance(profile, dict):
+            continue
+        for category in profile.get("categories") or []:
+            core_profiles.setdefault(str(category), []).append(str(name))
+        rotation = profile.get("rotation") if isinstance(profile.get("rotation"), dict) else {}
+        for category in rotation.get("categories") or []:
+            rotation_profiles.setdefault(str(category), []).append(str(name))
+    result: list[dict[str, Any]] = []
+    for name, keywords in categories_config.items():
+        if not isinstance(keywords, list):
+            continue
+        words = [str(value).strip() for value in keywords if str(value).strip()]
+        category = str(name)
+        result.append({
+            "name": category,
+            "keywords": words,
+            "count": len(words),
+            "in_rotation": category in rotation_profiles,
+            "rotation_profiles": rotation_profiles.get(category, []),
+            "core_profiles": core_profiles.get(category, []),
         })
     return result
 
