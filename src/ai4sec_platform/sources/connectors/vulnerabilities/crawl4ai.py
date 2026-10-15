@@ -11,9 +11,38 @@ from html import unescape
 from typing import Any, Callable
 
 from ai4sec_platform.domains.vulnerabilities.crawl_policies import VulnerabilityCrawlPolicy
-from ai4sec_platform.proc_reaper import reap_and_report, reap_browser_zombies, reaped_total
+from ai4sec_platform.proc_reaper import (
+    orphans_killed_total,
+    reap_and_report,
+    reap_browser_orphans,
+    reap_browser_zombies,
+    reaped_total,
+)
 from ai4sec_platform.schemas.sources import SourceFetchRequest, SourceHealth
 from ai4sec_platform.sources.result import SourceFetchResult
+
+# 挑战/拦截页特征(2026-10-14 实测: 每晚约 34 条候选落在拦截页上, SE 系占 67%)。
+# 这些页被 crawl4ai 报成 success=True, 于是既不会触发重试, 又被评审当成"正文太短"驳掉 ——
+# 真正的失败原因(被 WAF 拦了)被完全掩盖, 所以在抓取这一层就把它认出来。
+_STRONG_CHALLENGE_MARKERS = (
+    "cf-mitigated",
+    "err_blocked_by_client",
+    "checking your browser before accessing",
+    "enable javascript and cookies to continue",
+    "attention required! | cloudflare",
+    "ddos protection by cloudflare",
+)
+_WEAK_CHALLENGE_MARKERS = (
+    "just a moment",
+    "verify you are human",
+    "verifying you are human",
+    "please complete the security check",
+    "unusual traffic from your computer",
+    "denied by our security policy",
+)
+# 长度闸门: 挑战页正文通常 <2KB, 而**讲人机验证的技术文章**可能几千字并顺带提到这些词。
+# 超过这个长度一律不判挑战页 —— 宁可漏判(退回原来的"正文太短")也不误杀一篇 writeup。
+_CHALLENGE_MAX_CHARS = 5000
 
 
 class Crawl4aiConnector:
@@ -60,6 +89,7 @@ class Crawl4aiConnector:
         prefer_url_fetch = bool(params.get("prefer_url_fetch", False))
         # 本轮回收量的起点(见文件末尾的 zombies_reaped)
         reaped_before = reaped_total()
+        orphans_before = orphans_killed_total()
         # idle timeout: 在飞的那几页若这么久都没一页完成, 就认定它们卡死了。
         # 可用 crawl_idle_timeout_seconds 覆盖(默认 = 慢站超时 + 30s, 上限 30 分钟), 便于按站点调整与测试。
         idle_timeout = _bounded_int(params.get("crawl_idle_timeout_seconds"), policy.slow_site_timeout_seconds + 30, maximum=1800)
@@ -152,9 +182,13 @@ class Crawl4aiConnector:
                 "idle_stalled": len(stalled_urls),
                 "idle_abandoned": abandoned,
                 "idle_stalled_urls": stalled_urls[:10],
-                # 进程卫生: 本轮回收了几个浏览器僵尸、还剩几个、pids 占用(顶到 max 就是事故前兆)
+                # 进程卫生: 本轮回收了几个浏览器僵尸/孤儿树、还剩几个、pids 占用(顶到 max 就是事故前兆)
                 "zombies_reaped": reaped_this_fetch,
                 "zombies_left": reap.get("zombies", 0),
+                "browser_orphans_killed": orphans_killed_total() - orphans_before,
+                # 抓取停下来后这个数不归零 = 又漏了(2026-10-15 现场是 11 个常驻不退, 约 975MB)
+                "browser_live": reap.get("browser_live", 0),
+                "browser_live_rss_kb": reap.get("browser_live_rss_kb", 0),
                 "pids_current": reap.get("pids_current", 0),
                 "pids_max": reap.get("pids_max", 0),
             },
@@ -175,7 +209,8 @@ def _crawl_candidate(candidate: dict[str, Any], *, policy: VulnerabilityCrawlPol
 
     crawl4ai_error = ""
     if effective_policy.use_crawl4ai:
-        result, crawl4ai_error = _with_retries(lambda: _crawl4ai_sync(candidate, policy=effective_policy), effective_policy)
+        # 结果级重试已经在 _crawl4ai_sync 内部(同一个浏览器里)做完了, 这里只兜"抛异常"。
+        result, crawl4ai_error = _retry_on_exception(lambda: _crawl4ai_sync(candidate, policy=effective_policy), effective_policy)
         if result and result.get("success"):
             return _record_strategy(result, strategy, effective_policy)
         if not effective_policy.allow_urllib_fallback:
@@ -210,6 +245,25 @@ def _with_retries(operation: Callable[[], dict[str, Any]], policy: Vulnerability
     return last_result, last_error
 
 
+def _retry_on_exception(operation: Callable[[], dict[str, Any]], policy: VulnerabilityCrawlPolicy) -> tuple[dict[str, Any] | None, str]:
+    """只在**抛异常**时重试(浏览器起不来之类), 结果级失败的重试归 `_crawl4ai_sync` 管。
+
+    2026-10-15 之前 crawl4ai 这条路用的是 `_with_retries`, 而它每次重试都重新调
+    `_crawl4ai_sync` → 新建一个浏览器。重试一旦离开原浏览器, 第一次拿到的挑战 cookie
+    就没了, 等于从零再来。改造后重试挪进了浏览器内部, 这里只保留"异常兜底"这一层,
+    避免同一个页面被两层循环各重试一遍(最多 (n+1)² 次)。
+    """
+    last_error = ""
+    for attempt in range(1, policy.max_retries + 2):
+        try:
+            return operation(), ""
+        except Exception as exc:  # pragma: no cover - optional runtime/network
+            last_error = f"{type(exc).__name__}: {exc}"
+            if attempt <= policy.max_retries and policy.retry_delay_seconds:
+                time.sleep(policy.retry_delay_seconds * attempt)
+    return None, last_error
+
+
 def _record_strategy(result: dict[str, Any], strategy: str, policy: VulnerabilityCrawlPolicy) -> dict[str, Any]:
     result["crawl_strategy"] = strategy
     result["effective_timeout_seconds"] = policy.timeout_seconds
@@ -238,21 +292,38 @@ def _crawl4ai_sync(candidate: dict[str, Any], *, policy: VulnerabilityCrawlPolic
             simulate_user=True,
             magic=True,
         )
+        # 重试必须在**同一个浏览器**里做(2026-10-15 改)。
+        # 在此之前 `_with_retries` 套在 `_crawl4ai_sync` 外面, 每次重试都新建浏览器:
+        # 第一次请求拿到 307 + 挑战页, 浏览器一销毁挑战 cookie 也跟着没了, 重试等于从零再来
+        # —— 实测同一个浏览器内再请求一次即可通过(13/16=81%), 换新浏览器则几乎必被再拦一次。
         async with AsyncWebCrawler(config=browser_config) as crawler:
-            result = await crawler.arun(url=str(candidate.get("url")), config=run_config)
-            if not getattr(result, "success", False):
-                error = str(getattr(result, "error_message", "crawl4ai_failed"))
-                return _failed(candidate, error, failure_reason="crawl4ai_failed")
-            markdown = _markdown_text(getattr(result, "markdown", ""))
-            metadata = dict(getattr(result, "metadata", {}) or {})
-            metadata.update(
-                {
-                    "status_code": getattr(result, "status_code", None),
-                    "links": getattr(result, "links", {}) or {},
-                    "media": getattr(result, "media", {}) or {},
-                }
-            )
-            return _success(candidate, markdown=markdown, mode="crawl4ai", metadata=metadata)
+            url = str(candidate.get("url"))
+            last: dict[str, Any] | None = None
+            for attempt in range(1, policy.max_retries + 2):
+                result = await crawler.arun(url=url, config=run_config)
+                if not getattr(result, "success", False):
+                    error = str(getattr(result, "error_message", "crawl4ai_failed"))
+                    last = _failed(candidate, error, failure_reason="crawl4ai_failed", attempt_count=attempt)
+                else:
+                    markdown = _markdown_text(getattr(result, "markdown", ""))
+                    metadata = dict(getattr(result, "metadata", {}) or {})
+                    metadata.update(
+                        {
+                            "status_code": getattr(result, "status_code", None),
+                            "links": getattr(result, "links", {}) or {},
+                            "media": getattr(result, "media", {}) or {},
+                        }
+                    )
+                    # crawl4ai 把挑战页也报成 success=True, 所以"成功"还得再看一眼内容。
+                    challenge = _bot_challenge_marker(markdown)
+                    if not challenge:
+                        return _success(candidate, markdown=markdown, mode="crawl4ai", metadata=metadata)
+                    last = _failed(candidate, f"bot_challenge: {challenge}", failure_reason="bot_challenge", attempt_count=attempt)
+                    last["crawl_info"]["bot_challenge_marker"] = challenge
+                    last["crawl_info"]["status_code"] = metadata.get("status_code")
+                if attempt <= policy.max_retries and policy.retry_delay_seconds:
+                    await asyncio.sleep(policy.retry_delay_seconds * attempt)
+            return last if last is not None else _failed(candidate, "crawl4ai_failed", failure_reason="crawl4ai_failed")
 
     try:
         return asyncio.run(run())
@@ -261,6 +332,10 @@ def _crawl4ai_sync(candidate: dict[str, Any], *, policy: VulnerabilityCrawlPolic
         # 等整轮结束再收太晚(中途就可能把 pids 顶满)。回收只按 pid 认自己名下、名字像
         # 浏览器/驱动的进程, 不碰其它子进程 —— 详见 ai4sec_platform/proc_reaper.py。
         reap_browser_zombies()
+        # 2026-10-15 补: 还有一类泄漏是**活着的孤儿浏览器树**(不是僵尸, 见 proc_reaper 模块说明)。
+        # 空闲超时放弃的页面会让整棵树常驻到进程重启, 每棵约 975MB —— 这才是"OOM 十天重演一次"的来源。
+        # 判据是年龄(宽限 600s, 正常单页树寿命上限约 140s), 所以不会误伤正在抓的页。
+        reap_browser_orphans()
 
 
 def _construct_supported(factory: Any, **kwargs: Any) -> Any:
@@ -296,12 +371,18 @@ def _urllib_crawl(candidate: dict[str, Any], *, policy: VulnerabilityCrawlPolicy
             content_type = response.headers.get("content-type", "")
             status_code = getattr(response, "status", 200)
     except urllib.error.HTTPError as exc:
-        return _failed(candidate, f"HTTP {exc.code}", failure_reason="http_error")
+        return _http_error_result(candidate, exc)
     except urllib.error.URLError as exc:
         return _failed(candidate, str(exc.reason), failure_reason="network_error")
     html = raw.decode("utf-8", errors="replace")
     title = _title(html) or candidate.get("title") or url
     text = _html_to_text(html)
+    challenge = _bot_challenge_marker(text)
+    if challenge:
+        blocked = _failed(candidate, f"bot_challenge: {challenge}", failure_reason="bot_challenge")
+        blocked["crawl_info"]["bot_challenge_marker"] = challenge
+        blocked["crawl_info"]["status_code"] = status_code
+        return blocked
     return _success(
         candidate,
         markdown=text,
@@ -309,6 +390,47 @@ def _urllib_crawl(candidate: dict[str, Any], *, policy: VulnerabilityCrawlPolicy
         mode="urllib",
         metadata={"content_type": content_type, "status_code": status_code, "elapsed_ms": int((time.time() - started) * 1000)},
     )
+
+
+def _http_error_result(candidate: dict[str, Any], exc: urllib.error.HTTPError) -> dict[str, Any]:
+    """4xx/5xx 也要看一眼正文才归因。
+
+    拦截/挑战页**正是带状态码返回的**(Cloudflare 挑战页是 403, 限流页是 429/503), 直接记
+    `http_error` 等于把"被 WAF 拦了"再掩盖一次 —— 和 2026-10-14 crawl4ai 那条 success=True
+    的坑同源(见模块 docstring)。正文读不到就退回 http_error, 不猜。
+    """
+    body = ""
+    try:
+        body = exc.read(65536).decode("utf-8", errors="replace")
+    except Exception:  # pragma: no cover - 读错误响应体失败不影响归因
+        body = ""
+    status_code = getattr(exc, "code", None)
+    challenge = _bot_challenge_marker(_html_to_text(body)) if body else ""
+    if challenge:
+        blocked = _failed(candidate, f"bot_challenge: {challenge}", failure_reason="bot_challenge")
+        blocked["crawl_info"]["bot_challenge_marker"] = challenge
+        blocked["crawl_info"]["status_code"] = status_code
+        return blocked
+    return _failed(candidate, f"HTTP {status_code}", failure_reason="http_error")
+
+
+def _bot_challenge_marker(text: str) -> str:
+    """正文像不像拦截/挑战页? 返回命中的特征串, 不像则返回空串。
+
+    只有**短**正文才判(见 `_CHALLENGE_MAX_CHARS`), 弱特征额外要求正文真的很短 ——
+    挑战页是几十个字的壳, 而讨论 Cloudflare 的技术文章动辄几千字。
+    """
+    lowered = (text or "").casefold()
+    if not lowered or len(lowered) > _CHALLENGE_MAX_CHARS:
+        return ""
+    for marker in _STRONG_CHALLENGE_MARKERS:
+        if marker in lowered:
+            return marker
+    if len(lowered) <= _CHALLENGE_MAX_CHARS // 2:
+        for marker in _WEAK_CHALLENGE_MARKERS:
+            if marker in lowered:
+                return marker
+    return ""
 
 
 def _bounded_int(value: Any, default: int, *, maximum: int) -> int:

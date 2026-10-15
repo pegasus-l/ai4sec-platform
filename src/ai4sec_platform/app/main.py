@@ -331,15 +331,21 @@ def create_app() -> FastAPI:
             print(f'[repro-reap] error: {e}', flush=True)
 
     def _reap_zombies():
-        # 周期看门狗: 回收浏览器/驱动类僵尸子进程。本容器 PID 1 就是平台自己(无 tini),
-        # 浏览器子进程正常退出后没人收尸,会一直占着 cgroup pids 名额 → 攒满后
-        # 威胁跑批 can't start new thread、docker exec 起不来。见 proc_reaper 模块说明。
+        # 周期看门狗: 回收两类浏览器进程残留 ——
+        #   1) 僵尸(Z): 本容器 PID 1 就是平台自己(无 tini), 浏览器子进程正常退出后没人收尸,
+        #      会一直占着 cgroup pids 名额 → 攒满后威胁跑批 can't start new thread、docker exec 起不来;
+        #   2) 活着的孤儿树(2026-10-15 补): 空闲超时放弃的页面会让整棵浏览器树常驻不退,
+        #      每棵约 975MB, 十天能把容器顶到 OOM。它们不是僵尸, 只有按年龄判才收得掉。
+        # 见 ai4sec_platform/proc_reaper.py 的实测记录。
         try:
             from ai4sec_platform.proc_reaper import reap_and_report
             report = reap_and_report()
-            if report.get("reaped"):
-                print(f"[zombie-reap] reaped {report['reaped']} zombie browser process(es); "
-                      f"zombies left={report['zombies']} pids={report['pids_current']}/{report['pids_max']}", flush=True)
+            if report.get("reaped") or report.get("orphans_killed"):
+                print(f"[zombie-reap] reaped {report.get('reaped', 0)} zombie(s), killed "
+                      f"{report.get('orphans_killed', 0)} orphan browser process(es) "
+                      f"({report.get('orphans_freed_kb', 0) // 1024}MB freed); "
+                      f"live browser={report.get('browser_live', 0)} "
+                      f"({report.get('browser_live_rss_kb', 0) // 1024}MB) pids={report['pids_current']}/{report['pids_max']}", flush=True)
         except Exception as e:  # noqa: BLE001 - 回收失败不阻断调度器
             print(f'[zombie-reap] error: {e}', flush=True)
 
@@ -414,11 +420,14 @@ def create_app() -> FastAPI:
         except Exception as e:  # noqa: BLE001 - 清扫失败不影响启动
             print(f'[pipeline-recover] error: {e}', flush=True)
         print('[scheduler] started: capability(15min), threat(daily 05:00), vuln(daily 22:00), vuln-pattern(daily 03:30), repro-watchdog(5min), pipeline-watchdog(5min), zombie-reap(60s), mem-trim(30min)', flush=True)
-        # 启动先扫一遍:容器上次运行攒下的浏览器僵尸在重启后不会自动消失(重启只是换了父进程)。
+        # 启动先扫一遍: 容器上次运行攒下的浏览器残留(僵尸与活着的孤儿树)在重启后不会自己消失 ——
+        # 重启只是换了父进程, 进程本身还在。2026-10-15 实测重启后 11 个浏览器进程(约 975MB)原地不动。
         try:
             from ai4sec_platform.proc_reaper import reap_and_report
             report = reap_and_report()
             print(f"[zombie-reap] startup: reaped={report.get('reaped')} zombies={report['zombies']} "
+                  f"orphans_killed={report.get('orphans_killed', 0)} "
+                  f"({report.get('orphans_freed_kb', 0) // 1024}MB) live_browser={report.get('browser_live', 0)} "
                   f"pids={report['pids_current']}/{report['pids_max']}", flush=True)
         except Exception as e:  # noqa: BLE001 - 扫不动不影响启动
             print(f'[zombie-reap] startup error: {e}', flush=True)
