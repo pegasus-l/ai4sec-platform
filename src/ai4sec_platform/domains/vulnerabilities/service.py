@@ -156,7 +156,9 @@ def today(conn: sqlite3.Connection, limit: int = 12) -> dict[str, Any]:
             "new_or_updated_event_count": len(events_data["items"]),
             # 新口径(2026-10-16): 这批新入库的**漏洞案例**数(人工添加的 pending_fetch 也算 ——
             # 登记了就是登记了, 抓不抓得到元数据是下一步的事)。
-            "new_case_count": len(cases_data["items"]),
+            # 用 total(窗口内的真实计数)而不是 len(items): items 受 limit 截断, 拿它当计数会在
+            # 批量入库的那天恰好等于 limit —— 2026-09-11 那批 1351 条的教训, 数字必须与截断解耦。
+            "new_case_count": int(cases_data.get("total") or 0),
             "case_total": int(case_service.case_stats(conn)["total"]),
             # 逐字段人工确认 2026-10-16 下线(前端页面已撤, 队列也不再写), 计数恒 0。
             # 键**保留**: 老前端/脚本读到 undefined 会渲染成空白而不是 0, 删字段等于制造一次静默故障。
