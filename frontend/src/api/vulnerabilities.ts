@@ -128,7 +128,9 @@ export function fetchManualKeywords(profile = ''): Promise<ManualKeywordListResp
   return getJson(`/api/vulnerabilities/manual-keywords${query}`);
 }
 
-export function addManualKeyword(input: { profile_name: string; keyword: string; label?: string; note?: string }): Promise<{ keyword: ManualKeyword; created: boolean }> {
+export function addManualKeyword(input: { profile_name: string; keyword: string; label?: string; note?: string }): Promise<{ keyword: ManualKeyword; created: boolean; existing_scope?: string }> {
+  // existing_scope 只在"这个词已挂在**另一个**范围下"时回带 —— 后端不再插重复行,
+  // 前端据此告诉用户它现在挂在哪(否则用户会以为没生效)。
   return postJson('/api/vulnerabilities/manual-keywords', input);
 }
 
