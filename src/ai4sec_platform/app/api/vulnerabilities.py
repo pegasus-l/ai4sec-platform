@@ -204,18 +204,16 @@ def list_manual_keywords(profile: str = Query(default=""), conn: sqlite3.Connect
         "items": manual_keywords.list_keywords(conn, profile_name=profile or None),
         "max_per_profile": manual_keywords.MAX_PER_PROFILE,
         "wildcard_profile": manual_keywords.WILDCARD_PROFILE,
-        # 生效范围两档(2026-10-16):页面不再让用户在 6 个 profile 里挑 —— 只有"所有漏洞
-        # 检索"和"仅每晚跑批"两种有意义的语义,默认前者(它不会因为换了 profile 而悄悄失效)。
+        # 生效范围收敛成一档(2026-10-16):原先给的是"所有漏洞检索 / 仅每晚跑批"两档,但这两者
+        # 在当前系统里**没有任何区别** —— 唯一的定时跑批写死 daily_watch,而取数 SQL 是
+        # `profile_name=? OR profile_name='*'`。没有后果的选择不该让人做,所以只留 `*`(它是唯一
+        # 不会因为某个调度档上线/下线而悄悄失效的范围)。字段仍是数组:页面照旧读 [0] 的标签与说明,
+        # 将来真出现第二个有意义的范围时不必改页面结构。
         "scope_options": [
             {
                 "value": manual_keywords.WILDCARD_PROFILE,
                 "label": "所有漏洞检索",
-                "hint": "任何检索配置跑批都会带上;默认值,换了 profile 也不会悄悄失效。",
-            },
-            {
-                "value": manual_keywords.NIGHTLY_PROFILE,
-                "label": "仅每晚跑批",
-                "hint": f"只服务于每天定时跑的那条配置({manual_keywords.NIGHTLY_PROFILE})。",
+                "hint": "任何漏洞检索跑批都会带上它,换了 profile 也不会悄悄失效。",
             },
         ],
         "nightly_profile": manual_keywords.NIGHTLY_PROFILE,
