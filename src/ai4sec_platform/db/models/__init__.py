@@ -301,6 +301,14 @@ CREATE TABLE IF NOT EXISTS vulnerability_manual_keywords (
     enabled INTEGER NOT NULL DEFAULT 1,
     created_by TEXT NOT NULL DEFAULT '',
     created_at TEXT NOT NULL,
+    -- 生效证据(2026-10-16):这条词**最近一次被真正下发**的时刻与被哪个 profile 用上。
+    -- 晚于 created_at 说明确实进过某次采集的查询表;空串 = 从未下发。
+    -- 为什么要它:挂在没在跑的 profile 上的词"启用"了却永远不会被搜,页面此前只显示
+    -- 一个绿色的「启用」徽章,是**看不见的失效**。有这个字段就能显示「从未下发」。
+    -- 写入方是 domains/vulnerabilities/manual_keywords.mark_manual_queries_used(),
+    -- 只在采集真要下发查询表的那一刻调用。
+    last_used_at TEXT NOT NULL DEFAULT '',
+    last_used_profile TEXT NOT NULL DEFAULT '',
     UNIQUE(profile_name, keyword)
 );
 CREATE INDEX IF NOT EXISTS idx_vulnerability_manual_keywords_profile
@@ -314,6 +322,13 @@ def init_db(conn: sqlite3.Connection) -> None:
     try: conn.execute("ALTER TABLE domain_items ADD COLUMN last_synced_at TEXT")
     except Exception: pass
     try: conn.execute("ALTER TABLE human_queue_items ADD COLUMN queue_source TEXT DEFAULT 'pipeline'")
+    except Exception: pass
+    # 生效证据两列(2026-10-16):生产库那张表 10-10 就建好了,上面的 CREATE TABLE IF NOT EXISTS
+    # **补不了列**,只能走这里。init_db 每次 get_db 都跑,所以必须幂等 —— duplicate column
+    # 的报错由同一个 except 吞掉,与上面两条同风格。
+    try: conn.execute("ALTER TABLE vulnerability_manual_keywords ADD COLUMN last_used_at TEXT NOT NULL DEFAULT ''")
+    except Exception: pass
+    try: conn.execute("ALTER TABLE vulnerability_manual_keywords ADD COLUMN last_used_profile TEXT NOT NULL DEFAULT ''")
     except Exception: pass
     conn.commit()
 
