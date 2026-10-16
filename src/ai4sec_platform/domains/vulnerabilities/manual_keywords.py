@@ -26,6 +26,27 @@ len(人工) + profile 的条数。
   启用而不是插一条重复的(与 domains/threats/source_registry.add_target 同一套约定)。
 - 表由 db/models 的 SCHEMA_SQL 建(每次 get_db 都会跑),本模块的 `ensure_table` 是
   同源双写,防止在没走过 init_db 的连接上(单测、脚本)INSERT 失败。
+  新列走 db/models 的 `init_db` 里的 ALTER(表已存在时 CREATE 补不了列)。
+
+## 2026-10-16 增补:范围语义、去重、生效证据
+
+起因:这个页面把**实现概念 profile** 暴露成了用户必须做的决定。核查后的事实是 ——
+唯一的定时漏洞跑批(app/main.py 的 CronTrigger)写死 `keyword_profile=daily_watch`,
+其余 profile 生产跑批各 0 次;而取数 SQL 是 `profile_name=? OR profile_name='*'`,
+所以**选 daily_watch 和选 `*` 在当前系统里等价**,下拉框给的是一个没有后果的选择。
+同时还有三个真问题,一起修掉:
+
+1. **跨范围重复**(两个侧都堵):同一个词挂在两个范围下时,取数会把两行都带出来 ——
+   ① 写入口 `add_keyword` 直接拦掉,返回 `existing_scope` 指向已存在那条,不再插新行;
+   ② `merge_manual_queries` 读取侧再兜一次,人工词内部按大小写去重(此前只与 base 去重,
+   **两条一样的人工词会原样下发两遍**)。
+2. **"启用"不等于"生效"**:挂在不跑的 profile 上的词永远不会被搜,页面此前只显示绿色
+   「启用」徽章 —— 这正是上面第 17 行说的那类坑的另一半。现在由
+   `mark_manual_queries_used()` 在**真要下发的那一刻**盖 `last_used_at`,页面据此显示
+   「从未下发」。**只读预览绝不能调它**,否则证据变假。
+3. **上限口径**:`MAX_PER_PROFILE` 是**按 profile_name 分组**算的,`*` 与具体 profile
+   各占一份额度,所以每晚实际下发量可以到 50+20+20。页面文案要按这个口径写,别写成
+   "每个 profile 总共最多 20 条"。
 """
 from __future__ import annotations
 
@@ -44,6 +65,10 @@ MAX_NOTE_LENGTH = 400
 _PROFILE_NAME_MAX = 64
 # 特殊 profile:表示"所有 profile 都带上这个词"
 WILDCARD_PROFILE = "*"
+# **每晚定时跑批用的 profile**(2026-10-16)。此前这个字面量硬编码在
+# app/main.py 的 CronTrigger 里、页面又各自猜一份,两边会漂;现在只在这里定义一处,
+# main.py 的调度注册与 API 的"今晚下发几条"预览都引用它。
+NIGHTLY_PROFILE = "daily_watch"
 
 
 def ensure_table(conn: sqlite3.Connection) -> None:
@@ -59,6 +84,8 @@ def ensure_table(conn: sqlite3.Connection) -> None:
             enabled INTEGER NOT NULL DEFAULT 1,
             created_by TEXT NOT NULL DEFAULT '',
             created_at TEXT NOT NULL,
+            last_used_at TEXT NOT NULL DEFAULT '',
+            last_used_profile TEXT NOT NULL DEFAULT '',
             UNIQUE(profile_name, keyword)
         );
         CREATE INDEX IF NOT EXISTS idx_vulnerability_manual_keywords_profile
@@ -95,10 +122,13 @@ def _row_to_keyword(row: sqlite3.Row | tuple) -> dict[str, Any]:
         "enabled": bool(get("enabled", 5)),
         "created_by": str(get("created_by", 6) or ""),
         "created_at": str(get("created_at", 7) or ""),
+        # 生效证据(2026-10-16):空串 = 从未下发。索引兜底必须与 _SELECT_COLUMNS 同序。
+        "last_used_at": str(get("last_used_at", 8) or ""),
+        "last_used_profile": str(get("last_used_profile", 9) or ""),
     }
 
 
-_SELECT_COLUMNS = "SELECT id, profile_name, keyword, label, note, enabled, created_by, created_at FROM vulnerability_manual_keywords"
+_SELECT_COLUMNS = "SELECT id, profile_name, keyword, label, note, enabled, created_by, created_at, last_used_at, last_used_profile FROM vulnerability_manual_keywords"
 
 
 def list_keywords(conn: sqlite3.Connection, *, profile_name: str | None = None) -> list[dict[str, Any]]:
@@ -171,6 +201,28 @@ def add_keyword(
             conn.execute("UPDATE vulnerability_manual_keywords SET enabled=1 WHERE id=?", (keyword_id,))
             conn.commit()
         return {"keyword": _fetch_keyword(conn, keyword_id), "created": False}
+    # **跨范围**查重(2026-10-16):同一个词挂在两个范围下(既在 `*` 又在 daily_watch)时,
+    # 取数 SQL(load_manual_queries 的 `profile_name=? OR profile_name='*'`)会把两行都带出来。
+    # 合并侧虽然已按大小写去重(见 merge_manual_queries),但列表里仍会出现两条看起来一样、
+    # 只有范围不同的记录,用户无从判断哪条在起作用。所以在**写入口**直接拦掉,把已存在的那条
+    # 指回给调用方(existing_scope),不再插新行。
+    # 已存在那条若是停用状态,按上面的同一套幂等约定重新启用 —— `*` 是任何 profile 的超集,
+    # 挂在它上面同样保证每晚被搜到,没必要再插一条重复行。
+    other = conn.execute(
+        "SELECT id, profile_name, enabled FROM vulnerability_manual_keywords "
+        "WHERE keyword=? AND profile_name<>? ORDER BY id LIMIT 1",
+        (clean, profile),
+    ).fetchone()
+    if other:
+        other_id, other_profile, other_enabled = int(other[0]), str(other[1] or ""), bool(other[2])
+        if not other_enabled:
+            conn.execute("UPDATE vulnerability_manual_keywords SET enabled=1 WHERE id=?", (other_id,))
+            conn.commit()
+        return {
+            "keyword": _fetch_keyword(conn, other_id),
+            "created": False,
+            "existing_scope": other_profile,
+        }
     # 只在"新增"这条路径上卡上限:重复添加一条已停用的词不该被上限挡住。
     if int(total) >= MAX_PER_PROFILE:
         raise ValueError(f"该配置已有 {int(total)} 条人工关键词(上限 {MAX_PER_PROFILE}),请先删除不再需要的")
@@ -254,10 +306,53 @@ def merge_manual_queries(
     base = [str(query).strip() for query in (base_queries or []) if str(query or "").strip()]
     if not manual:
         return base, {"manual_queries": 0, "manual_merged": 0}
-    seen = {query.casefold() for query in manual}
-    merged = [*manual, *[query for query in base if query.casefold() not in seen]]
+    # 人工词**自己**也要去重(2026-10-16):同一个词可能分别挂在 `*` 和某个具体 profile 上,
+    # 而 load_manual_queries 的 `profile_name=? OR profile_name='*'` 会把两行都取出来。
+    # 此前只做了"人工词 vs base"的去重,**两条一模一样的人工词会原样下发两遍**
+    # (白烧一次搜索与会话额度)。写入口已拦掉新的跨范围重复,这里再兜一次读取侧,
+    # 因为历史数据与直接写库仍可能造成这种状态。保留首次出现的那条(即 id 最小的)。
+    seen: set[str] = set()
+    manual_deduped: list[str] = []
+    for query in manual:
+        key = query.casefold()
+        if key not in seen:
+            seen.add(key)
+            manual_deduped.append(query)
+    merged = [*manual_deduped, *[query for query in base if query.casefold() not in seen]]
     return merged, {
+        # 注意这里报的是**去重前**的启用条数,便于和页面上显示的条数对照;
+        # 真正进下发的数量看 manual_merged / queries_after_merge。
         "manual_queries": len(manual),
         "manual_merged": len(merged) - len(base),
         "queries_after_merge": len(merged),
     }
+
+
+def mark_manual_queries_used(conn: sqlite3.Connection, profile_name: str) -> None:
+    """给"这条词真的被下发过"留证据(2026-10-16)。
+
+    把该 profile 下**启用中**的人工词(自己的 + 挂在 `*` 上的)盖上 last_used_at 与
+    last_used_profile。**不需要传下发词表**:merge_manual_queries 的去重永远是丢 base 那一份、
+    保留人工那一份,所以每个启用的行都确实进了这一次的下发集合。
+
+    **调用时机 = 采集真要下发查询表的那一刻**(见 pipelines/steps/vulnerability_discovery.py
+    与 vulnerability_batch.py 里紧跟在 merge 之后的位置)。**只读的预览路径绝不能调它** ——
+    否则页面一打开就把所有词标成"已下发",这个证据就失去意义了。
+
+    **不自己 commit()**:runner 在每个 step 结束后都会提交,跟着既有提交点落盘即可,不改变
+    事务语义。代价是进程在提交前猝死会丢这条证据 —— 可接受,它是监控字段,不是业务数据。
+    写失败一律吞掉:采集主流程不能因为一张附属表写不进去就整晚不跑(与 load_manual_queries 同理)。
+    """
+    name = str(profile_name or "").strip()
+    if not name:
+        return
+    try:
+        if not table_ready(conn):
+            return
+        conn.execute(
+            "UPDATE vulnerability_manual_keywords SET last_used_at=?, last_used_profile=? "
+            "WHERE enabled=1 AND (profile_name=? OR profile_name=?)",
+            (repo.utc_now(), name, name, WILDCARD_PROFILE),
+        )
+    except sqlite3.Error:
+        return
