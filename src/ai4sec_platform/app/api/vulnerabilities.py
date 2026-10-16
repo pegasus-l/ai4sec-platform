@@ -13,7 +13,12 @@ from ai4sec_platform.app.api.runs import start_pipeline_run
 from ai4sec_platform.db import repositories as repo
 from ai4sec_platform.core.config import load_settings
 from ai4sec_platform.domains.vulnerabilities import manual_ingest, manual_keywords
-from ai4sec_platform.domains.vulnerabilities.keyword_profiles import list_keyword_categories, list_keyword_profiles
+from ai4sec_platform.domains.vulnerabilities.keyword_profiles import (
+    list_keyword_categories,
+    list_keyword_profiles,
+    load_keyword_rotation_state,
+    resolve_keyword_profile,
+)
 from ai4sec_platform.domains.vulnerabilities.comprehension_probers import aggregate_feedback, render_probe_markdown
 from ai4sec_platform.domains.vulnerabilities.pattern_synthesizers import render_pattern_markdown
 from ai4sec_platform.domains.vulnerabilities import service as vuln_service
@@ -157,6 +162,41 @@ class AddManualKeywordRequest(BaseModel):
     note: str = ""
 
 
+def _nightly_dispatch_preview(conn: sqlite3.Connection) -> dict:
+    """今晚那条定时跑批**实际会下发多少条查询**(2026-10-16)。
+
+    口径必须和今晚真正下发的一致,否则页面上那个数字就是骗人的:用**与采集路径相同**的
+    params 解析 profile(见 pipelines/steps/vulnerability_discovery.py 里 keyword_profile
+    + 轮换游标那两行),再走**纯函数**合并人工词,得出去重后的真实条数。
+
+    这是**只读**预览 —— 绝不能调 mark_manual_queries_used:那样页面一打开就把所有词标成
+    "已下发",生效证据立刻变假。合并函数保持纯函数正是为了这里能安全地预览。
+    """
+    settings = load_settings()
+    name = manual_keywords.NIGHTLY_PROFILE
+    preview = {"profile": name, "base": 0, "manual": 0, "total": 0, "dropped": 0, "error": ""}
+    try:
+        state = load_keyword_rotation_state(settings.output_dir, name)
+        profile = resolve_keyword_profile(
+            {"keyword_profile": name, "_rotation_offset": state.get("cursor", 0)},
+            settings.project_root,
+        )
+        if profile is None:
+            return preview
+        base = list(profile.queries)
+        merged, metrics = manual_keywords.merge_manual_queries(conn, name, base)
+    except Exception as exc:  # noqa: BLE001 - 预览算不出来不该让整个页面 500
+        preview["error"] = str(exc)
+        return preview
+    preview["base"] = len(base)
+    # manual 报的是**去重前**的启用条数,便于和列表里的条数对照
+    preview["manual"] = int(metrics.get("manual_queries") or 0)
+    preview["total"] = len(merged)
+    # 没进下发的人工词条数(与 profile 自带词重名、或人工词之间重名)
+    preview["dropped"] = preview["base"] + preview["manual"] - preview["total"]
+    return preview
+
+
 @router.get("/manual-keywords")
 def list_manual_keywords(profile: str = Query(default=""), conn: sqlite3.Connection = Depends(get_db)) -> dict:
     """人工添加的漏洞检索关键词(停用的也返回,页面显示为删除线)。"""
@@ -164,6 +204,22 @@ def list_manual_keywords(profile: str = Query(default=""), conn: sqlite3.Connect
         "items": manual_keywords.list_keywords(conn, profile_name=profile or None),
         "max_per_profile": manual_keywords.MAX_PER_PROFILE,
         "wildcard_profile": manual_keywords.WILDCARD_PROFILE,
+        # 生效范围两档(2026-10-16):页面不再让用户在 6 个 profile 里挑 —— 只有"所有漏洞
+        # 检索"和"仅每晚跑批"两种有意义的语义,默认前者(它不会因为换了 profile 而悄悄失效)。
+        "scope_options": [
+            {
+                "value": manual_keywords.WILDCARD_PROFILE,
+                "label": "所有漏洞检索",
+                "hint": "任何检索配置跑批都会带上;默认值,换了 profile 也不会悄悄失效。",
+            },
+            {
+                "value": manual_keywords.NIGHTLY_PROFILE,
+                "label": "仅每晚跑批",
+                "hint": f"只服务于每天定时跑的那条配置({manual_keywords.NIGHTLY_PROFILE})。",
+            },
+        ],
+        "nightly_profile": manual_keywords.NIGHTLY_PROFILE,
+        "nightly_preview": _nightly_dispatch_preview(conn),
     }
 
 
