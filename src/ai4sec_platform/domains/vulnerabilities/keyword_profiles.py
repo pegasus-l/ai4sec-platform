@@ -77,12 +77,17 @@ def list_keyword_categories(project_root: Path) -> list[dict[str, Any]]:
     `list_keyword_profiles` 只回每个 profile 的类别**名**和词**数**;页面上要回答
     "每个类别到底有哪些词",得把 ``categories`` 段原样摊开。这里不读任何运行状态,
     也不复用 ``_interleaved_category_queries`` —— 那个是给跑批排序用的,顺序在此无意义。
+
+    ``note`` 是该类别的中文释义(2026-10-16),取自与 ``categories`` 平级的 ``category_notes``
+    段。**纯展示**:光看 ``kernel_driver``/``virtualization_hw`` 这种英文名看不出这一类覆盖
+    什么、和相邻类怎么分。配置里没写就回空串,页面按"没释义"处理,不报错(不强制每类都写)。
     """
     config_path = project_root / "configs" / "vulnerability_keywords.yaml"
     if not config_path.exists():
         raise ValueError(f"keyword profile config not found: {config_path}")
     config = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
     categories_config = config.get("categories") or {}
+    category_notes = config.get("category_notes") or {}
     profiles = config.get("profiles") or {}
     core_profiles: dict[str, list[str]] = {}
     rotation_profiles: dict[str, list[str]] = {}
@@ -102,6 +107,7 @@ def list_keyword_categories(project_root: Path) -> list[dict[str, Any]]:
         category = str(name)
         result.append({
             "name": category,
+            "note": str(category_notes.get(category) or ""),
             "keywords": words,
             "count": len(words),
             "in_rotation": category in rotation_profiles,
