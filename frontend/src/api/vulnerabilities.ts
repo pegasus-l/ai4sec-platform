@@ -1,5 +1,9 @@
-import { BASE, deleteJson, getJson, postJson } from './client';
+import { BASE, deleteJson, getJson, patchJson, postJson } from './client';
 import type {
+  CaseDetail,
+  CaseListResponse,
+  CaseSourceTarget,
+  CaseStats,
   ComprehensionProbePayload,
   ComprehensionSummary,
   DomainItem,
@@ -219,6 +223,89 @@ export function fetchVulnerabilityEvents(): Promise<ListResponse<DomainItem>> {
 
 export function fetchVulnerabilityEventDetail(itemId: number): Promise<DomainItem & { materials?: DomainItem<MaterialPayload>[] }> {
   return getJson(`/api/vulnerabilities/events/${itemId}`);
+}
+
+// ============================================================================
+// 漏洞案例库 (2026-10-16): 一个洞一行, 取代原来"从素材聚合出的主题"事件
+// ============================================================================
+
+export interface CaseListParams {
+  q?: string;
+  severity?: string;
+  id_kind?: string;
+  source?: string;
+  status?: string;
+  /** full(4 位全有) / partial(有上下文但没齐) / empty(只有元数据) */
+  completeness?: string;
+  published_from?: string;
+  published_to?: string;
+  limit?: number;
+  offset?: number;
+}
+
+/**
+ * 案例列表。**关键词与所有筛选都下推 SQL 分页** —— 库是 15.5GB 量级, 拉全量回前端筛就是
+ * 素材库当年"分数最低那批永远不可达"的翻版。offset 分页(不是页码)。
+ */
+export function fetchCases(params: CaseListParams = {}): Promise<CaseListResponse> {
+  const sp = new URLSearchParams();
+  Object.entries(params).forEach(([key, value]) => {
+    if (value !== undefined && value !== null && value !== '') sp.set(key, String(value));
+  });
+  const qs = sp.toString();
+  return getJson(`/api/vulnerabilities/cases${qs ? `?${qs}` : ''}`);
+}
+
+export function fetchCaseStats(): Promise<CaseStats> {
+  return getJson('/api/vulnerabilities/cases/stats');
+}
+
+/**
+ * 按 id 取单条素材。案例抽屉的「关联素材」只带 id/标题/链接三件套(案例里不抄素材正文),
+ * 点进去要拿完整素材才能复用现成的素材抽屉 —— 这是那条路径的唯一入口。
+ */
+export function fetchVulnerabilityMaterial(itemId: number): Promise<DomainItem<MaterialPayload>> {
+  return getJson(`/api/vulnerabilities/materials/${itemId}`);
+}
+
+export function fetchCaseDetail(caseId: number): Promise<CaseDetail> {
+  return getJson(`/api/vulnerabilities/cases/${caseId}`);
+}
+
+/**
+ * 人工添加一个洞。
+ *   mode='auto'   贴 CVE/GHSA/OSV id → 落 status='pending_fetch', 采集步(自动或手动触发)去抓元数据
+ *   mode='manual' 完全手填(没有外部 id 的项目内部 bug) → 主键由标题+链接派生, 直接 active
+ * 重复添加是同一条(不插新行): auto 按 canonical_id 幂等, manual 按派生主键幂等。
+ */
+export function addCase(input: { mode: 'auto' | 'manual'; canonical_id?: string; title?: string; summary?: string; severity?: string; cvss_score?: number | null; source_url?: string; cwe_ids?: string[]; affected_products?: string[]; references?: string[]; code?: string; note?: string }): Promise<{ case_id: number; canonical_id: string; created: boolean; context_inserted: number }> {
+  return postJson('/api/vulnerabilities/cases', input);
+}
+
+export function updateCase(caseId: number, fields: Record<string, unknown>): Promise<{ case_id: number; changed: number }> {
+  return patchJson(`/api/vulnerabilities/cases/${caseId}`, fields);
+}
+
+/** 人工补一条上下文。provenance 由后端固定成 manual_added(这个入口不接受来源标注)。 */
+export function addCaseContext(caseId: number, row: { context_type: string; content?: string; confidence?: number; repo?: string; commit_sha?: string; file_path?: string; function_name?: string; start_line?: number; end_line?: number; source_url?: string; label?: string }): Promise<{ case_id: number; inserted: number }> {
+  return postJson(`/api/vulnerabilities/cases/${caseId}/context`, row);
+}
+
+export function fetchCaseSources(): Promise<{ count: number; items: CaseSourceTarget[] }> {
+  return getJson('/api/vulnerabilities/case-sources');
+}
+
+export function addCaseSource(input: { kind: string; identifier: string; source_key?: string; label?: string; note?: string }): Promise<{ source: CaseSourceTarget; created: boolean }> {
+  return postJson('/api/vulnerabilities/case-sources', input);
+}
+
+/** 不带 body, 用两个路径区分开关(与人工关键词同一约定) */
+export function setCaseSourceEnabled(sourceId: number, enabled: boolean): Promise<CaseSourceTarget> {
+  return postJson(`/api/vulnerabilities/case-sources/${sourceId}/${enabled ? 'enable' : 'disable'}`);
+}
+
+export function deleteCaseSource(sourceId: number): Promise<{ deleted: number }> {
+  return deleteJson(`/api/vulnerabilities/case-sources/${sourceId}`);
 }
 
 export function fetchVulnerabilityExtractions(): Promise<ListResponse<DomainItem<KnowledgePayload>>> {

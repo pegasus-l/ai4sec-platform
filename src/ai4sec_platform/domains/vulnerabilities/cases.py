@@ -378,6 +378,7 @@ def list_cases(
     completeness: str = "",
     published_from: str = "",
     published_to: str = "",
+    created_since: str = "",
     limit: int = 50,
     offset: int = 0,
 ) -> dict[str, Any]:
@@ -385,6 +386,7 @@ def list_cases(
 
     `completeness` 支持 `full`(4 位全有) / `partial`(有上下文但没齐) / `empty`(只有元数据) ——
     这是运营最常用的一个筛选:"哪些洞还没收全上下文"。
+    `created_since` 给今日情报页圈"这批新登记了哪些洞"(窗口由 service._batch_window 给出)。
     """
     where: list[str] = []
     params: list[Any] = []
@@ -402,6 +404,9 @@ def list_cases(
     if published_to:
         where.append("published_at <= ?")
         params.append(published_to)
+    if created_since:
+        where.append("created_at >= ?")
+        params.append(created_since)
     if completeness == "full":
         where.append("has_patch = 1 AND has_vuln_site = 1 AND has_dataflow = 1 AND metadata_complete = 1")
     elif completeness == "partial":

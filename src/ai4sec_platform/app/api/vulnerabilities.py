@@ -679,12 +679,13 @@ def list_cases(
     completeness: str = "",
     published_from: str = "",
     published_to: str = "",
+    created_since: str = "",
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
     conn: sqlite3.Connection = Depends(get_db),
 ) -> dict:
     """案例列表。关键词/筛选**全部下推 SQL 分页**(照素材库的服务端分页先例),不拉全量回前端过滤。"""
-    return case_service.list_cases(conn, q=q, severity=severity, id_kind=id_kind, source=source, status=status, completeness=completeness, published_from=published_from, published_to=published_to, limit=limit, offset=offset)
+    return case_service.list_cases(conn, q=q, severity=severity, id_kind=id_kind, source=source, status=status, completeness=completeness, published_from=published_from, published_to=published_to, created_since=created_since, limit=limit, offset=offset)
 
 
 @router.get("/cases/stats")

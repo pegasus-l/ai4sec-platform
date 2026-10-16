@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from ai4sec_platform.db import repositories as repo
+from ai4sec_platform.domains.vulnerabilities import cases as case_service
 from ai4sec_platform.domains.vulnerabilities import field_reviews
 from ai4sec_platform.services import domain_items
 
@@ -141,6 +142,11 @@ def today(conn: sqlite3.Connection, limit: int = 12) -> dict[str, Any]:
     materials_data["items"] = [slim_material(item) for item in materials_data["items"]]
     events_data = _active_events(conn, limit, since=batch_start)
     knowledge_data = domain_items.list_items(conn, DOMAIN, item_type="knowledge", limit=limit, since=batch_start)
+    # 案例库(2026-10-16):「漏洞事件库」改成以洞为主键的案例库后, 这一页的主卡片从"事件"换成"案例"。
+    # 窗口不变 —— 同一条 _batch_window, 所以"这批新登记了哪些洞"与其他两张卡口径一致。
+    # 旧 event 现在全是 superseded, events_data 恒空; 那两行**保留不删**: 键删掉老前端会渲染空白
+    # (P0 同样的理由), 且回滚时把 event 的 status 改回 active 就恢复。
+    cases_data = case_service.list_cases(conn, created_since=batch_start, limit=limit)
     return {
         "domain": DOMAIN,
         # 窗口自述: 前端用它说明"这一页是哪一批", 免得再出现"空了但不知道为什么"
@@ -148,6 +154,10 @@ def today(conn: sqlite3.Connection, limit: int = 12) -> dict[str, Any]:
         "kpis": {
             "new_poc_count": sum(1 for item in materials_data["items"] if (item.get("payload") or {}).get("material_type") == "poc_exploit"),
             "new_or_updated_event_count": len(events_data["items"]),
+            # 新口径(2026-10-16): 这批新入库的**漏洞案例**数(人工添加的 pending_fetch 也算 ——
+            # 登记了就是登记了, 抓不抓得到元数据是下一步的事)。
+            "new_case_count": len(cases_data["items"]),
+            "case_total": int(case_service.case_stats(conn)["total"]),
             # 逐字段人工确认 2026-10-16 下线(前端页面已撤, 队列也不再写), 计数恒 0。
             # 键**保留**: 老前端/脚本读到 undefined 会渲染成空白而不是 0, 删字段等于制造一次静默故障。
             "pending_field_review_count": 0,
@@ -155,13 +165,15 @@ def today(conn: sqlite3.Connection, limit: int = 12) -> dict[str, Any]:
             "knowledge_count": len(knowledge_data["items"]),
             "confirmed_knowledge_count": sum(1 for item in knowledge_data["items"] if item.get("status") == "confirmed"),
         },
-        "workflow": ["先看新 PoC / Exploit", "按 CVE / 事件归并", "模型自动抽取知识字段", "沉淀到漏洞模式库"],
+        "workflow": ["先看新 PoC / Exploit", "按 CVE 归并到漏洞案例", "模型自动抽取知识字段", "沉淀到漏洞模式库"],
+        # 旧事件键保留(见上方注释); 新键 new_cases 是本批新增的案例, 前端主卡片读它。
         "priority_events": [_event_card(item) for item in events_data["items"]],
         "priority_event_items": events_data["items"],
+        "new_cases": cases_data["items"],
         "new_materials": materials_data["items"],
         "new_knowledge": knowledge_data["items"],
         "items": materials_data["items"],
-        "next_workload": {"materials": len(materials_data["items"]), "events": len(events_data["items"]), "pending_fields": 0, "knowledge": len(knowledge_data["items"])},
+        "next_workload": {"materials": len(materials_data["items"]), "events": len(events_data["items"]), "cases": len(cases_data["items"]), "pending_fields": 0, "knowledge": len(knowledge_data["items"])},
     }
 
 

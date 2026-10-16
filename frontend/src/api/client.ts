@@ -46,6 +46,21 @@ export async function postJson<T>(path: string, body?: unknown): Promise<T> {
   return response.json() as Promise<T>;
 }
 
+/** PATCH 与 POST 同一套约定(401 派发横幅事件 / 非 2xx 抛错)。案例库的字段编辑用它。 */
+export async function patchJson<T>(path: string, body?: unknown): Promise<T> {
+  const response = await fetch(BASE + path, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    cache: 'no-store',
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  if (response.status === 401) notifyAuthRequired();
+  if (!response.ok) {
+    throw new Error(`${path}: ${response.status}`);
+  }
+  return response.json() as Promise<T>;
+}
+
 export async function deleteJson<T>(path: string): Promise<T> {
   const response = await fetch(BASE + path, { method: 'DELETE', cache: 'no-store' });
   if (response.status === 401) notifyAuthRequired();  // 会话过期: 让横幅出来(后端 401 JSON)

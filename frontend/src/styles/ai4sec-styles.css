@@ -1368,3 +1368,51 @@ button.assoc-kpi:hover, .assoc-kpi.on { border-color: color-mix(in srgb, var(--a
 .filters .filter-check input { accent-color: var(--accent); cursor: pointer; }
 /* 导出按钮组:无可导出内容时置灰 */
 .assoc-seg.assoc-export button:disabled { opacity: 0.45; cursor: not-allowed; }
+
+/* ── 漏洞案例库(2026-10-16)───────────────────────────────────────────────────
+   「漏洞事件库」从"素材聚合出的主题"换成"一个洞一条"的案例库(CasesView/CaseDrawer)。
+   两条视觉规则贯穿这一块:
+   1) **上下文完整度是可见的进度** —— 领导要的"上下文收集全"必须能在列表上一眼看出缺哪一格,
+      所以 4 格指示器(元/补/点/流)做的是一眼可辨的开关, 不是淡灰的装饰。
+   2) **事实 / 继承 / 推断 / 人工 四种来源不能长一样** —— 颜色在 CaseDrawer.provenanceBadge 里定,
+      这里只保证它们在最挤的一行里也读得出来(badge 自动换行, 不撑破卡片)。 */
+.context-dots { display: flex; gap: 4px; }
+.context-dot { width: 22px; height: 22px; display: grid; place-items: center; border-radius: 7px; font-size: 11px; font-weight: 700;
+  color: var(--faint); background: transparent; border: 1px dashed var(--line-strong); }
+.context-dot.on { color: var(--green); background: color-mix(in srgb, var(--green) 14%, transparent); border: 1px solid color-mix(in srgb, var(--green) 42%, transparent); }
+.case-list { display: grid; gap: 10px; }
+.case-card { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 14px; align-items: start;
+  padding: 14px; border: 1px solid var(--line); border-radius: 18px; background: var(--panel-2); }
+.case-card:hover { border-color: color-mix(in srgb, var(--accent) 34%, var(--line)); }
+.case-card-main { min-width: 0; }
+.case-card-main h4 { margin: 8px 0 0; font-size: 15px; line-height: 1.35; color: var(--text); }
+.case-card-main p { margin: 5px 0 0; font-size: 12px; line-height: 1.55; color: var(--muted); }
+.case-card-side { display: grid; gap: 6px; justify-items: end; align-content: start; text-align: right; }
+.case-card-side b { font-size: 15px; color: var(--text); }
+.case-card-side .btn { margin-top: 4px; white-space: nowrap; }
+.case-mini-foot { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 9px; }
+/* 上下文收集进度: 4 条真实采集动作的产出(不是估算), 每条一个百分比条 */
+.progress-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+.progress-item { padding: 11px 12px; border: 1px solid var(--line); border-radius: 14px; background: var(--panel-2); }
+.progress-item-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.progress-item-head b { font-size: 13px; color: var(--text); }
+.progress-item-head span { font-size: 12px; color: var(--sky); font-weight: 700; }
+.progress-item p { margin: 6px 0 0; }
+.case-add .panel-head { flex-wrap: wrap; }
+.case-add-modes { flex: 0 0 auto; margin: 0 0 8px; }
+.case-add .filters { margin-top: 8px; }
+.case-add .panel-actions { align-items: center; justify-content: space-between; margin-top: 12px; }
+.case-tabs { flex: 0 0 auto; }
+.case-context-card .grid { gap: 12px; }
+.case-context-row { padding: 12px; border: 1px solid var(--line); border-radius: 14px; background: var(--panel-2); }
+.case-context-row + .case-context-row { margin-top: 8px; }
+.case-context-row .badges { margin-top: 0; }
+.case-context-row p { margin: 7px 0 0; }
+.case-context-row .btn { margin-top: 8px; }
+/* 代码片段: 与 .snippet 同族但更宽(整段 diff / 函数体), 保留原始换行与缩进 —— 代码的缩进是内容的一部分 */
+.case-code { margin: 8px 0 0; max-height: 420px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11.5px; line-height: 1.5; tab-size: 2; }
+@media (max-width: 1180px) {
+  .progress-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .case-card { grid-template-columns: minmax(0, 1fr); }
+  .case-card-side { justify-items: start; text-align: left; }
+}
