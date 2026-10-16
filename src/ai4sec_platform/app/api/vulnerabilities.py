@@ -12,6 +12,7 @@ from ai4sec_platform.app.dependencies import current_user, get_db
 from ai4sec_platform.app.api.runs import start_pipeline_run
 from ai4sec_platform.db import repositories as repo
 from ai4sec_platform.core.config import load_settings
+from ai4sec_platform.domains.vulnerabilities import cases as case_service
 from ai4sec_platform.domains.vulnerabilities import manual_ingest, manual_keywords
 from ai4sec_platform.domains.vulnerabilities.keyword_profiles import (
     list_keyword_categories,
@@ -612,6 +613,242 @@ def event_detail(item_id: int, conn: sqlite3.Connection = Depends(get_db)) -> di
     if not item:
         raise HTTPException(status_code=404, detail="event not found")
     return item
+
+
+# ── 漏洞案例库(2026-10-16)────────────────────────────────────────────────────
+# 一个洞一行(canonical_id 唯一),上下文在子表里。**列表不带 content** —— 代码片段只在详情里出现。
+
+class CaseCreateRequest(BaseModel):
+    # auto = 人贴一个 id,元数据等采集步去抓;manual = 完全手填(没有外部 id 的项目内部 bug)
+    mode: str = "auto"
+    canonical_id: str = ""
+    title: str = ""
+    summary: str = ""
+    severity: str = ""
+    cvss_score: float | None = None
+    source_url: str = ""
+    cwe_ids: list[str] = []
+    affected_products: list[str] = []
+    references: list[str] = []
+    code: str = ""
+    note: str = ""
+
+
+class CaseUpdateRequest(BaseModel):
+    title: str | None = None
+    summary: str | None = None
+    severity: str | None = None
+    cvss_score: float | None = None
+    cvss_vector: str | None = None
+    status: str | None = None
+    cwe_ids: list[str] | None = None
+    affected_products: list[str] | None = None
+    fixed_versions: list[str] | None = None
+    references: list[str] | None = None
+
+
+class CaseContextRequest(BaseModel):
+    context_type: str = "manual_note"
+    content: str = ""
+    confidence: float | None = None
+    repo: str = ""
+    commit_sha: str = ""
+    file_path: str = ""
+    function_name: str = ""
+    start_line: int = 0
+    end_line: int = 0
+    source_url: str = ""
+    label: str = ""
+
+
+class CaseSourceRequest(BaseModel):
+    kind: str = "manual_id"
+    identifier: str = ""
+    source_key: str = ""
+    label: str = ""
+    note: str = ""
+
+
+@router.get("/cases")
+def list_cases(
+    q: str = "",
+    severity: str = "",
+    id_kind: str = "",
+    source: str = "",
+    status: str = "",
+    completeness: str = "",
+    published_from: str = "",
+    published_to: str = "",
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    conn: sqlite3.Connection = Depends(get_db),
+) -> dict:
+    """案例列表。关键词/筛选**全部下推 SQL 分页**(照素材库的服务端分页先例),不拉全量回前端过滤。"""
+    return case_service.list_cases(conn, q=q, severity=severity, id_kind=id_kind, source=source, status=status, completeness=completeness, published_from=published_from, published_to=published_to, limit=limit, offset=offset)
+
+
+@router.get("/cases/stats")
+def case_stats(conn: sqlite3.Connection = Depends(get_db)) -> dict:
+    """案例库 KPI 与"上下文收全了没有"的分布。**必须声明在 /cases/{case_id} 之前**,否则会被当成 case_id 解析。"""
+    return case_service.case_stats(conn)
+
+
+@router.get("/cases/{case_id}")
+def case_detail(case_id: int, conn: sqlite3.Connection = Depends(get_db)) -> dict:
+    """案例详情:元数据 + 按 context_type 分组的上下文(补丁/漏洞点/数据流/引用)。"""
+    item = case_service.case_detail(conn, case_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="case not found")
+    return item
+
+
+@router.post("/cases")
+def create_case(request: CaseCreateRequest, conn: sqlite3.Connection = Depends(get_db), user: dict = Depends(current_user)) -> dict:
+    """人工添加案例。两条路径见 CaseCreateRequest.mode 的注释。
+
+    重复添加**不插新行**:auto 走 canonical_id 幂等、manual 走由标题+链接派生的
+    `manual:<sha1[:12]>`,再添一次是"重新启用",与威胁域 add_target 的语义一致。
+    """
+    actor = str(user.get("username") or "")
+    mode = str(request.mode or "auto")
+    try:
+        if mode == "manual":
+            title = str(request.title or "").strip()
+            if not title:
+                raise ValueError("完全手填必须给标题(它参与生成案例主键)")
+            canonical_id = case_service.manual_case_id(title, request.source_url)
+            id_kind = "custom"
+            source = case_service.MANUAL_SOURCE
+            status = "active"
+        else:
+            normalized = case_service.normalize_canonical_id(request.canonical_id)
+            if not normalized:
+                raise ValueError("认不出这个 id:支持 CVE-xxxx-xxxx / GHSA-xxxx-xxxx-xxxx / OSV-xxxx-n")
+            canonical_id, id_kind = normalized["canonical_id"], normalized["id_kind"]
+            # 人只给了 id,元数据还没抓 —— 所以 source 记 manual_id(内容的来源),created_by 记人。
+            # 采集步富化时会把 source 改成 nvd/osv;而 source='manual_added'(完全手填)的案例
+            # 永远不被自动覆盖。
+            source = "manual_id"
+            status = "pending_fetch"
+        context_rows = _case_create_context(request)
+        return case_service.upsert_case(
+            conn,
+            canonical_id=canonical_id,
+            id_kind=id_kind,
+            title=request.title,
+            summary=request.summary,
+            severity=request.severity,
+            cvss_score=request.cvss_score,
+            source_url=request.source_url,
+            cwe_ids=_str_list(request.cwe_ids),
+            affected_products=_str_list(request.affected_products),
+            references=_str_list(request.references),
+            source=source,
+            status=status,
+            actor=actor,
+            context_rows=context_rows,
+            payload={"added_via": mode},
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+def _case_create_context(request: CaseCreateRequest) -> list[dict]:
+    """人工添加时随单附上的上下文:一段代码 + 一条备注 + 若干外链。"""
+    rows: list[dict] = []
+    if str(request.code or "").strip():
+        rows.append({"context_type": "manual_note", "provenance": "manual_added", "label": "人工补充的代码/说明", "content": request.code})
+    if str(request.note or "").strip():
+        rows.append({"context_type": "manual_note", "provenance": "manual_added", "label": "备注", "content": request.note})
+    for url in _str_list(request.references):
+        rows.append({"context_type": "reference", "provenance": "manual_added", "source_url": url, "label": url, "content": ""})
+    return rows
+
+
+@router.patch("/cases/{case_id}")
+def update_case(case_id: int, request: CaseUpdateRequest, conn: sqlite3.Connection = Depends(get_db), user: dict = Depends(current_user)) -> dict:
+    """人工改案例字段(白名单外的键忽略)。"""
+    try:
+        fields = {key: value for key, value in request.model_dump().items() if value is not None}
+        return case_service.update_case(conn, case_id, actor=str(user.get("username") or ""), **fields)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.post("/cases/{case_id}/context")
+def add_case_context(case_id: int, request: CaseContextRequest, conn: sqlite3.Connection = Depends(get_db), user: dict = Depends(current_user)) -> dict:
+    """人工补一条上下文。**provenance 固定 manual_added** —— 这个入口不接受模型/外部源的来源标注,
+    否则一条人写的东西可以被标成 from_osv,前端"事实 vs 推断"的分层就废了。"""
+    if not str(request.content or "").strip() and not request.source_url:
+        raise HTTPException(status_code=400, detail="内容与链接至少要给一个")
+    try:
+        inserted = case_service.add_context(
+            conn,
+            case_id,
+            [{
+                "context_type": request.context_type,
+                "provenance": "manual_added",
+                "confidence": request.confidence,
+                "repo": request.repo,
+                "commit_sha": request.commit_sha,
+                "file_path": request.file_path,
+                "function_name": request.function_name,
+                "start_line": request.start_line,
+                "end_line": request.end_line,
+                "content": request.content,
+                "source_url": request.source_url,
+                "label": request.label or f"人工补充({request.context_type})",
+            }],
+            actor=str(user.get("username") or ""),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {"case_id": case_id, "inserted": inserted}
+
+
+@router.get("/case-sources")
+def list_case_sources(conn: sqlite3.Connection = Depends(get_db)) -> dict:
+    """要盯哪些源(生态包 / 单仓 / 指定 id)。P3 的采集步消费这张表。"""
+    items = case_service.list_case_sources(conn)
+    return {"count": len(items), "items": items}
+
+
+@router.post("/case-sources")
+def add_case_source(request: CaseSourceRequest, conn: sqlite3.Connection = Depends(get_db), user: dict = Depends(current_user)) -> dict:
+    try:
+        return case_service.add_case_source(
+            conn,
+            kind=request.kind,
+            identifier=request.identifier,
+            source_key=request.source_key,
+            label=request.label,
+            note=request.note,
+            created_by=str(user.get("username") or ""),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+# 与 /manual-keywords/{id}/enable 同一约定:不带 body,用两个路径区分开关(少一个 JSON 就 422 的坑)
+@router.post("/case-sources/{source_id}/enable")
+def enable_case_source(source_id: int, conn: sqlite3.Connection = Depends(get_db)) -> dict:
+    try:
+        return case_service.set_case_source_enabled(conn, source_id, True)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+
+@router.post("/case-sources/{source_id}/disable")
+def disable_case_source(source_id: int, conn: sqlite3.Connection = Depends(get_db)) -> dict:
+    try:
+        return case_service.set_case_source_enabled(conn, source_id, False)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+
+@router.delete("/case-sources/{source_id}")
+def delete_case_source(source_id: int, conn: sqlite3.Connection = Depends(get_db)) -> dict:
+    return {"deleted": case_service.delete_case_source(conn, source_id)}
 
 
 # ── 以下 /extractions 与 /knowledge* 接口: 2026-10-16 起**前端页面已撤**(侧栏不再下发

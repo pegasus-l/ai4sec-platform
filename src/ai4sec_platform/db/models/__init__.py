@@ -313,6 +313,118 @@ CREATE TABLE IF NOT EXISTS vulnerability_manual_keywords (
 );
 CREATE INDEX IF NOT EXISTS idx_vulnerability_manual_keywords_profile
     ON vulnerability_manual_keywords(profile_name, enabled);
+
+-- ── 漏洞案例库(2026-10-16):「漏洞事件库」从一个**从素材聚合出的主题**改成**一个个单独的洞**。
+-- 为什么不复用 domain_items + 新 item_type(这是本次唯一的关键技术选择):
+--   ① domain_items 的列表路径恒 `SELECT *`(payload 整列返回),仓库里有"200 条实测 129MB"的
+--      踩坑注释(domains/vulnerabilities/service.py:17-28);而领导要的上下文里**有成段代码**
+--      (补丁 diff / 漏洞点片段 / 数据流每一跳),塞进 payload_json 就是重演威胁域 800MB 的坑。
+--   ② domain_items **没有任何唯一约束**,现有 event 的幂等靠
+--      `json_extract(payload_json,'$.aggregation_key')` 扫 JSON 实现的;案例库的主键是
+--      外部 id(CVE/GHSA),天然该有 UNIQUE(canonical_id)。
+--   ③ 一个洞 → N 个文件/hunk/数据流跳是**一对多**,嵌套数组没法按文件筛、没法分页。
+--   ④ domain_items 是四域共用的热表,新域不该往里塞。
+-- 表进 SCHEMA_SQL(init_db 每次 get_db 都跑,CREATE TABLE IF NOT EXISTS 即自动迁移,无需版本化)。
+CREATE TABLE IF NOT EXISTS vulnerability_cases (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    -- 幂等键。取值形态: CVE-2021-44228 / GHSA-jfh8-c2jp-5v3q / OSV-2021-1234 /
+    -- oss:<repo>#<issue|commit> / manual:<sha1[:12]>(完全手填、没有外部 id 的项目内部 bug)
+    canonical_id TEXT NOT NULL UNIQUE,
+    id_kind TEXT NOT NULL DEFAULT 'cve',
+    title TEXT NOT NULL DEFAULT '',
+    summary TEXT NOT NULL DEFAULT '',
+    severity TEXT NOT NULL DEFAULT '',
+    -- 可空:NULL = 未知,与"算出来是 0 分"是两件事
+    cvss_score REAL,
+    cvss_vector TEXT NOT NULL DEFAULT '',
+    cve_ids_json TEXT NOT NULL DEFAULT '[]',
+    ghsa_ids_json TEXT NOT NULL DEFAULT '[]',
+    cwe_ids_json TEXT NOT NULL DEFAULT '[]',
+    aliases_json TEXT NOT NULL DEFAULT '[]',
+    affected_products_json TEXT NOT NULL DEFAULT '[]',
+    affected_ranges_json TEXT NOT NULL DEFAULT '[]',
+    fixed_versions_json TEXT NOT NULL DEFAULT '[]',
+    references_json TEXT NOT NULL DEFAULT '[]',
+    -- 从旧 event 继承来的站内素材 id(见 domains/vulnerabilities/legacy_event_migration.py)。
+    -- 单独留一列而不是只落 context 行,是为了"删除"时能一眼看出这条案例原来挂在哪些素材上。
+    legacy_material_ids_json TEXT NOT NULL DEFAULT '[]',
+    -- 外部源的公开/修改时间。modified_at 是**回溯富化的 watermark**:T+7/T+30 后 OSV/GHSA 才
+    -- 补上记录,所以采集不是一锤子买卖,每次都按 modified_at 找"该重查的"。
+    published_at TEXT NOT NULL DEFAULT '',
+    modified_at TEXT NOT NULL DEFAULT '',
+    source TEXT NOT NULL DEFAULT '',
+    source_url TEXT NOT NULL DEFAULT '',
+    -- pending_fetch = 人在页面上贴了个 id、等采集步去抓(这**就是**待抓队列,不另建表);
+    -- draft = 完全手填但还没写上下文;superseded = 已取代(沿用 event 既有语义,不删行)
+    status TEXT NOT NULL DEFAULT 'active',
+    -- 4 个位:元数据 / 补丁 / 漏洞点 / 数据流。**由代码统一重算**(cases.refresh_completeness,
+    -- 每次写案例/写上下文后自动调),存成列是为了列表页能在 SQL 里直接筛"哪条还没补全",
+    -- 不必为每一行去 join 子表 —— 这是本表的常规读路径。
+    metadata_complete INTEGER NOT NULL DEFAULT 0,
+    has_patch INTEGER NOT NULL DEFAULT 0,
+    has_vuln_site INTEGER NOT NULL DEFAULT 0,
+    has_dataflow INTEGER NOT NULL DEFAULT 0,
+    context_completeness REAL NOT NULL DEFAULT 0,
+    payload_json TEXT NOT NULL DEFAULT '{}',
+    created_by TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    updated_by TEXT NOT NULL DEFAULT '',
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_vulnerability_cases_status ON vulnerability_cases(status, severity);
+CREATE INDEX IF NOT EXISTS idx_vulnerability_cases_published ON vulnerability_cases(published_at DESC);
+
+-- 一个洞的上下文,**代码全放这张表**(一对多)。
+-- provenance 是 NOT NULL 的硬规则:每条上下文都必须说清"这是哪来的",因为
+-- from_osv/from_patch = 外部事实,llm_extracted = 模型推断,manual_added = 人写的,
+-- 三者在前端要用不同视觉呈现(见计划第七节"诚实性硬规则")。
+CREATE TABLE IF NOT EXISTS vulnerability_case_context (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    case_id INTEGER NOT NULL REFERENCES vulnerability_cases(id) ON DELETE CASCADE,
+    -- reference(站内素材/外链) / patch_diff / vuln_site / dataflow / caller_snippet / manual_note
+    context_type TEXT NOT NULL,
+    provenance TEXT NOT NULL,
+    -- 仅 provenance='llm_extracted' 必填(写库侧强制,见 cases.add_context)
+    confidence REAL,
+    repo TEXT NOT NULL DEFAULT '',
+    commit_sha TEXT NOT NULL DEFAULT '',
+    file_path TEXT NOT NULL DEFAULT '',
+    function_name TEXT NOT NULL DEFAULT '',
+    start_line INTEGER NOT NULL DEFAULT 0,
+    end_line INTEGER NOT NULL DEFAULT 0,
+    content TEXT NOT NULL DEFAULT '',
+    content_hash TEXT NOT NULL DEFAULT '',
+    source_url TEXT NOT NULL DEFAULT '',
+    -- 指向站内 domain_items(material)的行 id,0 = 无。有了它抽屉里点关联 writeup
+    -- 可以直接走既有的 openMaterialDrawer,不必把素材正文再抄一份进来。
+    ref_item_id INTEGER NOT NULL DEFAULT 0,
+    label TEXT NOT NULL DEFAULT '',
+    -- dataflow 的跳序 / 同类型多条时的稳定排序
+    order_index INTEGER NOT NULL DEFAULT 0,
+    created_by TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    -- 重跑幂等:同一条上下文(同洞同类型同文件同行且内容一样)只落一行。
+    -- 写在 UNIQUE 里而不是靠应用层查重,是因为采集/富化/重抽都会反复写同一批行。
+    UNIQUE(case_id, context_type, file_path, start_line, content_hash)
+);
+CREATE INDEX IF NOT EXISTS idx_vulnerability_case_context_case ON vulnerability_case_context(case_id, context_type);
+
+-- "我要盯哪些源"(P3 的采集入口用)。全列照抄 threat_source_targets 的约定与约束,
+-- 人工添加的行也在这张表里留痕(created_by/created_at)。
+CREATE TABLE IF NOT EXISTS vulnerability_case_sources (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    -- tracked_package(生态包) / tracked_repo(单仓) / manual_id(指定 CVE/GHSA)
+    kind TEXT NOT NULL DEFAULT 'manual_id',
+    source_key TEXT NOT NULL DEFAULT 'manual',
+    identifier TEXT NOT NULL,
+    label TEXT NOT NULL DEFAULT '',
+    note TEXT NOT NULL DEFAULT '',
+    enabled INTEGER NOT NULL DEFAULT 1,
+    created_by TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    UNIQUE(kind, source_key, identifier)
+);
+CREATE INDEX IF NOT EXISTS idx_vulnerability_case_sources_kind ON vulnerability_case_sources(kind, source_key, enabled);
 """
 
 
@@ -339,6 +451,10 @@ def reset_db(conn: sqlite3.Connection) -> None:
         "threat_repo_filters",
         "threat_source_targets",
         "vulnerability_manual_keywords",
+        # 案例库三张表: context 有外键级联, 但 DROP 顺序仍按"子先父后"写清楚
+        "vulnerability_case_context",
+        "vulnerability_case_sources",
+        "vulnerability_cases",
         "news_daily_reports",
         "news_user_states",
         "news_item_index",

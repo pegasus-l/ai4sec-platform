@@ -96,7 +96,11 @@ def vulnerability_full_discovery_pipeline() -> PipelineDefinition:
             ReviewCrawledMaterialsStep(),
             DrillDownAcceptedMaterialsStep(),
             BuildAcceptedVulnerabilityMaterialsStep(),
-            AggregateVulnerabilityEventsStep(),
+            # 2026-10-16: 事件聚合下线(案例库改用 vulnerabilities.* 的新采集流水线)。
+            # 这一步是"素材 → 主题 event"的桥梁, 撤掉后知识抽取**不受影响** —— 知识只从
+            # material 取, 从不读 event(见 steps/vulnerability_knowledge.py)。
+            # 与 registry.py 里的注释是一对: 两处都还原才是完整回滚。
+            # AggregateVulnerabilityEventsStep(),
             SelectVulnerabilityKnowledgeCandidatesStep(),
             ExtractVulnerabilityKnowledgeStep(),
             BuildVulnerabilityShadowEvaluationStep(),

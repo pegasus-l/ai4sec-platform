@@ -58,7 +58,13 @@ def default_registry() -> PipelineRegistry:
     registry.register(vulnerability_external_discovery_pipeline())
     registry.register(vulnerability_full_discovery_pipeline())
     registry.register(vulnerability_batched_full_discovery_pipeline())
-    registry.register(vulnerability_event_pipeline())
+    # 2026-10-16: 「漏洞事件库」改成以洞为主键的案例库(vulnerability_cases), 旧的
+    # 「从素材聚合出主题」事件流水线**停止注册**。存量 524 条 event 已在迁移里置 superseded
+    # (见 domains/vulnerabilities/legacy_event_migration.py)。
+    # 这里只注释掉注册, **函数与模块都保留**(pipelines.py 里的 vulnerability_event_pipeline
+    # 与 steps/vulnerability_event.py 不动) —— 回滚就是取消这一行注释 + 把 event 的 status
+    # 改回 active, 不需要重新写代码。
+    # registry.register(vulnerability_event_pipeline())
     registry.register(vulnerability_knowledge_pipeline())
     registry.register(vulnerability_manual_ingest_pipeline())
     registry.register(vulnerability_pattern_pipeline())
