@@ -141,7 +141,6 @@ def today(conn: sqlite3.Connection, limit: int = 12) -> dict[str, Any]:
     materials_data["items"] = [slim_material(item) for item in materials_data["items"]]
     events_data = _active_events(conn, limit, since=batch_start)
     knowledge_data = domain_items.list_items(conn, DOMAIN, item_type="knowledge", limit=limit, since=batch_start)
-    pending_fields = _pending_field_count(knowledge_data["items"])
     return {
         "domain": DOMAIN,
         # 窗口自述: 前端用它说明"这一页是哪一批", 免得再出现"空了但不知道为什么"
@@ -149,16 +148,20 @@ def today(conn: sqlite3.Connection, limit: int = 12) -> dict[str, Any]:
         "kpis": {
             "new_poc_count": sum(1 for item in materials_data["items"] if (item.get("payload") or {}).get("material_type") == "poc_exploit"),
             "new_or_updated_event_count": len(events_data["items"]),
-            "pending_field_review_count": pending_fields,
+            # 逐字段人工确认 2026-10-16 下线(前端页面已撤, 队列也不再写), 计数恒 0。
+            # 键**保留**: 老前端/脚本读到 undefined 会渲染成空白而不是 0, 删字段等于制造一次静默故障。
+            "pending_field_review_count": 0,
+            # 新口径: 这批知识抽取出来多少条(供模式合成消费), 才是运营真正关心的数
+            "knowledge_count": len(knowledge_data["items"]),
             "confirmed_knowledge_count": sum(1 for item in knowledge_data["items"] if item.get("status") == "confirmed"),
         },
-        "workflow": ["先看新 PoC / Exploit", "按 CVE / 事件归并", "复核知识字段", "沉淀到知识库"],
+        "workflow": ["先看新 PoC / Exploit", "按 CVE / 事件归并", "模型自动抽取知识字段", "沉淀到漏洞模式库"],
         "priority_events": [_event_card(item) for item in events_data["items"]],
         "priority_event_items": events_data["items"],
         "new_materials": materials_data["items"],
         "new_knowledge": knowledge_data["items"],
         "items": materials_data["items"],
-        "next_workload": {"materials": len(materials_data["items"]), "events": len(events_data["items"]), "pending_fields": pending_fields, "knowledge": len(knowledge_data["items"])},
+        "next_workload": {"materials": len(materials_data["items"]), "events": len(events_data["items"]), "pending_fields": 0, "knowledge": len(knowledge_data["items"])},
     }
 
 

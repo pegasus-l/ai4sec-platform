@@ -614,13 +614,24 @@ def event_detail(item_id: int, conn: sqlite3.Connection = Depends(get_db)) -> di
     return item
 
 
+# ── 以下 /extractions 与 /knowledge* 接口: 2026-10-16 起**前端页面已撤**(侧栏不再下发
+#    「抽取审核」「漏洞知识库」两个入口), 但接口全部保留不删:
+#    · /extractions 仍被今日情报页的 30s 轮询用于展示知识候选计数与素材状态, 不能停;
+#    · 字段复核三个 POST 只在有人调 reject 时才产生副作用, 撤页后自然归零, 留着便于回滚;
+#    · /knowledge/{id}/model-snippet 是撤页后**仍然免费**的抽取质量检查途径(直接看喂给
+#      模式合成的片段原文), 出问题时不必重建页面。
+#    谁要清理这些接口, 先 grep 前端确认调用方确实归零。
+
+
 @router.get("/extractions")
 def extractions(limit: int = Query(50, ge=1, le=200), conn: sqlite3.Connection = Depends(get_db)) -> dict:
+    """知识候选列表(含逐字段复核状态)。页面已撤, 今日情报页仍在轮询。"""
     return vuln_service.extractions(conn, limit=limit)
 
 
 @router.get("/knowledge")
 def knowledge(conn: sqlite3.Connection = Depends(get_db)) -> dict:
+    """知识列表(摘要态)。当前无前端调用方, 保留给排查与将来的 API 使用者。"""
     data = domain_items.list_items(conn, DOMAIN, item_type="knowledge", limit=50)
     return {
         "domain": DOMAIN,
@@ -641,6 +652,7 @@ def knowledge(conn: sqlite3.Connection = Depends(get_db)) -> dict:
 
 @router.get("/knowledge/{item_id}")
 def knowledge_detail(item_id: int, conn: sqlite3.Connection = Depends(get_db)) -> dict:
+    """知识条目全量详情。当前无前端调用方(知识抽屉走 /extractions 与 /materials 的数据)。"""
     item = domain_items.detail(conn, DOMAIN, item_id)
     if not item or item.get("item_type") != "knowledge":
         raise HTTPException(status_code=404, detail="knowledge not found")
@@ -649,6 +661,7 @@ def knowledge_detail(item_id: int, conn: sqlite3.Connection = Depends(get_db)) -
 
 @router.get("/knowledge/{item_id}/model-snippet")
 def knowledge_model_snippet(item_id: int, conn: sqlite3.Connection = Depends(get_db)) -> dict:
+    """把该条知识拼成喂给模式合成的片段原文。撤页后检查抽取质量靠它, 不要删。"""
     item = domain_items.detail(conn, DOMAIN, item_id)
     if not item or item.get("item_type") != "knowledge":
         raise HTTPException(status_code=404, detail="knowledge not found")
@@ -666,6 +679,10 @@ def knowledge_model_snippet(item_id: int, conn: sqlite3.Connection = Depends(get
         ]
     )
     return {"knowledge_id": item_id, "title": item.get("title"), "snippet": snippet}
+
+
+# 字段级人工复核(accept/modify/reject): 逐字段确认流程 2026-10-16 下线, 页面已撤。
+# 接口保留 —— 只在被调用时写数据, 无人调用即完全惰性, 回滚时不必补代码。
 
 
 @router.post("/knowledge/{item_id}/fields/{field_name}/accept")

@@ -234,6 +234,15 @@ export function patternDownloadUrl(itemId: number): string {
   return `${BASE}/api/vulnerabilities/patterns/${itemId}/download`;
 }
 
+/**
+ * 单条知识喂给模型的知识片段原文(JSON)。
+ * 「漏洞知识库」「抽取审核」两个页面 2026-10-16 已撤, 这个接口是撤页后**仍然免费**的
+ * 抽取质量检查途径 —— 出问题时看得到原始片段, 不必为排查把页面加回来。
+ */
+export function knowledgeSnippetUrl(itemId: number): string {
+  return `${BASE}/api/vulnerabilities/knowledge/${itemId}/model-snippet`;
+}
+
 /** 触发漏洞模式抽象 pipeline(按 CWE 聚类已确认知识, 跨素材归纳模式)。 */
 export function runPatternSynthesis(): Promise<PipelineRunStartResponse> {
   return postJson('/api/runs', {
