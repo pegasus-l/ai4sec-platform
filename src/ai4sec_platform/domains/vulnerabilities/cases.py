@@ -327,9 +327,17 @@ def add_context(conn: sqlite3.Connection, case_id: int, rows: list[dict[str, Any
 
 def _content_hash(row: dict[str, Any], content: str) -> str:
     """内容指纹。站内素材引用用 `item:<id>` 做种子 —— 同一条素材重复挂到同一个洞上必须只落一行,
-    而它的 `content` 可能为空(正文不进这张表,抽屉里按 id 去读原素材)。"""
+    而它的 `content` 可能为空(正文不进这张表,抽屉里按 id 去读原素材)。
+
+    2026-10-19:补上"既没有正文、也不是站内素材"的分支。P3 采集的外部引用行
+    (`source_url` 有值、`content` 为空、`ref_item_id=0`)原先全部落到同一个空种子,
+    UNIQUE 约束会把它们判成同一行 —— 一个洞挂 20 条 references,库里只剩 1 条,
+    而且不报错。身份只能是 URL 本身。
+    """
     if not content and row.get("ref_item_id"):
         seed = f"item:{int(row['ref_item_id'])}"
+    elif not content:
+        seed = f"url:{row.get('source_url') or ''}"
     else:
         seed = "\n".join([
             str(row.get("repo") or ""), str(row.get("commit_sha") or ""), str(row.get("file_path") or ""),

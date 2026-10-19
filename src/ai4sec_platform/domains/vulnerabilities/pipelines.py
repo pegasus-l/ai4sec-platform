@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from ai4sec_platform.pipelines.base import PipelineDefinition
 from ai4sec_platform.pipelines.steps.vulnerability_batch import RunBatchedVulnerabilityDiscoveryStep
+from ai4sec_platform.pipelines.steps.vulnerability_case_ingest import BackfillEnrichStep, EnrichFromOsvStep, FetchNewCveWindowStep, ResolvePatchContextStep
 from ai4sec_platform.pipelines.steps.vulnerability_discovery import BuildAcceptedVulnerabilityMaterialsStep, CollectAnySearchCandidatesStep, CrawlCandidatePagesStep, DrillDownAcceptedMaterialsStep, ExtractCrawledContentStep, ReviewCrawledMaterialsStep
 from ai4sec_platform.pipelines.steps.vulnerability_event import AggregateVulnerabilityEventsStep
 from ai4sec_platform.pipelines.steps.vulnerability_evaluation import BuildVulnerabilityShadowEvaluationStep
@@ -104,6 +105,28 @@ def vulnerability_full_discovery_pipeline() -> PipelineDefinition:
             SelectVulnerabilityKnowledgeCandidatesStep(),
             ExtractVulnerabilityKnowledgeStep(),
             BuildVulnerabilityShadowEvaluationStep(),
+        ],
+    )
+
+
+def vulnerability_case_ingest_pipeline() -> PipelineDefinition:
+    """案例库的采集链路(2026-10-19 起,P3)。
+
+    四步是依赖关系:没有案例就无从富化,没有引用就认不出补丁,回溯放最后才不会把
+    前三步刚收的洞再扫一遍。每日 04:00 由 APScheduler 触发(见 app/main.py),
+    与 03:30 的模式合成同用「抢不到全局锁就每 10 分钟重入」的兜底。
+
+    口径(2026-10-19 按实测基线拍板):CVSS ≥ 7.0,**不附加 CWE 条件** ——
+    近 7 天 5496 条新 CVE 里 89.3% 都有真 CWE,加这个条件只砍掉 7 条,没有区分度。
+    """
+    return PipelineDefinition(
+        name="vulnerabilities.case_ingest_pipeline",
+        domain="vulnerabilities",
+        steps=[
+            FetchNewCveWindowStep(),
+            EnrichFromOsvStep(),
+            ResolvePatchContextStep(),
+            BackfillEnrichStep(),
         ],
     )
 

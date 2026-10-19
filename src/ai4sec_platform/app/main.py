@@ -218,6 +218,9 @@ _PIPELINE_RETRY_WHITELIST = {
     # 03:30 时通常还占着锁。加进白名单就等于"锁一空就跑",不需要另造链式触发
     # (代码里没有 on_complete/chain 这类原语,硬链接要凭空造)。
     "vulnerabilities.pattern_synthesis_pipeline",
+    # 案例采集(2026-10-19,P3)排 04:00:此时夜跑批通常刚结束,但超长夜仍会占锁,
+    # 与模式合成同理 —— 加进白名单 = "锁一空就跑",不需要另造链式触发。
+    "vulnerabilities.case_ingest_pipeline",
 }
 _PIPELINE_RETRY_DELAY_SECONDS = 10 * 60
 _PIPELINE_RETRY_MAX = 24  # 10min x 24 = 4h 重试窗口, 仍无锁则放弃当日
@@ -385,6 +388,11 @@ def create_app() -> FastAPI:
     # 威胁任务前收尾);超长夜则每 10 分钟重试、锁一释放就跑(见 _PIPELINE_RETRY_WHITELIST)。
     # 排在 05:00 而非更晚,是为了给威胁任务留出它自己的重试窗口。
     scheduler.add_job(_run_pipeline_job, CronTrigger(hour=3, minute=30, timezone="Asia/Shanghai"), args=['vulnerabilities.pattern_synthesis_pipeline', {'limit': 120}], id='vuln-pattern', name='vuln-pattern(daily 03:30)', replace_existing=True)
+    # 案例采集(2026-10-19 新增,P3)。04:00 是为了排在 03:30 模式合成之后、05:00 威胁任务之前:
+    # 它不依赖模式合成,但要避开夜跑批的尾巴 —— 那次跑批北京 22:00 起,实测能占锁到 05:41。
+    # 所以真正的保障不是 04:00 这个时刻,而是 _PIPELINE_RETRY_WHITELIST 的「锁忙每 10 分钟重入」。
+    # 口径:CVSS ≥ 7.0(2026-10-19 实测日均 378 条,补丁可得率 15%,全收只有 5%)。
+    scheduler.add_job(_run_pipeline_job, CronTrigger(hour=4, minute=0, timezone="Asia/Shanghai"), args=['vulnerabilities.case_ingest_pipeline', {'min_cvss': 7.0}], id='vuln-case-ingest', name='vuln-case-ingest(daily 04:00)', replace_existing=True)
     scheduler.add_job(_reap_repro_tasks, IntervalTrigger(minutes=5), id='repro-reap', name='repro-watchdog(5min)', replace_existing=True)
     scheduler.add_job(_reap_stale_pipeline_runs, IntervalTrigger(minutes=5), id='pipeline-reap', name='pipeline-watchdog(5min)', replace_existing=True)
     # 僵尸回收(60s):浏览器子进程正常退出却没人 wait,会一直占着容器的 pids 名额,
@@ -416,7 +424,7 @@ def create_app() -> FastAPI:
             print(f'[pipeline-recover] {n} orphaned pipeline run(s) recovered', flush=True)
         except Exception as e:  # noqa: BLE001 - 清扫失败不影响启动
             print(f'[pipeline-recover] error: {e}', flush=True)
-        print('[scheduler] started: capability(15min), threat(daily 05:00), vuln(daily 22:00), vuln-pattern(daily 03:30), repro-watchdog(5min), pipeline-watchdog(5min), zombie-reap(60s), mem-trim(30min)', flush=True)
+        print('[scheduler] started: ' + ', '.join(sorted(f'{job.name}' for job in scheduler.get_jobs())), flush=True)
         # 启动先扫一遍:容器上次运行攒下的浏览器僵尸在重启后不会自动消失(重启只是换了父进程)。
         try:
             from ai4sec_platform.proc_reaper import reap_and_report

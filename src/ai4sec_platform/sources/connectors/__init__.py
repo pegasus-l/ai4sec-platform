@@ -9,6 +9,9 @@ from ai4sec_platform.sources.connectors.news.awesome import AwesomeConnector
 from ai4sec_platform.sources.connectors.vulnerabilities.anysearch import AnysearchConnector
 from ai4sec_platform.sources.connectors.vulnerabilities.crawl4ai import Crawl4aiConnector
 from ai4sec_platform.sources.connectors.vulnerabilities.manual_import import ManualImportConnector
+from ai4sec_platform.sources.connectors.vulnerabilities.nvd import NvdConnector
+from ai4sec_platform.sources.connectors.vulnerabilities.osv import OsvConnector
+from ai4sec_platform.sources.connectors.vulnerabilities.patch import PatchConnector
 from ai4sec_platform.sources.connectors.threats.huawei_repo import HuaweiRepoConnector
 from ai4sec_platform.sources.connectors.threats.cve import CveConnector
 from ai4sec_platform.sources.connectors.threats.firmware import FirmwareConnector
@@ -27,4 +30,6 @@ def all_connectors():
         AnysearchConnector(), Crawl4aiConnector(), ManualImportConnector(), HuaweiRepoConnector(), CveConnector(),
         FirmwareConnector(), MirrorConnector(), GitCodeConnector(), AtomGitConnector(), HiAscendConnector(),
         HuaweiMirrorConnector(), OpenXHuaweiConnector(), FirmwareApiConnector(),
+        # 2026-10-19 P3 案例库采集:NVD 定窗口 / OSV 富化与补丁线索 / github-gitlab 补丁下载
+        NvdConnector(), OsvConnector(), PatchConnector(),
     ]
