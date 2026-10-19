@@ -19,6 +19,12 @@ import type {
   PagedListResponse,
   PatternPayload,
   PipelineRunDetail,
+  Project,
+  ProjectDetectResult,
+  ProjectLinkResult,
+  ProjectListResponse,
+  ProjectPayload,
+  ProjectPackage,
   PipelineRunSummary,
   PipelineRunStartResponse,
   ShadowEvaluationPayload,
@@ -237,6 +243,10 @@ export interface CaseListParams {
   status?: string;
   /** full(4 位全有) / partial(有上下文但没齐) / empty(只有元数据) */
   completeness?: string;
+  /** 只看某个项目的洞(P5a);由项目视图传下来 */
+  project_id?: number;
+  /** true = 只看 B 层(有 OSV/补丁/CVSS≥9/人工/项目命中的洞);不传 = 全量索引 */
+  curated?: boolean;
   published_from?: string;
   published_to?: string;
   limit?: number;
@@ -306,6 +316,48 @@ export function setCaseSourceEnabled(sourceId: number, enabled: boolean): Promis
 
 export function deleteCaseSource(sourceId: number): Promise<{ deleted: number }> {
   return deleteJson(`/api/vulnerabilities/case-sources/${sourceId}`);
+}
+
+// ── 项目(P5a)────────────────────────────────────────────────────────────────
+
+export function fetchProjects(includeDisabled = true): Promise<ProjectListResponse> {
+  return getJson(`/api/vulnerabilities/projects?include_disabled=${includeDisabled ? 'true' : 'false'}`);
+}
+
+/** 新增项目。后端建完会立即做一次全量关联, 所以返回值里带 link 统计。 */
+export function addProject(input: ProjectPayload): Promise<{ project: Project; created: boolean; link: ProjectLinkResult }> {
+  return postJson('/api/vulnerabilities/projects', input);
+}
+
+export function updateProject(
+  projectId: number,
+  fields: { display_name?: string; packages?: Array<string | ProjectPackage>; tier?: string; native_sources?: string[] },
+): Promise<{ project: Project; changed: number; link?: ProjectLinkResult }> {
+  return patchJson(`/api/vulnerabilities/projects/${projectId}`, fields);
+}
+
+/** 不带 body, 用两个路径区分开关(与盯源/人工关键词同一约定) */
+export function setProjectEnabled(projectId: number, enabled: boolean): Promise<Project> {
+  return postJson(`/api/vulnerabilities/projects/${projectId}/${enabled ? 'enable' : 'disable'}`);
+}
+
+/** 手动重扫关联。since 传 ISO 时间只扫最近更新的案例; 不传 = 全量(幂等)。 */
+export function linkProjectCases(projectId: number, since = ''): Promise<ProjectLinkResult> {
+  const qs = since ? `?since=${encodeURIComponent(since)}` : '';
+  return postJson(`/api/vulnerabilities/projects/${projectId}/link${qs}`);
+}
+
+export function deleteProject(projectId: number): Promise<{ deleted: number }> {
+  return deleteJson(`/api/vulnerabilities/projects/${projectId}`);
+}
+
+/** 读仓库根目录 manifest 猜发布包。**只回候选**, 不落库。 */
+export function detectProjectPackages(url: string): Promise<ProjectDetectResult> {
+  return postJson('/api/vulnerabilities/projects/detect', { url });
+}
+
+export function fetchProjectCases(projectId: number, limit = 50, offset = 0): Promise<CaseListResponse> {
+  return getJson(`/api/vulnerabilities/projects/${projectId}/cases?limit=${limit}&offset=${offset}`);
 }
 
 export function fetchVulnerabilityExtractions(): Promise<ListResponse<DomainItem<KnowledgePayload>>> {

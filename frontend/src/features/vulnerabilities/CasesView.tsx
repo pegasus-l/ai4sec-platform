@@ -2,7 +2,7 @@ import { useEffect, useState, type ReactNode } from 'react';
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Badge, EmptyState } from '../../components/ui';
 import { useToast } from '../../components/Toast';
-import { addCase, addCaseSource, deleteCaseSource, fetchCases, fetchCaseSources, fetchCaseStats, setCaseSourceEnabled } from '../../api/vulnerabilities';
+import { addCase, addCaseSource, deleteCaseSource, fetchCases, fetchCaseSources, fetchCaseStats, fetchProjects, setCaseSourceEnabled } from '../../api/vulnerabilities';
 import { ContextDots, invalidateCase, openCaseDrawer, severityTone, type DrawerSetter } from './CaseDrawer';
 import type { CaseIdKind, CasePayload, CaseSourceTarget } from '../../types/vulnerability';
 
@@ -24,6 +24,13 @@ export function CasesView({ search, setDrawer, onOpenMaterial }: { search: strin
   const [idKind, setIdKind] = useState<string>('all');
   const [completeness, setCompleteness] = useState<string>('all');
   const [severity, setSeverity] = useState<string>('');
+  // 收录口径(P5a): 全部 = A 层索引; curated = B 层(有 OSV / 补丁 / CVSS≥9 / 人工 / 项目命中)。
+  // 默认仍是「全部」—— 实测线上 902 条里 B 层只有 6 条(896 条是未富化的历史迁移行),
+  // 默认精选会让页面看起来像空了。等回溯富化把存量补齐后再翻默认值(见计划 §13.2)。
+  const [curated, setCurated] = useState<'all' | 'curated'>('all');
+  // 项目筛选(P5a): 0 = 全部。项目清单变化慢, 60s 拉一次即可。
+  const [projectId, setProjectId] = useState<number>(0);
+  const projects = useQuery({ queryKey: ['vulnerabilities', 'projects'], queryFn: () => fetchProjects(false), refetchInterval: 60_000 });
   const [offset, setOffset] = useState(0);
   // 搜索词防抖 250ms: 列表在服务端, 每敲一个字发一次请求会把这台机器的慢查询叠起来
   // (素材库那几个接口服务端自己就要 3.4~7.7s, 这条链路共用同一个进程)。
@@ -33,14 +40,16 @@ export function CasesView({ search, setDrawer, onOpenMaterial }: { search: strin
     return () => clearTimeout(timer);
   }, [search]);
   // 换筛选/换搜索词必须回到第一页 —— 否则会在新结果集里停在越界的 offset 上, 页面看着像"空了"。
-  useEffect(() => { setOffset(0); }, [q, idKind, completeness, severity]);
+  useEffect(() => { setOffset(0); }, [q, idKind, completeness, severity, projectId, curated]);
 
   const list = useQuery({
-    queryKey: ['vulnerabilities', 'cases', { q, idKind, completeness, severity, offset }],
+    queryKey: ['vulnerabilities', 'cases', { q, idKind, completeness, severity, projectId, curated, offset }],
     queryFn: () => fetchCases({
       q, severity,
       id_kind: idKind === 'all' ? '' : idKind,
       completeness: completeness === 'all' ? '' : completeness,
+      project_id: projectId || undefined,
+      curated: curated === 'curated' || undefined,
       limit: PAGE_SIZE, offset,
     }),
     refetchInterval: 30_000,
@@ -53,7 +62,7 @@ export function CasesView({ search, setDrawer, onOpenMaterial }: { search: strin
   const total = list.data?.total ?? 0;
   const pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
   const page = Math.floor(offset / PAGE_SIZE) + 1;
-  const hasFilter = Boolean(q.trim() || idKind !== 'all' || completeness !== 'all' || severity);
+  const hasFilter = Boolean(q.trim() || idKind !== 'all' || completeness !== 'all' || severity || projectId || curated === 'curated');
   const kpi = stats.data;
 
   // 首次加载必须先说"在加载": 未到达时 items 是 [], 直接落到空态会看起来像"案例全没了"。
@@ -89,6 +98,12 @@ export function CasesView({ search, setDrawer, onOpenMaterial }: { search: strin
     <div className="viewbar">
       <div className="view-pills">{ID_KIND_LABELS.map(([id, label]) => <button key={id} className={`view-pill ${idKind === id ? 'active' : ''}`} onClick={() => setIdKind(id)}>{label}</button>)}</div>
       <div className="view-pills">{COMPLETENESS_LABELS.map(([id, label]) => <button key={id} className={`view-pill ${completeness === id ? 'active' : ''}`} onClick={() => setCompleteness(id)}>{label}</button>)}</div>
+      {/* 收录口径。精选 = 有 OSV/GHSA 记录、有补丁、CVSS≥9、人工添加或被项目命中;
+          只有元数据的洞不会消失, 切回「全部」或用关键词仍搜得到。 */}
+      <div className="view-pills">
+        <button className={`view-pill ${curated === 'all' ? 'active' : ''}`} onClick={() => setCurated('all')}>全部</button>
+        <button className={`view-pill ${curated === 'curated' ? 'active' : ''}`} onClick={() => setCurated('curated')}>精选</button>
+      </div>
       <select value={severity} onChange={event => setSeverity(event.target.value)}>
         <option value="">全部严重性</option>
         <option value="CRITICAL">Critical</option>
@@ -96,14 +111,30 @@ export function CasesView({ search, setDrawer, onOpenMaterial }: { search: strin
         <option value="MEDIUM">Medium</option>
         <option value="LOW">Low</option>
       </select>
+      {/* 项目筛选(P5a)。只在有启用中的项目时出现 —— 否则是个永远选不出东西的空下拉。 */}
+      {(projects.data?.items.length ?? 0) > 0 && <select value={projectId} onChange={event => setProjectId(Number(event.target.value))}>
+        <option value={0}>全部项目</option>
+        {(projects.data?.items ?? []).map(item => <option key={item.id} value={item.id}>{item.display_name}（{item.case_total}）</option>)}
+      </select>}
     </div>
+
+    {/* 收录范围说明(计划 §13.2 的硬要求)。没有这段, 用户会把"搜不到"当成"不存在" —— 比收不全更危险。 */}
+    <p className="muted small" style={{ margin: '4px 0 10px' }}>
+      收录范围：每晚抓取 NVD 近 3 天新公开、CVSS≥7 的 CVE，加上你在「跟踪的漏洞源」登记的包 / 仓 / ID 与人工添加的案例。
+      未收录：CVSS&lt;7、没有编号且不在任何项目清单里的项目内部 bug、NVD 尚未公开的洞 —— 搜不到某个 ID 不等于它不存在。
+    </p>
 
     <section className="panel">
       <div className="panel-head"><h3>漏洞案例</h3><span>一条案例 = 一个洞；素材是它的证据，上下文是它的细节</span></div>
       <div className="panel-body">
         {items.length
           ? <div className="case-list">{items.map(item => <CaseCard key={item.id} item={item} onOpen={() => openCaseDrawer(item, setDrawer, onOpenMaterial)} />)}</div>
-          : <EmptyState title={hasFilter ? '没有匹配的漏洞案例' : '案例库还是空的'} description={hasFilter ? '换个关键词或把筛选放宽试试。' : '每晚的采集跑批会自动登记新公开的洞；也可以在上面「添加」一个指定的 CVE / GHSA，或完全手填一个项目内部 bug。'} />}
+          : <EmptyState
+            title={curated === 'curated' && !q.trim() ? '精选口径下暂时没有案例' : hasFilter ? '没有匹配的漏洞案例' : '案例库还是空的'}
+            description={curated === 'curated' && !q.trim()
+              ? '「精选」只收有 OSV/GHSA 记录、有补丁、CVSS≥9、人工添加或被项目命中的洞。切回「全部」可以看到只有元数据的索引条目 —— 它们不代表不收录，只是还没有上下文。'
+              : hasFilter ? '换个关键词或把筛选放宽试试。' : '每晚的采集跑批会自动登记新公开的洞；也可以在上面「添加」一个指定的 CVE / GHSA，或完全手填一个项目内部 bug。'}
+          />}
       </div>
     </section>
 

@@ -386,6 +386,8 @@ def list_cases(
     source: str = "",
     status: str = "",
     completeness: str = "",
+    project_id: int = 0,
+    curated: bool = False,
     published_from: str = "",
     published_to: str = "",
     created_since: str = "",
@@ -417,6 +419,23 @@ def list_cases(
     if created_since:
         where.append("created_at >= ?")
         params.append(created_since)
+    if project_id:
+        # 子查询而不是 JOIN:一条案例可能因包和仓各挂一行 link,JOIN 会让它在列表里出现两次。
+        where.append("id IN (SELECT case_id FROM vulnerability_case_projects WHERE project_id = ?)")
+        params.append(int(project_id))
+    if curated:
+        # B 层(默认展示口径):有"故事"的洞才进 —— 有 OSV/GHSA 记录、有补丁、CVSS≥9、
+        # 人工添加、或已被某个项目命中。A 层(NVD 索引)里那批只有元数据的洞默认不展示,
+        # 但按 ID/关键词仍搜得到(不传 curated 就是全量)。阈值来自 P5-0 标定,写在这里可复查。
+        where.append(
+            "(has_patch = 1"
+            " OR (cvss_score IS NOT NULL AND cvss_score >= 9.0)"
+            " OR source = 'manual_added'"
+            " OR affected_products_json NOT IN ('[]', '')"
+            " OR ghsa_ids_json NOT IN ('[]', '')"
+            " OR fixed_versions_json NOT IN ('[]', '')"
+            " OR id IN (SELECT case_id FROM vulnerability_case_projects))"
+        )
     if completeness == "full":
         where.append("has_patch = 1 AND has_vuln_site = 1 AND has_dataflow = 1 AND metadata_complete = 1")
     elif completeness == "partial":
@@ -459,6 +478,19 @@ def case_detail(conn: sqlite3.Connection, case_id: int) -> dict[str, Any] | None
         (int(case_id),),
     ).fetchall()
     case["materials"] = [{"item_id": int(item["id"]), "title": item["title"], "source_url": item["source_url"]} for item in material_rows]
+    # 挂到哪些项目(P5a)。一条案例可能同时有 package_match / repo_match 两行,
+    # 前端按项目去重展示,这里把两种证据都带上,让"为什么算这个项目的洞"可解释。
+    project_rows = conn.execute(
+        "SELECT p.id, p.slug, p.display_name, p.tier, l.link_kind, l.confidence "
+        "FROM vulnerability_case_projects l JOIN vulnerability_projects p ON p.id = l.project_id "
+        "WHERE l.case_id = ? ORDER BY p.display_name, l.link_kind",
+        (int(case_id),),
+    ).fetchall()
+    case["projects"] = [
+        {"id": int(item["id"]), "slug": item["slug"], "display_name": item["display_name"],
+         "tier": item["tier"], "link_kind": item["link_kind"], "confidence": item["confidence"]}
+        for item in project_rows
+    ]
     return case
 
 

@@ -5,6 +5,7 @@ import json
 import re
 import sqlite3
 import zipfile
+from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel
 
@@ -13,6 +14,7 @@ from ai4sec_platform.app.api.runs import start_pipeline_run
 from ai4sec_platform.db import repositories as repo
 from ai4sec_platform.core.config import load_settings
 from ai4sec_platform.domains.vulnerabilities import cases as case_service
+from ai4sec_platform.domains.vulnerabilities import projects as project_service
 from ai4sec_platform.domains.vulnerabilities import manual_ingest, manual_keywords
 from ai4sec_platform.domains.vulnerabilities.keyword_profiles import (
     list_keyword_categories,
@@ -669,6 +671,28 @@ class CaseSourceRequest(BaseModel):
     note: str = ""
 
 
+class ProjectRequest(BaseModel):
+    # 仓地址(github:org/repo / https://github.com/org/repo / org/repo)
+    url: str = ""
+    display_name: str = ""
+    # 字符串("pkg:pypi/django" / "Maven:group:artifact")或 {ecosystem,name}
+    packages: list[Any] = []
+    tier: str = "benchmark"
+    # P5b 预留:项目自有公告源
+    native_sources: list[str] = []
+
+
+class ProjectUpdateRequest(BaseModel):
+    display_name: str | None = None
+    packages: list[Any] | None = None
+    tier: str | None = None
+    native_sources: list[str] | None = None
+
+
+class ProjectDetectRequest(BaseModel):
+    url: str = ""
+
+
 @router.get("/cases")
 def list_cases(
     q: str = "",
@@ -677,6 +701,8 @@ def list_cases(
     source: str = "",
     status: str = "",
     completeness: str = "",
+    project_id: int = 0,
+    curated: bool = False,
     published_from: str = "",
     published_to: str = "",
     created_since: str = "",
@@ -684,8 +710,12 @@ def list_cases(
     offset: int = Query(0, ge=0),
     conn: sqlite3.Connection = Depends(get_db),
 ) -> dict:
-    """案例列表。关键词/筛选**全部下推 SQL 分页**(照素材库的服务端分页先例),不拉全量回前端过滤。"""
-    return case_service.list_cases(conn, q=q, severity=severity, id_kind=id_kind, source=source, status=status, completeness=completeness, published_from=published_from, published_to=published_to, created_since=created_since, limit=limit, offset=offset)
+    """案例列表。关键词/筛选**全部下推 SQL 分页**(照素材库的服务端分页先例),不拉全量回前端过滤。
+
+    `curated=true` 是 B 层口径(有 OSV/补丁/CVSS≥9/人工/项目命中的洞),`false` 是全量索引。
+    两个口径共用同一套筛选,所以"精选里没有"的洞切到全部仍搜得到。
+    """
+    return case_service.list_cases(conn, q=q, severity=severity, id_kind=id_kind, source=source, status=status, completeness=completeness, project_id=project_id, curated=curated, published_from=published_from, published_to=published_to, created_since=created_since, limit=limit, offset=offset)
 
 
 @router.get("/cases/stats")
@@ -850,6 +880,116 @@ def disable_case_source(source_id: int, conn: sqlite3.Connection = Depends(get_d
 @router.delete("/case-sources/{source_id}")
 def delete_case_source(source_id: int, conn: sqlite3.Connection = Depends(get_db)) -> dict:
     return {"deleted": case_service.delete_case_source(conn, source_id)}
+
+
+# ── 项目(P5a):页面上按"项目"看这个项目有哪些已知洞。与「跟踪的漏洞源」不是一回事 ——
+#    项目是有名字、可能有多个发布包、以后会有自有公告源的实体;关联证据全部来自已有数据
+#    (OSV 的 affected_products、补丁上下文的 repo),P5a 不新增任何外部请求。
+#    自动识别包需要联网,所以单独一个 POST /projects/detect,且结果**只是候选**。
+
+
+@router.get("/projects")
+def list_projects(include_disabled: bool = True, conn: sqlite3.Connection = Depends(get_db)) -> dict:
+    return project_service.list_projects(conn, include_disabled=include_disabled)
+
+
+@router.post("/projects/detect")
+def detect_project_packages(request: ProjectDetectRequest, conn: sqlite3.Connection = Depends(get_db), user: dict = Depends(current_user)) -> dict:
+    """读仓库根目录 manifest,返回候选包。**不落库** —— 由人确认后再 PATCH 进项目。"""
+    try:
+        result = project_service.detect_packages(request.url)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {**result, "url": request.url}
+
+
+@router.post("/projects")
+def create_project(request: ProjectRequest, conn: sqlite3.Connection = Depends(get_db), user: dict = Depends(current_user)) -> dict:
+    """新增项目。重复添加 = 合并包并重新启用(与盯源/威胁域 add_target 同语义)。
+
+    建完**立即做一次全量关联**,不让用户等当晚 04:00 的跑批 —— 项目建的当天页面就该有内容。
+    """
+    try:
+        result = project_service.add_project(
+            conn,
+            url=request.url,
+            display_name=request.display_name,
+            packages=request.packages,
+            tier=request.tier,
+            native_sources=request.native_sources,
+            created_by=str(user.get("username") or ""),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    result["link"] = project_service.link_project_cases(conn, int(result["project"]["id"]))
+    return result
+
+
+@router.get("/projects/{project_id}")
+def get_project(project_id: int, conn: sqlite3.Connection = Depends(get_db)) -> dict:
+    item = project_service.get_project(conn, project_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="project not found")
+    return item
+
+
+@router.get("/projects/{project_id}/cases")
+def list_project_cases(
+    project_id: int,
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    conn: sqlite3.Connection = Depends(get_db),
+) -> dict:
+    """项目详情页的案例时间线。复用 /cases 的筛选与分页,保证两处口径一致。"""
+    if not project_service.get_project(conn, project_id):
+        raise HTTPException(status_code=404, detail="project not found")
+    return case_service.list_cases(conn, project_id=project_id, limit=limit, offset=offset)
+
+
+@router.patch("/projects/{project_id}")
+def update_project(project_id: int, request: ProjectUpdateRequest, conn: sqlite3.Connection = Depends(get_db), user: dict = Depends(current_user)) -> dict:
+    """改显示名/包映射/层级。**改了包映射就重扫关联**(包变了,原来关联的案例集合也跟着变)。"""
+    fields = {key: value for key, value in request.model_dump().items() if value is not None}
+    try:
+        result = project_service.update_project(conn, project_id, actor=str(user.get("username") or ""), **fields)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    if "packages" in fields:
+        result["link"] = project_service.link_project_cases(conn, project_id)
+    return result
+
+
+# 与 /case-sources/{id}/enable 同一约定:不带 body,用两个路径区分开关
+@router.post("/projects/{project_id}/enable")
+def enable_project(project_id: int, conn: sqlite3.Connection = Depends(get_db)) -> dict:
+    try:
+        return project_service.set_project_enabled(conn, project_id, True)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+
+@router.post("/projects/{project_id}/disable")
+def disable_project(project_id: int, conn: sqlite3.Connection = Depends(get_db)) -> dict:
+    """停用:**案例与关联都保留**,只是不再出现在项目视图、也不再参与每晚跑批。"""
+    try:
+        return project_service.set_project_enabled(conn, project_id, False)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+
+@router.post("/projects/{project_id}/link")
+def link_project_cases(project_id: int, since: str = "", conn: sqlite3.Connection = Depends(get_db), user: dict = Depends(current_user)) -> dict:
+    """手动重扫关联。`since` 传 ISO 时间可只扫最近更新的案例;不传 = 全量(幂等)。"""
+    try:
+        return project_service.link_project_cases(conn, project_id, since=since)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+
+@router.delete("/projects/{project_id}")
+def delete_project(project_id: int, conn: sqlite3.Connection = Depends(get_db)) -> dict:
+    """删项目(连带关联行)。**案例本身不动** —— 洞是洞,项目只是看它的一个维度。"""
+    return {"deleted": project_service.delete_project(conn, project_id)}
 
 
 # ── 以下 /extractions 与 /knowledge* 接口: 2026-10-16 起**前端页面已撤**(侧栏不再下发

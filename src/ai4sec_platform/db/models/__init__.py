@@ -425,6 +425,45 @@ CREATE TABLE IF NOT EXISTS vulnerability_case_sources (
     UNIQUE(kind, source_key, identifier)
 );
 CREATE INDEX IF NOT EXISTS idx_vulnerability_case_sources_kind ON vulnerability_case_sources(kind, source_key, enabled);
+
+-- P5a 项目维度:一个有名字、可能有多个发布包、有自有公告源的开源项目。
+-- 与 vulnerability_case_sources("我要盯哪些零散源")是两件事:项目是可聚合、可展示的实体,
+-- 一个项目可以同时被盯源命中,去重仍靠案例的 canonical_id。
+-- slug 是身份(github:org/repo),不可编辑;packages_json 是人工确认后的 [{ecosystem,name}],
+-- 自动识别只给候选、不直接落库(monorepo 根 manifest 经常不是真正的发布包)。
+CREATE TABLE IF NOT EXISTS vulnerability_projects (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    slug TEXT NOT NULL UNIQUE,
+    platform TEXT NOT NULL,
+    org TEXT NOT NULL DEFAULT '',
+    repo TEXT NOT NULL DEFAULT '',
+    url TEXT NOT NULL DEFAULT '',
+    display_name TEXT NOT NULL,
+    packages_json TEXT NOT NULL DEFAULT '[]',
+    -- 预留:P5b 的项目自有公告源 ["releases","changelog","github_advisories","issues"]
+    native_sources_json TEXT NOT NULL DEFAULT '[]',
+    tier TEXT NOT NULL DEFAULT 'benchmark',
+    enabled INTEGER NOT NULL DEFAULT 1,
+    last_synced_at TEXT,
+    sync_cursor_json TEXT,
+    created_by TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    updated_by TEXT NOT NULL DEFAULT '',
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_vulnerability_projects_enabled ON vulnerability_projects(enabled, tier);
+
+-- 项目 ↔ 案例。一条案例可以因不同证据挂到同一个项目上(package_match / repo_match 各一行),
+-- 所以唯一键带 link_kind;INSERT OR IGNORE 保证每晚重跑不长重复行。
+CREATE TABLE IF NOT EXISTS vulnerability_case_projects (
+    case_id INTEGER NOT NULL REFERENCES vulnerability_cases(id) ON DELETE CASCADE,
+    project_id INTEGER NOT NULL REFERENCES vulnerability_projects(id) ON DELETE CASCADE,
+    link_kind TEXT NOT NULL,
+    confidence REAL,
+    created_at TEXT NOT NULL,
+    UNIQUE(case_id, project_id, link_kind)
+);
+CREATE INDEX IF NOT EXISTS idx_vulnerability_case_projects_project ON vulnerability_case_projects(project_id, case_id);
 """
 
 
@@ -451,9 +490,11 @@ def reset_db(conn: sqlite3.Connection) -> None:
         "threat_repo_filters",
         "threat_source_targets",
         "vulnerability_manual_keywords",
-        # 案例库三张表: context 有外键级联, 但 DROP 顺序仍按"子先父后"写清楚
+        # 案例库五张表: context/projects 链接有外键级联, DROP 顺序仍按"子先父后"写清楚
+        "vulnerability_case_projects",
         "vulnerability_case_context",
         "vulnerability_case_sources",
+        "vulnerability_projects",
         "vulnerability_cases",
         "news_daily_reports",
         "news_user_states",
