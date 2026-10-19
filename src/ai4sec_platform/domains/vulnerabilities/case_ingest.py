@@ -219,6 +219,45 @@ def mark_patch_checked(conn: sqlite3.Connection, case_id: int, *, status: str) -
     _merge_payload(conn, int(case_id), {"patch_checked_at": utc_now(), "patch_status": status})
 
 
+# ── 漏洞点(P4a) ─────────────────────────────────────────────────────────────
+
+def cases_needing_vuln_site(conn: sqlite3.Connection, *, limit: int = 40) -> list[sqlite3.Row]:
+    """挑出"有补丁、但还没有漏洞点"的案例。高分优先。
+
+    不做时间窗重试:**同一个 diff 重抽一遍不会得到新答案**,只会让模型复述得更像真的。
+    已经在 `vuln_site_status` 留过痕的一律跳过(见 `mark_vuln_site_checked` 的口径)。
+    """
+    return conn.execute(
+        "SELECT c.* FROM vulnerability_cases c "
+        "WHERE c.status IN ('active', 'pending_fetch') "
+        "  AND EXISTS (SELECT 1 FROM vulnerability_case_context x WHERE x.case_id = c.id AND x.context_type = 'patch_diff') "
+        "  AND NOT EXISTS (SELECT 1 FROM vulnerability_case_context x WHERE x.case_id = c.id AND x.context_type = 'vuln_site') "
+        "  AND json_extract(c.payload_json, '$.vuln_site_status') IS NULL "
+        "ORDER BY (c.cvss_score IS NULL), c.cvss_score DESC, c.id DESC "
+        "LIMIT ?",
+        (max(1, int(limit)),),
+    ).fetchall()
+
+
+def patch_context_for(conn: sqlite3.Connection, case_id: int) -> dict[str, Any] | None:
+    """取该案例的补丁行(一条案例正常只有一条;有多条时取最早的那条)。"""
+    row = conn.execute(
+        "SELECT * FROM vulnerability_case_context WHERE case_id = ? AND context_type = 'patch_diff' "
+        "ORDER BY id LIMIT 1",
+        (int(case_id),),
+    ).fetchone()
+    return repo.row_to_dict(row) if row else None
+
+
+def mark_vuln_site_checked(conn: sqlite3.Connection, case_id: int, *, status: str) -> None:
+    """记录"这个洞的漏洞点已经问过模型了"。
+
+    只由**模型真的回了话**的路径调用(`success` / `no_site`)。网络失败、熔断跳过都不调 ——
+    否则一次 provider 抽风就会把一个洞永久标记成"这里没有漏洞点"。
+    """
+    _merge_payload(conn, int(case_id), {"vuln_site_checked_at": utc_now(), "vuln_site_status": status})
+
+
 # ── 杂项 ─────────────────────────────────────────────────────────────────────
 
 def pending_case_ids(conn: sqlite3.Connection, *, limit: int = 50) -> list[str]:
