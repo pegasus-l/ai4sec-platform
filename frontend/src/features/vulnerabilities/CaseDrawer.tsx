@@ -38,6 +38,7 @@ function provenanceBadge(provenance: string, confidence?: number | null) {
     from_nvd: 'NVD 事实',
     from_osv: 'OSV 事实',
     from_patch: '补丁事实',
+    from_source: '源码事实',
     from_legacy_event: '继承素材',
     llm_extracted: '模型推断',
     llm_extracted_unverified: '模型推断·未校验',

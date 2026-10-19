@@ -258,6 +258,46 @@ def mark_vuln_site_checked(conn: sqlite3.Connection, case_id: int, *, status: st
     _merge_payload(conn, int(case_id), {"vuln_site_checked_at": utc_now(), "vuln_site_status": status})
 
 
+# ── 数据流(P4b) ─────────────────────────────────────────────────────────────
+
+def cases_needing_dataflow(conn: sqlite3.Connection, *, limit: int = 20) -> list[sqlite3.Row]:
+    """挑出"有漏洞点、但还没有数据流"的案例。高分优先。
+
+    只对**已经抽出漏洞点**的洞做:漏洞点给了文件与函数名,才有地方去抓修复前源码、
+    才有函数名去搜 1 跳调用者。没有任何时间窗重试 —— 同一份补丁和同一个 commit 抓出来的
+    源码是一样的,问两遍只会让模型把故事编得更圆。
+    """
+    return conn.execute(
+        "SELECT c.* FROM vulnerability_cases c "
+        "WHERE c.status IN ('active', 'pending_fetch') "
+        "  AND EXISTS (SELECT 1 FROM vulnerability_case_context x WHERE x.case_id = c.id AND x.context_type = 'vuln_site') "
+        "  AND NOT EXISTS (SELECT 1 FROM vulnerability_case_context x WHERE x.case_id = c.id AND x.context_type = 'dataflow') "
+        "  AND json_extract(c.payload_json, '$.dataflow_status') IS NULL "
+        "ORDER BY (c.cvss_score IS NULL), c.cvss_score DESC, c.id DESC "
+        "LIMIT ?",
+        (max(1, int(limit)),),
+    ).fetchall()
+
+
+def vuln_site_context_for(conn: sqlite3.Connection, case_id: int) -> dict[str, Any] | None:
+    """取该案例的漏洞点行。可信的优先于降级的,同档次取置信度高的。"""
+    row = conn.execute(
+        "SELECT * FROM vulnerability_case_context WHERE case_id = ? AND context_type = 'vuln_site' "
+        "ORDER BY (provenance = 'llm_extracted') DESC, confidence DESC, id LIMIT 1",
+        (int(case_id),),
+    ).fetchone()
+    return repo.row_to_dict(row) if row else None
+
+
+def mark_dataflow_checked(conn: sqlite3.Connection, case_id: int, *, status: str) -> None:
+    """记录"这个洞的数据流处理到哪一步了"(`done` / `no_dataflow` / `no_source`)。
+
+    与 P4a 同一口径:**模型报错、网络异常都不写** —— 那是"还没问成",下一轮要重试。
+    只有拿到确定结论(写出了行 / 模型说材料不足 / 真的抓不到修复前源码)才落痕。
+    """
+    _merge_payload(conn, int(case_id), {"dataflow_checked_at": utc_now(), "dataflow_status": status})
+
+
 # ── 杂项 ─────────────────────────────────────────────────────────────────────
 
 def pending_case_ids(conn: sqlite3.Connection, *, limit: int = 50) -> list[str]:

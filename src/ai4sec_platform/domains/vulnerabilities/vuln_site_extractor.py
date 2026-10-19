@@ -76,46 +76,76 @@ class Hunk:
         return (self.old_start, self.old_start + self.old_count - 1)
 
 
-def parse_diff(diff: str) -> dict[str, list[Hunk]]:
-    """把 unified diff 解析成 {文件路径: [hunk, ...]}。
+@dataclass(frozen=True)
+class FileSection:
+    """diff 里的一个文件段(多 commit 的 PR 补丁会对同一路径出现多段)。
 
-    路径取 `+++ b/...` 那一侧(与 GitHub `.patch` 一致),`/dev/null` 表示新建文件 ——
-    新建文件没有"修复前的代码",整段跳过(它不可能承载漏洞点)。
+    `old_path` 是**修复前**的路径 —— P4b 抓源码时要用它(`--- a/...` 侧);
+    改名(rename)时它与 `new_path` 不同。`new_file=True` 表示 `/dev/null`(新建文件),
+    这种文件没有"修复前的代码"。
     """
-    hunks: dict[str, list[Hunk]] = {}
-    current_file = ""
-    old_is_null = False
+
+    old_path: str
+    new_path: str
+    hunks: tuple[Hunk, ...]
+    new_file: bool = False
+
+
+def parse_sections(diff: str) -> list[FileSection]:
+    """把 unified diff 解析成**按出现顺序**的文件段列表。
+
+    与 `parse_diff()` 的差别只有两点:保留 `---` 侧的旧路径(P4b 抓修复前源码用)、
+    保留同一路径的多段(多 commit 的 PR 补丁),不做按路径合并。
+    """
+    sections: list[FileSection] = []
+    current: dict[str, Any] | None = None
     pending: tuple[int, int, int, int] | None = None
     body: list[str] = []
+    old_is_null = False
+    pending_old = ""
     lines = str(diff or "").splitlines()
 
-    def flush() -> None:
+    def flush_hunk() -> None:
         nonlocal pending, body
-        if pending is not None and current_file:
+        if pending is not None and current is not None:
             old_start, old_count, new_start, new_count = pending
-            hunks.setdefault(current_file, []).append(Hunk(old_start, old_count, new_start, new_count, tuple(body)))
+            current["hunks"].append(Hunk(old_start, old_count, new_start, new_count, tuple(body)))
         pending, body = None, []
+
+    def flush_section() -> None:
+        nonlocal current
+        flush_hunk()
+        if current is not None and current["new_path"]:
+            sections.append(FileSection(
+                old_path="" if old_is_null else current["old_path"],
+                new_path=current["new_path"],
+                hunks=tuple(current["hunks"]),
+                new_file=old_is_null,
+            ))
+        current = None
 
     for index, line in enumerate(lines):
         if _DIFF_GIT_RE.match(line):
-            flush()
-            current_file, old_is_null = "", False
+            flush_section()
+            old_is_null = False
+            pending_old = ""
             continue
         if line.startswith("--- "):
             # 普通 diff(非 git 扩展)里 `---` 也可能出现在 hunk 正文中(被删除的 `--xxx` 行),
             # 只有紧跟 `+++ ` 时才算文件头。
             if index + 1 < len(lines) and lines[index + 1].startswith("+++ "):
-                flush()
+                flush_section()
                 old_is_null = line[4:].strip() in {"/dev/null", "dev/null"}
+                pending_old = "" if old_is_null else clean_path(line[4:])
             continue
         if line.startswith("+++ "):
             if pending is not None:  # 没有 `---` 的裸 `+++`(极少见),仍然认作文件头
-                flush()
-            current_file = "" if old_is_null else _clean_path(line[4:])
+                flush_hunk()
+            current = {"old_path": pending_old, "new_path": clean_path(line[4:]), "hunks": []}
             continue
         match = _HUNK_RE.match(line)
         if match:
-            flush()
+            flush_hunk()
             pending = (
                 int(match.group(1)),
                 int(match.group(2)) if match.group(2) is not None else 1,
@@ -125,11 +155,25 @@ def parse_diff(diff: str) -> dict[str, list[Hunk]]:
             continue
         if pending is not None:
             body.append(line)
-    flush()
+    flush_section()
+    return sections
+
+
+def parse_diff(diff: str) -> dict[str, list[Hunk]]:
+    """把 unified diff 解析成 {文件路径: [hunk, ...]}。
+
+    路径取 `+++ b/...` 那一侧(与 GitHub `.patch` 一致),`/dev/null` 表示新建文件 ——
+    新建文件没有"修复前的代码",整段跳过(它不可能承载漏洞点)。
+    """
+    hunks: dict[str, list[Hunk]] = {}
+    for section in parse_sections(diff):
+        if section.new_file or not section.new_path:
+            continue
+        hunks.setdefault(section.new_path, []).extend(section.hunks)
     return hunks
 
 
-def _clean_path(raw: str) -> str:
+def clean_path(raw: str) -> str:
     """`b/src/a.c` → `src/a.c`;去掉 git 对含空格路径加的双引号。"""
     text = str(raw or "").strip()
     if text.startswith('"') and text.endswith('"') and len(text) >= 2:
@@ -171,7 +215,7 @@ def verify_site(site: dict[str, Any], hunks: dict[str, list[Hunk]]) -> tuple[boo
     hunk 里找到。第三条是防"行号碰巧对、代码是编的"—— 只要求**至少一行**对得上,
     免得模型多摘了两行上下文或改了缩进就被误判。
     """
-    path = _clean_path(site.get("file_path"))
+    path = clean_path(site.get("file_path"))
     if not path:
         return False, "模型没给出文件路径", ""
     resolved = path if path in hunks else _unique_suffix(path, hunks)

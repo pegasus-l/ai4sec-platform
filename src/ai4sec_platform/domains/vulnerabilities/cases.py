@@ -31,8 +31,10 @@ CASE_STATUSES = ("pending_fetch", "draft", "active", "superseded")
 ID_KINDS = ("cve", "ghsa", "osv", "oss", "custom")
 CONTEXT_TYPES = ("reference", "patch_diff", "vuln_site", "dataflow", "caller_snippet", "manual_note")
 # llm_extracted_unverified: 模型给的行号落在补丁 hunk 之外(见 P4a 的规则校验),降级保留但标出来
-PROVENANCES = ("from_nvd", "from_osv", "from_patch", "from_legacy_event", "llm_extracted", "llm_extracted_unverified", "manual_added")
-AUTO_PROVENANCES = ("from_nvd", "from_osv", "from_patch")
+# from_source: 从仓库**修复前源码**里直接读到的行(2026-10-19 P4b 的调用方代码)。它是外部事实,
+#             但锚定的是 base commit(仓库里没有一个可直接引用的"父提交"指针),所以与 from_patch 分开记。
+PROVENANCES = ("from_nvd", "from_osv", "from_patch", "from_source", "from_legacy_event", "llm_extracted", "llm_extracted_unverified", "manual_added")
+AUTO_PROVENANCES = ("from_nvd", "from_osv", "from_patch", "from_source")
 # 需要置信度的来源:模型推断的两档
 LLM_PROVENANCES = ("llm_extracted", "llm_extracted_unverified")
 MANUAL_SOURCE = "manual_added"

@@ -8,6 +8,7 @@ from ai4sec_platform.sources.connectors.news.asis import AsisConnector
 from ai4sec_platform.sources.connectors.news.awesome import AwesomeConnector
 from ai4sec_platform.sources.connectors.vulnerabilities.anysearch import AnysearchConnector
 from ai4sec_platform.sources.connectors.vulnerabilities.crawl4ai import Crawl4aiConnector
+from ai4sec_platform.sources.connectors.vulnerabilities.github_source import GithubSourceConnector
 from ai4sec_platform.sources.connectors.vulnerabilities.manual_import import ManualImportConnector
 from ai4sec_platform.sources.connectors.vulnerabilities.nvd import NvdConnector
 from ai4sec_platform.sources.connectors.vulnerabilities.osv import OsvConnector
@@ -31,5 +32,6 @@ def all_connectors():
         FirmwareConnector(), MirrorConnector(), GitCodeConnector(), AtomGitConnector(), HiAscendConnector(),
         HuaweiMirrorConnector(), OpenXHuaweiConnector(), FirmwareApiConnector(),
         # 2026-10-19 P3 案例库采集:NVD 定窗口 / OSV 富化与补丁线索 / github-gitlab 补丁下载
-        NvdConnector(), OsvConnector(), PatchConnector(),
+        # 2026-10-19 P4b:修复前源码是"抓修复后文件 + 反向回滚"得到的,不用 GitHub API(配额太小)
+        NvdConnector(), OsvConnector(), PatchConnector(), GithubSourceConnector(),
     ]
