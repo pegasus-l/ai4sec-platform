@@ -177,6 +177,100 @@ def mark_osv_missing(conn: sqlite3.Connection, case_id: int, *, status: str = "n
     _merge_payload(conn, case_id, {"osv_checked_at": utc_now(), "osv_status": status})
 
 
+# ── "我要盯哪些源" → 采集动作 ─────────────────────────────────────────────────
+
+def enabled_case_sources(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    """启用的采集源。停用的行留在表里(与 threat_source_targets 同一语义),只是不参与采集。"""
+    return conn.execute(
+        "SELECT * FROM vulnerability_case_sources WHERE enabled = 1 ORDER BY kind, source_key, id"
+    ).fetchall()
+
+
+def case_row(conn: sqlite3.Connection, canonical_id: str) -> sqlite3.Row | None:
+    return conn.execute(
+        "SELECT * FROM vulnerability_cases WHERE canonical_id = ?", (str(canonical_id),)
+    ).fetchone()
+
+
+def osv_is_fresh(conn: sqlite3.Connection, canonical_id: str, *, recheck_days: int = RECHECK_DAYS) -> bool:
+    """这条案例最近是否已经查过 OSV。查过就别每晚重复写 —— `upsert_case` 会刷新 `updated_at`,
+    而列表按它排序:每个包每晚把所有历史洞"更新"一遍,案例库头版就永远是同一批老洞。"""
+    row = conn.execute(
+        "SELECT payload_json FROM vulnerability_cases WHERE canonical_id = ?", (str(canonical_id),)
+    ).fetchone()
+    if row is None:
+        return False
+    payload = repo.loads(row["payload_json"], {}) or {}
+    checked = str(payload.get("osv_checked_at") or "")
+    return bool(checked) and checked >= _cutoff(recheck_days)
+
+
+def apply_osv_record(
+    conn: sqlite3.Connection,
+    payload: dict[str, Any],
+    *,
+    source_identifier: str = "",
+    actor: str = "case_ingest",
+) -> dict[str, Any]:
+    """一条 OSV 记录 → 建/补一条案例(**从 OSV 起家**的路径,用于盯包/盯仓/指定 GHSA)。
+
+    与 `apply_osv_result` 的区别:那个要求案例已经存在(按 canonical_id 富化),这个在案例
+    不存在时也能落库。两份记录合并(GHSA 别名里的修复链接)由调用方先做 `merge_osv_payloads`。
+    """
+    fields = case_sources.osv_case_fields(payload)
+    canonical_id = str(fields.pop("canonical_id", ""))
+    if not canonical_id:
+        return {"canonical_id": "", "skipped": "no_id"}
+    id_kind = str(fields.pop("id_kind", "osv"))
+    payload_doc: dict[str, Any] = {"osv_checked_at": utc_now(), "osv_status": "found"}
+    if source_identifier:
+        # 记"最近一次是哪条盯源带来的" —— 用户回头能对上"这个洞是我加的包带进来的"
+        payload_doc["case_source"] = str(source_identifier)
+    result = cases_repo.upsert_case(
+        conn,
+        canonical_id=canonical_id,
+        id_kind=id_kind,
+        actor=actor,
+        source="osv",
+        status="active",
+        payload=payload_doc,
+        **fields,
+    )
+    return {
+        "case_id": int(result["case_id"]),
+        "canonical_id": canonical_id,
+        "created": bool(result["created"]),
+    }
+
+
+def ensure_pending_case(
+    conn: sqlite3.Connection,
+    canonical_id: str,
+    *,
+    id_kind: str,
+    source: str = "case_source",
+    actor: str = "case_ingest",
+) -> dict[str, Any]:
+    """给"指定 ID"的盯源建一条**待抓**案例,交给同晚的 NVD 窗口步去补元数据。
+
+    只新建、不改已有行:已有案例可能已经被富化过,再写成 pending_fetch 会让它从"活动"
+    退回"待抓",下一步又会用 NVD 的旧数据覆盖已收集的上下文。
+    """
+    existing = case_row(conn, canonical_id)
+    if existing is not None:
+        return {"canonical_id": canonical_id, "created": False, "status": str(existing["status"])}
+    result = cases_repo.upsert_case(
+        conn,
+        canonical_id=canonical_id,
+        id_kind=id_kind,
+        actor=actor,
+        source=source,
+        status="pending_fetch",
+        payload={"case_source": source},
+    )
+    return {"canonical_id": canonical_id, "created": bool(result["created"]), "status": "pending_fetch"}
+
+
 # ── 补丁 diff ────────────────────────────────────────────────────────────────
 
 def cases_needing_patch(conn: sqlite3.Connection, *, limit: int = 120, recheck_days: int = RECHECK_DAYS) -> list[sqlite3.Row]:

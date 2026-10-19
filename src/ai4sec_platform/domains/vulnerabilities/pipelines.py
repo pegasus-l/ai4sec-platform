@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from ai4sec_platform.pipelines.base import PipelineDefinition
 from ai4sec_platform.pipelines.steps.vulnerability_batch import RunBatchedVulnerabilityDiscoveryStep
-from ai4sec_platform.pipelines.steps.vulnerability_case_ingest import BackfillEnrichStep, EnrichFromOsvStep, ExtractDataflowStep, ExtractVulnSiteStep, FetchNewCveWindowStep, ResolvePatchContextStep
+from ai4sec_platform.pipelines.steps.vulnerability_case_ingest import BackfillEnrichStep, ConsumeCaseSourcesStep, EnrichFromOsvStep, ExtractDataflowStep, ExtractVulnSiteStep, FetchNewCveWindowStep, ResolvePatchContextStep
 from ai4sec_platform.pipelines.steps.vulnerability_discovery import BuildAcceptedVulnerabilityMaterialsStep, CollectAnySearchCandidatesStep, CrawlCandidatePagesStep, DrillDownAcceptedMaterialsStep, ExtractCrawledContentStep, ReviewCrawledMaterialsStep
 from ai4sec_platform.pipelines.steps.vulnerability_event import AggregateVulnerabilityEventsStep
 from ai4sec_platform.pipelines.steps.vulnerability_evaluation import BuildVulnerabilityShadowEvaluationStep
@@ -116,9 +116,12 @@ def vulnerability_case_ingest_pipeline() -> PipelineDefinition:
     回溯放最后才不会把前面刚收的洞再扫一遍。每日 04:00 由 APScheduler 触发(见 app/main.py),
     与 03:30 的模式合成同用「抢不到全局锁就每 10 分钟重入」的兜底。
 
-    第 5 步 `extract_vuln_site` 是 P4a(2026-10-19):只处理**已经有补丁**的案例,
+    第 1 步 `consume_case_sources`(2026-10-19):读用户在页面上登记的「盯哪些源」
+    (生态包 / 单仓 / 指定 id),把 OSV 免费能查到的洞登记进库。它排在最前,是因为
+    它建出的 pending CVE 由紧接着的 NVD 窗口步当场补,不用等到下一晚。
+    第 6 步 `extract_vuln_site` 是 P4a(2026-10-19):只处理**已经有补丁**的案例,
     所以绝大多数新洞当天到不了这一步 —— 它们要等回溯步把 OSV 的修复链接补上。
-    第 6 步 `extract_dataflow` 是 P4b(2026-10-19):只处理**已经抽出漏洞点**的案例,
+    第 7 步 `extract_dataflow` 是 P4b(2026-10-19):只处理**已经抽出漏洞点**的案例,
     它要抓修复前源码并按函数名找 1 跳调用者,是整条链路里最慢的一步(有体积/条数上限)。
 
     口径(2026-10-19 按实测基线拍板):CVSS ≥ 7.0,**不附加 CWE 条件** ——
@@ -128,6 +131,9 @@ def vulnerability_case_ingest_pipeline() -> PipelineDefinition:
         name="vulnerabilities.case_ingest_pipeline",
         domain="vulnerabilities",
         steps=[
+            # 盯源排最前:它建出的 pending CVE 案例由紧接着的 NVD 窗口步当场 drain,
+            # 不用等到下一晚(用户刚在页面上加的源,当晚就该有结果)。
+            ConsumeCaseSourcesStep(),
             FetchNewCveWindowStep(),
             EnrichFromOsvStep(),
             ResolvePatchContextStep(),

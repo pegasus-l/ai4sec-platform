@@ -2,9 +2,9 @@ import { useEffect, useState, type ReactNode } from 'react';
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Badge, EmptyState } from '../../components/ui';
 import { useToast } from '../../components/Toast';
-import { addCase, fetchCases, fetchCaseStats } from '../../api/vulnerabilities';
+import { addCase, addCaseSource, deleteCaseSource, fetchCases, fetchCaseSources, fetchCaseStats, setCaseSourceEnabled } from '../../api/vulnerabilities';
 import { ContextDots, invalidateCase, openCaseDrawer, severityTone, type DrawerSetter } from './CaseDrawer';
-import type { CaseIdKind, CasePayload } from '../../types/vulnerability';
+import type { CaseIdKind, CasePayload, CaseSourceTarget } from '../../types/vulnerability';
 
 // 案例库每页条数。与素材库一样是**服务端分页**: 关键词/筛选/页码全部下推 SQL —— 库是 15.5GB 量级,
 // 拉全量回前端筛就是素材库当年"分数最低那批永远不可达"的翻版。
@@ -108,7 +108,103 @@ export function CasesView({ search, setDrawer, onOpenMaterial }: { search: strin
     </section>
 
     <Pagination page={page} pages={pages} total={total} setOffset={setOffset} />
+
+    {/* 追加在页面末尾(2026-10-19):「案例从哪来」的长期配置, 与上面的案例列表是两件事 ——
+        列表是结果, 这里是采集入口。 */}
+    <CaseSourcesPanel />
   </div>;
+}
+
+const CASE_SOURCE_KINDS: Array<[CaseSourceTarget['kind'], string, string, string]> = [
+  ['tracked_package', '生态包', 'pkg:pypi/django', '每晚按 OSV 查这个包最近公开的漏洞并登记（不传版本 = 全部已知洞）'],
+  ['tracked_repo', '单个 Git 仓', 'github:apache/logging-log4j2', '拉默认分支最近几个提交，按 commit 查 OSV —— 只有被 OSV 收录了 GIT 区间的项目（多为 OSS-Fuzz）查得到'],
+  ['manual_id', '指定漏洞 ID', 'CVE-2021-44228 / GHSA-jfh8-c2jp-5v3q', 'CVE 交给当晚的 NVD 采集补元数据，GHSA / OSV 直接查 OSV'],
+];
+
+/**
+ * 「我要盯哪些源」。这张表从 P1 就建好了, 但一直没入口、采集步也没消费 —— 2026-10-19 接上:
+ * 每天 04:00 的采集跑批先按这里查一遍(ConsumeCaseSourcesStep), 查到的洞进上面的案例库。
+ * 停用的行留在列表里(与人工关键词同一语义), 只是不参与采集。
+ */
+function CaseSourcesPanel() {
+  const { toast } = useToast();
+  const qc = useQueryClient();
+  const [open, setOpen] = useState(false);
+  const [kind, setKind] = useState<CaseSourceTarget['kind']>('tracked_package');
+  const [identifier, setIdentifier] = useState('');
+  const [label, setLabel] = useState('');
+  const sources = useQuery({ queryKey: ['vulnerabilities', 'case-sources'], queryFn: fetchCaseSources, refetchInterval: 60_000 });
+  const refresh = () => void qc.invalidateQueries({ queryKey: ['vulnerabilities', 'case-sources'] });
+  const items = sources.data?.items ?? [];
+  const kindMeta = CASE_SOURCE_KINDS.find(([id]) => id === kind)!;
+
+  const add = useMutation({
+    mutationFn: () => addCaseSource({ kind, identifier: identifier.trim(), label: label.trim() }),
+    onSuccess: result => {
+      toast(result.created ? `已加入盯源：${result.source.identifier}（下一轮采集生效）` : `该源已存在，已重新启用：${result.source.identifier}`, 'success');
+      setIdentifier('');
+      setLabel('');
+      refresh();
+    },
+    onError: error => toast(`添加失败(${error})：请按占位符的格式填写`, 'error'),
+  });
+  const toggle = useMutation({
+    mutationFn: ({ item, enabled }: { item: CaseSourceTarget; enabled: boolean }) => setCaseSourceEnabled(item.id, enabled),
+    onSuccess: result => { toast(result.enabled ? `已启用：${result.identifier}` : `已停用：${result.identifier}`, 'success'); refresh(); },
+    onError: error => toast(`操作失败(${error})`, 'error'),
+  });
+  const remove = useMutation({
+    mutationFn: (id: number) => deleteCaseSource(id),
+    onSuccess: () => { toast('已删除盯源', 'success'); refresh(); },
+    onError: error => toast(`删除失败(${error})`, 'error'),
+  });
+  const askRemove = async (item: CaseSourceTarget) => {
+    const ok = await confirm(`确认删除盯源「${item.label || item.identifier}」?\n删除后下一轮采集不再查它(想保留记录的话停用即可)。`);
+    if (ok) remove.mutate(item.id);
+  };
+
+  return <section className="panel case-add">
+    <div className="panel-head">
+      <h3>跟踪的漏洞源</h3>
+      <span>登记要长期盯的包 / 仓 / ID；每天 04:00 的采集跑批先按这里查，查到的洞自动进案例库</span>
+      <button className="btn" onClick={() => setOpen(value => !value)}>{open ? '收起' : '+ 添加盯源'}</button>
+    </div>
+    {open && <div className="panel-body">
+      <div className="view-pills case-add-modes">
+        {CASE_SOURCE_KINDS.map(([id, text]) => <button key={id} className={`view-pill ${kind === id ? 'active' : ''}`} onClick={() => setKind(id)}>{text}</button>)}
+      </div>
+      <p className="muted small">{kindMeta[3]}</p>
+      <div className="filters">
+        <input className="search" placeholder={kindMeta[2]} value={identifier} onChange={event => setIdentifier(event.target.value)} onKeyDown={event => { if (event.key === 'Enter' && identifier.trim()) add.mutate(); }} />
+        <input className="search" placeholder="备注（可空，如：我司使用的组件）" value={label} onChange={event => setLabel(event.target.value)} />
+        <button className="btn primary" disabled={!identifier.trim() || add.isPending} onClick={() => add.mutate()}>{add.isPending ? '提交中…' : '加入盯源'}</button>
+      </div>
+      <p className="muted small" style={{ marginTop: 8 }}>生态名要写对（PyPI / npm / Maven / Go / crates.io / Packagist / NuGet / RubyGems 等）。重复添加不会插新行，只会把已有的那条重新启用。</p>
+    </div>}
+    <div className="panel-body">
+      {sources.isLoading
+        ? <p className="muted small">加载中…</p>
+        : items.length
+          ? <div className="timeline">
+            {items.map(item => <div key={item.id} className="timeline-item">
+              <div className="row-title">
+                <span style={item.enabled ? undefined : { opacity: 0.5, textDecoration: 'line-through' }}>
+                  <Badge tone={item.kind === 'tracked_package' ? 'sky' : item.kind === 'tracked_repo' ? 'amber' : 'violet'}>{CASE_SOURCE_KINDS.find(([id]) => id === item.kind)?.[1] ?? item.kind}</Badge>
+                  <b style={{ marginLeft: 6 }}>{item.identifier}</b>
+                  {item.label ? <span className="muted small"> · {item.label}</span> : null}
+                </span>
+                <span>
+                  <span className={`badge ${item.enabled ? 'success' : 'warn'}`}>{item.enabled ? '启用' : '已停用'}</span>
+                  <button className="btn sm" style={{ marginLeft: 6 }} disabled={toggle.isPending} onClick={() => toggle.mutate({ item, enabled: !item.enabled })}>{item.enabled ? '停用' : '启用'}</button>
+                  <button className="btn sm" style={{ marginLeft: 6 }} disabled={remove.isPending} onClick={() => void askRemove(item)}>删除</button>
+                </span>
+              </div>
+              <span className="muted small">添加人:{item.created_by || '未知'} · 添加于 {item.created_at?.slice(0, 19) || '未知'}</span>
+            </div>)}
+          </div>
+          : <p className="muted small">还没有盯源。加上之后，每天 04:00 的采集会先查它们；想立刻验证可以先按 ID 在「添加漏洞案例」里加一个。</p>}
+    </div>
+  </section>;
 }
 
 /** 案例卡片: 主键徽章 + 严重性 + 4 格完整度 + 关联素材数 —— "这条洞收全了没有"一行看完。 */

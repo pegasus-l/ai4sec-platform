@@ -204,6 +204,105 @@ def merge_osv_payloads(primary: dict[str, Any], extra: dict[str, Any] | None) ->
     return merged
 
 
+def osv_canonical_id(payload: dict[str, Any]) -> tuple[str, str]:
+    """OSV 记录 → (案例主键, id_kind)。优先级 CVE > GHSA > OSV > 原始 id。
+
+    同一条洞在 OSV 里可能只有 GHSA 记录(新公开的洞还没分配 CVE),也可能只有 OSV-Fuzz
+    的 OSV-* 记录;按此优先级归一,才能和 NVD 那条线按同一个主键对齐、不重复建案例。
+    """
+    seen: list[str] = []
+    for value in [payload.get("id"), *(payload.get("aliases") or [])]:
+        text = str(value or "").strip()
+        if text and text not in seen:
+            seen.append(text)
+    for text in seen:
+        if text.upper().startswith("CVE-"):
+            return text.upper(), "cve"
+    for text in seen:
+        if text.upper().startswith("GHSA-"):
+            # 与 cases.normalize_canonical_id 同一口径:GHSA 后缀统一小写
+            return "GHSA-" + text[5:].lower(), "ghsa"
+    for text in seen:
+        if text.upper().startswith("OSV-"):
+            return text.upper(), "osv"
+    if seen:
+        return seen[0], "osv"
+    return "", ""
+
+
+def osv_case_fields(payload: dict[str, Any]) -> dict[str, Any]:
+    """一条 OSV 记录 → 新建案例需要的完整字段(NVD 那套之外的"从 OSV 起家"路径)。
+
+    与 `osv_fields()` 的分工:那个只回"OSV 才知道的东西"(别名/受影响范围/修复链接),
+    这个把它扩成能直接 `upsert_case` 的完整字段 —— 用于「盯的包/仓」发现了库里还没有的洞。
+    `details` 才是完整描述,`summary` 只适合当标题;两者不能互换(标题会变成一整段)。
+    """
+    canonical_id, id_kind = osv_canonical_id(payload)
+    if not canonical_id:
+        return {}
+    details = str(payload.get("details") or "").strip()
+    summary = str(payload.get("summary") or "").strip()
+    fields = osv_fields(payload)
+    # fix_urls 只在选补丁链接时有用;osv_id/summary 与这里要写的列同名但含义不同,先摘掉
+    for key in ("fix_urls", "osv_id", "summary"):
+        fields.pop(key, None)
+    fields.update({
+        "canonical_id": canonical_id,
+        "id_kind": id_kind,
+        "title": short_title(canonical_id, summary or details),
+        "summary": details or summary,
+        "source_url": f"https://osv.dev/vulnerability/{payload.get('id') or canonical_id}",
+    })
+    return {key: value for key, value in fields.items() if value not in ("", None, [])}
+
+
+# OSV 的 ecosystem 是大小写敏感的(PyPI / Maven / crates.io),人写 `pkg:pypi/django` 时要归一。
+# 认不出的就原样传下去 —— OSV 会返回 400,比我们猜一个错的值更诚实。
+ECOSYSTEM_ALIASES = {
+    "pypi": "PyPI", "npm": "npm", "maven": "Maven", "go": "Go", "golang": "Go",
+    "packagist": "Packagist", "composer": "Packagist", "cargo": "crates.io", "crates.io": "crates.io",
+    "nuget": "NuGet", "rubygems": "RubyGems", "gem": "RubyGems", "hex": "Hex", "pub": "Pub",
+    "debian": "Debian", "ubuntu": "Ubuntu", "alpine": "Alpine", "oss-fuzz": "OSS-Fuzz",
+    "linux": "Linux", "android": "Android", "swifturl": "SwiftURL",
+}
+
+
+def parse_package_identifier(identifier: str) -> tuple[str, str] | None:
+    """`pkg:pypi/django` / `PyPI:django` / `pypi/django` → (包名, OSV ecosystem)。
+
+    返回 None 表示缺生态 —— 没有生态就查不了 OSV(同名包在 npm 和 PyPI 是两个东西),
+    调用方必须记成"输入不合法",不能猜一个生态去查。
+    """
+    text = str(identifier or "").strip()
+    if text.lower().startswith("pkg:"):
+        text = text[4:]
+    if "/" not in text and ":" in text:
+        text = text.replace(":", "/", 1)
+    if "/" not in text:
+        return None
+    ecosystem, name = text.split("/", 1)
+    ecosystem = ecosystem.strip()
+    name = name.strip()
+    if not ecosystem or not name:
+        return None
+    # PURL 的版本写法 `pkg:pypi/django@4.0`;npm 的 scope(`@scope/name`)不在此列
+    if "@" in name and not name.startswith("@"):
+        name = name.split("@", 1)[0]
+    return name, ECOSYSTEM_ALIASES.get(ecosystem.lower(), ecosystem)
+
+
+_GITHUB_REPO_RE = re.compile(
+    r"^(?:github:)?(?:https?://github\.com/)?([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+?)(?:\.git)?/?$",
+    re.IGNORECASE,
+)
+
+
+def parse_github_repo(identifier: str) -> str:
+    """`github:org/repo` / `https://github.com/org/repo` / `org/repo` → `org/repo`;认不出返回空串。"""
+    match = _GITHUB_REPO_RE.match(str(identifier or "").strip())
+    return f"{match.group(1)}/{match.group(2)}" if match else ""
+
+
 def osv_fields(payload: dict[str, Any]) -> dict[str, Any]:
     """OSV 记录 → 案例字段(只回"OSV 才知道的东西")。标题/摘要不从这里取。
 

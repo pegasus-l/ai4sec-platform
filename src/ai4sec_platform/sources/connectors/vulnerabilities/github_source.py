@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+import re
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -28,6 +29,10 @@ FILE_MAX_BYTES = 2_000_000
 # 整仓归档上限(压缩后)。linux 这类超大仓会超限 —— 那是**跳过找调用者**,不是失败:
 # 漏洞点文件本身仍然抓得到,数据流仍可从该文件内推断。
 ARCHIVE_MAX_BYTES = 25 * 1024 * 1024
+
+# GitHub 提交 RSS/Atom 流里的 commit 形如 `<id>tag:github.com,2008:Grit::Commit/<40hex></id>`。
+# 用 atom 而不是 api.github.com/commits:后者未鉴权 60 次/小时,和 P4b 避开的是同一份额度。
+_ATOM_COMMIT_RE = re.compile(r"Grit::Commit/([0-9a-f]{40})")
 
 
 class GithubSourceConnector:
@@ -67,6 +72,25 @@ class GithubSourceConnector:
     def fetch_gitlab_file(self, project: str, ref: str, path: str, *, timeout: int = 45) -> str | None:
         url = f"https://gitlab.com/{urllib.parse.quote(project, safe='/')}/-/raw/{urllib.parse.quote(ref, safe='')}/{urllib.parse.quote(path, safe='/')}"
         return self._get_text(url, timeout=timeout, max_bytes=FILE_MAX_BYTES)
+
+    # ── 最近提交(默认分支) ───────────────────────────────────────────────────
+
+    def recent_commit_shas(self, repo: str, *, limit: int = 5, timeout: int = 45) -> list[str]:
+        """默认分支最近 N 个 commit 的 sha(从 atom 流读,不消耗 API 配额)。
+
+        仓不存在 / 私有仓返回 404 → 空列表(调用方记"没有提交",不当异常)。
+        """
+        url = f"https://github.com/{urllib.parse.quote(repo, safe='/')}/commits.atom"
+        text = self._get_text(url, timeout=timeout, max_bytes=512_000)
+        if text is None:
+            return []
+        out: list[str] = []
+        for sha in _ATOM_COMMIT_RE.findall(text):
+            if sha not in out:
+                out.append(sha)
+            if len(out) >= max(1, int(limit)):
+                break
+        return out
 
     # ── 整仓归档 ──────────────────────────────────────────────────────────────
 
