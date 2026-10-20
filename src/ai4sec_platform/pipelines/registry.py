@@ -13,7 +13,7 @@ from ai4sec_platform.domains.news.pipelines import (
     news_shadow_collect_pipeline,
 )
 from ai4sec_platform.domains.threats.pipelines import asset_association_pipeline, huawei_asset_pipeline, huawei_attack_surface_pipeline, huawei_collect_sources_pipeline, huawei_cve_scout_pipeline, huawei_full_migration_pipeline, threat_risk_pipeline
-from ai4sec_platform.domains.vulnerabilities.pipelines import comprehension_probe_pipeline, vulnerability_case_ingest_pipeline, vulnerability_batched_full_discovery_pipeline, vulnerability_event_pipeline, vulnerability_external_discovery_pipeline, vulnerability_full_discovery_pipeline, vulnerability_knowledge_pipeline, vulnerability_manual_ingest_pipeline, vulnerability_pattern_pipeline, vulnerability_raw_pipeline
+from ai4sec_platform.domains.vulnerabilities.pipelines import comprehension_probe_pipeline, vulnerability_case_ingest_pipeline, vulnerability_batched_full_discovery_pipeline, vulnerability_event_pipeline, vulnerability_external_discovery_pipeline, vulnerability_full_discovery_pipeline, vulnerability_knowledge_pipeline, vulnerability_manual_ingest_pipeline, vulnerability_pattern_pipeline, vulnerability_project_buglist_pipeline, vulnerability_raw_pipeline
 
 
 class PipelineRegistry:
@@ -68,6 +68,9 @@ def default_registry() -> PipelineRegistry:
     # 2026-10-19 P3: 案例库采集(每日 04:00)。与上面的 event 聚合是两回事 ——
     # 这条是"NVD 窗口 → OSV 富化 → 补丁 diff → 回溯",直接写 vulnerability_cases 表。
     registry.register(vulnerability_case_ingest_pipeline())
+    # 2026-10-20 P5b: 项目自有安全源(每日 04:30)。与上面那条是两条 pipeline ——
+    # 项目公告慢且可能限流,失败不该拖住核心采集;回滚 = 注释掉这一行。
+    registry.register(vulnerability_project_buglist_pipeline())
     registry.register(vulnerability_knowledge_pipeline())
     registry.register(vulnerability_manual_ingest_pipeline())
     registry.register(vulnerability_pattern_pipeline())

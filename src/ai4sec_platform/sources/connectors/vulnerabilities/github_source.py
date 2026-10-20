@@ -9,6 +9,7 @@
 三个端点:
 - `raw.githubusercontent.com/{repo}/{ref}/{path}` —— 单文件(修复后状态,由调用方回滚)
 - `codeload.github.com/{repo}/tar.gz/{ref}` —— 整仓归档,只在找 1 跳调用者时用,有体积上限
+- `github.com/{repo}/releases.atom` —— 发布说明(P5b 自有源),同样不吃 api.github.com 配额
 - GitLab 的 `/-/raw/` 单文件(不拉归档:GitLab 归档 URL 形态与体积都更难控)
 """
 
@@ -18,6 +19,7 @@ import re
 import urllib.error
 import urllib.parse
 import urllib.request
+import xml.etree.ElementTree as ET
 
 from ai4sec_platform.schemas.sources import SourceFetchRequest, SourceHealth
 from ai4sec_platform.sources.result import SourceFetchResult
@@ -33,6 +35,36 @@ ARCHIVE_MAX_BYTES = 25 * 1024 * 1024
 # GitHub 提交 RSS/Atom 流里的 commit 形如 `<id>tag:github.com,2008:Grit::Commit/<40hex></id>`。
 # 用 atom 而不是 api.github.com/commits:后者未鉴权 60 次/小时,和 P4b 避开的是同一份额度。
 _ATOM_COMMIT_RE = re.compile(r"Grit::Commit/([0-9a-f]{40})")
+
+
+_ATOM_NS = "{http://www.w3.org/2005/Atom}"
+
+
+def parse_release_atom(text: str, *, limit: int = 5) -> list[dict[str, str]]:
+    """Atom → [{entry_id, title, updated, content}](新到旧)。**纯解析**,单测直接喂 XML。
+
+    解析失败返回空列表而不是抛:一个项目的 feed 坏了不该让整晚同步停下。
+    """
+    try:
+        root = ET.fromstring(str(text or "").strip())
+    except ET.ParseError:
+        return []
+    prefix = _ATOM_NS if root.tag.startswith(_ATOM_NS) else ""
+    out: list[dict[str, str]] = []
+    for entry in root.findall(f"{prefix}entry"):
+        def field(tag: str) -> str:
+            node = entry.find(f"{prefix}{tag}")
+            return (node.text or "").strip() if node is not None else ""
+        content = field("content") or field("summary")
+        out.append({
+            "entry_id": field("id"),
+            "title": field("title"),
+            "updated": field("updated") or field("published"),
+            "content": content,
+        })
+        if len(out) >= max(1, int(limit)):
+            break
+    return out
 
 
 class GithubSourceConnector:
@@ -91,6 +123,22 @@ class GithubSourceConnector:
             if len(out) >= max(1, int(limit)):
                 break
         return out
+
+    # ── 发布说明(P5b 自有源) ──────────────────────────────────────────────────
+
+    def recent_releases(self, repo: str, *, limit: int = 5, timeout: int = 45) -> list[dict[str, str]]:
+        """默认分支最近的 release 条目(新到旧)。仓没有 release / 404 → 空列表。
+
+        `releases.atom` 与 `commits.atom` 是同一套免 token 通道:内容里就是发布说明正文
+        (HTML),漏洞编号(CVE/GHSA)常常直接写在里面。**不解析 HTML**,交给
+        `project_sources.extract_ids` 做正则 —— 发布说明的结构千奇百怪,挑一种解析器
+        去认另一种格式只会静默漏数据。
+        """
+        url = f"https://github.com/{urllib.parse.quote(repo, safe='/')}/releases.atom"
+        text = self._get_text(url, timeout=timeout, max_bytes=1_000_000)
+        if text is None:
+            return []
+        return parse_release_atom(text, limit=limit)
 
     # ── 整仓归档 ──────────────────────────────────────────────────────────────
 

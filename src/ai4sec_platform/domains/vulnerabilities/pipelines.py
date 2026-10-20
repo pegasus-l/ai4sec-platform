@@ -11,6 +11,7 @@ from ai4sec_platform.pipelines.steps.comprehension_probe import ComprehensionPro
 from ai4sec_platform.pipelines.steps.vulnerability_knowledge import ExtractVulnerabilityKnowledgeStep, SelectVulnerabilityKnowledgeCandidatesStep
 from ai4sec_platform.pipelines.steps.vulnerability_manual import IngestManualMaterialsStep
 from ai4sec_platform.pipelines.steps.vulnerability_pattern import SynthesizeVulnerabilityPatternsStep
+from ai4sec_platform.pipelines.steps.vulnerability_project_buglist import SyncProjectNativeSourcesStep
 
 
 def vulnerability_raw_pipeline() -> PipelineDefinition:
@@ -146,6 +147,23 @@ def vulnerability_case_ingest_pipeline() -> PipelineDefinition:
             # 纯 DB 不联网,失败也只影响项目视图,不影响采集本身。
             LinkCasesToProjectsStep(),
         ],
+    )
+
+
+def vulnerability_project_buglist_pipeline() -> PipelineDefinition:
+    """项目自有安全源(P5b,2026-10-20):发布说明 / CHANGELOG / SECURITY.md。
+
+    与 04:00 的案例采集分开跑:这一步逐项目请求第三方页面、慢且可能限流,失败只影响
+    「项目公告里提到的洞有没有挂到项目上」,不该拖住核心采集。每日 04:30 + 白名单重入
+    (04:00 的主链路常跑到 04:30 之后,抢不到锁就每 10 分钟再来)。
+
+    只做两件事:读项目自己发的文本 → 解析出 CVE/GHSA → **核实存在**才建案例并挂关联。
+    查不到的编号不建案例(见 `project_sources` 的诚实性规则)。
+    """
+    return PipelineDefinition(
+        name="vulnerabilities.project_buglist_pipeline",
+        domain="vulnerabilities",
+        steps=[SyncProjectNativeSourcesStep()],
     )
 
 

@@ -360,6 +360,20 @@ export function fetchProjectCases(projectId: number, limit = 50, offset = 0): Pr
   return getJson(`/api/vulnerabilities/projects/${projectId}/cases?limit=${limit}&offset=${offset}`);
 }
 
+/**
+ * 手动触发一个项目的自有源同步(P5b)。走 /api/runs 的**后台跑批**,不在请求里等结果:
+ * 一次同步要逐条去 NVD/OSV 核实编号(未鉴权 NVD 5 次/30 秒),几秒到几分钟都有可能;
+ * 而且 04:00 的主链路可能还占着全局锁 —— 排队比长时间挂着一个 HTTP 请求诚实。
+ */
+export function runProjectNativeSync(projectId: number): Promise<PipelineRunStartResponse> {
+  return postJson('/api/runs', {
+    pipeline_name: 'vulnerabilities.project_buglist_pipeline',
+    reset: false,
+    wait: false,
+    params: { project_ids: [projectId] },
+  });
+}
+
 export function fetchVulnerabilityExtractions(): Promise<ListResponse<DomainItem<KnowledgePayload>>> {
   return getJson('/api/vulnerabilities/extractions?limit=200');
 }

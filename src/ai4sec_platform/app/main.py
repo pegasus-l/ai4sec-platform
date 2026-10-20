@@ -221,6 +221,9 @@ _PIPELINE_RETRY_WHITELIST = {
     # 案例采集(2026-10-19,P3)排 04:00:此时夜跑批通常刚结束,但超长夜仍会占锁,
     # 与模式合成同理 —— 加进白名单 = "锁一空就跑",不需要另造链式触发。
     "vulnerabilities.case_ingest_pipeline",
+    # 项目自有源(2026-10-20,P5b)排 04:30:04:00 的主链路实测常跑到半小时以上,
+    # 与上面两条同理 —— 抢不到锁就每 10 分钟重入,名义时刻只是起点。
+    "vulnerabilities.project_buglist_pipeline",
 }
 _PIPELINE_RETRY_DELAY_SECONDS = 10 * 60
 _PIPELINE_RETRY_MAX = 24  # 10min x 24 = 4h 重试窗口, 仍无锁则放弃当日
@@ -393,6 +396,10 @@ def create_app() -> FastAPI:
     # 所以真正的保障不是 04:00 这个时刻,而是 _PIPELINE_RETRY_WHITELIST 的「锁忙每 10 分钟重入」。
     # 口径:CVSS ≥ 7.0(2026-10-19 实测日均 378 条,补丁可得率 15%,全收只有 5%)。
     scheduler.add_job(_run_pipeline_job, CronTrigger(hour=4, minute=0, timezone="Asia/Shanghai"), args=['vulnerabilities.case_ingest_pipeline', {'min_cvss': 7.0}], id='vuln-case-ingest', name='vuln-case-ingest(daily 04:00)', replace_existing=True)
+    # 项目自有源(2026-10-20 新增,P5b)。04:30 是名义时刻:04:00 的主链路常跑到更晚,
+    # 真正的保障同样是白名单的「锁忙每 10 分钟重入」。排独立 pipeline 而不是并进主链路,
+    # 是因为它逐项目打第三方页面(慢、可能限流),失败只影响项目关联。
+    scheduler.add_job(_run_pipeline_job, CronTrigger(hour=4, minute=30, timezone="Asia/Shanghai"), args=['vulnerabilities.project_buglist_pipeline', {}], id='vuln-project-sources', name='vuln-project-sources(daily 04:30)', replace_existing=True)
     scheduler.add_job(_reap_repro_tasks, IntervalTrigger(minutes=5), id='repro-reap', name='repro-watchdog(5min)', replace_existing=True)
     scheduler.add_job(_reap_stale_pipeline_runs, IntervalTrigger(minutes=5), id='pipeline-reap', name='pipeline-watchdog(5min)', replace_existing=True)
     # 僵尸回收(60s):浏览器子进程正常退出却没人 wait,会一直占着容器的 pids 名额,

@@ -6,7 +6,7 @@
 (`vulnerability_case_sources`)不是一回事:盯源是零散的长期订阅,项目是可展示、可聚合的维度。
 
 本模块的边界:
-- **只做项目和关联**,不抓项目公告(P5b 再做);
+- **只做项目和关联**;抓项目自己的公告在 `project_sources.py`(P5b),这里只存"开了哪些源";
 - 项目 → 案例的关联靠**已有的数据**:OSV 写入的 `affected_products`(`Ecosystem:name`)与
   补丁上下文里的 `repo`(`owner/repo`)。不为了关联去额外请求任何外部服务;
 - 自动识别包(`detect_packages`)是**候选**,不直接生效 —— monorepo 的根 manifest 经常
@@ -37,6 +37,26 @@ from ai4sec_platform.domains.vulnerabilities import case_sources
 
 TIERS = ("asset", "benchmark")
 LINK_KINDS = ("package_match", "repo_match", "advisory", "manual")
+
+# 项目自有公告源(P5b)。`github_advisories` 与 `issues` 只是登记位,采集步会如实说"未启用",
+# 不假装支持 —— 前者需要 token,后者噪声太大只适合当线索。
+NATIVE_SOURCE_KINDS = ("releases", "changelog", "github_advisories", "issues")
+DEFAULT_NATIVE_SOURCES = ("releases", "changelog")
+
+
+def normalize_native_sources(values: Iterable[Any] | None) -> list[str]:
+    """去重并校验来源名。认不出的名字**报错**而不是静默丢弃 —— 页面上打错一个字母,
+    用户会以为"已经开启",而实际整晚什么都没抓。"""
+    out: list[str] = []
+    for value in values or []:
+        name = str(value or "").strip()
+        if not name:
+            continue
+        if name not in NATIVE_SOURCE_KINDS:
+            raise ValueError(f"不认识的自有源: {name}(可选:{', '.join(NATIVE_SOURCE_KINDS)})")
+        if name not in out:
+            out.append(name)
+    return out
 
 _GITHUB_URL_RE = re.compile(r"^(?:https?://)?(?:www\.)?github\.com/([^/?#]+)/([^/?#]+)", re.IGNORECASE)
 _GITHUB_SHORT_RE = re.compile(r"^github:([^/]+)/([^/]+)$", re.IGNORECASE)
@@ -327,15 +347,19 @@ def add_project(
     if tier not in TIERS:
         raise ValueError(f"不支持的 tier: {tier}")
     normalized = normalize_packages(packages or [])
+    # 不传 = 用默认(发布说明 + CHANGELOG);传空数组 = 用户明确不要任何自有源。
+    source_list = normalize_native_sources(native_sources) if native_sources is not None else list(DEFAULT_NATIVE_SOURCES)
     now = utc_now()
     existing = conn.execute("SELECT * FROM vulnerability_projects WHERE slug = ?", (parsed["slug"],)).fetchone()
     if existing is not None:
         merged = normalize_packages([*(repo.loads(existing["packages_json"], []) or []), *normalized])
+        kept_sources = source_list if native_sources is not None else (repo.loads(existing["native_sources_json"], []) or [])
         conn.execute(
-            "UPDATE vulnerability_projects SET display_name = ?, packages_json = ?, tier = ?, enabled = 1, updated_by = ?, updated_at = ? WHERE id = ?",
+            "UPDATE vulnerability_projects SET display_name = ?, packages_json = ?, native_sources_json = ?, tier = ?, enabled = 1, updated_by = ?, updated_at = ? WHERE id = ?",
             (
                 str(display_name or existing["display_name"] or "").strip()[:200],
                 repo.dumps(merged),
+                repo.dumps(kept_sources),
                 tier,
                 str(created_by or ""),
                 now,
@@ -352,7 +376,7 @@ def add_project(
         (
             parsed["slug"], parsed["platform"], parsed["org"], parsed["repo"], parsed["url"],
             str(display_name or parsed["repo"]).strip()[:200], repo.dumps(normalized),
-            repo.dumps([str(item) for item in (native_sources or [])]), tier,
+            repo.dumps(source_list), tier,
             str(created_by or ""), now, str(created_by or ""), now,
         ),
     )
@@ -375,7 +399,7 @@ def update_project(conn: sqlite3.Connection, project_id: int, *, actor: str = ""
         elif field == "packages":
             updates["packages_json"] = repo.dumps(normalize_packages(value))
         elif field == "native_sources":
-            updates["native_sources_json"] = repo.dumps([str(item) for item in value])
+            updates["native_sources_json"] = repo.dumps(normalize_native_sources(value))
         elif field == "tier":
             if str(value) not in TIERS:
                 raise ValueError(f"不支持的 tier: {value}")

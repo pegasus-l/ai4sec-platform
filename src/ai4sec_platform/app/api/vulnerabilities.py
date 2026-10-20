@@ -678,8 +678,9 @@ class ProjectRequest(BaseModel):
     # 字符串("pkg:pypi/django" / "Maven:group:artifact")或 {ecosystem,name}
     packages: list[Any] = []
     tier: str = "benchmark"
-    # P5b 预留:项目自有公告源
-    native_sources: list[str] = []
+    # P5b:项目自有公告源。**不传 = 默认开 releases + changelog**;
+    # 传空数组 = 用户明确不要任何自有源(页面上会显示"未配置")。
+    native_sources: list[str] | None = None
 
 
 class ProjectUpdateRequest(BaseModel):

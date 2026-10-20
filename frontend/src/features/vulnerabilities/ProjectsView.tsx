@@ -4,21 +4,38 @@ import { Badge, EmptyState } from '../../components/ui';
 import { useToast } from '../../components/Toast';
 import {
   addProject, deleteProject, detectProjectPackages, fetchCases, fetchProjects,
-  linkProjectCases, setProjectEnabled, updateProject,
+  linkProjectCases, runProjectNativeSync, setProjectEnabled, updateProject,
 } from '../../api/vulnerabilities';
 import { openCaseDrawer, severityTone, type DrawerSetter } from './CaseDrawer';
 import type { Project, ProjectPackage } from '../../types/vulnerability';
+
+/** 自有源的展示名。采集步只实现了前两种,后两种在页面上如实标「未启用」。 */
+const NATIVE_SOURCES: Array<{ id: string; label: string; hint: string }> = [
+  { id: 'releases', label: '发布说明', hint: 'GitHub Releases(免 token)' },
+  { id: 'changelog', label: 'CHANGELOG / SECURITY', hint: '仓库根目录的文本文件' },
+  { id: 'github_advisories', label: 'GitHub 安全公告', hint: '需要 token，本期未启用' },
+  { id: 'issues', label: 'Issues(security)', hint: '噪声大，本期只作线索' },
+];
+const NATIVE_LABEL = Object.fromEntries(NATIVE_SOURCES.map(item => [item.id, item.label]));
+const SUPPORTED_NATIVE = new Set(['releases', 'changelog']);
+
+function utcMinute(value: string | null | undefined): string {
+  return value ? `${value.slice(0, 16).replace('T', ' ')} UTC` : '';
+}
 
 /**
  * 项目视图(P5a, 2026-10-19)。
  *
  * 为什么要有这一页: 案例库的主键是**洞**, 而领导要的「开源项目的 buglist」问的是
- * 「这个项目有哪些已知洞」。项目 = 一个仓 + 它的发布包; 关联**不新增任何采集**,
+ * 「这个项目有哪些已知洞」。项目 = 一个仓 + 它的发布包; 案例关联**不新增任何采集**,
  * 只复用已有数据: OSV 写进案例的 `生态:包名`, 以及补丁上下文里的 `owner/repo`。
+ * P5b(2026-10-20)加的是**独立的**自有源同步: 每晚 04:30 读项目自己的发布说明/CHANGELOG,
+ * 只提取编号并逐个核实 —— 解析不到/核实不到都不建案例。
  *
- * 页面上必须说清两件事, 否则会误导:
+ * 页面上必须说清三件事, 否则会误导:
  *   ① 0 条 ≠ 这个项目没有漏洞, 只表示"没有匹配到已收录的案例";
- *   ② 自动识别出来的包只是候选, 要人确认 —— monorepo 根 manifest 经常不是真正的发布包。
+ *   ② 自动识别出来的包只是候选, 要人确认 —— monorepo 根 manifest 经常不是真正的发布包;
+ *   ③ 自有源同步"无新增" ≠ 没漏洞, 公告里提到的编号也可能是第三方依赖的洞。
  */
 export function ProjectsView({ setDrawer, onOpenMaterial }: { setDrawer: DrawerSetter; onOpenMaterial?: (itemId: number) => void }) {
   const qc = useQueryClient();
@@ -38,6 +55,12 @@ export function ProjectsView({ setDrawer, onOpenMaterial }: { setDrawer: DrawerS
     mutationFn: (id: number) => linkProjectCases(id),
     onSuccess: result => { toast(`重扫完成：匹配 ${result.cases_matched} 条案例，新增 ${result.links_created} 条关联`, 'success'); refresh(); void qc.invalidateQueries({ queryKey: ['vulnerabilities', 'project-cases'] }); },
     onError: error => toast(`重扫失败(${error})`, 'error'),
+  });
+  const syncNative = useMutation({
+    mutationFn: (id: number) => runProjectNativeSync(id),
+    // 不谎称"已完成":这是后台跑批,主链路占锁时还会排队重试。用户按 F5/等一分钟再看。
+    onSuccess: () => toast('已提交后台同步(逐条核实编号,完成后刷新本页查看结果)', 'success'),
+    onError: error => toast(`提交同步失败(${error})`, 'error'),
   });
   const remove = useMutation({
     mutationFn: (id: number) => deleteProject(id),
@@ -60,13 +83,21 @@ export function ProjectsView({ setDrawer, onOpenMaterial }: { setDrawer: DrawerS
     </div>
 
     <section className="panel case-add">
-      <div className="panel-head"><h3>收录范围</h3><span>项目视图只是案例库的一个切面，不额外采集</span></div>
+      <div className="panel-head"><h3>收录范围</h3><span>案例关联复用已有数据；项目自有源每日 04:30 单独同步</span></div>
       <div className="panel-body">
         <p className="muted small">
           项目与案例的关联只有两种证据：① 案例的<b>受影响产品</b>与项目的发布包写成完全相同的「生态:包名」；
           ② 案例的<b>补丁仓库 / 引用链接</b>指向这个仓。因此<b>0 条不等于这个项目没有漏洞</b>，
           只表示「没有匹配到已收录的案例」—— 没有被 NVD/OSV 收录、或还没有补丁的洞不会出现在这里。
           自动识别出的包只是候选，请确认后再保存（monorepo 的根 manifest 经常不是真正的发布包）。
+        </p>
+        <p className="muted small" style={{ marginTop: 8 }}>
+          <b>自有源</b>指项目自己在<b>发布说明</b>或 <b>CHANGELOG/SECURITY</b> 文件里写出来的安全修复。
+          系统只从这些文本里提取 <b>CVE / GHSA 编号</b>，逐个到 NVD/OSV 核实：
+          核实得到的才建案例并以「项目公告」关联（置信度 0.6）；核实不到的只记为线索，<b>不会出现在案例库</b>。
+          因此公告里提到某个编号，说明的是「项目公告里提到」，不等于该项目的漏洞 ——
+          它也可能是第三方依赖的洞。没配置自有源、或最近没有新公告，只表示<b>没抓到东西</b>，
+          同样不等于「这个项目没有漏洞」。
         </p>
       </div>
     </section>
@@ -83,6 +114,7 @@ export function ProjectsView({ setDrawer, onOpenMaterial }: { setDrawer: DrawerS
               key={item.id} item={item} expanded={selected === item.id}
               onToggle={() => setSelected(selected === item.id ? null : item.id)}
               onRelink={() => relink.mutate(item.id)}
+              onSync={() => syncNative.mutate(item.id)}
               onToggleEnabled={() => toggle.mutate({ item, enabled: !item.enabled })}
               onRemove={() => void askRemove(item)}
               onOpenMaterial={onOpenMaterial} setDrawer={setDrawer}
@@ -93,11 +125,12 @@ export function ProjectsView({ setDrawer, onOpenMaterial }: { setDrawer: DrawerS
   </div>;
 }
 
-function ProjectCard({ item, expanded, onToggle, onRelink, onToggleEnabled, onRemove, setDrawer, onOpenMaterial }: {
+function ProjectCard({ item, expanded, onToggle, onRelink, onSync, onToggleEnabled, onRemove, setDrawer, onOpenMaterial }: {
   item: Project;
   expanded: boolean;
   onToggle: () => void;
   onRelink: () => void;
+  onSync: () => void;
   onToggleEnabled: () => void;
   onRemove: () => void;
   setDrawer: DrawerSetter;
@@ -107,17 +140,19 @@ function ProjectCard({ item, expanded, onToggle, onRelink, onToggleEnabled, onRe
   const qc = useQueryClient();
   const [editing, setEditing] = useState(false);
   const [packagesText, setPackagesText] = useState('');
-  const savePackages = useMutation({
+  const [sources, setSources] = useState<string[]>(item.native_sources ?? []);
+  const saveSettings = useMutation({
     // 改包映射会改变"哪些洞算这个项目的" —— 后端 PATCH 后立刻全量重扫, 所以这里等它跑完。
-    mutationFn: () => updateProject(item.id, { packages: splitLines(packagesText) }),
+    mutationFn: () => updateProject(item.id, { packages: splitLines(packagesText), native_sources: sources }),
     onSuccess: result => {
-      toast(`发布包已更新：匹配 ${result.link?.cases_matched ?? 0} 条案例`, 'success');
+      toast(`已保存：匹配 ${result.link?.cases_matched ?? 0} 条案例`, 'success');
       setEditing(false);
       void qc.invalidateQueries({ queryKey: ['vulnerabilities', 'projects'] });
       void qc.invalidateQueries({ queryKey: ['vulnerabilities', 'project-cases', item.id] });
     },
     onError: error => toast(`保存失败(${error})：包名格式为「生态:包名」，如 PyPI:django`, 'error'),
   });
+  const lastRun = item.sync_cursor?.last_run;
   const severity = Object.entries(item.by_severity ?? {}).sort((a, b) => b[1] - a[1]);
   return <article className="case-card">
     <div className="case-card-main">
@@ -134,6 +169,18 @@ function ProjectCard({ item, expanded, onToggle, onRelink, onToggleEnabled, onRe
           ? `发布包：${item.packages.map(pkg => `${pkg.ecosystem}:${pkg.name}`).join(' / ')}`
           : '发布包：未配置（只能按仓库关联）'}
       </p>
+      <p className="small">
+        {item.native_sources.length
+          ? `自有源：${item.native_sources.map(id => NATIVE_LABEL[id] ?? id).join(' / ')}`
+          : '自有源：未配置（不抓项目公告）'}
+        {item.last_synced_at ? ` · 上次同步 ${utcMinute(item.last_synced_at)}` : ''}
+      </p>
+      {lastRun && <p className="small muted">
+        上次运行：新公告 {lastRun.releases_new ?? 0} 条、文件变更 {lastRun.files_changed ?? 0} 个；
+        编号 核实 {lastRun.created ?? 0} 建案 / 已有 {lastRun.existing ?? 0} / 未核实 {lastRun.unverified ?? 0}
+        {lastRun.errors ? `；错误 ${lastRun.errors}` : ''}
+        {lastRun.notes?.length ? <><br />{lastRun.notes.join('；')}</> : null}
+      </p>}
     </div>
     <div className="case-card-side">
       <b>{item.case_total}</b>
@@ -141,7 +188,8 @@ function ProjectCard({ item, expanded, onToggle, onRelink, onToggleEnabled, onRe
       <button className="btn primary" onClick={onToggle}>{expanded ? '收起案例' : '看案例'}</button>
       <div className="split" style={{ gap: 6, marginTop: 6 }}>
         <button className="btn sm" onClick={onRelink}>重扫关联</button>
-        <button className="btn sm" onClick={() => { setPackagesText(item.packages.map(pkg => `${pkg.ecosystem}:${pkg.name}`).join('\n')); setEditing(value => !value); }}>编辑包</button>
+        <button className="btn sm" onClick={onSync}>同步自有源</button>
+        <button className="btn sm" onClick={() => { setPackagesText(item.packages.map(pkg => `${pkg.ecosystem}:${pkg.name}`).join('\n')); setSources(item.native_sources); setEditing(value => !value); }}>编辑配置</button>
         <button className="btn sm" onClick={onToggleEnabled}>{item.enabled ? '停用' : '启用'}</button>
         <button className="btn sm" onClick={onRemove}>删除</button>
       </div>
@@ -154,9 +202,24 @@ function ProjectCard({ item, expanded, onToggle, onRelink, onToggleEnabled, onRe
         value={packagesText}
         onChange={event => setPackagesText(event.target.value)}
       />
+      <div className="filters" style={{ marginTop: 8 }}>
+        {NATIVE_SOURCES.map(source => <label key={source.id} className="small" title={source.hint}
+          style={{ display: 'inline-flex', alignItems: 'center', gap: 4, opacity: SUPPORTED_NATIVE.has(source.id) ? 1 : 0.55 }}>
+          <input
+            type="checkbox"
+            checked={sources.includes(source.id)}
+            disabled={!SUPPORTED_NATIVE.has(source.id)}
+            onChange={event => setSources(prev => event.target.checked
+              ? [...prev.filter(id => id !== source.id), source.id]
+              : prev.filter(id => id !== source.id))}
+          />
+          {source.label}
+        </label>)}
+      </div>
+      <p className="muted small">发布说明与 CHANGELOG 免 token；GitHub 安全公告与 Issues 本期未启用（灰掉的勾选不会生效）。</p>
       <div className="split panel-actions">
-        <button className="btn primary sm" disabled={savePackages.isPending} onClick={() => savePackages.mutate()}>{savePackages.isPending ? '保存并重扫…' : '保存并重扫'}</button>
-        <span className="muted small">清空并保存 = 该项目只按仓库关联。</span>
+        <button className="btn primary sm" disabled={saveSettings.isPending} onClick={() => saveSettings.mutate()}>{saveSettings.isPending ? '保存并重扫…' : '保存并重扫'}</button>
+        <span className="muted small">清空发布包并保存 = 该项目只按仓库关联；自有源全不勾 = 不抓项目公告。</span>
       </div>
     </div>}
     {expanded && <ProjectCases projectId={item.id} setDrawer={setDrawer} onOpenMaterial={onOpenMaterial} />}
@@ -200,6 +263,8 @@ function ProjectAddForm({ onAdded }: { onAdded: () => void }) {
   const [displayName, setDisplayName] = useState('');
   const [tier, setTier] = useState<'benchmark' | 'asset'>('benchmark');
   const [packagesText, setPackagesText] = useState('');
+  // 新项目默认盯发布说明 + CHANGELOG(都免 token);不勾 = 明确不抓公告。
+  const [sources, setSources] = useState<string[]>(['releases', 'changelog']);
   const [notes, setNotes] = useState<string[]>([]);
 
   const detect = useMutation({
@@ -229,12 +294,13 @@ function ProjectAddForm({ onAdded }: { onAdded: () => void }) {
       display_name: displayName.trim(),
       tier,
       packages: splitLines(packagesText),
+      native_sources: sources,
     }),
     onSuccess: result => {
       toast(result.created
         ? `已添加 ${result.project.display_name}：匹配 ${result.link.cases_matched} 条案例`
         : `项目已存在，已合并发布包：匹配 ${result.link.cases_matched} 条案例`, 'success');
-      setUrl(''); setDisplayName(''); setPackagesText(''); setNotes([]);
+      setUrl(''); setDisplayName(''); setPackagesText(''); setNotes([]); setSources(['releases', 'changelog']);
       onAdded();
     },
     onError: error => toast(`添加失败(${error})：仓地址支持 github:org/repo 或 https://github.com/org/repo`, 'error'),
@@ -263,6 +329,21 @@ function ProjectAddForm({ onAdded }: { onAdded: () => void }) {
         value={packagesText}
         onChange={event => setPackagesText(event.target.value)}
       />
+      <div className="filters" style={{ marginTop: 8 }}>
+        <span className="muted small">自有安全源：</span>
+        {NATIVE_SOURCES.map(source => <label key={source.id} className="small" title={source.hint}
+          style={{ display: 'inline-flex', alignItems: 'center', gap: 4, opacity: SUPPORTED_NATIVE.has(source.id) ? 1 : 0.55 }}>
+          <input
+            type="checkbox"
+            checked={sources.includes(source.id)}
+            disabled={!SUPPORTED_NATIVE.has(source.id)}
+            onChange={event => setSources(prev => event.target.checked
+              ? [...prev.filter(id => id !== source.id), source.id]
+              : prev.filter(id => id !== source.id))}
+          />
+          {source.label}
+        </label>)}
+      </div>
       {notes.length > 0 && <p className="muted small">识别提示：{notes.join('；')}</p>}
       <div className="split panel-actions">
         <button className="btn primary" disabled={!url.trim() || submit.isPending} onClick={() => submit.mutate()}>{submit.isPending ? '提交中…' : '添加并关联'}</button>
