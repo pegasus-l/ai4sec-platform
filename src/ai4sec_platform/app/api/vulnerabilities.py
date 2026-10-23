@@ -14,6 +14,7 @@ from ai4sec_platform.app.api.runs import start_pipeline_run
 from ai4sec_platform.db import repositories as repo
 from ai4sec_platform.core.config import load_settings
 from ai4sec_platform.domains.vulnerabilities import cases as case_service
+from ai4sec_platform.domains.vulnerabilities import links as case_links
 from ai4sec_platform.domains.vulnerabilities import projects as project_service
 from ai4sec_platform.domains.vulnerabilities import manual_ingest, manual_keywords
 from ai4sec_platform.domains.vulnerabilities.keyword_profiles import (
@@ -529,6 +530,20 @@ def pattern_detail(item_id: int, conn: sqlite3.Connection = Depends(get_db)) -> 
     if not item or item.get("item_type") != "vulnerability_pattern":
         raise HTTPException(status_code=404, detail="pattern not found")
     return item
+
+
+@router.get("/patterns/{item_id}/cases")
+def pattern_cases(item_id: int, limit: int = Query(50, ge=1, le=200), conn: sqlite3.Connection = Depends(get_db)) -> dict:
+    """模式 → 实例案例(P6a)。
+
+    口径:模式来源文章的 CVE,或挂在同一批文章上的案例。它回答的是「这类洞在库里有哪些
+    真实实例」,不是「模型判定这些案例属于该模式」—— 后者要等 P6b 用代码证据去判。
+    列表为空时带 `note` 说明原因(没有来源素材 / 文章还没点名库里的洞),不返回一个空列表了事。
+    """
+    data = case_links.cases_for_pattern(conn, item_id, limit=limit)
+    if data is None:
+        raise HTTPException(status_code=404, detail="pattern not found")
+    return data
 
 
 @router.get("/patterns/{item_id}/download")

@@ -17,6 +17,7 @@ import type {
   ManualKeywordListResponse,
   MaterialPayload,
   PagedListResponse,
+  PatternCasesResponse,
   PatternPayload,
   PipelineRunDetail,
   Project,
@@ -380,6 +381,19 @@ export function fetchVulnerabilityExtractions(): Promise<ListResponse<DomainItem
 
 export function fetchVulnerabilityPatterns(): Promise<ListResponse<DomainItem<PatternPayload>>> {
   return getJson('/api/vulnerabilities/patterns?limit=200');
+}
+
+/** 单条模式详情(点卡片进抽屉时用；列表接口不返回完整 model_output)。 */
+export function fetchVulnerabilityPatternDetail(itemId: number): Promise<DomainItem<PatternPayload>> {
+  return getJson(`/api/vulnerabilities/patterns/${itemId}`);
+}
+
+/**
+ * 模式的实例案例(P6a)。口径 = 模式来源文章里提到的洞 / 挂在同一批文章上的案例；
+ * 列表为空是正常的（文章还没点名库里已有的洞），响应里的 `note` 会说明原因。
+ */
+export function fetchPatternCases(itemId: number, limit = 50): Promise<PatternCasesResponse> {
+  return getJson(`/api/vulnerabilities/patterns/${itemId}/cases?limit=${limit}`);
 }
 
 /** 漏洞模式 markdown 下载地址：<a href> 直接跳转，服务器按 Content-Disposition 触发下载。 */

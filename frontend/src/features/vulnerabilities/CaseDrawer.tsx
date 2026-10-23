@@ -2,8 +2,8 @@ import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Badge, Card, EmptyState } from '../../components/ui';
 import { useToast } from '../../components/Toast';
-import { addCaseContext, fetchCaseDetail, fetchVulnerabilityMaterial, updateCase } from '../../api/vulnerabilities';
-import type { CaseContextRow, CaseContextType, CasePayload, CaseDetail } from '../../types/vulnerability';
+import { addCaseContext, fetchCaseDetail, fetchPatternCases, fetchVulnerabilityMaterial, updateCase } from '../../api/vulnerabilities';
+import type { CaseContextRow, CaseContextType, CasePayload, CaseDetail, CasePatternLink } from '../../types/vulnerability';
 import type { DomainItem, MaterialPayload } from '../../types/vulnerability';
 
 /** 与 VulnerabilityPage 里的 DrawerState 结构一致(那边没导出, 这里按结构对齐即可)。 */
@@ -13,11 +13,16 @@ export type DrawerSetter = (drawer: { title: string; subtitle?: string; body: JS
  * 漏洞案例详情。**入口只传 id 与标题**(列表里已经有这两个), 上下文由本组件自己拉 ——
  * 列表接口刻意不带 content(代码片段只在详情里出现), 所以这里必然是第二次请求。
  */
-export function openCaseDrawer(item: Pick<CasePayload, 'id' | 'title' | 'canonical_id' | 'id_kind'>, setDrawer: DrawerSetter, onOpenMaterial?: (itemId: number) => void) {
+export function openCaseDrawer(
+  item: Pick<CasePayload, 'id' | 'title' | 'canonical_id' | 'id_kind'>,
+  setDrawer: DrawerSetter,
+  onOpenMaterial?: (itemId: number) => void,
+  onOpenPattern?: (itemId: number) => void,
+) {
   setDrawer({
     title: item.title || item.canonical_id,
     subtitle: `${item.canonical_id} · 正在加载上下文…`,
-    body: <CaseDetailPanel caseId={item.id} onOpenMaterial={onOpenMaterial} />,
+    body: <CaseDetailPanel caseId={item.id} onOpenMaterial={onOpenMaterial} onOpenPattern={onOpenPattern} />,
   });
 }
 
@@ -40,6 +45,7 @@ function provenanceBadge(provenance: string, confidence?: number | null) {
     from_patch: '补丁事实',
     from_source: '源码事实',
     from_legacy_event: '继承素材',
+    from_material_cve: '文章提及',
     llm_extracted: '模型推断',
     llm_extracted_unverified: '模型推断·未校验',
     manual_added: '人工补充',
@@ -47,7 +53,7 @@ function provenanceBadge(provenance: string, confidence?: number | null) {
   const tone = provenance === 'manual_added' ? 'violet'
     : provenance === 'llm_extracted' ? 'amber'
     : provenance === 'llm_extracted_unverified' ? 'red'
-    : provenance === 'from_legacy_event' ? 'sky' : 'green';
+    : provenance === 'from_legacy_event' || provenance === 'from_material_cve' ? 'sky' : 'green';
   return <Badge tone={tone}>{label}{confidence != null && provenance.startsWith('llm_extracted') ? ` ${Math.round(confidence * 100)}%` : ''}</Badge>;
 }
 
@@ -71,7 +77,7 @@ export function ContextDots({ item }: { item: CasePayload }) {
   return <div className="context-dots">{bits.map(([label, on, title]) => <span key={label} className={`context-dot ${on ? 'on' : ''}`} title={`${title}:${on ? '已有' : '缺失'}`}>{label}</span>)}</div>;
 }
 
-function CaseDetailPanel({ caseId, onOpenMaterial }: { caseId: number; onOpenMaterial?: (itemId: number) => void }) {
+function CaseDetailPanel({ caseId, onOpenMaterial, onOpenPattern }: { caseId: number; onOpenMaterial?: (itemId: number) => void; onOpenPattern?: (itemId: number) => void }) {
   const [tab, setTab] = useState<'overview' | CaseContextType>('overview');
   const detail = useQuery({ queryKey: ['vulnerabilities', 'case', caseId], queryFn: () => fetchCaseDetail(caseId) });
   if (detail.isLoading) return <EmptyState title="正在加载案例上下文…" />;
@@ -111,19 +117,26 @@ function CaseDetailPanel({ caseId, onOpenMaterial }: { caseId: number; onOpenMat
     <div className="viewbar case-tabs">
       {tabs.map(([id, label, count]) => <button key={id} className={`view-pill ${tab === id ? 'active' : ''}`} onClick={() => setTab(id)} disabled={id !== 'overview' && id !== 'manual_note' && count === 0}>{label}{count ? ` ${count}` : ''}</button>)}
     </div>
-    {tab === 'overview' ? <CaseOverview detail={item} onOpenMaterial={onOpenMaterial} /> : <ContextList type={tab} rows={context[tab] ?? []} />}
+    {tab === 'overview' ? <CaseOverview detail={item} onOpenMaterial={onOpenMaterial} onOpenPattern={onOpenPattern} /> : <ContextList type={tab} rows={context[tab] ?? []} />}
     <ManualContextForm caseId={caseId} />
   </div>;
 }
 
-function CaseOverview({ detail, onOpenMaterial }: { detail: CaseDetail; onOpenMaterial?: (itemId: number) => void }) {
+function CaseOverview({ detail, onOpenMaterial, onOpenPattern }: { detail: CaseDetail; onOpenMaterial?: (itemId: number) => void; onOpenPattern?: (itemId: number) => void }) {
   const item = detail;
   return <>
     <Card>
       <h3>关联情报素材</h3>
       {detail.materials.length
-        ? <div className="timeline">{detail.materials.map(material => <div className="timeline-item" key={material.item_id}><b>{material.title || `素材 #${material.item_id}`}</b><span>{material.source_url ? <a href={material.source_url} target="_blank" rel="noreferrer">{material.source_url}</a> : '无原文链接'}</span>{onOpenMaterial && <button className="btn sm" onClick={() => onOpenMaterial(material.item_id)}>查看素材依据</button>}</div>)}</div>
-        : <p className="muted">这条案例还没有关联素材。自动采集的洞会在这里挂上对应的 writeup。</p>}
+        ? <div className="timeline">{detail.materials.map(material => <div className="timeline-item" key={material.item_id}><b>{material.title || `素材 #${material.item_id}`}</b><div className="badges">{material.provenance === 'from_material_cve' ? <Badge tone="sky">文章提到该编号</Badge> : material.provenance === 'from_legacy_event' ? <Badge tone="sky">继承素材</Badge> : null}</div><span>{material.source_url ? <a href={material.source_url} target="_blank" rel="noreferrer">{material.source_url}</a> : '无原文链接'}</span>{onOpenMaterial && <button className="btn sm" onClick={() => onOpenMaterial(material.item_id)}>查看素材依据</button>}</div>)}</div>
+        : <p className="muted">站内素材库里还没有提到这个编号的文章。采集到的洞会在这里挂上对应的 writeup。</p>}
+      <p className="small">这里的关联只说明「文章提到过这个洞」，不代表文章把它讲透了。</p>
+    </Card>
+    <Card>
+      <h3>所属漏洞模式</h3>
+      {detail.patterns?.length
+        ? <div className="timeline">{detail.patterns.map(pattern => <PatternLinkRow key={pattern.id} pattern={pattern} onOpenPattern={onOpenPattern} />)}</div>
+        : <p className="muted">这条案例的文章还没有参与任何模式的抽象（或者它还没有 writeup）。模式库只从文章归纳，不从补丁反推。</p>}
     </Card>
     <Card>
       <h3>外部引用</h3>
@@ -134,6 +147,49 @@ function CaseOverview({ detail, onOpenMaterial }: { detail: CaseDetail; onOpenMa
     </Card>
     <CaseEditForm detail={item} />
   </>;
+}
+
+function PatternLinkRow({ pattern, onOpenPattern }: { pattern: CasePatternLink; onOpenPattern?: (itemId: number) => void }) {
+  return <div className="timeline-item">
+    <b>{pattern.pattern_name}</b>
+    <div className="badges">
+      {pattern.cwe_ids.map(cwe => <Badge key={cwe} tone="red">{cwe}</Badge>)}
+      <Badge tone="sky">覆盖 {pattern.member_count} 条知识</Badge>
+      {pattern.confidence != null && <Badge tone="amber">置信度 {Math.round(pattern.confidence * 100)}%</Badge>}
+    </div>
+    {onOpenPattern && <button className="btn sm" onClick={() => onOpenPattern(pattern.id)}>查看模式</button>}
+  </div>;
+}
+
+/**
+ * 模式抽屉里的「实例案例」(P6a)。
+ *
+ * 必须现拉:模式列表接口只带 payload,不带案例;这也是唯一需要跨表 join 的地方
+ * (模式 → 知识 → 来源素材 / 编号 → 案例)。空列表不算故障,`note` 会说明原因。
+ */
+export function PatternCasesCard({ patternItemId, setDrawer }: { patternItemId: number; setDrawer: DrawerSetter }) {
+  const cases = useQuery({ queryKey: ['vulnerabilities', 'pattern-cases', patternItemId], queryFn: () => fetchPatternCases(patternItemId) });
+  return <Card>
+    <h3>实例案例</h3>
+    <p className="muted small">口径:该模式来源文章里提到的洞,或挂着同一批文章的真实案例。按公开时间倒序,点条目进案例详情。</p>
+    {cases.isLoading && <p className="muted">正在查找…</p>}
+    {cases.isError && <p className="muted">实例列表加载失败({String(cases.error)})，模式本身不受影响。</p>}
+    {cases.data && !cases.data.items.length && <p className="muted">{cases.data.note || '暂无实例案例。'}</p>}
+    {!!cases.data?.items.length && <div className="timeline">
+      {cases.data.items.map(item => <button type="button" className="timeline-item clickable" key={item.id} onClick={() => openCaseDrawer(item, setDrawer)}>
+        <b>{item.canonical_id}{item.title ? ` · ${item.title}` : ''}</b>
+        <div className="badges">
+          {item.severity && <Badge tone={severityTone(item.severity)}>{item.severity}</Badge>}
+          {item.has_patch ? <Badge tone="green">有补丁</Badge> : null}
+          {item.has_vuln_site ? <Badge tone="green">有漏洞点</Badge> : null}
+          {item.has_dataflow ? <Badge tone="green">有数据流</Badge> : null}
+          {item.why === 'material' ? <Badge tone="sky">来自模式来源文章</Badge> : <Badge>编号相同</Badge>}
+        </div>
+        {item.materials.length > 0 && <span>{item.materials.map(material => material.title || `素材 #${material.item_id}`).join(' / ')}</span>}
+        <span>{item.published_at ? `公开于 ${item.published_at.slice(0, 10)}` : '公开时间未知'}</span>
+      </button>)}
+    </div>}
+  </Card>;
 }
 
 /** 逐字段人工编辑。只列白名单里的键(PATCH 后端会丢掉其余键, 这里也不给入口)。 */

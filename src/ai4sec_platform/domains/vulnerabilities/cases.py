@@ -33,7 +33,7 @@ CONTEXT_TYPES = ("reference", "patch_diff", "vuln_site", "dataflow", "caller_sni
 # llm_extracted_unverified: 模型给的行号落在补丁 hunk 之外(见 P4a 的规则校验),降级保留但标出来
 # from_source: 从仓库**修复前源码**里直接读到的行(2026-10-19 P4b 的调用方代码)。它是外部事实,
 #             但锚定的是 base commit(仓库里没有一个可直接引用的"父提交"指针),所以与 from_patch 分开记。
-PROVENANCES = ("from_nvd", "from_osv", "from_patch", "from_source", "from_legacy_event", "llm_extracted", "llm_extracted_unverified", "manual_added")
+PROVENANCES = ("from_nvd", "from_osv", "from_patch", "from_source", "from_legacy_event", "from_material_cve", "llm_extracted", "llm_extracted_unverified", "manual_added")
 AUTO_PROVENANCES = ("from_nvd", "from_osv", "from_patch", "from_source")
 # 需要置信度的来源:模型推断的两档
 LLM_PROVENANCES = ("llm_extracted", "llm_extracted_unverified")
@@ -472,12 +472,39 @@ def case_detail(conn: sqlite3.Connection, case_id: int) -> dict[str, Any] | None
     case = serialize_case(row, counts)
     case["context"] = {context_type: items for context_type, items in grouped.items() if items}
     # 关联的站内素材:前端点它走既有的 openMaterialDrawer,所以这里只回 id/label/url 三件套。
-    material_rows = conn.execute(
-        "SELECT id, title, source_url FROM domain_items WHERE domain = 'vulnerabilities' AND item_type = 'material' AND id IN ("
-        " SELECT ref_item_id FROM vulnerability_case_context WHERE case_id = ? AND ref_item_id > 0)",
+    # provenance 一并带出去(P6a):`from_legacy_event` = 这条洞就是从这篇文章聚合出来的;
+    # `from_material_cve` = 文章正文里出现过这个编号。两者都只说明"文章提到过",
+    # 不说明"文章把这条案例讲透了",页面上按这个措辞展示。
+    material_links = conn.execute(
+        "SELECT ref_item_id AS item_id, MAX(provenance) AS provenance FROM vulnerability_case_context "
+        "WHERE case_id = ? AND ref_item_id > 0 GROUP BY ref_item_id ORDER BY ref_item_id",
         (int(case_id),),
     ).fetchall()
-    case["materials"] = [{"item_id": int(item["id"]), "title": item["title"], "source_url": item["source_url"]} for item in material_rows]
+    material_meta: dict[int, dict[str, Any]] = {}
+    material_ids = [int(link["item_id"]) for link in material_links]
+    if material_ids:
+        placeholders = ",".join("?" for _ in material_ids)
+        for material in conn.execute(
+            "SELECT id, title, source_url FROM domain_items WHERE domain = 'vulnerabilities' "
+            f"AND item_type = 'material' AND id IN ({placeholders})",
+            material_ids,
+        ):
+            material_meta[int(material["id"])] = {"title": str(material["title"] or ""), "source_url": str(material["source_url"] or "")}
+    case["materials"] = [
+        {
+            "item_id": int(link["item_id"]),
+            # 素材已被清理时仍保留 id:页面显示"素材 #N",比静默消失诚实。
+            "title": material_meta.get(int(link["item_id"]), {}).get("title", ""),
+            "source_url": material_meta.get(int(link["item_id"]), {}).get("source_url", ""),
+            "provenance": str(link["provenance"] or ""),
+        }
+        for link in material_links
+    ]
+    # P6a:这条案例的文章参与抽象过哪些模式(见 links.patterns_for_case 的口径说明)。
+    # 局部 import:links 写回 reference 行时要用本模块的 add_context,模块级互相 import 会成环。
+    from ai4sec_platform.domains.vulnerabilities.links import patterns_for_case
+
+    case["patterns"] = patterns_for_case(conn, row)
     # 挂到哪些项目(P5a)。一条案例可能同时有 package_match / repo_match 两行,
     # 前端按项目去重展示,这里把两种证据都带上,让"为什么算这个项目的洞"可解释。
     project_rows = conn.execute(

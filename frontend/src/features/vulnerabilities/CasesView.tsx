@@ -20,7 +20,7 @@ const COMPLETENESS_LABELS: Array<[string, string]> = [['all', '全部'], ['full'
 
 const CASE_KIND_TONE: Record<string, 'red' | 'violet' | 'sky' | 'amber' | 'slate'> = { cve: 'red', ghsa: 'violet', osv: 'sky', oss: 'amber', custom: 'slate' };
 
-export function CasesView({ search, setDrawer, onOpenMaterial }: { search: string; setDrawer: DrawerSetter; onOpenMaterial?: (itemId: number) => void }) {
+export function CasesView({ search, setDrawer, onOpenMaterial, onOpenPattern }: { search: string; setDrawer: DrawerSetter; onOpenMaterial?: (itemId: number) => void; onOpenPattern?: (itemId: number) => void }) {
   const [idKind, setIdKind] = useState<string>('all');
   const [completeness, setCompleteness] = useState<string>('all');
   const [severity, setSeverity] = useState<string>('');
@@ -128,7 +128,7 @@ export function CasesView({ search, setDrawer, onOpenMaterial }: { search: strin
       <div className="panel-head"><h3>漏洞案例</h3><span>一条案例 = 一个洞；素材是它的证据，上下文是它的细节</span></div>
       <div className="panel-body">
         {items.length
-          ? <div className="case-list">{items.map(item => <CaseCard key={item.id} item={item} onOpen={() => openCaseDrawer(item, setDrawer, onOpenMaterial)} />)}</div>
+          ? <div className="case-list">{items.map(item => <CaseCard key={item.id} item={item} onOpen={() => openCaseDrawer(item, setDrawer, onOpenMaterial, onOpenPattern)} />)}</div>
           : <EmptyState
             title={curated === 'curated' && !q.trim() ? '精选口径下暂时没有案例' : hasFilter ? '没有匹配的漏洞案例' : '案例库还是空的'}
             description={curated === 'curated' && !q.trim()

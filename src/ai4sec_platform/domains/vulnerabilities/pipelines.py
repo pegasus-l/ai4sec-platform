@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from ai4sec_platform.pipelines.base import PipelineDefinition
 from ai4sec_platform.pipelines.steps.vulnerability_batch import RunBatchedVulnerabilityDiscoveryStep
-from ai4sec_platform.pipelines.steps.vulnerability_case_ingest import BackfillEnrichStep, ConsumeCaseSourcesStep, EnrichFromOsvStep, ExtractDataflowStep, ExtractVulnSiteStep, FetchNewCveWindowStep, LinkCasesToProjectsStep, ResolvePatchContextStep
+from ai4sec_platform.pipelines.steps.vulnerability_case_ingest import BackfillEnrichStep, ConsumeCaseSourcesStep, EnrichFromOsvStep, ExtractDataflowStep, ExtractVulnSiteStep, FetchNewCveWindowStep, LinkCasesToMaterialsStep, LinkCasesToProjectsStep, ResolvePatchContextStep
 from ai4sec_platform.pipelines.steps.vulnerability_discovery import BuildAcceptedVulnerabilityMaterialsStep, CollectAnySearchCandidatesStep, CrawlCandidatePagesStep, DrillDownAcceptedMaterialsStep, ExtractCrawledContentStep, ReviewCrawledMaterialsStep
 from ai4sec_platform.pipelines.steps.vulnerability_event import AggregateVulnerabilityEventsStep
 from ai4sec_platform.pipelines.steps.vulnerability_evaluation import BuildVulnerabilityShadowEvaluationStep
@@ -126,6 +126,8 @@ def vulnerability_case_ingest_pipeline() -> PipelineDefinition:
     它要抓修复前源码并按函数名找 1 跳调用者,是整条链路里最慢的一步(有体积/条数上限)。
     第 8 步 `link_cases_to_projects` 是 P5a(2026-10-19):纯 DB,把这一晚新登记/富化的案例
     按包名与仓库关联到「项目」,只扫 `updated_at` 近 30 天(关联幂等,全量重扫留给项目增改时)。
+    第 9 步 `link_cases_to_materials` 是 P6a(2026-10-23):纯 DB,把「文章正文提到这个编号」
+    落成案例的 reference 行 —— 这是案例页「相关 writeup」和模式页「实例案例」的数据基础。
 
     口径(2026-10-19 按实测基线拍板):CVSS ≥ 7.0,**不附加 CWE 条件** ——
     近 7 天 5496 条新 CVE 里 89.3% 都有真 CWE,加这个条件只砍掉 7 条,没有区分度。
@@ -146,6 +148,9 @@ def vulnerability_case_ingest_pipeline() -> PipelineDefinition:
             # P5a 项目关联排最后:前面几步这一晚新登记/富化的案例,同晚就能在「项目」视图里看到。
             # 纯 DB 不联网,失败也只影响项目视图,不影响采集本身。
             LinkCasesToProjectsStep(),
+            # P6a 文章关联(2026-10-23):同样是纯 DB,把「文章提到的洞」写成 reference 行。
+            # 放在项目关联之后 —— 它只读素材的 cve_ids 与案例编号,不依赖前 8 步之外的任何东西。
+            LinkCasesToMaterialsStep(),
         ],
     )
 
