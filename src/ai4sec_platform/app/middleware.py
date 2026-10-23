@@ -6,6 +6,11 @@ from starlette.responses import JSONResponse, RedirectResponse
 
 COOKIE_NAME = "sec_ai_hot_session"
 
+# 入口网关(136 nginx)用 auth_request 现签一张短期只读票, 放在这个请求头里转发过来。
+# 网关的 proxy_set_header 会覆盖客户端同名头, 所以外部伪造无效。
+EMBED_TICKET_HEADER = "x-insight-session"
+READ_ONLY_METHODS = ("GET", "HEAD", "OPTIONS")
+
 
 # 入口网关(如 136 radar nginx)把 /insights 前缀剥掉后转发到本服务, 所以重定向回跳必须
 # 按"浏览器可见路径"拼回去。两个值都可按部署覆盖, 默认值对应当前线上链路。
@@ -47,6 +52,10 @@ class ASISSessionMiddleware(BaseHTTPMiddleware):
     /api/* 验签失败 → 401 JSON; 非 /api/* 只在"浏览器导航"且未登录时 307 到登录页,
     静态资源/fetch/XHR/repro-web 放行。
     格式 v1.<base64url(payload)>.<base64url(HMAC-SHA256)>
+
+    2026-10-23 起还认一个请求头 X-Insight-Session: 入口网关为 Chimera 嵌入的
+    三个洞察页现签的短期 viewer 票。有票就只认票(不再回退 cookie), 且这类会话
+    强制只读 —— 嵌入页只该看, 不该停任务/改数据。
     """
 
     def __init__(self, app, secret: str):
@@ -75,26 +84,49 @@ class ASISSessionMiddleware(BaseHTTPMiddleware):
         # /repro-web/* 排除: 那是由复现容器自己鉴权的 UI, 且可能被跨站 iframe 嵌入
         # (SameSite=Lax 下 iframe 不带 cookie), 重定向会误伤本来就正常的用法。
         if not path.startswith("/api/"):
-            if (
-                not path.startswith("/repro-web")
-                and _wants_html_navigation(request.headers)
-                and not self._verify(request.cookies.get(COOKIE_NAME) or "")
-            ):
-                return RedirectResponse(
-                    login_redirect_url(path, request.url.query, request.headers),
-                    status_code=307,
-                )
+            if not path.startswith("/repro-web") and _wants_html_navigation(request.headers):
+                user, _ = self._session_from(request)
+                if not user:
+                    return RedirectResponse(
+                        login_redirect_url(path, request.url.query, request.headers),
+                        status_code=307,
+                    )
             return await call_next(request)
         # /api/health 放行(健康检查)
         if path.endswith("/health"):
             return await call_next(request)
-        # 其他 /api/* 验 cookie → 401 JSON(前端据此弹"登录已过期"横幅)
-        cookie_val = request.cookies.get(COOKIE_NAME)
-        user = self._verify(cookie_val) if cookie_val else None
+        # 其他 /api/* 验票/验 cookie → 401 JSON(前端据此弹"登录已过期"横幅)
+        user, _embedded = self._session_from(request)
         if not user:
             return JSONResponse({"error": "auth_required", "login": LOGIN_PATH}, status_code=401)
+        # 非 admin 一律只读: 嵌入票是 viewer, ASIS 的只读账号也是 viewer/user。
+        # 这条同时堵住旧行为 —— 以前只要签名有效, viewer 也能调写接口。
+        if user.get("role") != "admin" and request.method not in READ_ONLY_METHODS:
+            return JSONResponse(
+                {"error": "forbidden", "detail": "当前会话只读, 不支持写操作"},
+                status_code=403,
+            )
         request.state.user = user
         return await call_next(request)
+
+    def _session_from(self, request) -> tuple[dict | None, bool]:
+        """取会话: 用户自己的有效 cookie 优先, 没有再认网关签发的嵌入票。
+
+        浏览器直接访问入口网关时, SameSite=Lax 的 ASIS cookie 会随请求带过来,
+        所以管理员经 136 看三个洞察页仍然保留写权限; 只有 Chimera iframe 里
+        没有 cookie 的场景才落到票上, 那条路固定是 viewer、固定只读。
+
+        返回 (user, 是否嵌入会话)。cookie 过期/无效时照常回退到票。
+        """
+        cookie_val = request.cookies.get(COOKIE_NAME)
+        if cookie_val:
+            user = self._verify(cookie_val)
+            if user:
+                return user, False
+        ticket = (request.headers.get(EMBED_TICKET_HEADER) or "").strip()
+        if ticket:
+            return self._verify(ticket), True
+        return None, False
 
     def _verify(self, value: str) -> dict | None:
         parts = value.split(".")
