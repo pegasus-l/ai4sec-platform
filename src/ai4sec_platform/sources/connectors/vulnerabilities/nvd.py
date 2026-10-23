@@ -25,8 +25,13 @@ class NvdConnector(LiveJsonConnector):
     connector_name = "nvd"
     source_type = "nvd"
     base_url = DEFAULT_BASE_URL
-    page_size = 2000
+    # 一页 2000 条时单次响应可达 10 MB 上下, 2026-10-20/21/22 连续三晚在这一步
+    # `IncompleteRead`(连接提前关闭, 3 次重试全中同一种截断), 整个采集跑批因此失败。
+    # 降到 1000 条: 单页体积减半, 代价是页数翻倍(每页间隔 7s, 30 天回溯多约 2 分钟)。
+    page_size = 1000
     page_interval_seconds = 7.0
+    # 大响应重试要更宽容: 默认 3 次在"每次都读到一半断开"的情况下不够。
+    page_attempts = 5
 
     def fetch(self, request: SourceFetchRequest) -> SourceFetchResult:
         start = str(request.params.get("pub_start_date") or request.config.get("pub_start_date") or "")
@@ -66,7 +71,7 @@ class NvdConnector(LiveJsonConnector):
             if not first:
                 time.sleep(self.page_interval_seconds)
             first = False
-            page = self.get_json(self._url(range_params, index), timeout=120)
+            page = self.get_json(self._url(range_params, index), timeout=120, attempts=self.page_attempts)
             if not isinstance(page, dict):
                 break
             batch = page.get("vulnerabilities") or []

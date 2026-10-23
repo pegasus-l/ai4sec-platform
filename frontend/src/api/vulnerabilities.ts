@@ -244,6 +244,8 @@ export interface CaseListParams {
   status?: string;
   /** full(4 位全有) / partial(有上下文但没齐) / empty(只有元数据) */
   completeness?: string;
+  /** 只看"有某一格"的洞: metadata / patch / vuln_site / dataflow(点上下文进度条时用) */
+  has?: string;
   /** 只看某个项目的洞(P5a);由项目视图传下来 */
   project_id?: number;
   /** true = 只看 B 层(有 OSV/补丁/CVSS≥9/人工/项目命中的洞);不传 = 全量索引 */

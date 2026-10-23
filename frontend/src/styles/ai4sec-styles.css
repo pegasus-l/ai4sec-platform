@@ -1395,13 +1395,35 @@ button.assoc-kpi:hover, .assoc-kpi.on { border-color: color-mix(in srgb, var(--a
 .case-card-side b { font-size: 15px; color: var(--text); }
 .case-card-side .btn { margin-top: 4px; white-space: nowrap; }
 .case-mini-foot { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 9px; }
-/* 上下文收集进度: 4 条真实采集动作的产出(不是估算), 每条一个百分比条 */
-.progress-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
-.progress-item { padding: 11px 12px; border: 1px solid var(--line); border-radius: 14px; background: var(--panel-2); }
-.progress-item-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
-.progress-item-head b { font-size: 13px; color: var(--text); }
-.progress-item-head span { font-size: 12px; color: var(--sky); font-weight: 700; }
-.progress-item p { margin: 6px 0 0; }
+/* 统计条(2026-10-23): 上面一行数字、下面一行进度条, 全部是按钮。
+   原来是「4 块 KPI 卡片 + 一块 4 格进度面板」两块大面板, 占掉半屏却一个都点不了;
+   现在合成一块, 纵向高度压到约 1/3, 腾出来的地方给案例列表。 */
+.case-stat-strip { padding: 12px 14px; display: grid; gap: 10px; }
+.case-stat-row { display: flex; align-items: stretch; gap: 8px; flex-wrap: wrap; }
+.case-stat-chip { display: grid; gap: 2px; justify-items: start; padding: 8px 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--panel-2); cursor: pointer; transition: border-color .15s, background .15s; }
+.case-stat-chip:hover { border-color: var(--sky); }
+.case-stat-chip.active { border-color: var(--sky); background: rgba(56,189,248,.12); }
+.case-stat-chip-label { font-size: 12px; color: var(--muted); }
+.case-stat-chip b { font-size: 19px; line-height: 1.1; color: var(--text); }
+.case-stat-add { margin-left: auto; display: flex; align-items: center; }
+.case-stat-bars { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+.case-stat-bar { display: grid; gap: 4px; padding: 7px 10px; border: 1px solid var(--line); border-radius: 12px; background: var(--panel-2); cursor: pointer; text-align: left; transition: border-color .15s, background .15s; }
+.case-stat-bar:hover { border-color: var(--sky); }
+.case-stat-bar.active { border-color: var(--sky); background: rgba(56,189,248,.12); }
+.case-stat-bar-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.case-stat-bar-head b { font-size: 12px; color: var(--text); }
+.case-stat-bar-head span { font-size: 11px; color: var(--sky); font-weight: 700; }
+/* 进度条在按钮里是 <span>(按钮的内容模型只允许 phrasing content), 所以显式 block 化才吃得到高度 */
+.case-stat-bar .progress { display: block; margin-top: 0; height: 6px; }
+/* 弹窗(添加案例): 与抽屉同一套遮罩口径, 但居中显示 —— 它是"填完就走"的短任务, 不该占一整块页面 */
+.modal-mask { position: fixed; inset: 0; z-index: 30; display: grid; place-items: center; padding: 24px; background: rgba(2, 6, 23, .55); }
+.modal-card { width: min(720px, 100%); max-height: 86vh; overflow: auto; border: 1px solid var(--line); border-radius: 16px; background: var(--panel); box-shadow: 0 24px 60px rgba(0,0,0,.45); }
+.modal-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 16px; border-bottom: 1px solid var(--line); }
+.modal-head h3 { margin: 0; font-size: 15px; color: var(--text); }
+.modal-body { padding: 14px 16px 18px; }
+.modal-note { margin: 0 0 8px; padding: 9px 11px; border: 1px solid var(--line); border-radius: 12px; background: var(--panel-2); }
+.modal-note p { margin: 0 0 6px; }
+.modal-note p:last-child { margin-bottom: 0; }
 .case-add .panel-head { flex-wrap: wrap; }
 .case-add-modes { flex: 0 0 auto; margin: 0 0 8px; }
 .case-add .filters { margin-top: 8px; }
@@ -1416,7 +1438,7 @@ button.assoc-kpi:hover, .assoc-kpi.on { border-color: color-mix(in srgb, var(--a
 /* 代码片段: 与 .snippet 同族但更宽(整段 diff / 函数体), 保留原始换行与缩进 —— 代码的缩进是内容的一部分 */
 .case-code { margin: 8px 0 0; max-height: 420px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11.5px; line-height: 1.5; tab-size: 2; }
 @media (max-width: 1180px) {
-  .progress-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .case-stat-bars { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .case-card { grid-template-columns: minmax(0, 1fr); }
   .case-card-side { justify-items: start; text-align: left; }
 }

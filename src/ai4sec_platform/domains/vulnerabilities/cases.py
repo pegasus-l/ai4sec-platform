@@ -38,6 +38,14 @@ AUTO_PROVENANCES = ("from_nvd", "from_osv", "from_patch", "from_source")
 # 需要置信度的来源:模型推断的两档
 LLM_PROVENANCES = ("llm_extracted", "llm_extracted_unverified")
 MANUAL_SOURCE = "manual_added"
+# "有某一格上下文"的正向筛选键 → 谓词。与 case_stats 的 context.* 四个计数同源,
+# 保证点开统计数字看到的条数与数字本身一致。
+HAS_PREDICATES = {
+    "metadata": "metadata_complete = 1",
+    "patch": "has_patch = 1",
+    "vuln_site": "has_vuln_site = 1",
+    "dataflow": "has_dataflow = 1",
+}
 
 _CVE_RE = re.compile(r"CVE-\d{4}-\d{4,}", re.IGNORECASE)
 # GHSA 是 4-4-4 的 base32 小写字母数字;外部文档里常写成大写,归一成小写
@@ -386,6 +394,7 @@ def list_cases(
     source: str = "",
     status: str = "",
     completeness: str = "",
+    has: str = "",
     project_id: int = 0,
     curated: bool = False,
     published_from: str = "",
@@ -442,6 +451,13 @@ def list_cases(
         where.append("(has_patch + has_vuln_site + has_dataflow) > 0 AND (has_patch + has_vuln_site + has_dataflow) < 3")
     elif completeness == "empty":
         where.append("has_patch = 0 AND has_vuln_site = 0 AND has_dataflow = 0")
+    if has:
+        # "有某一格"的正向筛选(2026-10-23): 页面上那 4 根进度条点一下就列出"有补丁的有哪些"。
+        # 与 completeness 共用同一批列, 只是方向相反 —— 未知取值明确报错, 不静默当没传。
+        predicate = HAS_PREDICATES.get(has)
+        if not predicate:
+            raise ValueError(f"Unsupported has: {has!r} (可选: {sorted(HAS_PREDICATES)})")
+        where.append(predicate)
     clause = f"WHERE {' AND '.join(where)}" if where else ""
     total = int(conn.execute(f"SELECT COUNT(*) FROM vulnerability_cases {clause}", params).fetchone()[0])
     rows = conn.execute(

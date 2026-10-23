@@ -134,6 +134,62 @@ def materials(conn: sqlite3.Connection, *, limit: int = 50, q: str | None = None
     return data
 
 
+_PATTERN_PIPELINE = "vulnerabilities.pattern_synthesis_pipeline"
+
+
+def _patterns_summary(conn: sqlite3.Connection, limit: int = 5) -> dict[str, Any]:
+    """模式库"昨晚动了没有"的口径(2026-10-23)。
+
+    为什么不能只看总数:模式是**按 CWE 聚类**的,一个 CWE 一个模式 —— 库里有 126 种 CWE,
+    总数就永远是 126 上下,哪怕每晚都在重算。所以今日情报页要回答的是"最近一次合成是什么时候、
+    重算了多少个、吸纳了哪些文章",而不是"又多了几条"。
+    用模式合成**自己那一批**的开始时间当界,而不是素材跑批的窗口:模式合成排在 03:30,
+    落在素材跑批(22:00 起)之后,拿素材窗口去圈它永远是 0。
+    """
+    total = int(conn.execute(
+        "SELECT COUNT(*) FROM domain_items WHERE domain = ? AND item_type = 'vulnerability_pattern'", (DOMAIN,)
+    ).fetchone()[0])
+    last_run = conn.execute(
+        "SELECT started_at FROM pipeline_runs WHERE pipeline_name = ? AND status = 'success' "
+        "ORDER BY started_at DESC LIMIT 1", (_PATTERN_PIPELINE,)
+    ).fetchone()
+    last_run_at = str(last_run[0]) if last_run and last_run[0] else ""
+    recalculated = 0
+    if last_run_at:
+        recalculated = int(conn.execute(
+            "SELECT COUNT(*) FROM domain_items WHERE domain = ? AND item_type = 'vulnerability_pattern' AND updated_at >= ?",
+            (DOMAIN, last_run_at),
+        ).fetchone()[0])
+    rows = conn.execute(
+        "SELECT id, title, updated_at, json_extract(payload_json, '$.pattern_name') AS pattern_name, "
+        "json_extract(payload_json, '$.member_count') AS member_count, "
+        "json_extract(payload_json, '$.cwe_ids') AS cwe_ids "
+        "FROM domain_items WHERE domain = ? AND item_type = 'vulnerability_pattern' "
+        "ORDER BY COALESCE(json_extract(payload_json, '$.member_count'), 0) DESC, id DESC LIMIT ?",
+        (DOMAIN, max(1, int(limit))),
+    ).fetchall()
+    items = []
+    for row in rows:
+        try:
+            cwe_ids = repo.loads(row["cwe_ids"] or "[]", []) or []
+        except (ValueError, TypeError):
+            cwe_ids = []
+        items.append({
+            "id": int(row["id"]),
+            "title": str(row["title"] or ""),
+            "pattern_name": str(row["pattern_name"] or row["title"] or ""),
+            "member_count": int(row["member_count"] or 0),
+            "cwe_ids": [str(value) for value in cwe_ids] if isinstance(cwe_ids, list) else [],
+            "updated_at": str(row["updated_at"] or ""),
+        })
+    return {
+        "total": total,
+        "last_run_at": last_run_at,
+        "recalculated": recalculated,
+        "items": items,
+    }
+
+
 def today(conn: sqlite3.Connection, limit: int = 12) -> dict[str, Any]:
     # 今日情报 = 最近一批跑批(或正在跑的那批)产出的素材/事件/知识, 见 _batch_window
     window = _batch_window(conn)
@@ -147,6 +203,11 @@ def today(conn: sqlite3.Connection, limit: int = 12) -> dict[str, Any]:
     # 旧 event 现在全是 superseded, events_data 恒空; 那两行**保留不删**: 键删掉老前端会渲染空白
     # (P0 同样的理由), 且回滚时把 event 的 status 改回 active 就恢复。
     cases_data = case_service.list_cases(conn, created_since=batch_start, limit=limit)
+    # 这批素材的**真实条数**:items 受 limit 截断,len(items) 会把 38 条素材说成 12 条
+    # (与 new_case_count 同一条教训: 计数必须与截断解耦)。
+    material_total = int(repo.count_domain_items(
+        conn, DOMAIN, item_type="material", exclude_status="已淘汰", since=batch_start
+    ))
     return {
         "domain": DOMAIN,
         # 窗口自述: 前端用它说明"这一页是哪一批", 免得再出现"空了但不知道为什么"
@@ -159,6 +220,8 @@ def today(conn: sqlite3.Connection, limit: int = 12) -> dict[str, Any]:
             # 用 total(窗口内的真实计数)而不是 len(items): items 受 limit 截断, 拿它当计数会在
             # 批量入库的那天恰好等于 limit —— 2026-09-11 那批 1351 条的教训, 数字必须与截断解耦。
             "new_case_count": int(cases_data.get("total") or 0),
+            # 本批素材条数(精确计数, 不是 items 长度)。今日页头那行"新增 X 条素材"读它。
+            "new_material_count": material_total,
             "case_total": int(case_service.case_stats(conn)["total"]),
             # 逐字段人工确认 2026-10-16 下线(前端页面已撤, 队列也不再写), 计数恒 0。
             # 键**保留**: 老前端/脚本读到 undefined 会渲染成空白而不是 0, 删字段等于制造一次静默故障。
@@ -174,6 +237,9 @@ def today(conn: sqlite3.Connection, limit: int = 12) -> dict[str, Any]:
         "new_cases": cases_data["items"],
         "new_materials": materials_data["items"],
         "new_knowledge": knowledge_data["items"],
+        # 模式库"昨晚重算了多少 / 最近一次合成是什么时候"(2026-10-23 新增)。
+        # 知识仍然产出, 但知识库页面已下线 —— 它是模式合成的原料, 不再在今日页单独露出一列。
+        "patterns": _patterns_summary(conn),
         "items": materials_data["items"],
         "next_workload": {"materials": len(materials_data["items"]), "events": len(events_data["items"]), "cases": len(cases_data["items"]), "pending_fields": 0, "knowledge": len(knowledge_data["items"])},
     }

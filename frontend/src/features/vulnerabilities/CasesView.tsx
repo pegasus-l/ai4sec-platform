@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useState } from 'react';
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Badge, EmptyState } from '../../components/ui';
 import { useToast } from '../../components/Toast';
@@ -10,9 +10,16 @@ import type { CaseIdKind, CasePayload, CaseSourceTarget } from '../../types/vuln
 // 拉全量回前端筛就是素材库当年"分数最低那批永远不可达"的翻版。
 const PAGE_SIZE = 20;
 
-/** 与 VulnerabilityPage 同款的 KPI 网格(那边的是页面私有函数, 不导出)。 */
-function MetricGrid({ items }: { items: Array<[string, ReactNode, string, 'sky' | 'green' | 'amber' | 'red' | 'violet']> }) {
-  return <div className="metric-grid">{items.map(([label, value, hint, tone]) => <div className={`insight-metric metric-bg-${tone}`} key={label}><div className="metric-label">{label}</div><div className="metric-value">{value}</div><div className="metric-hint">{hint}</div></div>)}</div>;
+/**
+ * 顶部统计的一格 = 一个筛选按钮。原来这里是四块不可点的 KPI 卡片: 数字摆在那,
+ * 想知道"上下文收全的 36 条是哪 36 条"只能自己到下面拼筛选条件(而且以前根本没有这个筛选)。
+ * 现在点一下就是一次查询, 再点一下取消。
+ */
+function StatChip({ label, value, title, active, onClick }: { label: string; value: number; title?: string; active: boolean; onClick: () => void }) {
+  return <button type="button" className={`case-stat-chip ${active ? 'active' : ''}`} title={title} onClick={onClick}>
+    <span className="case-stat-chip-label">{label}</span>
+    <b>{value}</b>
+  </button>;
 }
 
 const ID_KIND_LABELS: Array<[CaseIdKind | 'all', string]> = [['all', '全部'], ['cve', 'CVE'], ['ghsa', 'GHSA'], ['osv', 'OSV'], ['oss', '开源项目'], ['custom', '人工登记']];
@@ -24,6 +31,10 @@ export function CasesView({ search, setDrawer, onOpenMaterial, onOpenPattern }: 
   const [idKind, setIdKind] = useState<string>('all');
   const [completeness, setCompleteness] = useState<string>('all');
   const [severity, setSeverity] = useState<string>('');
+  // 来源筛选: '' = 全部; manual_added = 人工添加。顶部「人工添加」那个数字点下去走这里。
+  const [source, setSource] = useState<string>('');
+  // 有某一格上下文: '' | metadata | patch | vuln_site | dataflow。底部四条进度条点下去走这里。
+  const [has, setHas] = useState<string>('');
   // 收录口径(P5a): 全部 = A 层索引; curated = B 层(有 OSV / 补丁 / CVSS≥9 / 人工 / 项目命中)。
   // 默认仍是「全部」—— 实测线上 902 条里 B 层只有 6 条(896 条是未富化的历史迁移行),
   // 默认精选会让页面看起来像空了。等回溯富化把存量补齐后再翻默认值(见计划 §13.2)。
@@ -40,14 +51,16 @@ export function CasesView({ search, setDrawer, onOpenMaterial, onOpenPattern }: 
     return () => clearTimeout(timer);
   }, [search]);
   // 换筛选/换搜索词必须回到第一页 —— 否则会在新结果集里停在越界的 offset 上, 页面看着像"空了"。
-  useEffect(() => { setOffset(0); }, [q, idKind, completeness, severity, projectId, curated]);
+  useEffect(() => { setOffset(0); }, [q, idKind, completeness, severity, projectId, curated, source, has]);
 
   const list = useQuery({
-    queryKey: ['vulnerabilities', 'cases', { q, idKind, completeness, severity, projectId, curated, offset }],
+    queryKey: ['vulnerabilities', 'cases', { q, idKind, completeness, severity, projectId, curated, source, has, offset }],
     queryFn: () => fetchCases({
       q, severity,
       id_kind: idKind === 'all' ? '' : idKind,
       completeness: completeness === 'all' ? '' : completeness,
+      source: source || undefined,
+      has: has || undefined,
       project_id: projectId || undefined,
       curated: curated === 'curated' || undefined,
       limit: PAGE_SIZE, offset,
@@ -62,38 +75,50 @@ export function CasesView({ search, setDrawer, onOpenMaterial, onOpenPattern }: 
   const total = list.data?.total ?? 0;
   const pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
   const page = Math.floor(offset / PAGE_SIZE) + 1;
-  const hasFilter = Boolean(q.trim() || idKind !== 'all' || completeness !== 'all' || severity || projectId || curated === 'curated');
+  const hasFilter = Boolean(q.trim() || idKind !== 'all' || completeness !== 'all' || severity || projectId || curated === 'curated' || source || has);
   const kpi = stats.data;
+  const [addOpen, setAddOpen] = useState(false);
+  // 点统计数字 = 设置筛选。三处(顶部数字、进度条、下拉)改的是同一批 state, 所以
+  // 点完之后筛选项会亮起来、列表跟着变 —— 数字不再只是"摆在那看"。
+  const applyStat = (next: { completeness?: string; source?: string; has?: string }) => {
+    setCompleteness(next.completeness ?? 'all');
+    setSource(next.source ?? '');
+    setHas(next.has ?? '');
+  };
+  const statActive = (next: { completeness?: string; source?: string; has?: string }) =>
+    completeness === (next.completeness ?? 'all') && source === (next.source ?? '') && has === (next.has ?? '');
 
   // 首次加载必须先说"在加载": 未到达时 items 是 [], 直接落到空态会看起来像"案例全没了"。
   if (list.isLoading) return <EmptyState title="正在加载漏洞案例库…" description="正在从平台读取案例列表，请稍候。" />;
   return <div className="v11-view">
-    <MetricGrid items={[
-      ['库内漏洞案例', kpi?.total ?? total, '一个洞一行（CVE / GHSA / 开源项目 bug），不再是从素材聚合出的主题', 'violet'],
-      ['人工添加', kpi?.manual ?? 0, '人工指定的 ID 或完全手填的洞', 'sky'],
-      ['上下文收全', kpi?.context.full ?? 0, '元数据 + 补丁 + 漏洞点 + 数据流四项齐备', 'green'],
-      ['仅元数据', kpi?.context.empty ?? 0, '还没抓到补丁与代码，采集步会持续回溯补齐', 'amber'],
-    ]} />
-
-    <CaseAddForm />
-
-    {/* 4 位完整度是领导那句"上下文收集全"的可见进度条: 每一格都是一个真实的采集动作的产出 */}
-    <section className="panel case-progress">
-      <div className="panel-head"><h3>上下文收集进度</h3><span>元数据来自 NVD/OSV，补丁来自修复 commit，漏洞点与数据流由模型从代码里抽</span></div>
-      <div className="panel-body">
-        <div className="progress-grid">
-          {([
-            ['元数据', kpi?.context.metadata ?? 0, '标题 / 严重性 / CVSS'],
-            ['补丁 diff', kpi?.context.patch ?? 0, '修复 commit 的改动'],
-            ['漏洞点', kpi?.context.vuln_site ?? 0, '文件 + 函数 + 行号'],
-            ['数据流', kpi?.context.dataflow ?? 0, 'source → sink 每一跳'],
-          ] as Array<[string, number, string]>).map(([label, count, hint]) => {
-            const ratio = kpi?.total ? Math.round(count / kpi.total * 100) : 0;
-            return <div className="progress-item" key={label}><div className="progress-item-head"><b>{label}</b><span>{count} / {kpi?.total ?? 0}</span></div><div className="progress"><span style={{ width: `${ratio}%` }} /></div><p className="small">{hint}</p></div>;
-          })}
-        </div>
+    {/* 统计与进度合成一条: 每个数字都是按钮, 点一下就筛出来。原来这里是两块大面板,
+        占掉半屏却不给任何入口 —— 想看"上下文收全的 36 条是哪些"只能自己去拼筛选。 */}
+    <section className="panel case-stat-strip">
+      <div className="case-stat-row">
+        <StatChip label="库内漏洞案例" value={kpi?.total ?? total} active={statActive({})} onClick={() => applyStat({})} title="一个洞一行（CVE / GHSA / 开源项目 bug）" />
+        <StatChip label="人工添加" value={kpi?.manual ?? 0} active={statActive({ source: 'manual_added' })} onClick={() => applyStat({ source: 'manual_added' })} title="人工贴 ID 自动抓的 + 完全手填的" />
+        <StatChip label="上下文收全" value={kpi?.context.full ?? 0} active={statActive({ completeness: 'full' })} onClick={() => applyStat({ completeness: 'full' })} title="元数据 + 补丁 + 漏洞点 + 数据流四项齐备" />
+        <StatChip label="仅元数据" value={kpi?.context.empty ?? 0} active={statActive({ completeness: 'empty' })} onClick={() => applyStat({ completeness: 'empty' })} title="还没抓到补丁与代码，采集步会持续回溯补齐" />
+        <div className="case-stat-add"><button className="btn primary" onClick={() => setAddOpen(true)}>+ 添加案例</button></div>
+      </div>
+      <div className="case-stat-bars">
+        {([
+          ['metadata', '元数据', '标题 / 严重性 / CVSS'],
+          ['patch', '补丁 diff', '修复 commit 的改动'],
+          ['vuln_site', '漏洞点', '文件 + 函数 + 行号'],
+          ['dataflow', '数据流', 'source → sink 每一跳'],
+        ] as Array<[string, string, string]>).map(([key, label, hint]) => {
+          const count = kpi?.context[key as 'metadata' | 'patch' | 'vuln_site' | 'dataflow'] ?? 0;
+          const ratio = kpi?.total ? Math.round(count / kpi.total * 100) : 0;
+          return <button type="button" className={`case-stat-bar ${has === key ? 'active' : ''}`} key={key} title={`${hint} —— 点一下列出有这一格的洞`} onClick={() => applyStat({ has: has === key ? '' : key })}>
+            <span className="case-stat-bar-head"><b>{label}</b><span>{count} · {ratio}%</span></span>
+            <span className="progress"><span style={{ width: `${ratio}%` }} /></span>
+          </button>;
+        })}
       </div>
     </section>
+
+    {addOpen && <CaseAddModal onClose={() => setAddOpen(false)} />}
 
     <div className="viewbar">
       <div className="view-pills">{ID_KIND_LABELS.map(([id, label]) => <button key={id} className={`view-pill ${idKind === id ? 'active' : ''}`} onClick={() => setIdKind(id)}>{label}</button>)}</div>
@@ -270,13 +295,15 @@ function CaseCard({ item, onOpen }: { item: CasePayload; onOpen: () => void }) {
 }
 
 /**
- * 人工添加。两条路径的差别是"这个洞有没有外部 id", 不是"谁填的":
+ * 人工添加(弹窗)。两条路径的差别是"这个洞有没有外部 id", 不是"谁填的":
  * 有 id → 登记成待抓元数据, 采集步去补; 没有 id(项目内部 bug) → 直接落地并标人工来源。
+ *
+ * 2026-10-23 从页内长面板改成弹窗: 原来那 8 个输入框常年占着首屏,
+ * 而它一天也用不到一次 —— 真正每天要看的是下面的案例列表。
  */
-function CaseAddForm() {
+function CaseAddModal({ onClose }: { onClose: () => void }) {
   const { toast } = useToast();
   const qc = useQueryClient();
-  const [open, setOpen] = useState(false);
   const [mode, setMode] = useState<'auto' | 'manual'>('auto');
   const [form, setForm] = useState({ canonical_id: '', title: '', summary: '', severity: '', source_url: '', cwe_ids: '', affected_products: '', references: '', code: '', note: '' });
   const submit = useMutation({
@@ -295,41 +322,50 @@ function CaseAddForm() {
     }),
     onSuccess: result => {
       void invalidateCase(qc);
-      toast(result.created ? `已登记 ${result.canonical_id}` : `${result.canonical_id} 已存在，这次只补充了新信息`, 'success');
+      toast(result.created ? `已登记 ${result.canonical_id}（元数据由每晚 04:00 的采集补齐）` : `${result.canonical_id} 已存在，这次只补充了新信息`, 'success');
       setForm(f => ({ ...f, canonical_id: '', title: '', summary: '', code: '', note: '' }));
+      onClose();
     },
     // 后端把"认不出这个 id"这类问题做成 400 + 中文 detail, 但 client 只抛出状态码 ——
     // 所以这里补一句人能看懂的话, 而不是把 "xxx: 400" 直接甩给用户。
     onError: error => toast(mode === 'auto' ? `添加失败(${error})：请确认 id 形如 CVE-2021-44228 / GHSA-jfh8-c2jp-5v3q` : `添加失败(${error})：标题是必填项`, 'error'),
   });
   const canSubmit = mode === 'auto' ? Boolean(form.canonical_id.trim()) : Boolean(form.title.trim());
-  return <section className="panel case-add">
-    <div className="panel-head"><h3>添加漏洞案例</h3><span>知道 id 就贴 id（元数据自动抓），没有外部 id 的项目内部 bug 就完全手填</span><button className="btn" onClick={() => setOpen(value => !value)}>{open ? '收起' : '+ 添加'}</button></div>
-    {open && <div className="panel-body">
-      <div className="view-pills case-add-modes">
-        <button className={`view-pill ${mode === 'auto' ? 'active' : ''}`} onClick={() => setMode('auto')}>按 ID 自动抓</button>
-        <button className={`view-pill ${mode === 'manual' ? 'active' : ''}`} onClick={() => setMode('manual')}>完全手填</button>
-      </div>
-      {mode === 'auto'
-        ? <p className="muted small">贴 CVE / GHSA / OSV id 即可。这里只登记，元数据（摘要、CVSS、CWE、影响版本、补丁）由采集步去抓 —— 抓不到也留着，回溯富化会再试。</p>
-        : <p className="muted small">用于没有外部编号的洞（开源项目 issue / 内部 bug）。案例主键由标题 + 链接派生，同样的标题和链接再添一次还是同一条。</p>}
-      <div className="filters">
+  return <div className="modal-mask" onClick={onClose}>
+    {/* 点遮罩关闭, 点弹窗本体不关(class 上有 onClick stopPropagation) */}
+    <div className="modal-card" onClick={event => event.stopPropagation()}>
+      <div className="modal-head"><h3>添加漏洞案例</h3><button className="btn sm" onClick={onClose}>关闭</button></div>
+      <div className="modal-body">
+        <div className="view-pills case-add-modes">
+          <button className={`view-pill ${mode === 'auto' ? 'active' : ''}`} onClick={() => setMode('auto')}>按 ID 自动抓</button>
+          <button className={`view-pill ${mode === 'manual' ? 'active' : ''}`} onClick={() => setMode('manual')}>完全手填</button>
+        </div>
+        {/* "按 ID 自动抓"到底抓什么、什么时候抓 —— 用户问过这个, 这里写清楚, 不留在口头解释里 */}
         {mode === 'auto'
-          ? <input className="search" placeholder="CVE-2021-44228 / GHSA-jfh8-c2jp-5v3q" value={form.canonical_id} onChange={event => setForm(f => ({ ...f, canonical_id: event.target.value }))} />
-          : <input className="search" placeholder="标题（必填，如 xxx 组件 UAF）" value={form.title} onChange={event => setForm(f => ({ ...f, title: event.target.value }))} />}
-        <input className="search" placeholder="严重性（如 high / 中危，可空）" value={form.severity} onChange={event => setForm(f => ({ ...f, severity: event.target.value }))} />
-        <input className="search" placeholder="原文链接 / issue 链接" value={form.source_url} onChange={event => setForm(f => ({ ...f, source_url: event.target.value }))} />
+          ? <div className="muted small modal-note">
+            <p>贴一个编号即可。提交后这条案例先进库, 状态是<b>「待抓元数据」</b>, 页面上立刻能看到。</p>
+            <p>之后由每晚 <b>04:00</b> 的采集跑批依次补: ① NVD 拿标题 / CVSS / CWE / 影响版本 → ② OSV 拿 GHSA 别名与引用 → ③ 从修复 commit 抓补丁 diff → ④ 从补丁抽漏洞点 → ⑤ 抽数据流。</p>
+            <p>不会立即抓取。这一晚没抓到的(刚公开的洞 OSV 常常还没有记录)不算失败, 回溯步会在之后每晚重试, 直到补齐或超过 30 天。</p>
+          </div>
+          : <p className="muted small">用于没有外部编号的洞（开源项目 issue / 内部 bug）。案例主键由标题 + 链接派生，同样的标题和链接再添一次还是同一条。</p>}
+        <div className="filters">
+          {mode === 'auto'
+            ? <input className="search" placeholder="CVE-2021-44228 / GHSA-jfh8-c2jp-5v3q" value={form.canonical_id} onChange={event => setForm(f => ({ ...f, canonical_id: event.target.value }))} />
+            : <input className="search" placeholder="标题（必填，如 xxx 组件 UAF）" value={form.title} onChange={event => setForm(f => ({ ...f, title: event.target.value }))} />}
+          <input className="search" placeholder="严重性（如 high / 中危，可空）" value={form.severity} onChange={event => setForm(f => ({ ...f, severity: event.target.value }))} />
+          <input className="search" placeholder="原文链接 / issue 链接" value={form.source_url} onChange={event => setForm(f => ({ ...f, source_url: event.target.value }))} />
+        </div>
+        <div className="filters">
+          <input className="search" placeholder="CWE（逗号分隔，如 CWE-416, CWE-787）" value={form.cwe_ids} onChange={event => setForm(f => ({ ...f, cwe_ids: event.target.value }))} />
+          <input className="search" placeholder="受影响产品（逗号分隔）" value={form.affected_products} onChange={event => setForm(f => ({ ...f, affected_products: event.target.value }))} />
+          <input className="search" placeholder="外部引用（逗号分隔，多个链接）" value={form.references} onChange={event => setForm(f => ({ ...f, references: event.target.value }))} />
+        </div>
+        {mode === 'manual' && <input className="search" style={{ width: '100%', marginTop: 8 }} placeholder="摘要（影响什么、怎么触发）" value={form.summary} onChange={event => setForm(f => ({ ...f, summary: event.target.value }))} />}
+        <textarea className="search" style={{ width: '100%', minHeight: 90, marginTop: 8, fontFamily: 'ui-monospace, monospace' }} placeholder="关键代码 / 说明（可空，会存成一条「人工补充」上下文）" value={form.code} onChange={event => setForm(f => ({ ...f, code: event.target.value }))} />
+        <div className="split panel-actions"><button className="btn primary" disabled={!canSubmit || submit.isPending} onClick={() => submit.mutate()}>{submit.isPending ? '提交中…' : '登记案例'}</button><span className="muted small">重复添加不会插新行：同一条洞再添一次只是补充新信息。</span></div>
       </div>
-      <div className="filters">
-        <input className="search" placeholder="CWE（逗号分隔，如 CWE-416, CWE-787）" value={form.cwe_ids} onChange={event => setForm(f => ({ ...f, cwe_ids: event.target.value }))} />
-        <input className="search" placeholder="受影响产品（逗号分隔）" value={form.affected_products} onChange={event => setForm(f => ({ ...f, affected_products: event.target.value }))} />
-        <input className="search" placeholder="外部引用（逗号分隔，多个链接）" value={form.references} onChange={event => setForm(f => ({ ...f, references: event.target.value }))} />
-      </div>
-      {mode === 'manual' && <input className="search" style={{ width: '100%', marginTop: 8 }} placeholder="摘要（影响什么、怎么触发）" value={form.summary} onChange={event => setForm(f => ({ ...f, summary: event.target.value }))} />}
-      <textarea className="search" style={{ width: '100%', minHeight: 90, marginTop: 8, fontFamily: 'ui-monospace, monospace' }} placeholder="关键代码 / 说明（可空，会存成一条「人工补充」上下文）" value={form.code} onChange={event => setForm(f => ({ ...f, code: event.target.value }))} />
-      <div className="split panel-actions"><button className="btn primary" disabled={!canSubmit || submit.isPending} onClick={() => submit.mutate()}>{submit.isPending ? '提交中…' : '登记案例'}</button><span className="muted small">重复添加不会插新行：同一条洞再添一次只是补充新信息。</span></div>
-    </div>}
-  </section>;
+    </div>
+  </div>;
 }
 
 function Pagination({ page, pages, total, setOffset }: { page: number; pages: number; total: number; setOffset: (offset: number) => void }) {
