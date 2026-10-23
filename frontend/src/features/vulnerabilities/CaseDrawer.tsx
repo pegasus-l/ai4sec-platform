@@ -189,6 +189,8 @@ export function PatternCasesCard({ patternItemId, setDrawer }: { patternItemId: 
         <span>{item.published_at ? `公开于 ${item.published_at.slice(0, 10)}` : '公开时间未知'}</span>
       </button>)}
     </div>}
+    {!!cases.data?.items.length && cases.data.count > cases.data.items.length &&
+      <p className="muted small">共 {cases.data.count} 条,这里显示最近 {cases.data.items.length} 条。</p>}
   </Card>;
 }
 

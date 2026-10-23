@@ -294,13 +294,19 @@ def cases_for_pattern(conn: sqlite3.Connection, item_id: int, *, limit: int = 50
         clauses.append(f"EXISTS (SELECT 1 FROM json_each(c.aliases_json) e WHERE upper(e.value) IN ({placeholders}))")
         params.extend(cve_list)
 
+    where = " OR ".join(clauses)
     rows = conn.execute(
         "SELECT c.id, c.canonical_id, c.id_kind, c.title, c.severity, c.cvss_score, c.published_at, c.source, "
         "c.has_patch, c.has_vuln_site, c.has_dataflow, c.context_completeness "
-        "FROM vulnerability_cases c WHERE " + " OR ".join(clauses) +
+        "FROM vulnerability_cases c WHERE " + where +
         " ORDER BY c.published_at DESC, c.id DESC LIMIT ?",
         (*params, max(int(limit), 1)),
     ).fetchall()
+    # 条数单独 COUNT:截断之后 len(items) 只是本页的页长,拿它当实例数会把 40 条说成 5 条
+    # (2026-09-11 那批 new_case_count 的同一条教训)。
+    total = int(conn.execute(
+        "SELECT COUNT(*) FROM vulnerability_cases c WHERE " + where, params
+    ).fetchone()[0])
     items = [
         {
             "id": int(case["id"]),
@@ -346,7 +352,7 @@ def cases_for_pattern(conn: sqlite3.Connection, item_id: int, *, limit: int = 50
                 item["why"] = "material"
                 item["materials"] = [{"item_id": mid, "title": titles.get(mid, "")} for mid in matched[:3]]
 
-    result["count"] = len(items)
+    result["count"] = total
     result["items"] = items
     if not items:
         result["note"] = (
