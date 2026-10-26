@@ -38,6 +38,20 @@ AUTO_PROVENANCES = ("from_nvd", "from_osv", "from_patch", "from_source")
 # 需要置信度的来源:模型推断的两档
 LLM_PROVENANCES = ("llm_extracted", "llm_extracted_unverified")
 MANUAL_SOURCE = "manual_added"
+
+
+def human_added_sql(alias: str = "") -> str:
+    """「这条洞是人登记的」的唯一判据。`source` 单独不够用。
+
+    按 ID 自动抓进来时 `source='manual_id'`,而 NVD/OSV 富化后它不会变成 nvd(upsert 只在
+    source 为空时才写),看起来还像人加的;但完全手填的是 `manual_added`。真正跨两条路径、
+    跨富化都还留着的痕迹是 `payload.added_via` —— 只有 `POST /cases` 会写它。
+    统计、筛选、采集排队三处必须用同一个判据,否则"我刚加的那个洞"在页面上数不到。
+    """
+    prefix = f"{alias}." if alias else ""
+    return f"({prefix}source = 'manual_added' OR json_extract({prefix}payload_json, '$.added_via') IN ('auto', 'manual'))"
+
+
 # "有某一格上下文"的正向筛选键 → 谓词。与 case_stats 的 context.* 四个计数同源,
 # 保证点开统计数字看到的条数与数字本身一致。
 HAS_PREDICATES = {
@@ -111,7 +125,7 @@ def serialize_case(row: sqlite3.Row | dict[str, Any], counts: dict[str, int] | N
     for field in ARRAY_FIELDS:
         item[field] = repo.loads(item.pop(f"{field}_json", None), []) or []
     item["payload"] = repo.loads(item.pop("payload_json", None), {}) or {}
-    item["is_manual"] = str(item.get("source") or "") == MANUAL_SOURCE
+    item["is_manual"] = str(item.get("source") or "") == MANUAL_SOURCE or str(item["payload"].get("added_via") or "") in {"auto", "manual"}
     if counts is not None:
         item["context_counts"] = counts
         item["context_total"] = sum(counts.values())
@@ -395,6 +409,7 @@ def list_cases(
     status: str = "",
     completeness: str = "",
     has: str = "",
+    manual: bool = False,
     project_id: int = 0,
     curated: bool = False,
     published_from: str = "",
@@ -439,7 +454,7 @@ def list_cases(
         where.append(
             "(has_patch = 1"
             " OR (cvss_score IS NOT NULL AND cvss_score >= 9.0)"
-            " OR source = 'manual_added'"
+            f" OR {human_added_sql()}"
             " OR affected_products_json NOT IN ('[]', '')"
             " OR ghsa_ids_json NOT IN ('[]', '')"
             " OR fixed_versions_json NOT IN ('[]', '')"
@@ -458,6 +473,10 @@ def list_cases(
         if not predicate:
             raise ValueError(f"Unsupported has: {has!r} (可选: {sorted(HAS_PREDICATES)})")
         where.append(predicate)
+    if manual:
+        # 页面上「人工添加」那个数字点下去走这里:既包含按 ID 自动抓的,也包含完全手填的。
+        # 不能直接筛 source:自动抓的那批 source 是 manual_id,富化后还可能不是它。
+        where.append(human_added_sql())
     clause = f"WHERE {' AND '.join(where)}" if where else ""
     total = int(conn.execute(f"SELECT COUNT(*) FROM vulnerability_cases {clause}", params).fetchone()[0])
     rows = conn.execute(
@@ -552,7 +571,8 @@ def case_stats(conn: sqlite3.Connection) -> dict[str, Any]:
         "by_status": grouped("status"),
         "by_id_kind": grouped("id_kind"),
         "by_severity": grouped("severity"),
-        "manual": int(conn.execute("SELECT COUNT(*) FROM vulnerability_cases WHERE source = ?", (MANUAL_SOURCE,)).fetchone()[0]),
+        # 与 list_cases(manual=True)、is_manual 同一判据:点开这个数字看到的条数必须等于它本身
+        "manual": int(conn.execute(f"SELECT COUNT(*) FROM vulnerability_cases WHERE {human_added_sql()}").fetchone()[0]),
         "context": {
             "metadata": int(bits["metadata"] or 0),
             "patch": int(bits["patch"] or 0),

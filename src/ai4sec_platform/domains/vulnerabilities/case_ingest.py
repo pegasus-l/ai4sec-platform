@@ -123,13 +123,18 @@ def _keep_existing_title(fields: dict[str, Any], existing: Any, canonical_id: st
 # ── OSV 富化 ─────────────────────────────────────────────────────────────────
 
 def cases_needing_osv(conn: sqlite3.Connection, *, limit: int = 400, recheck_days: int = RECHECK_DAYS) -> list[sqlite3.Row]:
-    """挑出该去 OSV 查的案例:从没查过的最优先,查过且超过 `recheck_days` 的排后面。"""
+    """挑出该去 OSV 查的案例:人登记的先行,然后从没查过的最优先,查过且超过 `recheck_days` 的排后面。
+
+    人登记的排第一:采集步每晚有 limit,而 backlog 实测有两千多条"从没查过"的存量。
+    不插队的话,"按 ID 自动抓"进来的洞要等十几个晚上才轮到 —— 那就不叫自动抓了。
+    """
     return conn.execute(
         "SELECT * FROM vulnerability_cases "
         "WHERE status IN ('active', 'pending_fetch') AND ("
         "  json_extract(payload_json, '$.osv_checked_at') IS NULL"
         "  OR json_extract(payload_json, '$.osv_checked_at') < ?) "
-        "ORDER BY (json_extract(payload_json, '$.osv_checked_at') IS NULL) DESC, published_at DESC, id DESC "
+        f"ORDER BY {cases_repo.human_added_sql()} DESC, "
+        "         (json_extract(payload_json, '$.osv_checked_at') IS NULL) DESC, published_at DESC, id DESC "
         "LIMIT ?",
         (_cutoff(recheck_days), max(1, int(limit))),
     ).fetchall()
@@ -274,14 +279,15 @@ def ensure_pending_case(
 # ── 补丁 diff ────────────────────────────────────────────────────────────────
 
 def cases_needing_patch(conn: sqlite3.Connection, *, limit: int = 120, recheck_days: int = RECHECK_DAYS) -> list[sqlite3.Row]:
-    """挑出没有补丁、且该重试的案例。高分优先 —— 补丁有限,先花在最值钱的洞上。"""
+    """挑出没有补丁、且该重试的案例。人登记的先行,再高分优先 —— 补丁有限,先花在最值钱的洞上。"""
     return conn.execute(
         "SELECT c.* FROM vulnerability_cases c "
         "WHERE c.status IN ('active', 'pending_fetch') "
         "  AND NOT EXISTS (SELECT 1 FROM vulnerability_case_context x WHERE x.case_id = c.id AND x.context_type = 'patch_diff') "
         "  AND (json_extract(c.payload_json, '$.patch_checked_at') IS NULL "
         "       OR json_extract(c.payload_json, '$.patch_checked_at') < ?) "
-        "ORDER BY (json_extract(c.payload_json, '$.patch_checked_at') IS NULL) DESC, "
+        f"ORDER BY {cases_repo.human_added_sql('c')} DESC, "
+        "         (json_extract(c.payload_json, '$.patch_checked_at') IS NULL) DESC, "
         "         (c.cvss_score IS NULL), c.cvss_score DESC, c.id DESC "
         "LIMIT ?",
         (_cutoff(recheck_days), max(1, int(limit))),
@@ -327,7 +333,7 @@ def cases_needing_vuln_site(conn: sqlite3.Connection, *, limit: int = 40) -> lis
         "  AND EXISTS (SELECT 1 FROM vulnerability_case_context x WHERE x.case_id = c.id AND x.context_type = 'patch_diff') "
         "  AND NOT EXISTS (SELECT 1 FROM vulnerability_case_context x WHERE x.case_id = c.id AND x.context_type = 'vuln_site') "
         "  AND json_extract(c.payload_json, '$.vuln_site_status') IS NULL "
-        "ORDER BY (c.cvss_score IS NULL), c.cvss_score DESC, c.id DESC "
+        f"ORDER BY {cases_repo.human_added_sql('c')} DESC, (c.cvss_score IS NULL), c.cvss_score DESC, c.id DESC "
         "LIMIT ?",
         (max(1, int(limit)),),
     ).fetchall()
@@ -367,7 +373,7 @@ def cases_needing_dataflow(conn: sqlite3.Connection, *, limit: int = 20) -> list
         "  AND EXISTS (SELECT 1 FROM vulnerability_case_context x WHERE x.case_id = c.id AND x.context_type = 'vuln_site') "
         "  AND NOT EXISTS (SELECT 1 FROM vulnerability_case_context x WHERE x.case_id = c.id AND x.context_type = 'dataflow') "
         "  AND json_extract(c.payload_json, '$.dataflow_status') IS NULL "
-        "ORDER BY (c.cvss_score IS NULL), c.cvss_score DESC, c.id DESC "
+        f"ORDER BY {cases_repo.human_added_sql('c')} DESC, (c.cvss_score IS NULL), c.cvss_score DESC, c.id DESC "
         "LIMIT ?",
         (max(1, int(limit)),),
     ).fetchall()

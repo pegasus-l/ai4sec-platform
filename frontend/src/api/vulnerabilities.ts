@@ -246,6 +246,8 @@ export interface CaseListParams {
   completeness?: string;
   /** 只看"有某一格"的洞: metadata / patch / vuln_site / dataflow(点上下文进度条时用) */
   has?: string;
+  /** true = 只看人登记的洞(按 ID 自动抓的 + 完全手填的)。后端认 payload.added_via, 不按 source 筛 */
+  manual?: boolean;
   /** 只看某个项目的洞(P5a);由项目视图传下来 */
   project_id?: number;
   /** true = 只看 B 层(有 OSV/补丁/CVSS≥9/人工/项目命中的洞);不传 = 全量索引 */

@@ -718,6 +718,7 @@ def list_cases(
     status: str = "",
     completeness: str = "",
     has: str = "",
+    manual: bool = False,
     project_id: int = 0,
     curated: bool = False,
     published_from: str = "",
@@ -732,9 +733,10 @@ def list_cases(
     `curated=true` 是 B 层口径(有 OSV/补丁/CVSS≥9/人工/项目命中的洞),`false` 是全量索引。
     两个口径共用同一套筛选,所以"精选里没有"的洞切到全部仍搜得到。
     `has` = metadata/patch/vuln_site/dataflow,点"上下文收集进度"里某一格时用它列出"有这一格"的洞。
+    `manual=true` = 人登记的洞(按 ID 自动抓的 + 完全手填的),点顶部「人工添加」那个数字时用它。
     """
     try:
-        return case_service.list_cases(conn, q=q, severity=severity, id_kind=id_kind, source=source, status=status, completeness=completeness, has=has, project_id=project_id, curated=curated, published_from=published_from, published_to=published_to, created_since=created_since, limit=limit, offset=offset)
+        return case_service.list_cases(conn, q=q, severity=severity, id_kind=id_kind, source=source, status=status, completeness=completeness, has=has, manual=manual, project_id=project_id, curated=curated, published_from=published_from, published_to=published_to, created_since=created_since, limit=limit, offset=offset)
     except ValueError as exc:
         # 未知 has 取值报 400: 静默忽略会表现为"筛选没生效", 比明确报错难查得多
         raise HTTPException(status_code=400, detail=str(exc))

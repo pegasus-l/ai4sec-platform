@@ -31,8 +31,10 @@ export function CasesView({ search, setDrawer, onOpenMaterial, onOpenPattern }: 
   const [idKind, setIdKind] = useState<string>('all');
   const [completeness, setCompleteness] = useState<string>('all');
   const [severity, setSeverity] = useState<string>('');
-  // 来源筛选: '' = 全部; manual_added = 人工添加。顶部「人工添加」那个数字点下去走这里。
-  const [source, setSource] = useState<string>('');
+  // 人登记的洞(按 ID 自动抓的 + 完全手填的)。顶部「人工添加」那个数字点下去走这里。
+  // 不能按 source 筛: 自动抓进来的是 source='manual_id', 富化后也不是 manual_added,
+  // 后端用 payload.added_via 认人, 这里只传一个布尔。
+  const [manual, setManual] = useState<boolean>(false);
   // 有某一格上下文: '' | metadata | patch | vuln_site | dataflow。底部四条进度条点下去走这里。
   const [has, setHas] = useState<string>('');
   // 收录口径(P5a): 全部 = A 层索引; curated = B 层(有 OSV / 补丁 / CVSS≥9 / 人工 / 项目命中)。
@@ -51,15 +53,15 @@ export function CasesView({ search, setDrawer, onOpenMaterial, onOpenPattern }: 
     return () => clearTimeout(timer);
   }, [search]);
   // 换筛选/换搜索词必须回到第一页 —— 否则会在新结果集里停在越界的 offset 上, 页面看着像"空了"。
-  useEffect(() => { setOffset(0); }, [q, idKind, completeness, severity, projectId, curated, source, has]);
+  useEffect(() => { setOffset(0); }, [q, idKind, completeness, severity, projectId, curated, manual, has]);
 
   const list = useQuery({
-    queryKey: ['vulnerabilities', 'cases', { q, idKind, completeness, severity, projectId, curated, source, has, offset }],
+    queryKey: ['vulnerabilities', 'cases', { q, idKind, completeness, severity, projectId, curated, manual, has, offset }],
     queryFn: () => fetchCases({
       q, severity,
       id_kind: idKind === 'all' ? '' : idKind,
       completeness: completeness === 'all' ? '' : completeness,
-      source: source || undefined,
+      manual: manual || undefined,
       has: has || undefined,
       project_id: projectId || undefined,
       curated: curated === 'curated' || undefined,
@@ -75,18 +77,18 @@ export function CasesView({ search, setDrawer, onOpenMaterial, onOpenPattern }: 
   const total = list.data?.total ?? 0;
   const pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
   const page = Math.floor(offset / PAGE_SIZE) + 1;
-  const hasFilter = Boolean(q.trim() || idKind !== 'all' || completeness !== 'all' || severity || projectId || curated === 'curated' || source || has);
+  const hasFilter = Boolean(q.trim() || idKind !== 'all' || completeness !== 'all' || severity || projectId || curated === 'curated' || manual || has);
   const kpi = stats.data;
   const [addOpen, setAddOpen] = useState(false);
   // 点统计数字 = 设置筛选。三处(顶部数字、进度条、下拉)改的是同一批 state, 所以
   // 点完之后筛选项会亮起来、列表跟着变 —— 数字不再只是"摆在那看"。
-  const applyStat = (next: { completeness?: string; source?: string; has?: string }) => {
+  const applyStat = (next: { completeness?: string; manual?: boolean; has?: string }) => {
     setCompleteness(next.completeness ?? 'all');
-    setSource(next.source ?? '');
+    setManual(next.manual ?? false);
     setHas(next.has ?? '');
   };
-  const statActive = (next: { completeness?: string; source?: string; has?: string }) =>
-    completeness === (next.completeness ?? 'all') && source === (next.source ?? '') && has === (next.has ?? '');
+  const statActive = (next: { completeness?: string; manual?: boolean; has?: string }) =>
+    completeness === (next.completeness ?? 'all') && manual === (next.manual ?? false) && has === (next.has ?? '');
 
   // 首次加载必须先说"在加载": 未到达时 items 是 [], 直接落到空态会看起来像"案例全没了"。
   if (list.isLoading) return <EmptyState title="正在加载漏洞案例库…" description="正在从平台读取案例列表，请稍候。" />;
@@ -96,7 +98,7 @@ export function CasesView({ search, setDrawer, onOpenMaterial, onOpenPattern }: 
     <section className="panel case-stat-strip">
       <div className="case-stat-row">
         <StatChip label="库内漏洞案例" value={kpi?.total ?? total} active={statActive({})} onClick={() => applyStat({})} title="一个洞一行（CVE / GHSA / 开源项目 bug）" />
-        <StatChip label="人工添加" value={kpi?.manual ?? 0} active={statActive({ source: 'manual_added' })} onClick={() => applyStat({ source: 'manual_added' })} title="人工贴 ID 自动抓的 + 完全手填的" />
+        <StatChip label="人工添加" value={kpi?.manual ?? 0} active={statActive({ manual: true })} onClick={() => applyStat({ manual: true })} title="人工贴 ID 自动抓的 + 完全手填的" />
         <StatChip label="上下文收全" value={kpi?.context.full ?? 0} active={statActive({ completeness: 'full' })} onClick={() => applyStat({ completeness: 'full' })} title="元数据 + 补丁 + 漏洞点 + 数据流四项齐备" />
         <StatChip label="仅元数据" value={kpi?.context.empty ?? 0} active={statActive({ completeness: 'empty' })} onClick={() => applyStat({ completeness: 'empty' })} title="还没抓到补丁与代码，采集步会持续回溯补齐" />
         <div className="case-stat-add"><button className="btn primary" onClick={() => setAddOpen(true)}>+ 添加案例</button></div>
