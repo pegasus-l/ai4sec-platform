@@ -5,45 +5,23 @@
 //   docker exec -i fusion-v2-repro-1 sh -c 'cat > /root/.local/share/opencode/auth.json'   < repro-auth.json
 //   docker restart fusion-v2-repro-1     # 只有 restart 才会重读配置
 // 下次重建镜像时本文件才会被用到(Dockerfile.repro COPY 它)。
+//
+// 2026-10-27 复现全线 16 秒失败(model_not_found)的根因就在这份配置里, 改法要点:
+//   1. 顶层必须显式 "model": "<provider>/<model>" —— 不写就落到 models.dev 清单里的默认模型
+//      (实测会去调 tongyi-intent-detect-v3)。
+//   2. 不要自建 provider.<id>.models 覆盖块。opencode 以 models.dev 缓存为准, 自建条目时好时坏;
+//      去掉覆盖、只留顶层 model 引脚才稳定。
+//   3. 模型名别带日期后缀: deepseek-v4-flash-0731 已被网关下线; 现用 deepseek-v4.1-flash。
+//      改完用 serve API 真跑一句话验证, 别只看 config 解析成功。
 {
   "$schema": "https://opencode.ai/config.json",
   "permission": "allow",
+  "model": "alibaba-cn/deepseek-v4.1-flash",
   "provider": {
     "alibaba-cn": {
       "options": {
         "baseURL": "https://st8tp3ajl0df3n8b8l8qu.apigateway-cn-beijing.volceapi.com/v1",
         "apiKey": "REPLACE_WITH_REAL_KEY"
-      },
-      "models": {
-        "deepseek-v4-flash-0731": {
-          "id": "deepseek-v4-flash-0731",
-          "name": "DeepSeek V4 Flash 0731",
-          "family": "deepseek-flash",
-          "attachment": false,
-          "reasoning": true,
-          "tool_call": true,
-          "interleaved": {
-            "field": "reasoning_content"
-          },
-          "structured_output": true,
-          "temperature": true,
-          "modalities": {
-            "input": [
-              "text"
-            ],
-            "output": [
-              "text"
-            ]
-          },
-          "limit": {
-            "context": 1000000,
-            "output": 384000
-          },
-          "cost": {
-            "input": 0.14,
-            "output": 0.28
-          }
-        }
       }
     }
   }

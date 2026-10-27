@@ -647,7 +647,7 @@ function ReproDetailContent({ task, capabilityItem, openDetail }: { task: ReproT
         <div className="field-grid repro-fields">
           <div className="cap-field"><span>报告状态</span><b>{reproStatusLabel(report.status)}</b></div>
           <div className="cap-field"><span>项目类型</span><b>{report.web_framework || report.project_type || '-'}</b></div>
-          <div className="cap-field"><span>Web 启动</span><b>{report.is_web ? (report.web_started ? '已启动并验证' : '未启动') : '非 Web 项目'}</b></div>
+          <div className="cap-field"><span>Web 启动</span><b>{report.is_web === true ? (report.web_started ? '已启动并验证' : '未启动') : report.is_web === false ? '非 Web 项目' : '未判定（agent 未给出结论）'}</b></div>
           <div className="cap-field"><span>启动命令</span><code>{report.start_command || '-'}</code></div>
         </div>
       </section>

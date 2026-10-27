@@ -260,6 +260,12 @@ def start_repro(item_id: int, body: StartReproRequest = StartReproRequest(), con
             "item_id": item_id,
         }
 
+    # 已被判定非 web(分类器判定, 或上一次复现 agent 的结论): 条目本就不参与复现维度, 不再建任务 ——
+    # 与 not_supported 同为跳过语义。LOWCONF 例外由 is_non_web_blocked 自己保留(它要靠一次 CLI 复现
+    # 自我纠正分类, 挡掉等于掐死那个闭环)。
+    if is_non_web_blocked(item.get("payload") or {}):
+        return {"ok": True, "skipped": True, "reason": "non_web", "item_id": item_id}
+
     repo_url = _resolve_repo_url(item)
     if not repo_url:
         raise HTTPException(status_code=400, detail="no repo URL found in item")

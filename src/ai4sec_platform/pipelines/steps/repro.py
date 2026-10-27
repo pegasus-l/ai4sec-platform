@@ -149,11 +149,13 @@ def _build_repro_prompt(code_url: str, task_id: int) -> str:
         f"(若该目录或 /workspace/repo 有上次残留, 先 rm -rf 再克隆), 严禁在残留目录上操作。"
         f"全程用中文说明你在做什么——每一步、每个命令、遇到的坑都简要写出来。\n\n"
         f"环境注意: 本环境没有 Docker、没有 GPU(项目必须 Docker(部署或核心功能)请看第零步①, 直接不复现)。"
-        f"但容器里已配好一个可用的云端 LLM API key(OpenAI 兼容): 配置在 /root/.local/share/opencode/auth.json(provider 名 alibaba-cn, type=api, key 为 sk- 开头)和 "
-        f"/root/.cache/opencode/models.json 里, endpoint=https://dashscope.aliyuncs.com/compatible-mode/v1, 可用模型 deepseek-v4-flash-0731。"
+        f"但容器里已配好一个可用的云端 LLM API(OpenAI 兼容): key 在 /root/.local/share/opencode/auth.json(provider 名 alibaba-cn, type=api; "
+        f"key 是 UUID 形式, 不是 sk- 开头, 别按 sk- 去校验或截断), endpoint=https://st8tp3ajl0df3n8b8l8qu.apigateway-cn-beijing.volceapi.com/v1, "
+        f"可用模型 deepseek-v4-flash(2026-10-27 实测可用; 带日期后缀的旧名如 deepseek-v4-flash-0731 已从网关下线, 会报 model_not_found)。"
+        f"【不要】把 key 发往 dashscope.aliyuncs.com 官方 endpoint —— 那是过期配置, 现在只会得到 invalid_api_key。"
         f"项目需要 LLM 能力(对话/agent/代码生成/审计/总结等)时, 【必须】用这个云端 key 配置项目的 LLM 设置"
-        f"(LiteLLM 或 OpenAI 兼容: 通常 export OPENAI_API_KEY=$(读 auth.json 的 key) + OPENAI_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1, "
-        f"或按项目自己的 LLM provider 配置方式设置, 模型名用 deepseek-v4-flash-0731（或项目支持的其它模型名)）。"
+        f"(LiteLLM 或 OpenAI 兼容: 通常 export OPENAI_API_KEY=$(读 auth.json 的 key) + OPENAI_BASE_URL=https://st8tp3ajl0df3n8b8l8qu.apigateway-cn-beijing.volceapi.com/v1, "
+        f"或按项目自己的 LLM provider 配置方式设置, 模型名用 deepseek-v4-flash（或项目支持的其它模型名)）。"
         f"【绝对不要】因项目需要 LLM 就安装本地 Ollama/本地小模型——云端 key 现成且可用。"
         f"Web 服务必须监听 127.0.0.1:自选端口(8101~8199, 见下方启动流程)。平台 nginx 总机(常驻 8080)会按 "
         f"/task/{task_id}/ 分发到你的端口, 用户通过 http://<平台地址>:8091/insights/repro-web/task/{task_id}/ 直接打开该界面。"
@@ -573,9 +575,6 @@ def _write_payload(item_id: int, repro_status: str, repro_result: dict[str, Any]
         item = repo.get_domain_item(conn, "capabilities", item_id)
         if not item:
             return
-        payload = dict(item.get("payload") or {})
-        payload["repro_status"] = repro_status
-        payload["repro_result"] = repro_result
         # 复现报告明确给出 web 判断时同步回 payload 分类, 修正分类器误判(LOWCONF 等):
         #   报告 is_web=True  → 回写 is_web=True + web_framework + web_reclass 标记;
         #   报告 is_web=False → 回写 is_web=False + web_reclass 标记, 并**清掉分类器遗留的框架名**
@@ -583,6 +582,21 @@ def _write_payload(item_id: int, repro_status: str, repro_result: dict[str, Any]
         #     自相矛盾, 报告说非 web 就以报告为准把框架名一并抹掉。
         # 报告缺省该字段(超时兜底/异常路径)则整体不覆盖, 保留原分类。
         web_flag = (web_report or {}).get("is_web")
+        # agent 判定「本项目不是 web」(2026-10-27): 该条目从此不参与复现维度 —— 回填 is_web=false 让后续
+        # 自动入队被 is_non_web_blocked 挡掉, 同时把这次复现结论整体摘掉。留着 repro_status/repro_result
+        # 会让页面继续挂「查看复现」、行状态停在「复现失败」, 与「非 Web(不参与复现)」自相矛盾
+        # (item#96253 实测)。行状态落「已淘汰」, 与 /repro/{id}/cleanup 的非 web 分支、分类阶段的
+        # web 把关同一个口径。
+        # not_supported 例外: 「环境不支持 Docker」的终态在提示词里同样要求 agent 报 is_web=false, 但它必须
+        # 保留「无法复现」结论(摘掉就会退回待复现队列, 白烧一次 run)。
+        non_web = web_flag is False and repro_status != "not_supported"
+        payload = dict(item.get("payload") or {})
+        if non_web:
+            payload.pop("repro_status", None)
+            payload.pop("repro_result", None)
+        else:
+            payload["repro_status"] = repro_status
+            payload["repro_result"] = repro_result
         if isinstance(web_flag, bool):
             payload["is_web"] = web_flag
             payload["web_reclass"] = f"repro-corrected-{_utc_now()[:10]}"
@@ -593,9 +607,17 @@ def _write_payload(item_id: int, repro_status: str, repro_result: dict[str, Any]
             else:
                 payload["web_framework"] = ""
         fields: dict[str, Any] = {"payload": payload}
-        if item_status:
-            fields["status"] = item_status
+        target_status = "已淘汰" if non_web else item_status
+        if target_status:
+            fields["status"] = target_status
         repo.update_domain_item(conn, item_id=item_id, **fields)
+        if non_web:
+            # merge 永不删键 → 显式摘掉上一轮留下的复现结论
+            conn.execute(
+                "UPDATE domain_items SET payload_json = "
+                "json_remove(payload_json, '$.repro_status', '$.repro_result') WHERE id = ?",
+                (item_id,),
+            )
         conn.commit()
     finally:
         conn.close()
