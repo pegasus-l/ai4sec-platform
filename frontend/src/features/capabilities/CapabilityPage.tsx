@@ -551,7 +551,7 @@ function CapabilityRepro({ runs, openDetail, targetItemId, onTargetConsumed }: {
 }
 
 function ReproDetailContent({ task, capabilityItem, openDetail }: { task: ReproTask; capabilityItem?: CapabilityItem; openDetail: (item: CapabilityItem) => void }) {
-  const { toast } = useToast();
+  const { toast, confirm } = useToast();
   const qc = useQueryClient();
   const [logs, setLogs] = useState<{ line: string; kind: string }[]>([]);
   const [streaming, setStreaming] = useState(false);
@@ -642,7 +642,13 @@ function ReproDetailContent({ task, capabilityItem, openDetail }: { task: ReproT
       {!p.demo_url && currentTask.web_url && report?.web_started && <a className="btn primary" href={currentTask.web_url} target="_blank" rel="noreferrer">打开 Web 验证 ↗</a>}
       {!p.demo_url && p.repro_status !== 'not_supported' && <button className="btn primary" onClick={async () => { if (capabilityItem) { try { await startRepro(capabilityItem.id, p.is_web ?? false); toast('已重跑复现', 'success'); qc.invalidateQueries({ queryKey: ['cap-repro'] }); } catch (e) { toast(`重跑失败: ${e}`, 'error'); } } }}>重跑</button>}
       {['running', 'queued'].includes(liveStatus) && <button className="btn" onClick={async () => { try { await stopRepro(currentTask.id); toast('已停止', 'success'); qc.invalidateQueries({ queryKey: ['cap-repro'] }); } catch (e) { toast(`停止失败: ${e}`, 'error'); } }}>停止</button>}
-      <button className="btn" onClick={async () => { try { await cleanupRepro(currentTask.id); toast('已清理', 'success'); qc.invalidateQueries({ queryKey: ['cap-repro'] }); } catch (e) { toast(`清理失败: ${e}`, 'error'); } }}>清理</button>
+      {/* 清理不可撤销: 任务作废 + 复现卷里的 clone/venv/服务进程由 repro 看门狗回收, 条目没有其它
+          任务时结论还会复位成「待复现」—— 手滑一下就得从头再跑, 所以先要一次确认(2026-10-29)。 */}
+      <button className="btn" onClick={async () => {
+        const ok = await confirm(`清理任务 #${currentTask.id}？\n这条任务会被作废，它的 clone / venv / 服务进程由复现看门狗回收（约 2 分钟内）。若该条目没有其它任务，复现结论会复位为「待复现」，需要从头再跑。`);
+        if (!ok) return;
+        try { await cleanupRepro(currentTask.id); toast('已清理', 'success'); qc.invalidateQueries({ queryKey: ['cap-repro'] }); } catch (e) { toast(`清理失败: ${e}`, 'error'); }
+      }}>清理</button>
       {capabilityItem && <button className="btn" onClick={() => openDetail(capabilityItem)}>查看能力详情</button>}
     </div>
     <section className="repro-section">
