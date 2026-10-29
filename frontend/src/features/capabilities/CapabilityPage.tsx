@@ -682,6 +682,26 @@ function ReproDetailContent({ task, capabilityItem, openDetail }: { task: ReproT
           {(report.acceptance_issues ?? []).map((issue, index) => <div className="blocker" key={`acceptance-${index}`}>自动验收：{issue}</div>)}
         </div>}
       </section>}
+      {(report.page_check || report.tests) && <section className="repro-section">
+        <div className="repro-section-title"><span>页面自检与仓库测试</span><small>{report.page_check ? (report.page_check.ok === false ? '页面打不开' : report.page_check.ok ? '页面已校验' : '未完成自检') : '未自检'}</small></div>
+        {report.page_check && <div className="field-grid repro-fields">
+          <div className="cap-field"><span>页面自检</span><b>{report.page_check.ok === false ? '未通过' : report.page_check.ok ? '通过' : '未完成'}</b></div>
+          <div className="cap-field"><span>首页状态</span><b>{report.page_check.entry_status ?? '-'}{report.page_check.entry_type ? ` · ${report.page_check.entry_type}` : ''}</b></div>
+          <div className="cap-field"><span>入口资源</span><b>{report.page_check.resources_checked ?? 0} 个已校验{(report.page_check.failed?.length ?? 0) > 0 ? `，${report.page_check.failed?.length} 个失败` : ''}</b></div>
+          <div className="cap-field"><span>可见正文</span><b>{report.page_check.visible_chars ?? 0} 字符</b></div>
+        </div>}
+        {report.tests && <div className={`repro-summary ${report.tests.result === 'pass' ? 'success' : report.tests.result === 'fail' ? 'failed' : 'partial'}`}>
+          <strong>{TEST_RESULT_LABEL[report.tests.result ?? ''] ?? report.tests.result ?? '测试未执行'}</strong>
+          <p>测试框架：{report.tests.framework || '-'}{report.tests.command ? ` · 命令：${report.tests.command}` : ''}</p>
+          {report.tests.totals && <p>通过 {report.tests.totals.passed ?? 0} / 失败 {report.tests.totals.failed ?? 0} / 跳过 {report.tests.totals.skipped ?? 0}</p>}
+          {(report.tests.fixed?.length ?? 0) > 0 && <p>为跑通测试做的修复：{report.tests.fixed?.join('；')}</p>}
+          {(report.tests.failed_tests?.length ?? 0) > 0 && <p>失败用例：{report.tests.failed_tests?.join('；')}</p>}
+          {report.tests.notes && <p>说明：{report.tests.notes}</p>}
+        </div>}
+        {(report.page_check?.issues?.length ?? 0) > 0 && <div className="repro-findings">
+          {(report.page_check?.issues ?? []).map((issue, index) => <div className="blocker" key={`pagecheck-${index}`}>页面自检：{issue}</div>)}
+        </div>}
+      </section>}
       {report.usage && Object.keys(report.usage).length > 0 && <section className="repro-section">
         <div className="repro-section-title"><span>使用说明</span><small>面向使用者</small></div>
         <div className="repro-usage">
@@ -711,6 +731,14 @@ function ReproDetailContent({ task, capabilityItem, openDetail }: { task: ReproT
 function taskShownStatus(task: { status: string; item_repro_status?: string }): string {
   return task.item_repro_status === 'not_supported' ? 'not_supported' : task.status;
 }
+
+const TEST_RESULT_LABEL: Record<string, string> = {
+  pass: '测试通过',
+  partial: '测试部分通过(有失败用例)',
+  fail: '测试失败',
+  skipped: '测试未运行(环境不允许)',
+  not_found: '仓库没有测试',
+};
 
 function reproStatusLabel(status: string): string {
   return { queued: '排队中', running: '复现中', success: '复现成功', partial: '部分成功', failed: '复现失败', stopped: '已停止', timeout: '已超时', cleaned: '已清理', not_supported: '无需复现' }[status] ?? status;

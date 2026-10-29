@@ -135,6 +135,8 @@ _WEB_REPORT_EXAMPLE = """{
   "web_framework": "如 Streamlit / Gradio / FastAPI / React+Vite; 无则填空",
   "start_command": "你启动服务的命令; 没启动填空",
   "verify": "curl 验证结果; 没验证填空",
+  "page_check": {"method": "静态资源校验|无头浏览器渲染", "ok": true/false, "issues": ["页面自检发现的问题"]},
+  "tests": {"framework": "pytest/npm test/go test/cargo test/dotnet test/无", "command": "实际执行的命令", "result": "pass|partial|fail|skipped|not_found", "totals": {"passed": 0, "failed": 0, "skipped": 0}, "fixed": ["为跑通测试做的环境修复"], "failed_tests": ["失败用例, 最多 5 条"], "notes": "跳过或失败的原因"},
   "project_type": "python|node|rust|go|web|其他",
   "core_workflow": {"goal": "核心用户价值", "mode": "real|mock", "verified": true/false, "result": "产物或失败阶段", "evidence": ["真实响应/产物摘要"]},
   "environment": {"language": "如 Python 3.12", "key_deps": ["关键依赖"]},
@@ -203,6 +205,17 @@ def _build_repro_prompt(code_url: str, task_id: int) -> str:
         f"脚本开头加幂等引导守卫: 入口缺失时先在 flock 锁内建 venv 装依赖再启动, 避免 watchdog 每 10s 重试并发重复建 venv, 写法参考 /workspace/.repro-web/task-15.sh;\n"
         f"  ② 运行 `python3 /workspace/.repro-web/register.py add {task_id} <端口> '<项目名>' --framework <streamlit|gradio|nextjs|fastapi|generic>`, 生成 nginx 配置并热 reload;\n"
         f"  ③ 验证: `curl -s http://localhost:8080/task/{task_id}/` 返回 200 且 HTML 含 `<base href=\"/insights/repro-web/task/{task_id}/\">` 即注册成功。\n"
+        f"- 需要配置 base path / 前缀路由的项目(Streamlit 的 --server.baseUrlPath、n8n 的 N8N_PATH、Jupyter 的 base_url、"
+        f"Next 的 basePath、Vite 的 base), 必须按项目文档配置成 /insights/repro-web/task/{task_id}/; "
+        f"否则前端会把 /assets/ /static/ /rest/ 这类绝对路径打到站点根, 页面打开就是空白或报错。\n"
+        f"# 页面必须真的渲染出来(curl 200 不等于页面能打开)\n"
+        f"- 首页 200 只说明端口活着。必须再验证\"用户点开链接真的能看到内容\":\n"
+        f"  ① 抓首页 HTML, 把里面所有 <script src> 与 <link rel=stylesheet> 的地址逐个 curl: 必须 200, 且 Content-Type 与后缀匹配"
+        f"(js 要是 javascript, css 要是 text/css)。任何一个返回 text/html 或 404, 页面就停在空白/Loading, 必须继续定位原因再重启验证。\n"
+        f"  ② 首页是空壳(SPA/WASM/React 之类 body 里几乎没有正文)时, 必须渲染确认: 容器里已有 chromium/playwright 就直接用; "
+        f"没有就试 `npx --yes playwright@1.49.0 install chromium` 后渲染一次(装不上或超过 4 分钟就跳过, 只做 ①)。"
+        f"渲染后断言: DOM 有可见正文, 且正文不是\"Loading/加载中/Please wait\"这类占位。\n"
+        f"  ③ 自检结论写进报告的 page_check(做了哪几项、失败在哪); 页面没真的起来就不能报 web_started=true。\n"
         f"首次启动失败不能直接结束: 读服务日志、检查工作目录/模块路径/端口/依赖, 至少修正重试一次。"
         f"前后端分离项目: 后端按其真实目录启动到内部端口(如 8000), 前端最终监听 127.0.0.1:<端口>, 并确认前端 /api 代理指向已启动的后端。\n"
         f"- 写配置前检查项目实际配置加载逻辑(Pydantic env_file、dotenv、进程 cwd), 配置文件必须放在运行进程真正读取的位置; "
@@ -225,6 +238,20 @@ def _build_repro_prompt(code_url: str, task_id: int) -> str:
         f"core_workflow.mode 必须区分 real/mock, 用 mock/fixture/静态占位只能报 partial。\n"
         f"- 检查关键页面入口是否真实可点击; 核心路由/API 可用但页面无可发现入口时, 允许做最小导航修复(如加\"进入项目\"按钮), "
         f"但不得重写业务功能, 并必须在 gotchas 和 steps 中记录修改。\n\n"
+        f"# 顺便跑仓库自带的测试(有就跑, 跑挂了先自己修)\n"
+        f"- 先看仓库有没有测试: tests/、test_*.py、*_test.go、*.test.ts、src/test/、package.json 的 scripts.test、"
+        f"[tool.pytest] 配置、Cargo.toml、pom.xml/build.gradle、*Tests.csproj。\n"
+        f"- 只挑【一套】覆盖核心模块的单元测试跑通, 不要跑全量; 测试阶段时间预算不超过 6 分钟。\n"
+        f"- 命令要带超时与收敛参数, 例: `pytest -x -q tests/unit`(有 pytest-timeout 再加 --timeout=60)、"
+        f"`npm test -- --run --reporter=dot`、`go test ./pkg/... -count=1 -timeout=120s`、`cargo test --lib --quiet`、"
+        f"`dotnet test --filter Category!=Integration`; 不要跑需要外部服务/数据库/GPU 的集成测试。\n"
+        f"- 失败先判断是不是【环境】问题, 是就自己修: 缺依赖或系统库、路径/配置不对、要先构建产物、缺 env"
+        f"(测试要 LLM 就指向云端 key, 模型名用 deepseek-v4-flash)、依赖网络的用例用 mock/fixture 绕开。修完重跑一次。\n"
+        f"- 【禁止】为了让测试变绿去改被测业务逻辑、删测试、改断言、无脑 skip; 只有\"该用例依赖本环境确实没有的外部服务\""
+        f"才允许跳过, 并必须在 tests.notes 里写明跳过了哪条、为什么。\n"
+        f"- 结果如实写进报告的 tests 字段(framework/command/result/通过失败数/修了什么/失败用例)。"
+        f"测试失败不改复现 status(可能是项目自身 bug), 但必须写进 tests 与 gotchas。仓库根本没有测试就填 not_found, "
+        f"不要编造, 也不要现写测试。\n\n"
         f"# 最后必须输出结构化报告(用标记包裹, JSON 必须合法, status/summary/usage 用中文)\n"
         f"===REPRO_REPORT_START===\n"
         f"{_WEB_REPORT_EXAMPLE}\n"
@@ -467,6 +494,173 @@ def _extract_test_results(text: str) -> str:
     lines = text.split("\n")
     test_lines = [l for l in lines if any(k in l.lower() for k in ["test", "pass", "fail", "skip", "coverage"])]
     return "\n".join(test_lines[:20]) if test_lines else "No test results found in response"
+
+
+# ---------------------------------------------------------------------------
+# 页面自检: agent 说 web_started=true 之后, 平台自己再探一次首页与入口资源
+# (2026-10-29: 两个复现任务都报了成功, 但一个资源全 404 停在 Loading、一个 REST 401 打不开)
+# ---------------------------------------------------------------------------
+_PAGE_CHECK_MAX_REFS = 12
+_PAGE_CHECK_TIMEOUT = 15.0
+_PAGE_CHECK_LOADING_MARKERS = ("loading", "加载中", "正在加载", "please wait")
+
+
+def _repro_web_base(repro_url: str) -> str:
+    """把 opencode API 地址(如 http://repro:4096)换成同一主机的 nginx 总机(8080)。"""
+    from urllib.parse import urlsplit
+
+    parts = urlsplit(repro_url)
+    host = parts.hostname or "repro"
+    return f"{parts.scheme or 'http'}://{host}:8080"
+
+
+def _strip_task_prefix(url: str, task_id: int) -> str:
+    """用户可见前缀(/insights/repro-web/task/{id}/)归一成总机可达的 /task/{id}/。"""
+    for p in (REPRO_WEB_URL.rstrip("/") + f"/task/{task_id}/", f"/repro-web/task/{task_id}/", f"/task/{task_id}/"):
+        i = url.find(p)
+        if i != -1:
+            return f"/task/{task_id}/" + url[i + len(p):]
+    return url
+
+
+def _html_visible_text(html: str) -> str:
+    body = re.sub(r"(?is)<(script|style|template)[^>]*>.*?</\1>", " ", html)
+    body = re.sub(r"(?s)<!--.*?-->", " ", body)
+    body = re.sub(r"(?s)<[^>]+>", " ", body)
+    body = re.sub(r"&nbsp;|&#160;", " ", body)
+    return re.sub(r"\s+", " ", body).strip()
+
+
+def _page_refs(html: str) -> list[tuple[str, str]]:
+    """首页里需要逐个校验的入口资源: [(地址, 期望类型 js|css)]。"""
+    refs: list[tuple[str, str]] = []
+    for m in re.finditer(r"(?is)<script[^>]*\ssrc=[\"']([^\"']+)[\"']", html):
+        refs.append((m.group(1), "js"))
+    for tag in re.finditer(r"(?is)<link\b[^>]*>", html):
+        t = tag.group(0)
+        if "stylesheet" not in t.lower():
+            continue
+        m = re.search(r"(?is)href=[\"']([^\"']+)[\"']", t)
+        if m:
+            refs.append((m.group(1), "css"))
+    return refs
+
+
+def _check_web_page(repro_url: str, task_id: int) -> dict[str, Any]:
+    """平台侧确定性的页面自检(不需要无头浏览器)。
+
+    判据: 首页 200 且是 HTML + 每个入口 js/css 资源 200 且 Content-Type 匹配 +
+    首页有可见正文, 或者至少有一个能执行的入口脚本。任一不满足就记 issue。
+    """
+    from urllib.parse import urljoin, urlsplit
+
+    base = _repro_web_base(repro_url)
+    entry = f"{base}/task/{task_id}/"
+    result: dict[str, Any] = {
+        "ok": None, "method": "http-static-check", "entry": entry,
+        "entry_status": None, "entry_type": "", "visible_chars": 0,
+        "resources_checked": 0, "failed": [], "issues": [],
+    }
+    try:
+        with urllib.request.urlopen(entry, timeout=_PAGE_CHECK_TIMEOUT) as resp:
+            result["entry_status"] = resp.status
+            result["entry_type"] = (resp.headers.get("content-type") or "").split(";")[0]
+            html = resp.read(400_000).decode("utf-8", "replace")
+    except Exception as e:  # noqa: BLE001 - 自检失败不能影响任务收尾
+        result["issues"].append(f"首页打不开: {e}")
+        result["ok"] = False
+        return result
+
+    if result["entry_status"] != 200:
+        result["issues"].append(f"首页返回 {result['entry_status']}")
+    if "html" not in result["entry_type"].lower():
+        result["issues"].append(f"首页 Content-Type 不是 HTML({result['entry_type'] or '无'})")
+
+    text = _html_visible_text(html)
+    result["visible_chars"] = len(text)
+    low = text.lower()
+    if len(text) < 40 and any(m in low for m in _PAGE_CHECK_LOADING_MARKERS):
+        result["issues"].append("首页只有加载占位, 没有真实内容")
+
+    js_ok = 0
+    for raw, kind in _page_refs(html)[:_PAGE_CHECK_MAX_REFS]:
+        url = _strip_task_prefix(raw, task_id)
+        if url.startswith(("http://", "https://")):
+            parts = urlsplit(url)
+            if parts.hostname not in {"repro", "localhost", "127.0.0.1", urlsplit(base).hostname}:
+                continue  # 外部 CDN 不校验
+            url = parts.path or "/"
+        probe = base + url if url.startswith("/") else urljoin(entry, url)
+        try:
+            with urllib.request.urlopen(probe, timeout=_PAGE_CHECK_TIMEOUT) as r:
+                st = r.status
+                ct = (r.headers.get("content-type") or "").split(";")[0].lower()
+        except Exception as e:  # noqa: BLE001
+            result["failed"].append(f"{probe} 请求失败: {e}")
+            continue
+        result["resources_checked"] += 1
+        type_ok = ("javascript" in ct or "ecmascript" in ct) if kind == "js" else ("css" in ct)
+        if st != 200 or not type_ok:
+            result["failed"].append(f"{probe} → {st} {ct or '无类型'}")
+        elif kind == "js":
+            js_ok += 1
+
+    if result["failed"]:
+        result["issues"].append(
+            f"入口资源 {len(result['failed'])} 个加载失败(页面会停在空白/Loading): " + "; ".join(result["failed"][:3])
+        )
+    if result["visible_chars"] < 40 and js_ok == 0:
+        result["issues"].append("首页没有可见正文, 也没有能执行的入口脚本")
+    result["ok"] = not result["issues"]
+    return result
+
+
+def _apply_page_check(
+    report: dict[str, Any] | None, verdict: str, repro_url: str, task_id: int
+) -> str:
+    """web 服务声称已启动时, 平台自己再探一次页面; 打不开就把 success 下调为 partial。
+
+    只处理"agent 说起来了"的任务: 报告里没有 web_started 的走原逻辑。
+    """
+    if not isinstance(report, dict) or not report.get("web_started"):
+        return verdict
+    try:
+        check = _check_web_page(repro_url, task_id)
+    except Exception as e:  # noqa: BLE001 - 自检本身出错不能改变任务结论
+        check = {"ok": None, "method": "http-static-check", "issues": [f"页面自检没跑起来: {e}"]}
+    report["page_check"] = check
+    issues = [str(i) for i in (check.get("issues") or [])]
+    if check.get("ok") is not False:
+        # ok=None 表示自检本身没跑起来(网络/依赖问题): 如实记录, 不据此改结论
+        if issues:
+            _append_log(task_id, "页面自检未完成: " + "; ".join(issues))
+        return verdict
+    if not issues:
+        _append_log(
+            task_id,
+            f"页面自检通过(入口资源 {check.get('resources_checked')} 个, 可见正文 {check.get('visible_chars')} 字符)",
+        )
+        return verdict
+    _append_log(task_id, "页面自检: " + "; ".join(issues))
+    existing = report.get("acceptance_issues")
+    existing = existing if isinstance(existing, list) else []
+    report["acceptance_issues"] = list(dict.fromkeys([*existing, *issues]))
+    blockers = report.get("blockers")
+    blockers = blockers if isinstance(blockers, list) else []
+    report["blockers"] = list(dict.fromkeys([*blockers, *[f"页面自检: {i}" for i in issues]]))
+    if verdict == "success":
+        report["status"] = "partial"
+        _append_log(task_id, "页面没真的打开 → 复现结论由 success 下调为 partial")
+        return "partial"
+    return verdict
+
+
+def _report_tests_text(report: dict[str, Any] | None, full_text: str) -> str:
+    """payload.test_results: 有结构化 tests 就用它, 否则退回旧的日志行抓取。"""
+    tests = report.get("tests") if isinstance(report, dict) else None
+    if isinstance(tests, dict) and tests:
+        return json.dumps(tests, ensure_ascii=False)[:4000]
+    return _extract_test_results(full_text)
 
 
 def _parse_report(full_text: str) -> tuple[dict | None, str]:
@@ -807,6 +1001,9 @@ def _run_task(task_id: int, item_id: int, code_url: str, title: str, timeout: in
         report_json.setdefault("environment", {"provider": "opencode-serve", "session_id": session_id})
         report_json.setdefault("steps", [])
 
+        # 页面自检: agent 说起来了, 平台自己再探一次(打不开就把 success 降为 partial)
+        verdict = _apply_page_check(report, verdict, repro_url, task_id)
+
         # 对外访问链接: web 服务已启动时, 通过平台反代路径开放给用户点击
         web_started = bool((report or {}).get("web_started"))
         _update_task(
@@ -824,7 +1021,7 @@ def _run_task(task_id: int, item_id: int, code_url: str, title: str, timeout: in
             "summary": summary,
             "session_id": session_id,
             "build_success": verdict == "success",
-            "test_results": _extract_test_results(full_response),
+            "test_results": _report_tests_text(report, full_response),
             "report_text": full_response[:2000],
         }, item_status=_STATUS_TO_ITEM.get(payload_status), web_report=report)
         # 会话已利用完毕: 中止 serve 会话(即便 agent 已自然结束也做清理, 防止边缘情况残留烧 token)
@@ -853,6 +1050,9 @@ def _run_task(task_id: int, item_id: int, code_url: str, title: str, timeout: in
                 report, verdict = _fallback_report(session_id, salvaged, reason)
                 report["blockers"] = [f"复现超时: {emsg}"] if salvaged.strip() else [f"复现超时: {emsg}(未产出有效文本)"]
                 task_status = "timeout"
+            verdict = _apply_page_check(report, verdict, repro_url, task_id)
+            if report_complete:
+                task_status = verdict
             web_started = bool((report or {}).get("web_started"))
             _update_task(
                 task_id, status=task_status, finished_at=_utc_now(),

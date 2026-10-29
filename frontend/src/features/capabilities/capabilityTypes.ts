@@ -85,6 +85,26 @@ export interface ReproReport {
     verified?: boolean;
   };
   acceptance_issues?: string[];
+  page_check?: {
+    ok?: boolean | null;
+    method?: string;
+    entry?: string;
+    entry_status?: number | null;
+    entry_type?: string;
+    visible_chars?: number;
+    resources_checked?: number;
+    failed?: string[];
+    issues?: string[];
+  };
+  tests?: {
+    framework?: string;
+    command?: string;
+    result?: string;
+    totals?: { passed?: number; failed?: number; skipped?: number };
+    fixed?: string[];
+    failed_tests?: string[];
+    notes?: string;
+  };
 }
 
 export interface ReproTask {
