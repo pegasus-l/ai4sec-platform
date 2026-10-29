@@ -524,7 +524,10 @@ class StoreCapabilitiesStep:
                     domain="capabilities",
                     item_type="capability",
                     title=title,
-                    summary=display_summary,
+                    # display_summary 是 build_store_payload 里的局部变量, 这里拿不到 —— 取 payload 算好的那份。
+                    # 原先直接写 display_summary 是 NameError(2026-08-10 评分引擎重构带进来的), 表现为
+                    # 每次真出现**新**能力时 store_capabilities 整步失败; 只更新的那几轮看不出来, 所以藏了两个月。
+                    summary=payload.get("display_summary", ""),
                     score=score,
                     status=status,
                     source="asis_raw",
