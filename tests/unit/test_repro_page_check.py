@@ -161,6 +161,9 @@ def test_web_prompt_requires_render_and_tests():
     prompt = repro._build_repro_prompt("https://github.com/a/b", 7)
     assert "页面必须真的渲染出来" in prompt
     assert "scripts.test" in prompt
-    assert "npx --yes playwright" in prompt
+    # 浏览器是预装的: 提示词必须指向现成脚本, 且不能留"自己联网装"的老指令
+    assert "node /workspace/.repro-web/render-check.js" in prompt
+    assert "不要联网重装" in prompt
+    assert "npx --yes playwright" not in prompt
     assert '"page_check"' in prompt and '"tests"' in prompt
     assert "/insights/repro-web/task/7/" in prompt
