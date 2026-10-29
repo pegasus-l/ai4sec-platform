@@ -165,7 +165,8 @@ def _build_repro_prompt(code_url: str, task_id: int) -> str:
         f"   a. 部署必须 Docker: 唯一/必需部署方式是 docker run 或 docker-compose, 没有可行的非 Docker 原生运行路径。\n"
         f"   b. 核心功能必须 Docker: 项目最核心的用户价值闭环/关键运行阶段【只能】在 Docker 容器/沙箱里跑"
         f"(例如\"漏洞验证靠隔离容器沙箱执行\"、\"执行不可信代码靠容器隔离\"、\"只能以容器镜像方式运行\"), 没有 Docker 时核心链只能降级/mock/根本跑不通。\n"
-        f"只要 a 或 b 成立, 立即停止: 本环境不支持 Docker, 按平台规则此类项目【不复现】。如实报告 is_web=false、web_started=false, "
+        f"只要 a 或 b 成立, 立即停止: 本环境不支持 Docker, 按平台规则此类项目【不复现】。如实报告 web_started=false, "
+        f"is_web 仍按 ② 的判据【如实】填写 —— 它只描述「项目本身」有没有 Web 界面, 与它能否在本环境跑起来无关; "
         f"blockers 写\"项目必须 Docker(部署或核心功能), 本复现环境不支持 Docker, 按平台规则不复现\", FINAL_VERDICT: FAILURE, 然后结束。"
         f"不要尝试安装/模拟 Docker, 不要浪费时间折腾, 不要凑合出一个 partial。\n"
         f"Docker 只是【可选/辅助】能力(存在可用的原生部署路径, 且核心用户闭环不依赖 Docker 也能跑通)时, 不触发本规则, 照常按下面流程原生部署, "
@@ -587,9 +588,14 @@ def _write_payload(item_id: int, repro_status: str, repro_result: dict[str, Any]
         # 会让页面继续挂「查看复现」、行状态停在「复现失败」, 与「非 Web(不参与复现)」自相矛盾
         # (item#96253 实测)。行状态落「已淘汰」, 与 /repro/{id}/cleanup 的非 web 分支、分类阶段的
         # web 把关同一个口径。
-        # not_supported 例外: 「环境不支持 Docker」的终态在提示词里同样要求 agent 报 is_web=false, 但它必须
-        # 保留「无法复现」结论(摘掉就会退回待复现队列, 白烧一次 run)。
+        # not_supported 例外(2026-10-29 修正): 「环境不支持 Docker」是终态, 必须保留「无法复现」结论
+        # (摘掉就会退回待复现队列, 白烧一次 run); 但它同样**不能改 web 分类**。
+        # item#10711(LingMi1/agent-go) 实测: 提示词旧版让 agent 在 Docker 硬依赖时一律报 is_web=false,
+        # 于是一个自带 React 界面的项目被打上「非 Web(不参与复现)」, 与「它确实是 web 项目」自相矛盾。
+        # is_web 描述的是项目本身有没有 Web 界面, 与能不能在当前环境跑起来无关 —— 这条终态只落
+        # repro_status/repro_result, 分类保持原判(不写 is_web / web_framework / web_reclass)。
         non_web = web_flag is False and repro_status != "not_supported"
+        apply_web = isinstance(web_flag, bool) and repro_status != "not_supported"
         payload = dict(item.get("payload") or {})
         if non_web:
             payload.pop("repro_status", None)
@@ -597,7 +603,7 @@ def _write_payload(item_id: int, repro_status: str, repro_result: dict[str, Any]
         else:
             payload["repro_status"] = repro_status
             payload["repro_result"] = repro_result
-        if isinstance(web_flag, bool):
+        if apply_web:
             payload["is_web"] = web_flag
             payload["web_reclass"] = f"repro-corrected-{_utc_now()[:10]}"
             if web_flag:

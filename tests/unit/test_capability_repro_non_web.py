@@ -74,9 +74,14 @@ def test_partial_verdict_on_non_web_also_strips() -> None:
 
 
 def test_docker_required_not_supported_keeps_conclusion() -> None:
-    """环境不支持(必须 Docker) 同样报 is_web=false, 但那是终态, 不能摘掉结论。"""
+    """环境不支持(必须 Docker) 是终态, 不能摘掉结论, 也不能改 web 分类(2026-10-29 修正)。
+
+    item#10711(LingMi1/agent-go) 实测: agent 在 Docker 硬依赖时按旧提示词报了 is_web=false,
+    于是一个自带 React 界面的项目被打上「非 Web(不参与复现)」, 页面上自相矛盾。
+    is_web 只描述项目本身有没有 Web 界面, 与能不能在本环境跑起来无关。
+    """
     conn = _db()
-    item_id = _mk_item(conn, {"is_web": True, "web_framework": "FastAPI"})
+    item_id = _mk_item(conn, {"is_web": True, "web_framework": "React"})
     repro_step._write_payload(
         item_id, "not_supported", {"verdict": "failed"},
         item_status="无法复现",
@@ -85,8 +90,25 @@ def test_docker_required_not_supported_keeps_conclusion() -> None:
     status, payload = _read(conn, item_id)
     assert payload["repro_status"] == "not_supported"
     assert payload["repro_result"] == {"verdict": "failed"}
-    assert payload["is_web"] is False
+    assert payload["is_web"] is True
+    assert payload["web_framework"] == "React"
+    assert "web_reclass" not in payload
     assert status == "无法复现"
+
+
+def test_not_supported_does_not_invent_web_classification() -> None:
+    """原 payload 没有 is_web 时, not_supported 也不得凭报告凭空写入分类。"""
+    conn = _db()
+    item_id = _mk_item(conn, {"code_url": "https://github.com/LingMi1/agent-go"})
+    repro_step._write_payload(
+        item_id, "not_supported", {"verdict": "failed"},
+        item_status="无法复现",
+        web_report={"is_web": False, "summary": "项目必须 Docker"},
+    )
+    _, payload = _read(conn, item_id)
+    assert "is_web" not in payload
+    assert "web_framework" not in payload
+    assert "web_reclass" not in payload
 
 
 def test_web_verdict_keeps_conclusion_as_before() -> None:
