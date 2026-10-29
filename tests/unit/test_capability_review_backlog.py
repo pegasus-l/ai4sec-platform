@@ -375,16 +375,20 @@ def test_capability_status_matches_store_contract() -> None:
     assert capability_status("rejected", 5) == "已淘汰"
 
 
-def test_vertical_app_never_enters_the_library() -> None:
-    """垂直应用一律已淘汰(2026-10-29 用户判定: 与 AI for Sec 业务方向无关)。
+def test_non_security_vertical_app_never_enters_the_library() -> None:
+    """和安全无关的垂直应用一律已淘汰(2026-10-29 用户判定: 与 AI for Sec 业务方向无关)。
 
     只压在性质封顶(≤65 / rec≤3)是不够的 —— 那样它会落「待资料补齐」, 仍然出现在今日能力里
-    (实测争议条目 isemsez/med_assistant)。规则也必须是幂等的: 每 15 分钟的资讯重扫会用
-    review 结论重算 status, 只改数据下一轮就漂回去。
+    (实测争议条目 isemsez/med_assistant = 俄语临床指南医疗 RAG)。规则也必须是幂等的: 每 15
+    分钟的资讯重扫会用 review 结论重算 status, 只改数据下一轮就漂回去。
     """
     for decision in ("selected", "watch", "rejected"):
         for recommended in (1, 3, 5):
-            assert capability_status(decision, recommended, "垂直应用") == "已淘汰"
+            assert capability_status(decision, recommended, "垂直应用", security_flag=False) == "已淘汰"
+    # 垂直应用但**有安全信号**的照旧入库: 安全运营自动化(Tracecat)、逆向 MCP(Reversecore_MCP)
+    # 恰恰是我们要的, 一刀切会误杀
+    assert capability_status("watch", 3, "垂直应用", security_flag=True) == "待资料补齐"
+    assert capability_status("watch", 5, "垂直应用", security_flag=True) == "待复现验证"
     # 其余三类与历史口径不变: 能力框架的 watch/3 照样是待资料补齐
     assert capability_status("watch", 3, "能力框架") == "待资料补齐"
     assert capability_status("watch", 4, "教学演示") == "待复现验证"
@@ -397,6 +401,10 @@ def test_vertical_app_payload_has_no_repro_status() -> None:
     review = reviewer._normalize_review(vertical, CANDIDATE, TECH_MAP)
     payload = build_store_payload(CANDIDATE, review)
     assert "repro_status" not in payload
+    # 垂直应用但带安全信号(安全运营/逆向分析那类)照旧是复现候选
+    secure = {**_good_review(), "project_nature": "垂直应用"}
+    assert build_store_payload({**CANDIDATE, "security_flag": True},
+                               reviewer._normalize_review(secure, CANDIDATE, TECH_MAP))["repro_status"] == "candidate"
     # 横向能力照旧带 candidate, 由后续 web 分类改成终态
     normal = reviewer._normalize_review(_good_review(), CANDIDATE, TECH_MAP)
     assert build_store_payload(CANDIDATE, normal)["repro_status"] == "candidate"

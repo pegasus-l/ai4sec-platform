@@ -184,16 +184,20 @@ class LLMReviewStep:
 # 由本步骤在模型恢复后重评 —— 否则一次网关 403 就能灌进上千条没有内容的条目(2026-10-28 实测)。
 
 
-def capability_status(decision: str, recommended: int, project_nature: str = "") -> str:
+def capability_status(decision: str, recommended: int, project_nature: str = "",
+                      security_flag: bool = False) -> str:
     """评审结论 → 行状态。增量写库、StoreCapabilitiesStep、降级重评三处共用同一口径。
 
-    2026-10-29 用户判定: 项目性质是「垂直应用」的条目**不入库**。它把 Agent 技术用在某个
-    具体行业(实测争议条目 isemsez/med_assistant = 俄语临床指南医疗 RAG), 技术本身没有新贡献,
-    与 AI for Sec 的业务方向无关 —— 这类项目按性质封顶(≤65 / rec≤3)之后仍会落「待资料补齐」,
-    然后出现在今日能力里。规则放在这个函数而不是只改数据: 每 15 分钟的资讯重扫会用 review
-    结论重算 status, 只改数据下一轮就被写回「待资料补齐」。
+    2026-10-29 用户判定: **和安全无关的垂直应用不入库**(实测争议条目 isemsez/med_assistant =
+    俄语临床指南医疗 RAG, "和我们的业务场景一点关系没有")。这类项目按性质封顶(≤65 / rec≤3)
+    之后仍会落「待资料补齐」, 于是出现在今日能力里。
+
+    判据是 security_flag(规则侧的安关键字判定), 不是单纯的 project_nature —— 同样是垂直应用,
+    安全运营自动化(Tracecat)、逆向/恶意代码分析的 MCP 服务(Reversecore_MCP)恰恰是我们要的,
+    一刀切会把它们误杀。规则放在这里而不是只改数据: 每 15 分钟的资讯重扫会用 review 结论
+    重算 status, 只改数据下一轮就被写回「待资料补齐」。
     """
-    if project_nature == "垂直应用":
+    if project_nature == "垂直应用" and not security_flag:
         return "已淘汰"
     if decision in ("selected", "watch") and recommended >= 4:
         return "待复现验证"
@@ -274,9 +278,9 @@ def build_store_payload(item: dict[str, Any], review: dict[str, Any]) -> dict[st
             "source_type": item.get("source_type", ""),
         },
     }
-    if str(review.get("project_nature") or "") == "垂直应用":
-        # 垂直应用不入库(见 capability_status), 也就不是复现候选 —— 别给已淘汰的条目挂 candidate 戳,
-        # 那是「非 Web 却在待复现」同类的自相矛盾(2026-09-15 那 4208 条)。
+    if str(review.get("project_nature") or "") == "垂直应用" and not item.get("security_flag"):
+        # 无安全信号的垂直应用不入库(见 capability_status), 也就不是复现候选 —— 别给已淘汰的条目
+        # 挂 candidate 戳, 那是「非 Web 却在待复现」同类的自相矛盾(2026-09-15 那 4208 条)。
         payload.pop("repro_status", None)
     return payload
 
@@ -390,7 +394,8 @@ class RetryDegradedReviewsStep:
                 summary=review.get("summary_zh", ""),
                 score=float(review.get("score") or 0),
                 status=capability_status(decision, int(review.get("recommended_score") or 0),
-                                         str(review.get("project_nature") or "")),
+                                         str(review.get("project_nature") or ""),
+                                         bool(item.get("security_flag"))),
                 source="asis_raw",
                 source_url=str(item.get("url") or ""),
                 tags=[t for t in (item.get("source_type", ""), review.get("topic", ""), review.get("capability_type", "")) if t],
@@ -433,8 +438,10 @@ class StoreCapabilitiesStep:
 
             # 垂直应用一律已淘汰(见 capability_status): 每 15 分钟的资讯重扫都会重算 status,
             # 只改数据不进这条规则, 下一轮就会被写回「待资料补齐」并重新出现在今日能力里。
-            vertical = str(review.get("project_nature") or "") == "垂直应用"
-            status = capability_status(decision, recommended, "垂直应用" if vertical else "")
+            vertical = str(review.get("project_nature") or "") == "垂直应用" and not item.get("security_flag")
+            status = capability_status(decision, recommended,
+                                       str(review.get("project_nature") or ""),
+                                       bool(item.get("security_flag")))
 
             payload = build_store_payload(item, review)
 
