@@ -3,6 +3,7 @@ import { ThemeToggle } from '../../components/ThemeToggle';
 import { Star, ListChecks, Settings, ArrowUpRight, Activity, ShieldCheck, RefreshCw, type LucideIcon } from 'lucide-react';
 import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Badge, MetricCard, EmptyState } from '../../components/ui';
+import { ConfirmModal, type ConfirmRequest } from '../../components/ConfirmModal';
 import { useToast } from '../../components/Toast';
 import { useDrawerStack } from '../../components/DrawerStack';
 import {
@@ -557,6 +558,8 @@ function ReproDetailContent({ task, capabilityItem, openDetail }: { task: ReproT
   const [streaming, setStreaming] = useState(false);
   const logRef = useRef<HTMLDivElement>(null);
   const cleanupRef = useRef<(() => void) | null>(null);
+  // 二次确认走页面内的弹窗, 不用 window.confirm(跨源 iframe 里会被浏览器吞掉, 点了没反应)
+  const [confirmReq, setConfirmReq] = useState<ConfirmRequest | null>(null);
   const { data: taskDetail } = useQuery({
     queryKey: ['cap-repro-task', task.id],
     queryFn: () => fetchReproTask(task.id),
@@ -640,21 +643,39 @@ function ReproDetailContent({ task, capabilityItem, openDetail }: { task: ReproT
     <div className="repro-actions">
       {p.demo_url && <a className="btn primary" href={p.demo_url} target="_blank" rel="noreferrer">打开官方 Demo ↗</a>}
       {!p.demo_url && currentTask.web_url && report?.web_started && <a className="btn primary" href={currentTask.web_url} target="_blank" rel="noreferrer">打开 Web 验证 ↗</a>}
-      {!p.demo_url && p.repro_status !== 'not_supported' && <button className="btn primary" onClick={async () => { if (capabilityItem) { try { await startRepro(capabilityItem.id, p.is_web ?? false); toast('已重跑复现', 'success'); qc.invalidateQueries({ queryKey: ['cap-repro'] }); } catch (e) { toast(`重跑失败: ${e}`, 'error'); } } }}>重跑</button>}
-      {['running', 'queued'].includes(liveStatus) && <button className="btn" onClick={async () => {
-        const ok = await confirm(`停止任务 #${currentTask.id}？\n复现会立刻中止，这一轮不再产出结论（工作目录和日志保留，之后可以「重跑」）。`);
-        if (!ok) return;
-        try { await stopRepro(currentTask.id); toast('已停止', 'success'); qc.invalidateQueries({ queryKey: ['cap-repro'] }); } catch (e) { toast(`停止失败: ${e}`, 'error'); }
-      }}>停止</button>}
+      {!p.demo_url && p.repro_status !== 'not_supported' && <button className="btn primary" onClick={() => {
+        if (!capabilityItem) return;
+        setConfirmReq({
+          title: `重跑条目 #${capabilityItem.id} 的复现？`,
+          message: <>会在复现沙箱里新建一条任务，重新 clone、装依赖、起服务；当前这条任务的记录保留不动。<br />同时能跑的复现有上限，名额满时会先排队，等前面那条结束再开始。</>,
+          confirmLabel: '重跑',
+          onConfirm: async () => {
+            try { await startRepro(capabilityItem.id, p.is_web ?? false); toast('已重跑复现', 'success'); qc.invalidateQueries({ queryKey: ['cap-repro'] }); } catch (e) { toast(`重跑失败: ${e}`, 'error'); }
+          },
+        });
+      }}>重跑</button>}
+      {['running', 'queued'].includes(liveStatus) && <button className="btn" onClick={() => setConfirmReq({
+        title: `停止任务 #${currentTask.id}？`,
+        message: '复现会立刻中止，这一轮不再产出结论（工作目录和日志保留，之后可以「重跑」）。',
+        confirmLabel: '停止',
+        onConfirm: async () => {
+          try { await stopRepro(currentTask.id); toast('已停止', 'success'); qc.invalidateQueries({ queryKey: ['cap-repro'] }); } catch (e) { toast(`停止失败: ${e}`, 'error'); }
+        },
+      })}>停止</button>}
       {/* 清理不可撤销: 任务作废 + 复现卷里的 clone/venv/服务进程由 repro 看门狗回收, 条目没有其它
           任务时结论还会复位成「待复现」—— 手滑一下就得从头再跑, 所以先要一次确认(2026-10-29)。 */}
-      <button className="btn" onClick={async () => {
-        const ok = await confirm(`清理任务 #${currentTask.id}？\n这条任务会被作废，它的 clone / venv / 服务进程由复现看门狗回收（约 2 分钟内）。若该条目没有其它任务，复现结论会复位为「待复现」，需要从头再跑。`);
-        if (!ok) return;
-        try { await cleanupRepro(currentTask.id); toast('已清理', 'success'); qc.invalidateQueries({ queryKey: ['cap-repro'] }); } catch (e) { toast(`清理失败: ${e}`, 'error'); }
-      }}>清理</button>
+      <button className="btn" onClick={() => setConfirmReq({
+        title: `清理任务 #${currentTask.id}？`,
+        message: <>这条任务会被作废，它的 clone / venv / 服务进程由复现看门狗回收（约 2 分钟内）。<br />若该条目没有其它任务，复现结论会复位为「待复现」，需要从头再跑。</>,
+        confirmLabel: '清理',
+        danger: true,
+        onConfirm: async () => {
+          try { await cleanupRepro(currentTask.id); toast('已清理', 'success'); qc.invalidateQueries({ queryKey: ['cap-repro'] }); } catch (e) { toast(`清理失败: ${e}`, 'error'); }
+        },
+      })}>清理</button>
       {capabilityItem && <button className="btn" onClick={() => openDetail(capabilityItem)}>查看能力详情</button>}
     </div>
+    <ConfirmModal request={confirmReq} onClose={() => setConfirmReq(null)} />
     <section className="repro-section">
       <div className="repro-section-title"><span>执行日志</span><small>{streaming && logs.length > 0 ? 'SSE LIVE' : `全文 ${displayedLogs.length} 行`}</small></div>
       <div className="log-stream" ref={logRef}>{displayedLogs.map((log, index) => <div key={`${index}-${log.line}`} className={`log-line log-${log.kind}`}>{log.line}</div>)}{displayedLogs.length === 0 && <div className="muted small">{liveStatus === 'queued' ? '任务已排队，等待复现调度…' : (!taskDetail && !fullLog ? '正在载入日志…' : '等待日志输出…')}</div>}</div>

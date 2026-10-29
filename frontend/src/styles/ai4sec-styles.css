@@ -1445,3 +1445,12 @@ button.assoc-kpi:hover, .assoc-kpi.on { border-color: color-mix(in srgb, var(--a
   .case-card { grid-template-columns: minmax(0, 1fr); }
   .case-card-side { justify-items: start; text-align: left; }
 }
+
+/* 二次确认弹窗(重跑/停止/清理): 复用 .modal-mask / .modal-card 的遮罩与卡片口径, 只把宽度收窄 ——
+   它是一句话确认, 不该占满屏。 */
+.confirm-card { width: min(440px, 100%); }
+.confirm-body { color: var(--muted); font-size: 12.5px; line-height: 1.75; }
+.confirm-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
+/* 不可撤销的动作(清理)染红; 嵌入页的浅色主题会覆盖 --danger, 所以带 --red 兜底 */
+.btn.danger { border-color: color-mix(in srgb, var(--danger, var(--red)) 46%, transparent); background: color-mix(in srgb, var(--danger, var(--red)) 14%, transparent); color: var(--danger, var(--red)); }
+.btn.danger:hover { border-color: color-mix(in srgb, var(--danger, var(--red)) 72%, transparent); background: color-mix(in srgb, var(--danger, var(--red)) 20%, transparent); }

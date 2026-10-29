@@ -78,6 +78,13 @@ def _task_web_url(task_id: int) -> str:
 # 停止协作标志（线程无法强杀，用 Event 在每个心跳检查点中止）
 _STOP_FLAGS: dict[int, threading.Event] = {}
 
+# 复现并发上限(2026-10-29): 一条复现要编译、装依赖、起服务、有时还要跑无头浏览器, 实测能吃掉
+# 1-2G; 同时跑三四条会把复现容器顶到 cgroup 上限, 内核只好杀进程 —— 10-29 就是把 PID1 的
+# opencode 杀掉, 整个沙箱重启、所有复现页面同时 502。超出的任务保持 queued(页面显示「排队中」),
+# 拿到名额才置 running。uvicorn 单 worker 运行, 所以进程内的信号量就是全局上限。
+_MAX_CONCURRENT_REPRO = max(1, int(os.getenv("REPRO_MAX_CONCURRENT", "2")))
+_REPRO_SLOTS = threading.BoundedSemaphore(_MAX_CONCURRENT_REPRO)
+
 
 def stop_repro_task(task_id: int) -> None:
     ev = _STOP_FLAGS.get(task_id)
@@ -859,6 +866,26 @@ def _write_payload(item_id: int, repro_status: str, repro_result: dict[str, Any]
 # Runner
 # ---------------------------------------------------------------------------
 def _run_task(task_id: int, item_id: int, code_url: str, title: str, timeout: int) -> None:
+    """排队拿并发名额, 拿到才真正开跑; 名额满时任务保持 queued(前端显示「排队中」)。
+
+    名额在 _run_task_body 全程持有, 任何退出路径都由这里的 finally 归还 —— 所以不要直接把
+    信号量的 acquire/release 塞进 body 里(它有 20 多处 return, 漏一个就把名额永久吃掉)。
+    """
+    if not _REPRO_SLOTS.acquire(blocking=False):
+        _append_log(task_id, f"排队中: 已有 {_MAX_CONCURRENT_REPRO} 条复现在跑, 前一条结束后自动开始")
+        _REPRO_SLOTS.acquire()
+    try:
+        if _is_stopped(task_id):
+            # 排队期间被「停止」: 别白开一个会话, 直接落停止态
+            _update_task(task_id, status="stopped", finished_at=_utc_now(), result="stopped by user (queued)")
+            _append_log(task_id, "⏹ 已由用户停止(排队期间)")
+            return
+        _run_task_body(task_id, item_id, code_url, title, timeout)
+    finally:
+        _REPRO_SLOTS.release()
+
+
+def _run_task_body(task_id: int, item_id: int, code_url: str, title: str, timeout: int) -> None:
     """后台线程主体: 建会话 → 发消息(子线程) → 心跳 → 完成写全文/汇总/回写 payload。"""
     repro_url = _env("REPRO_API_URL", "http://repro:4096")
     password = _env("REPRO_PASSWORD", "")
@@ -1119,7 +1146,10 @@ def run_repro_sync(conn: sqlite3.Connection, *, item_id: int, code_url: str, tri
     if timeout is None:
         timeout = _default_timeout()
     task_id, thread = start_repro_task(conn, item_id=item_id, code_url=code_url, trigger=trigger, timeout=timeout)
-    thread.join(timeout=timeout + _grace_seconds() + 120)
+    # 并发上限会把这条任务先丢进排队: 预算里要留出「前面那条跑完」的时间, 否则到点时任务还是
+    # queued, 调用方会把「排队中」当成这条条目的最终结论。上限是 N 时前面最多 N-1 条。
+    queue_allowance = (timeout + _grace_seconds()) * (_MAX_CONCURRENT_REPRO - 1)
+    thread.join(timeout=timeout + _grace_seconds() + 120 + queue_allowance)
     task = repo.get_repro_task(conn, task_id)
     return (task or {}).get("status", "failed")
 
@@ -1333,6 +1363,10 @@ def reap_stale_repro_tasks() -> int:
         threshold = _default_timeout() + _grace_seconds() + 300
         for task_id, item_id, status, log, created_at in rows:
             if task_id in alive_ids:
+                # 排队中的任务还没开跑(在等并发名额), created_at 里含着排队时间, 拿它当
+                # 「agent 挂死」判死会把正常的排队任务误杀 —— 排队态的线程活着就一定不是在跑。
+                if status == "queued":
+                    continue
                 # 线程活着: 只有超时兜底才回收(覆盖线程活着但 agent 挂死等场景)
                 elapsed = _elapsed_seconds(created_at)
                 if elapsed is None or elapsed <= threshold:
