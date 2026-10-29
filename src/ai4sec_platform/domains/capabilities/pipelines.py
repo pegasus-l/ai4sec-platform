@@ -17,6 +17,7 @@ from ai4sec_platform.pipelines.steps.capability_raw import (
     RuleFilterStep,
     FetchReadmeStep,
     LLMReviewStep,
+    RetryDegradedReviewsStep,
     StoreCapabilitiesStep,
 )
 from ai4sec_platform.pipelines.steps.repro import TriggerReproStep
@@ -63,6 +64,7 @@ def capability_from_raw_pipeline() -> PipelineDefinition:
             RuleFilterStep(),
             FetchReadmeStep(),
             LLMReviewStep(),
+            RetryDegradedReviewsStep(),
             StoreCapabilitiesStep(),
             SelectUnclassifiedWebCandidatesStep(),
             ClassifyWebCapabilityStep(),
@@ -83,6 +85,7 @@ def capability_from_news_pipeline() -> PipelineDefinition:
             RuleFilterStep(),
             FetchReadmeStep(),
             LLMReviewStep(),
+            RetryDegradedReviewsStep(),
             StoreCapabilitiesStep(),
             SelectUnclassifiedWebCandidatesStep(),
             ClassifyWebCapabilityStep(),

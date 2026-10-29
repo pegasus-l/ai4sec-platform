@@ -108,6 +108,13 @@ def _store_incremental(conn: sqlite3.Connection, item: dict[str, Any], review: d
         )
 
 
+def _enqueue_degraded(conn: sqlite3.Connection, item: dict[str, Any], input_payload: dict[str, Any], reason: str) -> str:
+    """降级候选入待重评队列(见 domains/capabilities/review_backlog.py 的来龙去脉)。返回 item_key。"""
+    from ai4sec_platform.domains.capabilities import review_backlog
+
+    return review_backlog.enqueue(conn, item=item, input_payload=input_payload, reason=reason)
+
+
 def review_candidates(
     conn: sqlite3.Connection,
     items: list[dict[str, Any]],
@@ -123,7 +130,8 @@ def review_candidates(
     model_identity = router.active_config(model_profile)
     prompt = _review_prompt()
     resolved: dict[int, dict[str, Any]] = {}
-    metrics = {"candidates": len(items), "model_calls": 0, "cache_hits": 0, "selected": 0, "watch": 0, "rejected": 0, "failed": 0}
+    metrics = {"candidates": len(items), "model_calls": 0, "cache_hits": 0, "selected": 0, "watch": 0,
+               "rejected": 0, "failed": 0, "degraded": 0, "backlog_enqueued": 0}
 
     if not items:
         return [], metrics
@@ -156,8 +164,19 @@ def review_candidates(
             resolved[r["index"]] = {**r["item"], "review": review}
             decision = review.get("decision", "rejected")
             metrics[decision] = metrics.get(decision, 0) + 1
-            # Incremental DB write: store each item as soon as its review completes
-            if decision in ("selected", "watch"):
+            degraded = str(review.get("degraded_reason") or "")
+            if degraded:
+                # 降级评审不是结论: 不写能力库(否则一次网关 403 就灌进上千条空壳, 见 _fallback_review),
+                # 连同送模型的那份输入进待重评队列, 模型恢复后重评
+                metrics["degraded"] += 1
+                try:
+                    if _enqueue_degraded(conn, r["item"], r["payload"], degraded):
+                        metrics["backlog_enqueued"] += 1
+                    conn.commit()
+                except Exception as exc:  # noqa: BLE001 - 入队失败不该打断整批评审
+                    print(f"[review] backlog enqueue failed: {exc}", flush=True)
+            elif decision in ("selected", "watch"):
+                # Incremental DB write: store each item as soon as its review completes
                 try:
                     _store_incremental(conn, r["item"], review, run_id)
                     conn.commit()
@@ -171,7 +190,9 @@ def review_candidates(
     # Items already stored incrementally during review, just return for metrics
     _rank = {"selected": 3, "watch": 2, "rejected": 1}
     _min_rank = _rank.get(min_decision, 3)
-    selected = [resolved[i] for i in range(len(items)) if i in resolved and _rank.get(resolved[i]["review"].get("decision","rejected"), 0) >= _min_rank]
+    selected = [resolved[i] for i in range(len(items)) if i in resolved and _rank.get(resolved[i]["review"].get("decision","rejected"), 0) >= _min_rank
+                # 降级评审不进返回值 —— 下游 StoreCapabilitiesStep 会把它当结论写库
+                and not resolved[i]["review"].get("degraded_reason")]
     return selected, metrics
 
 
@@ -334,6 +355,8 @@ def _fallback_review(item: dict[str, Any], tech_map: AgentTechMap, reason: str) 
         "decision": "watch" if paths else "rejected",
         "score": score,
         "project_nature": "能力框架",
+        # 标记「这不是一次真评审」的唯一真源: 调用方据此走待重评队列, 不再写库(见 review_backlog.py)
+        "degraded_reason": reason,
         "score_breakdown": breakdown,
         "tech_paths": paths,
         "topic": topic,

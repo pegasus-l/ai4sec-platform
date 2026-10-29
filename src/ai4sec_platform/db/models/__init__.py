@@ -464,6 +464,25 @@ CREATE TABLE IF NOT EXISTS vulnerability_case_projects (
     UNIQUE(case_id, project_id, link_kind)
 );
 CREATE INDEX IF NOT EXISTS idx_vulnerability_case_projects_project ON vulnerability_case_projects(project_id, case_id);
+
+-- 评审降级待重评队列(2026-10-29)。见 domains/capabilities/review_backlog.py:
+-- 模型不可用时 _fallback_review 照样给 decision=watch, 若照旧写库, 一次网关 403 就灌进上千条
+-- 没有内容的「待资料补齐」条目(2026-10-28 实测 24 小时 1941 条)。降级候选改落这里, 模型恢复后
+-- 由 retry_degraded_reviews 步骤重评。input_json 存的是送模型的那份输入 —— raw 游标每 15 分钟
+-- 往前走, 不存就再也拿不回来。
+CREATE TABLE IF NOT EXISTS capability_review_backlog (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    item_key TEXT NOT NULL UNIQUE,
+    item_json TEXT NOT NULL DEFAULT '{}',
+    input_json TEXT NOT NULL,
+    reason TEXT NOT NULL DEFAULT '',
+    attempts INTEGER NOT NULL DEFAULT 0,
+    last_error TEXT NOT NULL DEFAULT '',
+    first_seen_at TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_capability_review_backlog_attempts ON capability_review_backlog(attempts, id);
 """
 
 

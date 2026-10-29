@@ -178,6 +178,199 @@ class LLMReviewStep:
         return StepResult(metrics=metrics)
 
 
+# ─────────────────── Step 5b: 降级评审重评（2026-10-29） ───────────────────
+
+# 降级评审(模型不可用/回包不是评审 schema)不再写库, 候选进 capability_review_backlog 队列,
+# 由本步骤在模型恢复后重评 —— 否则一次网关 403 就能灌进上千条没有内容的条目(2026-10-28 实测)。
+
+
+def capability_status(decision: str, recommended: int) -> str:
+    """评审结论 → 行状态。增量写库、StoreCapabilitiesStep、降级重评三处共用同一口径。"""
+    if decision in ("selected", "watch") and recommended >= 4:
+        return "待复现验证"
+    if decision in ("selected", "watch"):
+        return "待资料补齐"
+    return "已淘汰"
+
+
+def build_store_payload(item: dict[str, Any], review: dict[str, Any]) -> dict[str, Any]:
+    """候选 + 评审结论 → 能力条目 payload(字段集是前端 V1 契约, 别随手改名)。"""
+    recommended = int(review.get("recommended_score") or 0)
+    display_title = review.get("theme") or f"{review.get('work_name', '')}：{review.get('theme_descriptor', '')}"
+    display_summary = review.get("summary_zh", "")
+    return {
+        # review (LLM 完整输出)
+        "review": review,
+        # display fields (V1 兼容)
+        "display_title": display_title,
+        "display_summary": display_summary,
+        "display_theme": review.get("theme_descriptor", ""),
+        "display_topic": review.get("topic", ""),
+        "display_work_name": review.get("work_name", ""),
+        "promo_line": review.get("promo_line", ""),
+        "highlight_line": review.get("highlight_line", ""),
+        "one_liner": review.get("promo_line", ""),
+        "highlight": review.get("highlight_line", ""),
+        "overview": review.get("summary_zh", ""),
+        "summary": review.get("summary_zh", ""),
+        # review status
+        "review_status": "enriched",
+        # rule scoring
+        "rule_score": item.get("rule_score", 0),
+        "rule_breakdown": item.get("rule_breakdown", {}),
+        "security_flag": item.get("security_flag", False),
+        "security_topics": item.get("security_topics", []),
+        "source_news_score": item.get("rule_score", 0),
+        # assessment (V1 顶层字段)
+        "security_value": review.get("security_value", ""),
+        "reproducibility_assessment": review.get("reproducibility_assessment", ""),
+        "application_advice": review.get("application_advice", ""),
+        "code_quality": review.get("code_quality", ""),
+        "score_reason": review.get("score_reason", ""),
+        "capability_type": review.get("capability_type", ""),
+        "application_scenarios": review.get("application_scenarios", []),
+        "tech_points": [p.get("point", "") for p in review.get("tech_paths", [])],
+        # source info
+        "code_url": item.get("code_url", ""),
+        "source_type": item.get("source_type", ""),
+        "capability_scoring": item.get("rule_breakdown", {}),
+        # assessment (嵌套，V1 兼容)
+        "assessment": {
+            "overview": review.get("summary_zh", ""),
+            "security_value": review.get("security_value", ""),
+            "reproducibility_assessment": review.get("reproducibility_assessment", ""),
+            "application_advice": review.get("application_advice", ""),
+            "recommended_score": recommended,
+            "capability_type": review.get("capability_type", ""),
+            "application_scenarios": review.get("application_scenarios", []),
+            "score_reason": review.get("score_reason", ""),
+        },
+        "implementation_depth": {
+            "has_real_code": bool(item.get("code_url")),
+            "has_tests": False,
+            "has_eval": False,
+            "is_prompt_wrapper": False,
+            "is_thin_mcp_wrapper": False,
+        },
+        "repro_status": "candidate",
+        "conversion_status": "待评估",
+        # source news item
+        "source_news_item": {
+            "title": item.get("title"),
+            "summary": item.get("summary"),
+            "url": item.get("url"),
+            "code_url": item.get("code_url"),
+            "stars": item.get("stars"),
+            "published_at": item.get("published_at"),
+            "source_type": item.get("source_type", ""),
+        },
+    }
+
+
+@dataclass
+class RetryDegradedReviewsStep:
+    """把评审降级的候选在模型恢复后重评, 通过则落库。
+
+    入队原因见 domains/capabilities/review_backlog.py。这里只做: 重评 → 落库(与
+    StoreCapabilitiesStep 同一份 payload/状态口径) → 出队。
+
+    两条硬规则:
+    1. **整批都失败 = 探活失败**, 不烧 attempts。否则一次长宕机就能把队列耗成空。
+    2. **created_at 回填成入队时的 first_seen_at**, 不写成今天 —— 补评上个月的候选不该
+       把「今日能力」撑爆, 更不该假装它们是今天新发现的。
+    """
+    name: str = "retry_degraded_reviews"
+    step_type: str = "llm_review"
+    model_profile: str = "configured_model"
+
+    def run(self, context: PipelineContext) -> StepResult:
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        from ai4sec_platform.domains.capabilities import review_backlog
+        from ai4sec_platform.domains.news import reviewer
+        from ai4sec_platform.domains.news.tech_map import AgentTechMap
+
+        project_root = Path(context.settings.project_root) if hasattr(context.settings, 'project_root') else Path("/opt/ai-security-fusion-v2/ai4sec")
+        limit = int(context.params.get("retry_limit", 200))
+        rows = review_backlog.pending(context.conn, limit)
+        if not rows:
+            return StepResult(metrics={"pending": 0, "reviewed": 0, "stored": 0, "rejected": 0})
+
+        model_profile = str(context.params.get("model_profile") or self.model_profile)
+        tech_map = AgentTechMap.load(project_root)
+        router = reviewer.LLMRouter()
+        prompt = reviewer._review_prompt()
+
+        def _work(row: dict[str, Any]) -> dict[str, Any]:
+            result, _output, failed, provider, latency, attempts = reviewer._call_model_api(
+                router, model_profile=model_profile, prompt=prompt, input_payload=row["input_payload"],
+            )
+            return {**row, "result": result, "failed": failed, "provider": provider,
+                    "latency": latency, "attempts": attempts}
+
+        results: list[dict[str, Any]] = []
+        with ThreadPoolExecutor(max_workers=reviewer.CONCURRENCY) as pool:
+            futures = [pool.submit(_work, row) for row in rows]
+            for future in as_completed(futures):
+                results.append(future.result())
+
+        if all(r["failed"] for r in results):
+            # 探活失败: 模型整批不可用。保留队列原样, 下次再试, 不算这条候选的失败次数。
+            return StepResult(metrics={"pending": len(rows), "reviewed": 0, "stored": 0, "rejected": 0,
+                                       "provider_down": 1})
+
+        stored = rejected = dropped = 0
+        for r in results:
+            # 重评的每次模型调用都记账(model_calls 是事后追查「这批条目是怎么来的」的唯一凭据)
+            reviewer._record_attempts(context.conn, run_id=context.run_id, agent_name="degraded_review_retry",
+                                      model_profile=model_profile, provider=r["provider"],
+                                      input_payload=r["input_payload"], attempts=r["attempts"])
+            if r["failed"]:
+                if review_backlog.record_failure(context.conn, r["id"], str((r["result"] or {}).get("error") or "model failed")):
+                    dropped += 1
+                continue
+            review = reviewer._normalize_review(r["result"], r["item"], tech_map)
+            if review.get("degraded_reason"):
+                # 模型回了话但不是评审 schema —— 算这条候选的一次失败, 不重复入队
+                if review_backlog.record_failure(context.conn, r["id"], str(review["degraded_reason"])):
+                    dropped += 1
+                continue
+            review = {**review, "prompt_version": reviewer.REVIEW_PROMPT_VERSION,
+                      "tech_map_version": tech_map.version}
+            decision = review.get("decision", "rejected")
+            if decision not in ("selected", "watch"):
+                review_backlog.remove(context.conn, r["id"])
+                rejected += 1
+                continue
+            item = r["item"]
+            code_url = str(item.get("code_url") or "").strip()
+            existing = repo.get_domain_item_by_repo(context.conn, domain="capabilities", repo_url=code_url) if code_url else None
+            if existing:
+                # 库里已有这个仓库(主链路写过更新的一次评审) → 以库里那份为准, 只出队
+                review_backlog.remove(context.conn, r["id"])
+                continue
+            item_id = repo.create_domain_item(
+                context.conn,
+                domain="capabilities",
+                item_type="capability",
+                title=str(item.get("title") or "未命名条目"),
+                summary=review.get("summary_zh", ""),
+                score=float(review.get("score") or 0),
+                status=capability_status(decision, int(review.get("recommended_score") or 0)),
+                source="asis_raw",
+                source_url=str(item.get("url") or ""),
+                tags=[t for t in (item.get("source_type", ""), review.get("topic", ""), review.get("capability_type", "")) if t],
+                payload=build_store_payload(item, review),
+            )
+            first_seen = str(r.get("first_seen_at") or "")
+            if first_seen:
+                context.conn.execute("UPDATE domain_items SET created_at = ? WHERE id = ?", (first_seen, item_id))
+            review_backlog.remove(context.conn, r["id"])
+            stored += 1
+        context.conn.commit()
+        return StepResult(metrics={"pending": len(rows), "reviewed": len(results), "stored": stored,
+                                   "rejected": rejected, "dropped": dropped, "provider_down": 0})
+
+
 # ─────────────────── Step 6: Store（写库） ───────────────────
 
 @dataclass
@@ -202,84 +395,9 @@ class StoreCapabilitiesStep:
             decision = review.get("decision", "rejected")
             recommended = int(review.get("recommended_score") or 0)
 
-            # status 判定
-            if decision in ("selected", "watch") and recommended >= 4:
-                status = "待复现验证"
-            elif decision in ("selected", "watch"):
-                status = "待资料补齐"
-            else:
-                status = "已淘汰"
+            status = capability_status(decision, recommended)
 
-            display_title = review.get("theme") or f"{review.get('work_name', '')}：{review.get('theme_descriptor', '')}"
-            display_summary = review.get("summary_zh", "")
-
-            payload = {
-                # review (LLM 完整输出)
-                "review": review,
-                # display fields (V1 兼容)
-                "display_title": display_title,
-                "display_summary": display_summary,
-                "display_theme": review.get("theme_descriptor", ""),
-                "display_topic": review.get("topic", ""),
-                "display_work_name": review.get("work_name", ""),
-                "promo_line": review.get("promo_line", ""),
-                "highlight_line": review.get("highlight_line", ""),
-                "one_liner": review.get("promo_line", ""),
-                "highlight": review.get("highlight_line", ""),
-                "overview": review.get("summary_zh", ""),
-                "summary": review.get("summary_zh", ""),
-                # review status
-                "review_status": "enriched",
-                # rule scoring
-                "rule_score": item.get("rule_score", 0),
-                "rule_breakdown": item.get("rule_breakdown", {}),
-                "security_flag": item.get("security_flag", False),
-                "security_topics": item.get("security_topics", []),
-                "source_news_score": item.get("rule_score", 0),
-                # assessment (V1 顶层字段)
-                "security_value": review.get("security_value", ""),
-                "reproducibility_assessment": review.get("reproducibility_assessment", ""),
-                "application_advice": review.get("application_advice", ""),
-                "code_quality": review.get("code_quality", ""),
-                "score_reason": review.get("score_reason", ""),
-                "capability_type": review.get("capability_type", ""),
-                "application_scenarios": review.get("application_scenarios", []),
-                "tech_points": [p.get("point", "") for p in review.get("tech_paths", [])],
-                # source info
-                "code_url": item.get("code_url", ""),
-                "source_type": item.get("source_type", ""),
-                "capability_scoring": item.get("rule_breakdown", {}),
-                # assessment (嵌套，V1 兼容)
-                "assessment": {
-                    "overview": review.get("summary_zh", ""),
-                    "security_value": review.get("security_value", ""),
-                    "reproducibility_assessment": review.get("reproducibility_assessment", ""),
-                    "application_advice": review.get("application_advice", ""),
-                    "recommended_score": recommended,
-                    "capability_type": review.get("capability_type", ""),
-                    "application_scenarios": review.get("application_scenarios", []),
-                    "score_reason": review.get("score_reason", ""),
-                },
-                "implementation_depth": {
-                    "has_real_code": bool(item.get("code_url")),
-                    "has_tests": False,
-                    "has_eval": False,
-                    "is_prompt_wrapper": False,
-                    "is_thin_mcp_wrapper": False,
-                },
-                "repro_status": "candidate",
-                "conversion_status": "待评估",
-                # source news item
-                "source_news_item": {
-                    "title": item.get("title"),
-                    "summary": item.get("summary"),
-                    "url": item.get("url"),
-                    "code_url": item.get("code_url"),
-                    "stars": item.get("stars"),
-                    "published_at": item.get("published_at"),
-                    "source_type": item.get("source_type", ""),
-                },
-            }
+            payload = build_store_payload(item, review)
 
             tags = [item.get("source_type", ""), review.get("topic", ""), review.get("capability_type", "")]
             tags = [t for t in tags if t]
