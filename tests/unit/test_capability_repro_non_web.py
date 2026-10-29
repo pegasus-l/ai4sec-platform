@@ -259,3 +259,21 @@ def test_cleanup_still_restores_conclusion_for_web_item() -> None:
     assert payload["repro_status"] == "success"
     assert "repro_skip_reason" not in payload
     assert status == "待复现验证"
+
+
+def test_final_status_detects_docker_and_kvm_env_limit() -> None:
+    """复现报告明说「本环境没有 Docker / 没有 KVM」→ 落无需复现, 而不是「复现失败」。
+
+    这两条是同一类: 环境边界, 不是项目复现不出来。KVM 是 2026-10-29 补的判据 ——
+    item#50500(kaim56) 的 blockers 写的就是 KVM/Docker/systemd 三缺, 原先只认 docker。
+    """
+    f = repro_step._final_payload_status
+    assert f("failed", {"summary": "本项目必须 Docker, 本环境不支持 Docker, 按平台规则不复现"}) == "not_supported"
+    assert f("failed", {"summary": "部署硬依赖 /dev/kvm",
+                        "blockers": ["本环境无 /dev/kvm, 无法启动 microVM"]}) == "not_supported"
+    # 前置闸: 没点名任何缺失的外部条件 → 不能因为一句「无法复现」就被洗成无需复现
+    assert f("failed", {"summary": "依赖安装失败, 无法复现"}) == "failed"
+    # 普通失败即使提到 docker(比如用 docker 构建时报错)也不改判
+    assert f("failed", {"summary": "docker build failed: npm ERR! 404"}) == "failed"
+    # 非 failed 结论一律原样返回
+    assert f("success", {"summary": "本环境不支持 Docker"}) == "success"

@@ -565,10 +565,15 @@ def _final_payload_status(verdict: str, report: dict[str, Any] | None) -> str:
     elif blockers:
         texts.append(str(blockers))
     blob = " ".join(texts).lower()
-    if "docker" not in blob:
+    # 前置闸: 报告必须点名某个本环境缺的外部条件, 否则一句「按平台规则不复现」就能把普通失败
+    # 洗成无需复现。KVM 与 Docker 同类(item#50500 kaim56 的 blockers 就是 KVM/Docker/systemd),
+    # 2026-10-29 补上 —— 原先只认 docker, 只写 KVM 的报告会继续挂在「复现失败」。
+    if not any(k in blob for k in ("docker", "kvm")):
         return verdict
     markers = ("不支持 docker", "不支持docker", "必须 docker", "必须docker",
                "依赖 docker", "依赖docker", "docker 沙箱", "docker沙箱",
+               "不支持 kvm", "不支持kvm", "必须 kvm", "必须kvm",
+               "依赖 kvm", "依赖kvm", "无 /dev/kvm", "无/dev/kvm", "没有 /dev/kvm",
                "本环境不支持", "环境不支持", "按平台规则不复现", "按规则不复现",
                "不予复现", "无法复现")
     return "not_supported" if any(m in blob for m in markers) else verdict
