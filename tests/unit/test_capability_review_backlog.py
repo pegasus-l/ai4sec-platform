@@ -375,6 +375,33 @@ def test_capability_status_matches_store_contract() -> None:
     assert capability_status("rejected", 5) == "已淘汰"
 
 
+def test_vertical_app_never_enters_the_library() -> None:
+    """垂直应用一律已淘汰(2026-10-29 用户判定: 与 AI for Sec 业务方向无关)。
+
+    只压在性质封顶(≤65 / rec≤3)是不够的 —— 那样它会落「待资料补齐」, 仍然出现在今日能力里
+    (实测争议条目 isemsez/med_assistant)。规则也必须是幂等的: 每 15 分钟的资讯重扫会用
+    review 结论重算 status, 只改数据下一轮就漂回去。
+    """
+    for decision in ("selected", "watch", "rejected"):
+        for recommended in (1, 3, 5):
+            assert capability_status(decision, recommended, "垂直应用") == "已淘汰"
+    # 其余三类与历史口径不变: 能力框架的 watch/3 照样是待资料补齐
+    assert capability_status("watch", 3, "能力框架") == "待资料补齐"
+    assert capability_status("watch", 4, "教学演示") == "待复现验证"
+    assert capability_status("watch", 4, "") == "待复现验证"
+
+
+def test_vertical_app_payload_has_no_repro_status() -> None:
+    """已淘汰的条目不是复现候选 —— 入库模板无条件带的 candidate 戳要摘掉(同非 web 那条教训)。"""
+    vertical = {**_good_review(), "project_nature": "垂直应用"}
+    review = reviewer._normalize_review(vertical, CANDIDATE, TECH_MAP)
+    payload = build_store_payload(CANDIDATE, review)
+    assert "repro_status" not in payload
+    # 横向能力照旧带 candidate, 由后续 web 分类改成终态
+    normal = reviewer._normalize_review(_good_review(), CANDIDATE, TECH_MAP)
+    assert build_store_payload(CANDIDATE, normal)["repro_status"] == "candidate"
+
+
 def test_build_store_payload_keeps_v1_contract() -> None:
     """重评落库与主链路落库必须用同一份 payload, 否则重评回来的条目在页面上长得不一样。"""
     review = reviewer._normalize_review(_good_review(), CANDIDATE, TECH_MAP)

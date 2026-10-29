@@ -184,8 +184,17 @@ class LLMReviewStep:
 # 由本步骤在模型恢复后重评 —— 否则一次网关 403 就能灌进上千条没有内容的条目(2026-10-28 实测)。
 
 
-def capability_status(decision: str, recommended: int) -> str:
-    """评审结论 → 行状态。增量写库、StoreCapabilitiesStep、降级重评三处共用同一口径。"""
+def capability_status(decision: str, recommended: int, project_nature: str = "") -> str:
+    """评审结论 → 行状态。增量写库、StoreCapabilitiesStep、降级重评三处共用同一口径。
+
+    2026-10-29 用户判定: 项目性质是「垂直应用」的条目**不入库**。它把 Agent 技术用在某个
+    具体行业(实测争议条目 isemsez/med_assistant = 俄语临床指南医疗 RAG), 技术本身没有新贡献,
+    与 AI for Sec 的业务方向无关 —— 这类项目按性质封顶(≤65 / rec≤3)之后仍会落「待资料补齐」,
+    然后出现在今日能力里。规则放在这个函数而不是只改数据: 每 15 分钟的资讯重扫会用 review
+    结论重算 status, 只改数据下一轮就被写回「待资料补齐」。
+    """
+    if project_nature == "垂直应用":
+        return "已淘汰"
     if decision in ("selected", "watch") and recommended >= 4:
         return "待复现验证"
     if decision in ("selected", "watch"):
@@ -198,7 +207,7 @@ def build_store_payload(item: dict[str, Any], review: dict[str, Any]) -> dict[st
     recommended = int(review.get("recommended_score") or 0)
     display_title = review.get("theme") or f"{review.get('work_name', '')}：{review.get('theme_descriptor', '')}"
     display_summary = review.get("summary_zh", "")
-    return {
+    payload = {
         # review (LLM 完整输出)
         "review": review,
         # display fields (V1 兼容)
@@ -265,6 +274,11 @@ def build_store_payload(item: dict[str, Any], review: dict[str, Any]) -> dict[st
             "source_type": item.get("source_type", ""),
         },
     }
+    if str(review.get("project_nature") or "") == "垂直应用":
+        # 垂直应用不入库(见 capability_status), 也就不是复现候选 —— 别给已淘汰的条目挂 candidate 戳,
+        # 那是「非 Web 却在待复现」同类的自相矛盾(2026-09-15 那 4208 条)。
+        payload.pop("repro_status", None)
+    return payload
 
 
 @dataclass
@@ -375,7 +389,8 @@ class RetryDegradedReviewsStep:
                 title=str(item.get("title") or "未命名条目"),
                 summary=review.get("summary_zh", ""),
                 score=float(review.get("score") or 0),
-                status=capability_status(decision, int(review.get("recommended_score") or 0)),
+                status=capability_status(decision, int(review.get("recommended_score") or 0),
+                                         str(review.get("project_nature") or "")),
                 source="asis_raw",
                 source_url=str(item.get("url") or ""),
                 tags=[t for t in (item.get("source_type", ""), review.get("topic", ""), review.get("capability_type", "")) if t],
@@ -416,7 +431,10 @@ class StoreCapabilitiesStep:
             decision = review.get("decision", "rejected")
             recommended = int(review.get("recommended_score") or 0)
 
-            status = capability_status(decision, recommended)
+            # 垂直应用一律已淘汰(见 capability_status): 每 15 分钟的资讯重扫都会重算 status,
+            # 只改数据不进这条规则, 下一轮就会被写回「待资料补齐」并重新出现在今日能力里。
+            vertical = str(review.get("project_nature") or "") == "垂直应用"
+            status = capability_status(decision, recommended, "垂直应用" if vertical else "")
 
             payload = build_store_payload(item, review)
 
@@ -431,11 +449,11 @@ class StoreCapabilitiesStep:
                 # 复用已有行时保留 repro 结果,避免重置回 candidate 造成重复复现
                 prev_payload = existing.get("payload") or {}
                 nonweb = is_non_web_blocked(prev_payload)
-                if prev_payload.get("repro_status"):
+                if prev_payload.get("repro_status") and not vertical:
                     payload["repro_status"] = prev_payload["repro_status"]
                 if prev_payload.get("repro_result"):
                     payload["repro_result"] = prev_payload["repro_result"]
-                if prev_payload.get("repro_skip_reason"):
+                if prev_payload.get("repro_skip_reason") and not vertical:
                     payload["repro_skip_reason"] = prev_payload["repro_skip_reason"]
                 # 非 web 把关(2026-09-15): 该 repo 此前已被判定非 web(且非 LOWCONF)时, 不得因资讯
                 # 重扫再次入复现队列。上面 status 是按 review.recommended 重算的, 不看 is_web, 而同一
@@ -458,6 +476,14 @@ class StoreCapabilitiesStep:
                     context.conn.execute(
                         "UPDATE domain_items SET payload_json = "
                         "json_remove(payload_json, '$.repro_result') WHERE id = ?",
+                        (existing["id"],),
+                    )
+                if vertical:
+                    # update_domain_item 对 payload 是浅 merge(永不删键) → 上一轮挂上的 candidate
+                    # 只能显式摘掉, 否则已淘汰的条目还留着复现状态戳。
+                    context.conn.execute(
+                        "UPDATE domain_items SET payload_json = json_remove("
+                        "payload_json, '$.repro_status', '$.repro_skip_reason') WHERE id = ?",
                         (existing["id"],),
                     )
                 item_ids.append(existing["id"])
