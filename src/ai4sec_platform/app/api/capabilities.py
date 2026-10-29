@@ -103,6 +103,29 @@ def _slim_repro_runs(items: Any) -> None:
                 task.pop(key, None)
 
 
+def _item_repro_verdicts(conn: sqlite3.Connection, item_ids: list[Any]) -> dict[int, dict[str, str]]:
+    """取任务所属能力条目的**终态结论**(payload.repro_status / repro_skip_reason), 按 item_id 批量查。
+
+    2026-10-29: 复现页此前只读任务行状态。条目被判「无需复现」(not_supported) 后, 它历史任务行
+    仍是 failed/success, 于是同一件事在能力库说「无需复现」、在复现页说「复现失败」—— 两页打架。
+    结论只在能力条目上, 任务行只是执行记录, 所以这里按 item_id 批量带出结论, 由前端叠加显示。
+    """
+    verdicts: dict[int, dict[str, str]] = {}
+    unique = sorted({int(i) for i in item_ids if i})
+    for start in range(0, len(unique), 500):
+        chunk = unique[start:start + 500]
+        marks = ",".join("?" * len(chunk))
+        rows = conn.execute(
+            "SELECT id, json_extract(payload_json, '$.repro_status'), "
+            f"json_extract(payload_json, '$.repro_skip_reason') FROM domain_items "
+            f"WHERE domain = ? AND id IN ({marks})",
+            [DOMAIN, *chunk],
+        ).fetchall()
+        for row in rows:
+            verdicts[int(row[0])] = {"repro_status": str(row[1] or ""),
+                                     "repro_skip_reason": str(row[2] or "")}
+    return verdicts
+
 
 # ============================================================================
 # 已有端点（保留）
@@ -176,11 +199,18 @@ def item_detail(item_id: int, conn: sqlite3.Connection = Depends(get_db)) -> dic
 
 @router.get("/repro-runs")
 def repro_runs(conn: sqlite3.Connection = Depends(get_db)) -> dict:
-    """复现任务列表，返回可直接用于详情、操作和 SSE 的真实 task id。"""
+    """复现任务列表，返回可直接用于详情、操作和 SSE 的真实 task id。
+
+    `item_repro_status` / `item_repro_skip_reason` 是**所属能力条目的终态结论**(见
+    `_item_repro_verdicts`): 条目落「无需复现」后, 前端据此覆盖任务行的原始 failed/success 展示,
+    否则能力库与复现页对同一件事说法不一。
+    """
     tasks = repo.list_repro_tasks(conn)
+    verdicts = _item_repro_verdicts(conn, [task["item_id"] for task in tasks])
     items = []
     for task in tasks:
         task_data = ReproTaskResponse.from_row(task).model_dump()
+        verdict = verdicts.get(int(task["item_id"] or 0)) or {}
         task_data.update({
             "task_id": task["id"],
             "display_id": f"repro-{task['item_id']}",
@@ -189,6 +219,8 @@ def repro_runs(conn: sqlite3.Connection = Depends(get_db)) -> dict:
             "environment": "auto-runner",
             "last_event": task.get("result", "")[:100] if task.get("result") else "",
             "artifacts": [],
+            "item_repro_status": verdict.get("repro_status", ""),
+            "item_repro_skip_reason": verdict.get("repro_skip_reason", ""),
         })
         items.append(task_data)
     # 轮询瘦身: 见 _REPRO_RUN_DROP_KEYS(详情端点逐字节带回, 每 5s 的轮询 17.5KB → 0.8KB gzip)
@@ -276,11 +308,15 @@ def start_repro(item_id: int, body: StartReproRequest = StartReproRequest(), con
 
 @router.get("/repro/{task_id}")
 def get_repro_task(task_id: int, conn: sqlite3.Connection = Depends(get_db)) -> dict:
-    """单个复现任务详情"""
+    """单个复现任务详情(带所属能力条目的终态结论, 口径与 /repro-runs 一致)"""
     task = repo.get_repro_task(conn, task_id)
     if not task:
         raise HTTPException(status_code=404, detail="repro task not found")
-    return ReproTaskResponse.from_row(task).model_dump()
+    data = ReproTaskResponse.from_row(task).model_dump()
+    verdict = _item_repro_verdicts(conn, [task.get("item_id")]).get(int(task.get("item_id") or 0)) or {}
+    data["item_repro_status"] = verdict.get("repro_status", "")
+    data["item_repro_skip_reason"] = verdict.get("repro_skip_reason", "")
+    return data
 
 
 @router.post("/repro/{task_id}/stop")

@@ -508,31 +508,33 @@ function CapabilityRepro({ runs, openDetail, targetItemId, onTargetConsumed }: {
     enabled: Boolean(selected?.item_id),
     staleTime: 300_000,
   });
-  const runningCount = runs.filter(run => run.status === 'running' || run.status === 'queued').length;
-  const successCount = runs.filter(run => run.status === 'success' || run.status === 'partial').length;
-  const failedCount = runs.filter(run => run.status === 'failed' || run.status === 'timeout').length;
+  const runningCount = runs.filter(run => taskShownStatus(run) === 'running' || taskShownStatus(run) === 'queued').length;
+  const successCount = runs.filter(run => ['success', 'partial'].includes(taskShownStatus(run))).length;
+  const failedCount = runs.filter(run => ['failed', 'timeout'].includes(taskShownStatus(run))).length;
+  const notSupportedCount = runs.filter(run => taskShownStatus(run) === 'not_supported').length;
 
   return <div className="grid">
     {targetHint && <div style={{ padding: '8px 12px', marginBottom: 8, borderRadius: 6, border: '1px solid var(--amber, #f5b83d)', background: 'var(--amber-bg, rgba(245,184,61,0.12))', fontSize: 12, color: 'var(--faint)' }}>ℹ {targetHint}</div>}
     {runs.length === 0 && <EmptyState title="暂无复现任务" description="从今日能力或能力库点击「加入复现」触发" />}
     {runs.length > 0 && <>
-      <div className="repro-metrics">
+      <div className="repro-metrics five">
         <div><span>全部任务</span><b>{runs.length}</b></div>
         <div><span>正在复现</span><b className="repro-running">{runningCount}</b></div>
         <div><span>复现成功</span><b className="repro-success">{successCount}</b></div>
         <div><span>失败 / 超时</span><b className="repro-failed">{failedCount}</b></div>
+        <div><span>无需复现</span><b className="repro-skipped">{notSupportedCount}</b></div>
       </div>
       <div className="repro-workbench">
         <div className="panel repro-task-panel">
           <div className="panel-head"><h3>任务队列 ({runs.length})</h3><span>{runningCount > 0 ? '实时更新中' : '历史任务'}</span></div>
           <div className="panel-body repro-task-list">
             {runs.map((run, index) => <button type="button" key={run.id} className={`repro-task ${run.id === selected?.id ? 'active' : ''}`} onClick={() => { setSelectedTaskId(run.id); setTargetHint(null); }}>
-              <span className={`repro-status-dot status-${run.status}`} />
+              <span className={`repro-status-dot status-${taskShownStatus(run)}`} />
               <span className="repro-task-main">
                 <strong>{run.title || run.repo_url?.split('/').filter(Boolean).slice(-1)[0] || `task-${run.id}`}</strong>
                 <small>#{run.id} · {run.trigger || 'manual'} · {formatReproTime(run.created_at)}</small>
               </span>
-              <span className={`repro-status status-${run.status}`}>{reproStatusLabel(run.status)}</span>
+              <span className={`repro-status status-${taskShownStatus(run)}`}>{reproStatusLabel(taskShownStatus(run))}</span>
               {index === 0 && (run.status === 'running' || run.status === 'queued') && <span className="repro-live">LIVE</span>}
             </button>)}
           </div>
@@ -623,13 +625,16 @@ function ReproDetailContent({ task, capabilityItem, openDetail }: { task: ReproT
 
   const report = liveReport ?? currentTask.report ?? capabilityItem?.payload?.repro_report;
   const p = capabilityItem?.payload ?? {};
+  // 头部徽标同样以条目结论为准(见 taskShownStatus): 否则列表已写「无需复现」, 选中后的控制台还写
+  // 「复现失败」。日志流、自动滚动、停止按钮仍按真实任务状态工作 —— 覆盖的只是对外那句话。
+  const shownStatus = currentTask.item_repro_status === 'not_supported' ? 'not_supported' : liveStatus;
   // 流式用 SSE 全量; 断流/终态/刷新用完整日志(不再是 log_excerpt 的最后 200 行)
   const fullLogText = fullLog?.log ?? currentTask.log_excerpt ?? currentTask.result ?? '';
   const displayedLogs = streaming && logs.length > 0 ? logs : fullLogText.split('\n').filter(Boolean).map(line => ({ line: stripAnsi(line), kind: classifyLogLine(line) }));
 
   return <div className="repro-console">
     <div className="repro-console-head">
-      <div><span className={`repro-status status-${liveStatus}`}>{reproStatusLabel(liveStatus)}</span><strong>{currentTask.repo_url?.split('/').filter(Boolean).slice(-1)[0]}</strong></div>
+      <div><span className={`repro-status status-${shownStatus}`}>{reproStatusLabel(shownStatus)}</span><strong>{currentTask.repo_url?.split('/').filter(Boolean).slice(-1)[0]}</strong></div>
       <div className="repro-meta">任务 #{currentTask.id}{currentTask.web_port ? ` · Web ${currentTask.web_port}` : ''}</div>
     </div>
     <div className="repro-actions">
@@ -688,8 +693,17 @@ function ReproDetailContent({ task, capabilityItem, openDetail }: { task: ReproT
   </div>;
 }
 
+/** 任务行该显示成什么: 所属能力条目已被判「无需复现」时, 覆盖任务行的原始结果。
+ *
+ *  2026-10-29: 同一件事在两页说法不一 —— 能力库写「无需复现」, 复现页还按任务行的 failed/success
+ *  显示「复现失败」/「复现成功」。结论在能力条目上(item_repro_status, 后端 /repro-runs 与
+ *  /repro/{id} 一并带回), 任务行只是执行记录, 所以展示层以结论为准; 原始状态仍可在详情里追。 */
+function taskShownStatus(task: { status: string; item_repro_status?: string }): string {
+  return task.item_repro_status === 'not_supported' ? 'not_supported' : task.status;
+}
+
 function reproStatusLabel(status: string): string {
-  return { queued: '排队中', running: '复现中', success: '复现成功', partial: '部分成功', failed: '复现失败', stopped: '已停止', timeout: '已超时', cleaned: '已清理' }[status] ?? status;
+  return { queued: '排队中', running: '复现中', success: '复现成功', partial: '部分成功', failed: '复现失败', stopped: '已停止', timeout: '已超时', cleaned: '已清理', not_supported: '无需复现' }[status] ?? status;
 }
 
 function formatReproTime(value?: string): string {

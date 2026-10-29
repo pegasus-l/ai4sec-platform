@@ -105,6 +105,10 @@ export interface ReproTask {
   result?: string;
   report?: ReproReport | null;
   log_excerpt?: string;
+  /** 所属能力条目的终态结论(/repro-runs 与 /repro/{id} 带回)。not_supported ⇒ 展示「无需复现」,
+   *  覆盖任务行原始 failed/success —— 同一件事不能两页两种说法。 */
+  item_repro_status?: string;
+  item_repro_skip_reason?: string;
 }
 
 export interface ConversionRecord {
