@@ -296,6 +296,8 @@ class StoreCapabilitiesStep:
                     payload["repro_status"] = prev_payload["repro_status"]
                 if prev_payload.get("repro_result"):
                     payload["repro_result"] = prev_payload["repro_result"]
+                if prev_payload.get("repro_skip_reason"):
+                    payload["repro_skip_reason"] = prev_payload["repro_skip_reason"]
                 # 非 web 把关(2026-09-15): 该 repo 此前已被判定非 web(且非 LOWCONF)时, 不得因资讯
                 # 重扫再次入复现队列。上面 status 是按 review.recommended 重算的, 不看 is_web, 而同一
                 # code_url 每晚都会被重新发现 → 已淘汰的条目被原样写回"待复现验证"; 又因
@@ -303,18 +305,20 @@ class StoreCapabilitiesStep:
                 # 再分类 → 一旦漂移就再无机会降级(实测 72 条漂移, 8/17 分类 / 9 月仍在队列)。
                 if status == "待复现验证" and nonweb:
                     status = "已淘汰"
-                # 非 web 条目不参与复现 → 复现状态整键摘掉(2026-09-15): 上面的入库模板无条件带
-                # "repro_status": "candidate", 而 update_domain_item 对 payload 是浅 merge(永不删键)
-                # → 只从出参里 pop 改不动落库行, 必须再对落库行 json_remove 一次, 否则每 15 分钟的
-                # 资讯重扫(capabilities.from_news_pipeline)就把已清掉的戳重新盖上。
-                # 只摘 repro_status: repro_result 是人工跑出来的结论(报告仍可看), 仍走「清理」入口。
+                # 非 web 条目不参与复现 → 落终态「无需复现」(2026-10-29 改口径, 原先是把 repro_status
+                # 整键摘掉)。上面入库模板无条件带 "repro_status": "candidate", 而 update_domain_item
+                # 对 payload 是浅 merge(永不删键), 所以这里必须显式改写成 not_supported —— 每 15 分钟的
+                # 资讯重扫(capabilities.from_news_pipeline)都会走到这里, 摘空就会被下一次重算复活。
+                # 只摘 repro_result: 非 web 没有「复现原文」可看, 留着卡片会挂「查看复现」。
                 if nonweb:
-                    payload.pop("repro_status", None)
+                    payload["repro_status"] = "not_supported"
+                    payload.setdefault("repro_skip_reason", "non_web")
+                    payload.pop("repro_result", None)
                 repo.update_domain_item(context.conn, item_id=existing["id"], status=status, score=score, payload=payload)
                 if nonweb:
                     context.conn.execute(
                         "UPDATE domain_items SET payload_json = "
-                        "json_remove(payload_json, '$.repro_status') WHERE id = ?",
+                        "json_remove(payload_json, '$.repro_result') WHERE id = ?",
                         (existing["id"],),
                     )
                 item_ids.append(existing["id"])

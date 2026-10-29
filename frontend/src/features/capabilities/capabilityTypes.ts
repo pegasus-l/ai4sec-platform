@@ -25,6 +25,8 @@ export interface CapabilityItem {
     tech_points?: string[];
     repro_status?: string;
     repro_result?: unknown;
+    /** repro_status==='not_supported'(无需复现)的原因: non_web=项目不是 Web / env_unsupported=依赖 Docker 等本环境没有的条件 */
+    repro_skip_reason?: 'non_web' | 'env_unsupported';
     conversion_status?: string;
     is_web?: boolean;
     web_framework?: string;

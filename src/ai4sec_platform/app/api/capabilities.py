@@ -250,7 +250,7 @@ def start_repro(item_id: int, body: StartReproRequest = StartReproRequest(), con
             "demo_url": demo_url,
         }
 
-    # 无法复现(环境不支持, 如依赖 Docker 而本环境无 Docker): 拒绝再次入队, 与官方 Demo 同为跳过语义
+    # 无需复现(终态: 非 Web, 或环境不支持如依赖 Docker 而本环境无 Docker): 拒绝再次入队, 与官方 Demo 同为跳过语义
     repro_status = str((item.get("payload") or {}).get("repro_status") or "")
     if repro_status == "not_supported":
         return {
@@ -298,9 +298,10 @@ def cleanup_repro(task_id: int, conn: sqlite3.Connection = Depends(get_db)) -> d
     """清理复现任务（作废该任务; 复现卷里的 clone/venv/服务进程由 repro 看门狗 ≤2 分钟回收）, 并按剩余任务重算该 item 的复现结论。
 
     清理 = 这条任务作废, 不管它是不是最新的一条:
+      - 非 web 条目 → 结论固定为终态「无需复现」(repro_status=not_supported, 原因 non_web),
+        不复位回待复现队列, 也不采纳任何剩余任务的结论;
       - 该 item 还有未清理的任务 → 结论回到其中最新那条(repro_result 不动);
-      - 已无未清理任务 → 复位「待复现」并抹掉 repro_result, 能力库卡片随之不再显示「查看复现」
-        (非 web 条目只清 payload, 不复位回待复现队列)。
+      - 已无未清理任务 → 复位「待复现」并抹掉 repro_result, 能力库卡片随之不再显示「查看复现」。
     """
     task = repo.get_repro_task(conn, task_id)
     if not task:
@@ -326,17 +327,20 @@ def cleanup_repro(task_id: int, conn: sqlite3.Connection = Depends(get_db)) -> d
             (item_id,),
         ).fetchone()
         rest_status = _TASK_TO_PAYLOAD_STATUS.get(rest["status"] if rest else "", None)
-        if rest_status and rest_status != "candidate":
-            # 还有没清理的任务 → 结论回到它, repro_result 保持不动
-            payload["repro_status"] = rest_status
-            repo.update_domain_item(conn, item_id=item_id, payload=payload)
-        elif is_non_web_blocked(payload):
-            # 非 web 条目本就不参与复现(2026-09-15): 最后一条任务被清掉后, 复现状态在 payload 里
-            # 整体消失 —— 不是退回"待复现"。否则数据里永远挂着「非Web 却待复现」的自相矛盾, 而且
-            # 行状态还停在「已复现」(item#30721 实测: 行说已复现、payload 说待复现)。
+        if is_non_web_blocked(payload):
+            # 非 web 条目本就不参与复现 —— **这条判断必须排在 rest_status 之前**(2026-10-29 修):
+            #   排在后面时, 只要该 item 名下还有一条没清理的旧任务(哪怕它的结论早已作废), 就会把那条
+            #   任务的结论写回 payload。item#51988(worktrunk)实测: 复现已判非 web、payload 已摘空,
+            #   用户在页面上清理旧任务#1022 时, 还活着的成功任务#1027 把 success 写回来 —— 于是同一个
+            #   条目同时显示「已复现」和「非Web」。
+            # 终态与 repro._write_payload 同口径: repro_status=not_supported + repro_skip_reason=non_web,
+            # 不摘空 repro_status(摘空后任何一次结论重算都可能把它复活, 页面也会退回「待复现」)。
+            # repro_result 要摘: 非 web 没有「复现原文」可看, 留着卡片会挂「查看复现」。
             # 行状态若正是复现结论(已复现/部分复现/复现失败)一并归「已淘汰」; 其余(待资料补齐等)不动,
             # 免得把另一个维度的问题顺手改了。
-            payload.pop("repro_status", None)
+            payload["repro_status"] = "not_supported"
+            payload["repro_skip_reason"] = "non_web"
+            payload.pop("repro_result", None)
             row_status = item.get("status") or ""
             repo.update_domain_item(
                 conn,
@@ -344,12 +348,15 @@ def cleanup_repro(task_id: int, conn: sqlite3.Connection = Depends(get_db)) -> d
                 status="已淘汰" if row_status in ("已复现", "部分复现", "复现失败") else None,
                 payload=payload,
             )
-            # merge 不删键 → 显式 json_remove 掉 repro_status 与 repro_result
+            # merge 不删键 → 显式 json_remove 掉 repro_result
             conn.execute(
-                "UPDATE domain_items SET payload_json = "
-                "json_remove(payload_json, '$.repro_status', '$.repro_result') WHERE id = ?",
+                "UPDATE domain_items SET payload_json = json_remove(payload_json, '$.repro_result') WHERE id = ?",
                 (item_id,),
             )
+        elif rest_status and rest_status != "candidate":
+            # 还有没清理的任务 → 结论回到它, repro_result 保持不动
+            payload["repro_status"] = rest_status
+            repo.update_domain_item(conn, item_id=item_id, payload=payload)
         else:
             # 已无有效任务 → 撤销这条 item 的复现结论(卡片随之不再显示「查看复现」)。
             # not_supported(环境不支持)是终态、本就不进复现队列, 撤销后保留该结论不退回 candidate,

@@ -42,15 +42,19 @@ function hasReproResult(p: CapabilityItem['payload'] | undefined): boolean {
   return ['success', 'succeeded', 'partial', 'failed', 'error', 'in_progress'].includes(s ?? '') || Boolean(p?.repro_result);
 }
 
-/** 复现状态徽标文案/色调(含 not_supported=无法复现) */
+/** 复现状态徽标文案/色调(含 not_supported=无需复现)。
+ *  2026-10-29 更名: 原「无法复现」。它同时覆盖两种互不相干的情形 —— 项目根本不是 Web(复现维度不适用)、
+ *  依赖 Docker 等本环境没有的条件(跑了也只会 FAILURE)。两者都是「平台决定不跑/跑了没有意义」，
+ *  共同点是**不该被读成「这个项目复现不出来」**。具体哪一种只在抽屉里按 repro_skip_reason 说明，
+ *  徽标只写「无需复现」以免卡片上出现两种措辞。色调从 red 改 slate: 它不是失败。 */
 const REPRO_LABEL: Record<string, string> = {
   candidate: '可复现', in_progress: '复现中', no_code: '无代码', success: '已复现',
   succeeded: '已复现', partial: '部分复现', failed: '复现失败', error: '复现异常',
-  not_supported: '无法复现', demo_verified: '官方Demo',
+  not_supported: '无需复现', demo_verified: '官方Demo',
 };
 const reproBadgeLabel = (rs?: string) => REPRO_LABEL[rs ?? ''] ?? rs ?? '未知';
 const reproBadgeTone = (rs?: string): 'green' | 'sky' | 'slate' | 'amber' | 'red' =>
-  rs === 'candidate' ? 'green' : rs === 'in_progress' ? 'sky' : rs === 'no_code' ? 'slate' : rs === 'not_supported' ? 'red' : 'amber';
+  rs === 'candidate' ? 'green' : rs === 'in_progress' ? 'sky' : rs === 'no_code' ? 'slate' : rs === 'not_supported' ? 'slate' : 'amber';
 
 /** 前端口径: 只要 payload 标了 is_web=false 就不算"可复现", LOWCONF 也算非 web。
  *  与后端 is_non_web_blocked 有意不同 —— 后端给 LOWCONF 留了例外(LLM 判 web 但无佐证,
@@ -58,7 +62,7 @@ const reproBadgeTone = (rs?: string): 'green' | 'sky' | 'slate' | 'amber' | 'red
  *  继续对外宣称"可复现"。实测 LOWCONF 有 103 条, 用户在页面上看到的就是它们。 */
 const isNonWebBlocked = (p: CapabilityItem['payload'] | undefined): boolean => p?.is_web === false;
 /** 是否渲染"可复现"徽标: 非 web 且仍是 candidate(待复现) 时不渲染 —— 同排已有「非Web」徽标承载
- *  该信息, 直接省略以免两个"非Web"并排。其余状态(无法复现/复现失败等)仍有信息量, 照常显示。 */
+ *  该信息, 直接省略以免两个"非Web"并排。其余状态(无需复现/复现失败等)仍有信息量, 照常显示。 */
 const showReproBadge = (p: CapabilityItem['payload'] | undefined): boolean =>
   !(isNonWebBlocked(p) && p?.repro_status === 'candidate');
 
@@ -221,7 +225,7 @@ function CapabilityToday({ items, stats, openDetail }: { items: CapabilityItem[]
 function CapabilityCard({ item, rank, onClick, onViewRepro }: { item: CapabilityItem; rank: number; onClick: () => void; onRepro: () => void; onViewRepro?: (item: CapabilityItem) => void }) {
   const p = item.payload ?? {};
   const sourceType = p.source_type || (item.source_url?.includes('github.com') ? 'github' : 'arxiv');
-  const reproTag = p.repro_status === 'candidate' ? 'green' : p.repro_status === 'in_progress' ? 'sky' : p.repro_status === 'no_code' ? 'slate' : p.repro_status === 'not_supported' ? 'red' : 'amber';
+  const reproTag = p.repro_status === 'candidate' ? 'green' : p.repro_status === 'in_progress' ? 'sky' : p.repro_status === 'no_code' ? 'slate' : p.repro_status === 'not_supported' ? 'slate' : 'amber';
   const reproText = reproBadgeLabel(p.repro_status);
   return <div className="asis-card clickable" onClick={onClick}>
     <div className="rank">{rank}</div>
@@ -247,12 +251,12 @@ function CapabilityCard({ item, rank, onClick, onViewRepro }: { item: Capability
 // 复现芯片名 → 后端 repro 键(与 /items/stats 的 repro 桶同名)
 const REPRO_CHIP_KEY: Record<string, ReproBucketKey> = {
   '官方 Demo': 'demo', '完整复现': 'success', '部分复现': 'partial', '复现中': 'in_progress',
-  '待复现': 'pending', '复现失败': 'failed', '无法复现': 'not_supported',
+  '待复现': 'pending', '复现失败': 'failed', '无需复现': 'not_supported',
 };
 // 桶 → 工程可用性视图的分组标题; 顺序即展示顺序
 const ENGINEERING_BUCKET_LABEL: Record<string, string> = {
   demo: '官方 Demo', success: '完整复现', partial: '部分复现', in_progress: '复现中',
-  pending: '待 Web 复现', failed: '复现失败', not_supported: '无法复现', non_web: '非 Web(不参与复现)',
+  pending: '待 Web 复现', failed: '复现失败', not_supported: '无需复现', non_web: '非 Web(不参与复现)',
 };
 const ENGINEERING_BUCKET_ORDER = ['demo', 'success', 'partial', 'in_progress', 'pending', 'failed', 'not_supported', 'non_web'] as const;
 
@@ -296,7 +300,7 @@ function CapabilityLibrary({ stats, search, openDetail, onViewRepro }: { stats?:
       case '复现中': return stats.repro.in_progress;
       case '待复现': return stats.repro.pending;
       case '复现失败': return stats.repro.failed;
-      case '无法复现': return stats.repro.not_supported;
+      case '无需复现': return stats.repro.not_supported;
       default: return undefined;
     }
   };
@@ -407,7 +411,7 @@ function CapabilityLibrary({ stats, search, openDetail, onViewRepro }: { stats?:
       <span style={{ fontSize: 12, color: 'var(--faint)', alignSelf: 'center', whiteSpace: 'nowrap' }}>可体验·复现</span>
       {onlyNonWeb
         ? <span style={{ fontSize: 12, color: 'var(--faint)', alignSelf: 'center' }}>非 Web 条目不参与复现(已被 web 把关挡在复现队列外), 该维度对其不适用</span>
-        : (['官方 Demo', '完整复现', '部分复现', '复现中', '待复现', '复现失败', '无法复现'] as const).map(chip => <span key={chip} className={`view-pill ${reproChips.includes(chip) ? 'active' : ''}`} onClick={() => setReproChips(toggleValue(reproChips, chip))}>{chip}{chipCount(chip) !== undefined && <em style={{ fontSize: 11, opacity: 0.7, fontStyle: 'normal' }}> {chipCount(chip)}</em>}</span>)}
+        : (['官方 Demo', '完整复现', '部分复现', '复现中', '待复现', '复现失败', '无需复现'] as const).map(chip => <span key={chip} className={`view-pill ${reproChips.includes(chip) ? 'active' : ''}`} onClick={() => setReproChips(toggleValue(reproChips, chip))}>{chip}{chipCount(chip) !== undefined && <em style={{ fontSize: 11, opacity: 0.7, fontStyle: 'normal' }}> {chipCount(chip)}</em>}</span>)}
     </div>
     {loadingAll && <EmptyState title="正在加载全量" description="分组视图需要整个筛选结果集, 首次切换时拉取一次。" />}
     {/* 空态只在"确实查过且命中 0"时给: 首帧 data 还没到, 单看 total===0 会先闪一下"能力库为空" */}
@@ -730,7 +734,7 @@ function CapabilityDetailContent({ itemId, initialItem, onRepro, onConvert, onVi
     setSubmitting(false);
     setShowConvertForm(false);
   };
-  // 无法复现的原因全文(取自复现结果 repro_result.summary, 如 AutoCVE 的 FAILURE 判定说明)
+  // 复现结论原文(取自复现结果 repro_result.summary, 如 AutoCVE 的 FAILURE 判定说明)
   const reproReason = p.repro_result && typeof p.repro_result === 'object' ? (p.repro_result as { summary?: string }).summary : undefined;
 
   return <div className="grid">
@@ -776,8 +780,12 @@ function CapabilityDetailContent({ itemId, initialItem, onRepro, onConvert, onVi
     {!p.demo_url && p.repro_summary && <div className="drawer-section"><h3>复现摘要</h3><p style={{ color: 'var(--green)' }}>{p.repro_summary}</p></div>}
     <div className="drawer-section"><h3>复现 & 转化</h3><div className="badges">{showReproBadge(p) && <Badge tone={reproBadgeTone(p.repro_status)}>{reproBadgeLabel(p.repro_status)}</Badge>}<Badge tone="violet">{p.conversion_status ?? '待评估'}</Badge>{p.is_web ? <Badge tone="amber">Web{p.web_framework ? `:${p.web_framework}` : ''}</Badge> : <Badge tone="slate">非Web</Badge>}{p.demo_url && <Badge tone="green">官方 Demo</Badge>}</div></div>
 
-    {/* 无法复现说明: 环境不支持(Docker 等) → 已剔除复现队列 */}
-    {p.repro_status === 'not_supported' && <div className="drawer-section"><h3>复现说明</h3><p style={{ color: 'var(--red)' }}>项目依赖 Docker 等本环境不支持的运行条件，已按平台规则判定为「无法复现」，不进入复现队列。</p>{reproReason && <blockquote style={{ margin: '8px 0 0', padding: '8px 12px', background: 'rgba(255,0,0,.05)', borderLeft: '3px solid var(--red)', fontSize: 12 }}>{reproReason}</blockquote>}</div>}
+    {/* 无需复现说明(2026-10-29): 徽标只写「无需复现」, 为什么不需要放在这里 —— 两种原因互不相干,
+        合成一句话就会两种都说错。旧数据没有 repro_skip_reason 时按 Docker 口径兜底(那是这个终态
+        最初的唯一来源)。 */}
+    {p.repro_status === 'not_supported' && <div className="drawer-section"><h3>复现说明</h3><p style={{ color: 'var(--muted, #8a8f98)' }}>{p.repro_skip_reason === 'non_web'
+      ? '复现结论判定这个项目不是 Web 应用（没有浏览器界面），复现维度对它不适用 —— 不是复现失败，也不会进入复现队列。'
+      : '项目依赖 Docker 等本环境没有的运行条件，按平台规则判定为「无需复现」，不进入复现队列。这是环境边界，不是项目本身复现不出来。'}</p>{reproReason && <blockquote style={{ margin: '8px 0 0', padding: '8px 12px', background: 'rgba(127,127,127,.07)', borderLeft: '3px solid rgba(127,127,127,.5)', fontSize: 12 }}>{reproReason}</blockquote>}</div>}
 
     {/* 使用说明 */}
     {p.usage && Object.keys(p.usage).length > 0 && <div className="drawer-section"><h3>使用说明</h3><p><b>是什么:</b> {p.usage.what ?? ''}</p><p><b>怎么用:</b> {p.usage.how_to_use ?? ''}</p>{p.usage.prerequisites && <p><b>前提:</b> {p.usage.prerequisites}</p>}{p.usage.limitations && <p><b>限制:</b> {p.usage.limitations}</p>}</div>}

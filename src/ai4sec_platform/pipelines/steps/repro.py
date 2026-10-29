@@ -50,10 +50,14 @@ def _connect() -> sqlite3.Connection:
 # ---------------------------------------------------------------------------
 # 前端 ReproTask status 词表: queued|running|success|partial|failed|timeout|stopped|cleaned
 # payload repro_status 词表（与前端卡片 map 对齐）: candidate|in_progress|no_code|success|partial|failed|error|not_supported
-# not_supported=无法复现: 项目依赖 Docker 等本环境不支持的运行条件, 判定后不进复现队列
+# not_supported=无需复现(2026-10-29 更名, 原「无法复现」): 平台判定这条不走复现维度, 不进复现队列。
+#   两种原因写在 payload.repro_skip_reason:
+#     non_web          —— 复现/分类判定它根本没有 Web 界面, 复现维度对它不适用
+#     env_unsupported  —— 依赖 Docker/KVM 等本环境不支持的外部条件, 跑了也只会 FAILURE
+#   两者都不该在页面上显示成「复现成功」或「复现失败」: 一个是从没成功过, 一个是根本没打算跑。
 # ---------------------------------------------------------------------------
 _PAYLOAD_ACTIVE_STATUSES = {"success", "succeeded", "partial", "failed", "in_progress", "error", "not_supported"}
-_STATUS_TO_ITEM = {"success": "已复现", "partial": "部分复现", "failed": "复现失败", "error": "复现失败", "not_supported": "无法复现"}
+_STATUS_TO_ITEM = {"success": "已复现", "partial": "部分复现", "failed": "复现失败", "error": "复现失败", "not_supported": "无需复现"}
 
 # 平台对外访问链接: 用户打开复现 Web 界面的入口
 # (ASIS → /insights/ rewrite → ai4sec → /repro-web/ → repro nginx 总机:8080 → /task/{id}/ → 任务独立端口)
@@ -548,7 +552,7 @@ def _update_task(task_id: int, **fields: Any) -> None:
 
 
 def _final_payload_status(verdict: str, report: dict[str, Any] | None) -> str:
-    """终态 payload 归一: 环境不支持(Docker 等外部依赖缺失)导致的复现失败 → 'not_supported'(无法复现)。
+    """终态 payload 归一: 环境不支持(Docker 等外部依赖缺失)导致的复现失败 → 'not_supported'(无需复现)。
     判定依据: 复现结论为 FAILURE, 且 report 的 summary/blockers 明确写出"本环境不支持 Docker / 按规则不复现"
     等标记。命中后 item 级状态归 not_supported, 不再进复现队列; task 记录仍保留原 failed 结论(历史不变)。"""
     if verdict != "failed":
@@ -584,25 +588,37 @@ def _write_payload(item_id: int, repro_status: str, repro_result: dict[str, Any]
         # 报告缺省该字段(超时兜底/异常路径)则整体不覆盖, 保留原分类。
         web_flag = (web_report or {}).get("is_web")
         # agent 判定「本项目不是 web」(2026-10-27): 该条目从此不参与复现维度 —— 回填 is_web=false 让后续
-        # 自动入队被 is_non_web_blocked 挡掉, 同时把这次复现结论整体摘掉。留着 repro_status/repro_result
-        # 会让页面继续挂「查看复现」、行状态停在「复现失败」, 与「非 Web(不参与复现)」自相矛盾
-        # (item#96253 实测)。行状态落「已淘汰」, 与 /repro/{id}/cleanup 的非 web 分支、分类阶段的
-        # web 把关同一个口径。
-        # not_supported 例外(2026-10-29 修正): 「环境不支持 Docker」是终态, 必须保留「无法复现」结论
-        # (摘掉就会退回待复现队列, 白烧一次 run); 但它同样**不能改 web 分类**。
+        # 自动入队被 is_non_web_blocked 挡掉。行状态落「已淘汰」, 与 /repro/{id}/cleanup 的非 web 分支、
+        # 分类阶段的 web 把关同一个口径。
+        # not_supported 例外(2026-10-29 修正): 「环境不支持 Docker」是终态, 必须保留结论(摘掉就会退回
+        # 待复现队列, 白烧一次 run); 但它同样**不能改 web 分类**。
         # item#10711(LingMi1/agent-go) 实测: 提示词旧版让 agent 在 Docker 硬依赖时一律报 is_web=false,
         # 于是一个自带 React 界面的项目被打上「非 Web(不参与复现)」, 与「它确实是 web 项目」自相矛盾。
-        # is_web 描述的是项目本身有没有 Web 界面, 与能不能在当前环境跑起来无关 —— 这条终态只落
-        # repro_status/repro_result, 分类保持原判(不写 is_web / web_framework / web_reclass)。
+        # is_web 描述的是项目本身有没有 Web 界面, 与能不能在当前环境跑起来无关 —— 这条终态不写
+        # is_web / web_framework / web_reclass。
+        # 2026-10-29 二次修正: 非 web 条目**不再把 repro_status 摘空**, 而是落同一个终态 not_supported
+        # + repro_skip_reason='non_web'。摘空的后果是页面退回「待复现/什么都没有」, 而条目其实已经
+        # 被判定不参与复现了; 更糟的是摘空后经不起任何一次结论重算 —— item#51988(worktrunk)在页面上
+        # 点一次「清理」旧任务, cleanup 就把还活着的成功任务结论写回来, 变成「已复现 + 非Web」。
+        # 只摘 repro_result: 非 web 没有「复现失败原文」可看, 留着会让卡片挂「查看复现」。
         non_web = web_flag is False and repro_status != "not_supported"
         apply_web = isinstance(web_flag, bool) and repro_status != "not_supported"
         payload = dict(item.get("payload") or {})
+        drop_keys: list[str] = []
         if non_web:
-            payload.pop("repro_status", None)
+            payload["repro_status"] = "not_supported"
+            payload["repro_skip_reason"] = "non_web"
             payload.pop("repro_result", None)
+            drop_keys.append("$.repro_result")
         else:
             payload["repro_status"] = repro_status
             payload["repro_result"] = repro_result
+            if repro_status == "not_supported":
+                payload["repro_skip_reason"] = "env_unsupported"
+            else:
+                # 原因只跟着终态走: 成功/部分/失败不该留着上一轮的「无需复现」原因
+                payload.pop("repro_skip_reason", None)
+                drop_keys.append("$.repro_skip_reason")
         if apply_web:
             payload["is_web"] = web_flag
             payload["web_reclass"] = f"repro-corrected-{_utc_now()[:10]}"
@@ -617,12 +633,12 @@ def _write_payload(item_id: int, repro_status: str, repro_result: dict[str, Any]
         if target_status:
             fields["status"] = target_status
         repo.update_domain_item(conn, item_id=item_id, **fields)
-        if non_web:
-            # merge 永不删键 → 显式摘掉上一轮留下的复现结论
+        if drop_keys:
+            # merge 永不删键 → 该消失的键必须显式 json_remove, 否则上一轮的结论/原因会粘住
+            placeholders = ", ".join("?" for _ in drop_keys)
             conn.execute(
-                "UPDATE domain_items SET payload_json = "
-                "json_remove(payload_json, '$.repro_status', '$.repro_result') WHERE id = ?",
-                (item_id,),
+                f"UPDATE domain_items SET payload_json = json_remove(payload_json, {placeholders}) WHERE id = ?",
+                (*drop_keys, item_id),
             )
         conn.commit()
     finally:

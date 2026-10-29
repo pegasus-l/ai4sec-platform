@@ -458,10 +458,29 @@ def _strip_repro_status(conn, item_id: int) -> None:
     盖上的 repro_status 戳(2026-09-15)。不抹的话数据里永远是「非Web 却在待复现」自相矛盾
     —— 全库 4208 条非 web 曾 100% 挂着 candidate(实测真正跑过复现的只有 1 条)。
     LOWCONF 例外不在此列: 它还要留在队列跑一次 CLI 复现来自我纠正, 那个 candidate 是真状态。
-    注意 update_domain_item 对 payload 是 merge(永不删键), 所以只能走 json_remove。"""
+    注意 update_domain_item 对 payload 是 merge(永不删键), 所以只能走 json_remove。
+
+    只给「分类未定」的两条路径用(LLM 报错 / 无有效 repo): 那时我们并不知道该不该复现,
+    抹空比编一个终态诚实。真判了非 web 的路径走 `_mark_repro_skipped`。"""
     conn.execute(
         "UPDATE domain_items SET payload_json = json_remove(payload_json, '$.repro_status') WHERE id = ?",
         (item_id,),
+    )
+
+
+def _mark_repro_skipped(conn, item_id: int, reason: str) -> None:
+    """落终态「无需复现」(2026-10-29): repro_status=not_supported + repro_skip_reason=<reason>,
+    并摘掉 repro_result。与 pipelines/steps/repro.py 的 _write_payload、app/api/capabilities.py
+    的 cleanup 同一个口径。
+
+    为什么不再抹空: 抹空之后, 任何一次「按剩余任务重算结论」都会把旧任务的结论写回来
+    (item#51988 实测: 非 web 条目被清理旧任务复活成「已复现」)。终态是幂等的, 重算也改不动它。
+    merge 永不删键 → repro_result 必须显式 json_remove。"""
+    conn.execute(
+        "UPDATE domain_items SET payload_json = json_remove("
+        "json_set(payload_json, '$.repro_status', 'not_supported', '$.repro_skip_reason', ?), "
+        "'$.repro_result') WHERE id = ?",
+        (reason, item_id),
     )
 
 
@@ -582,8 +601,8 @@ def classify_batch(
                         status="已淘汰",
                         metrics={"web_classify_score": rule_score},
                     )
-                    # 判死为非 web → 复现状态整体不存在(2026-09-15)
-                    _strip_repro_status(conn, item_id)
+                    # 判死为非 web → 终态「无需复现」(2026-10-29: 原先是抹空, 抹空会被结论重算复活)
+                    _mark_repro_skipped(conn, item_id, "non_web")
                 else:
                     repo.update_domain_item(
                         conn,
