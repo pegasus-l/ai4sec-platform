@@ -103,10 +103,14 @@ class SelectUnclassifiedWebCandidatesStep:
 
     def run(self, context: PipelineContext) -> StepResult:
         # 扫全表:所有尚未 web 分类的 capability 条目都进候选(不仅当次 run 新建的),
-        # 避免新条目因当次 run 错过 select 窗口而永久漏分类
+        # 避免新条目因当次 run 错过 select 窗口而永久漏分类。
+        # 已淘汰的不扫(2026-10-29): 它们不进能力库/今日能力, 分类结果没有任何用处, 却会白花一次
+        # LLM 调用, 并把 repro_status=candidate 重新盖回「已淘汰」的行上 —— 与 capability_status
+        # 刚摘掉 candidate 的口径打架。
         limit = int(context.params.get("classify_limit", 50))
         candidates: list[dict[str, Any]] = []
-        items = repo.list_domain_items(context.conn, "capabilities", item_type="capability", limit=10000)
+        items = repo.list_domain_items(context.conn, "capabilities", item_type="capability",
+                                       exclude_status="已淘汰", limit=10000)
         for item in items:
             payload = item.get("payload") or {}
             if not payload.get("web_classify_ts"):

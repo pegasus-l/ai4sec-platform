@@ -19,7 +19,9 @@ import pytest
 
 from ai4sec_platform.core.config import load_settings
 from ai4sec_platform.db.models import init_db
+from ai4sec_platform.db import repositories as repo
 from ai4sec_platform.domains.capabilities import review_backlog
+from ai4sec_platform.domains.capabilities.pipelines import SelectUnclassifiedWebCandidatesStep
 from ai4sec_platform.domains.news import reviewer
 from ai4sec_platform.domains.news.tech_map import AgentTechMap
 from ai4sec_platform.pipelines.context import PipelineContext
@@ -408,6 +410,28 @@ def test_vertical_app_payload_has_no_repro_status() -> None:
     # 横向能力照旧带 candidate, 由后续 web 分类改成终态
     normal = reviewer._normalize_review(_good_review(), CANDIDATE, TECH_MAP)
     assert build_store_payload(CANDIDATE, normal)["repro_status"] == "candidate"
+
+
+def test_select_skips_eliminated_items() -> None:
+    """已淘汰的条目不再进 web 分类队列(2026-10-29)。
+
+    它们既不进能力库也不进今日能力, 分类结果没有任何用处, 却会白花一次 LLM 调用, 并把刚被
+    capability_status 摘掉的 repro_status=candidate 重新盖回「已淘汰」的行上。
+    """
+    conn = _conn()
+    repo.create_domain_item(conn, domain="capabilities", item_type="capability",
+                            title="垂直医疗应用", status="已淘汰",
+                            payload={"code_url": "https://github.com/x/med", "review": {}})
+    repo.create_domain_item(conn, domain="capabilities", item_type="capability",
+                            title="待分类条目", status="待资料补齐",
+                            payload={"code_url": "https://github.com/x/framework"})
+    conn.commit()
+
+    ctx = _ctx(conn, None)
+    result = SelectUnclassifiedWebCandidatesStep().run(ctx)
+
+    assert [c["title"] for c in ctx.outputs["web_classify_candidates"]] == ["待分类条目"]
+    assert result.metrics["candidates"] == 1
 
 
 def test_build_store_payload_keeps_v1_contract() -> None:
