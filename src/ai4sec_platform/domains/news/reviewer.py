@@ -15,7 +15,29 @@ from ai4sec_platform.domains.news.tech_map import AgentTechMap
 from ai4sec_platform.models.router import LLMRouter
 import yaml
 
-REVIEW_PROMPT_VERSION = "unified-review-v3"
+REVIEW_PROMPT_VERSION = "unified-review-v4"
+
+# ── 项目性质 / 推荐分的硬天花板(2026-10-29) ───────────────────────────────────
+# 方向(map_relevance)在加权分里只占 25%, 一个「工程漂亮但方向不对」的项目靠其余六维照样能到 75+:
+#   item#24574 nightglass(海事 SAR 情报分析, 垂直应用) 81.25、
+#   item#114569 learn-claude-code(78K stars 教学仓库, 模型自己在摘要里写「教学向」) 80.9,
+# 两条都进了「待复现验证」。提示词里本来就有两条排除规则(教学类 recommended_score ≤3、
+# map_relevance 只有核心命中才给 70+), 但代码侧没有任何兜底 → 模型「写完规则再违反」就没人拦。
+# 这里把项目性质做成天花板, 平台自己封顶。
+_NATURE_CAPS: dict[str, tuple[float, int]] = {
+    "能力框架": (100.0, 5),   # 可迁移的 Agent 能力/框架/基础设施 —— 不额外封顶
+    "垂直应用": (65.0, 3),    # 把 Agent 技术用在某个具体行业, 技术本身没有新贡献
+    "教学演示": (60.0, 3),    # 教学/教程/从零构建/示例仓库
+    "资源合集": (45.0, 2),    # awesome 清单/prompt 合集/数据集/模板集合
+}
+# recommended_score 反过来也是加权分的上限: 模型自己只给 3 分(觉得不值得复现), 分数就不该显示成 72。
+_RECOMMENDED_CEILING: dict[int, float] = {1: 30.0, 2: 45.0, 3: 60.0, 4: 85.0, 5: 100.0}
+# 模型自己文本里的定位标记: 它一边写「教学向」「教学价值突出」一边给 4 分时, 以文本为准。
+# 只扫模型自己写的三段(技术定位/摘要/理由), 不扫 README —— README 里出现「教程」太常见。
+_NATURE_KEYWORDS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("教学演示", ("教学", "教程", "学习资源", "从零构建", "从零实现", "手把手", "课程", "书籍")),
+    ("资源合集", ("awesome", "合集", "清单", "prompt 合集", "数据集", "模板集合")),
+)
 MODEL_MAX_ATTEMPTS = 3
 MODEL_RETRY_BASE_SECONDS = 1.0
 MODEL_RETRY_JITTER_SECONDS = 0.5
@@ -185,10 +207,17 @@ def _review_prompt() -> str:
     - 0-34：无关、无价值或无法判断——如纯数据集、prompt 合集、已废弃项目。
 16. map_relevance 评分标准：只有项目核心技术直接命中技术地图路径时才给 70+；泛泛相关给 40-60；勉强沾边给 20-40。不要因为项目涉及 AI/Agent 就给高分。
 17. novelty 评分标准：同类项目已有多个则 novelty 不超过 50；真正创新的架构、方法或场景才给 70+。
+18. 必须给出 project_nature（项目性质），它是分数与 recommended_score 的硬天花板，优先于第 15 条的锚点：
+    - 能力框架：核心贡献是可迁移的 Agent 能力/框架/基础设施（harness、记忆层、工具编排、评测方法等）。
+    - 垂直应用：核心价值是把 Agent 技术用在某个具体行业/领域（海事、医疗、金融、遥感、情报分析…），技术本身没有新贡献。分数最高 65，recommended_score 不超过 3。
+    - 教学演示：以教学、教程、示例、从零构建、课程、书籍为目的的仓库。分数最高 60，recommended_score 不超过 3。
+    - 资源合集：awesome 清单、prompt 合集、数据集、模板集合。分数最高 45，recommended_score 不超过 2。
+    判为后三类时 score_breakdown 也要相应压低，不要出现 85+ 的工程分；「用了 MCP/LangGraph/RAG」不等于核心贡献是 Agent 能力。
 
 输出：
 {
   "score_breakdown": {"map_relevance":0,"novelty":0,"technical_depth":0,"engineering_value":0,"reproducibility":0,"influence":0,"freshness":0},
+  "project_nature": "能力框架 | 垂直应用 | 教学演示 | 资源合集",
   "tech_paths": [{"dimension":"","category":"","point":""}],
   "topic": "技术地图二级分类",
   "work_name": "工作名或项目名",
@@ -255,29 +284,36 @@ def _normalize_review(value: Any, item: dict[str, Any], tech_map: AgentTechMap) 
     paths = tech_map.validate_paths(result.get("tech_paths"))
     breakdown = _normalize_breakdown(result.get("score_breakdown"))
     item_type = str(item.get("source_type") or "")
-    score = _weighted_score(item_type, breakdown)
     map_rel = breakdown.get("map_relevance", 0)
-    decision = "selected" if paths and score >= 70 and map_rel >= 70 else "watch" if paths and score >= 55 else "rejected"
     work_name = _work_name(result.get("work_name"), item)
     theme_descriptor = _theme_descriptor(result.get("theme_descriptor") or result.get("theme"), work_name, item)
+    summary = str(result.get("summary_zh") or "").strip()
+    reason = str(result.get("score_reason") or "").strip()
+    # 天花板先于决策: 性质封顶 → 推荐分封顶 → 再判 selected/watch/rejected
+    nature = _project_nature(result.get("project_nature"), theme_descriptor, summary, reason)
+    nature_score_cap, nature_rec_cap = _NATURE_CAPS[nature]
+    recommended = min(_recommended_score(result.get("recommended_score")), nature_rec_cap)
+    score = min(_weighted_score(item_type, breakdown), nature_score_cap, _RECOMMENDED_CEILING[recommended])
+    decision = "selected" if paths and score >= 70 and map_rel >= 70 else "watch" if paths and score >= 55 else "rejected"
     return {
         "decision": decision,
         "score": score,
+        "project_nature": nature,
         "score_breakdown": breakdown,
         "tech_paths": paths,
         "topic": str(result.get("topic") or (paths[0]["category"] if paths else "")),
         "work_name": work_name,
         "theme_descriptor": theme_descriptor,
         "theme": _compose_theme(work_name, theme_descriptor),
-        "summary_zh": str(result.get("summary_zh") or "").strip(),
+        "summary_zh": summary,
         "promo_line": str(result.get("promo_line") or "").strip(),
         "highlight_line": str(result.get("highlight_line") or "").strip(),
         "security_value": str(result.get("security_value") or "").strip(),
         "reproducibility_assessment": str(result.get("reproducibility_assessment") or "").strip(),
         "code_quality": str(result.get("code_quality") or "").strip(),
         "application_advice": str(result.get("application_advice") or "").strip(),
-        "recommended_score": int(result.get("recommended_score") or 0),
-        "score_reason": str(result.get("score_reason") or "").strip(),
+        "recommended_score": recommended,
+        "score_reason": reason,
         "capability_type": str(result.get("capability_type") or "").strip(),
         "application_scenarios": [str(s) for s in result.get("application_scenarios", []) if s],
         "confidence": _fraction(result.get("confidence")),
@@ -290,11 +326,14 @@ def _fallback_review(item: dict[str, Any], tech_map: AgentTechMap, reason: str) 
     topic = paths[0]["category"] if paths else ""
     breakdown = {"map_relevance": 70, "novelty": 65, "technical_depth": 65, "engineering_value": 70, "reproducibility": 70, "influence": 50, "freshness": 70} if paths else {}
     score = _weighted_score(str(item.get("source_type") or ""), breakdown) if paths else 0
+    # 降级评审的 recommended_score 固定 3 ⇒ 加权分同样受 60 上限约束(与 _normalize_review 同口径)
+    score = min(score, _RECOMMENDED_CEILING[3]) if score else 0
     work_name = _work_name("", item)
     theme = _theme_descriptor(title, work_name, item)
     return {
-        "decision": "selected" if paths else "rejected",
+        "decision": "watch" if paths else "rejected",
         "score": score,
+        "project_nature": "能力框架",
         "score_breakdown": breakdown,
         "tech_paths": paths,
         "topic": topic,
@@ -330,6 +369,40 @@ def _weighted_score(item_type: str, breakdown: dict[str, float]) -> float:
     except Exception:
         weights = {"map_relevance": 0.25, "novelty": 0.15, "technical_depth": 0.15, "engineering_value": 0.15, "reproducibility": 0.15, "influence": 0.05, "freshness": 0.10}
     return round(sum(breakdown.get(f, 0) * w for f, w in weights.items()), 2)
+
+
+# ─────────────────── 项目性质 / 推荐分天花板 ───────────────────
+
+def _recommended_score(value: Any) -> int:
+    """recommended_score 归一成 1–5 整数。缺失/异常按 3 处理 —— 不因为模型漏了一个字段就把整条打成低分。"""
+    try:
+        score = int(float(value))
+    except (TypeError, ValueError):
+        return 3
+    if score <= 0:
+        return 3
+    return min(5, score)
+
+
+def _project_nature(value: Any, descriptor: str, summary: str, reason: str) -> str:
+    """项目性质: 模型自己文本里的定位标记优先, 其次模型填的 project_nature, 都没有按「能力框架」。"""
+    keyword = _keyword_nature(descriptor, summary, reason)
+    if keyword:
+        return keyword
+    nature = str(value or "").strip()
+    return nature if nature in _NATURE_CAPS else "能力框架"
+
+
+def _keyword_nature(descriptor: str, summary: str, reason: str) -> str:
+    """单个词出现在技术定位里、或正文(摘要+理由)里命中两个不同词, 才判 —— 少用一次「教程」误伤正经工具。"""
+    body = ("%s %s" % (summary or "", reason or "")).lower()
+    head = (descriptor or "").lower()
+    for nature, words in _NATURE_KEYWORDS:
+        if any(word.lower() in head for word in words):
+            return nature
+        if len({word for word in words if word.lower() in body}) >= 2:
+            return nature
+    return ""
 
 
 # ─────────────────── model call ───────────────────
