@@ -501,7 +501,8 @@ def _extract_test_results(text: str) -> str:
 # (2026-10-29: 两个复现任务都报了成功, 但一个资源全 404 停在 Loading、一个 REST 401 打不开)
 # ---------------------------------------------------------------------------
 _PAGE_CHECK_MAX_REFS = 12
-_PAGE_CHECK_TIMEOUT = 15.0
+_PAGE_CHECK_TIMEOUT = 8.0
+_PAGE_CHECK_BUDGET = 60.0  # 整个自检最多占用多久, 页面挂死时别把收尾拖成几分钟
 _PAGE_CHECK_LOADING_MARKERS = ("loading", "加载中", "正在加载", "please wait")
 
 
@@ -554,6 +555,7 @@ def _check_web_page(repro_url: str, task_id: int) -> dict[str, Any]:
     """
     from urllib.parse import urljoin, urlsplit
 
+    deadline = time.monotonic() + _PAGE_CHECK_BUDGET
     base = _repro_web_base(repro_url)
     entry = f"{base}/task/{task_id}/"
     result: dict[str, Any] = {
@@ -584,6 +586,9 @@ def _check_web_page(repro_url: str, task_id: int) -> dict[str, Any]:
 
     js_ok = 0
     for raw, kind in _page_refs(html)[:_PAGE_CHECK_MAX_REFS]:
+        if time.monotonic() > deadline:
+            result["truncated"] = True
+            break
         url = _strip_task_prefix(raw, task_id)
         if url.startswith(("http://", "https://")):
             parts = urlsplit(url)
