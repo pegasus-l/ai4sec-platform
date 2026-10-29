@@ -184,20 +184,43 @@ class LLMReviewStep:
 # 由本步骤在模型恢复后重评 —— 否则一次网关 403 就能灌进上千条没有内容的条目(2026-10-28 实测)。
 
 
+# 安全域关键词: 只用来兜 security_flag 的漏判。security_flag 是规则侧扫标题/README 打的标,
+# 实测 six2dez/burp-ai-agent(Burp Suite 的 AI 渗透扩展)被打成 False —— 它的摘要里写满
+# 「渗透测试/漏洞赏金/Web 安全测试」。这类项目恰恰是能力库要收的, 所以再看一眼模型自己写的
+# 技术定位与摘要(与 _NATURE_KEYWORDS 同一口径: 只信模型自己的话, 不扫 README)。
+_SECURITY_DOMAIN_TERMS: tuple[str, ...] = (
+    "渗透测试", "漏洞赏金", "网络安全", "网络攻击", "攻击面", "安全测试", "安全运营",
+    "恶意代码", "恶意软件", "逆向工程", "逆向分析", "威胁情报", "漏洞发现", "漏洞挖掘",
+    "红队", "蓝队", "攻防", "免杀", "提权",
+)
+
+
+def security_relevant(item: dict[str, Any], review: dict[str, Any] | None = None) -> bool:
+    """条目是否落在安全域。宁可放过(留在「待资料补齐」), 不可误杀安全工具。"""
+    if item.get("security_flag") or item.get("security_topics"):
+        return True
+    review = review or {}
+    text = " ".join(str(x or "") for x in (
+        item.get("title"), item.get("summary"),
+        review.get("theme_descriptor"), review.get("summary_zh"), review.get("reason"),
+    ))
+    return any(term in text for term in _SECURITY_DOMAIN_TERMS)
+
+
 def capability_status(decision: str, recommended: int, project_nature: str = "",
-                      security_flag: bool = False) -> str:
-    """评审结论 → 行状态。增量写库、StoreCapabilitiesStep、降级重评三处共用同一口径。
+                      security_relevant: bool = False) -> str:
+    """评审结论 → 行状态。主链路写库(StoreCapabilitiesStep)与降级重评两处共用同一口径。
 
     2026-10-29 用户判定: **和安全无关的垂直应用不入库**(实测争议条目 isemsez/med_assistant =
     俄语临床指南医疗 RAG, "和我们的业务场景一点关系没有")。这类项目按性质封顶(≤65 / rec≤3)
     之后仍会落「待资料补齐」, 于是出现在今日能力里。
 
-    判据是 security_flag(规则侧的安关键字判定), 不是单纯的 project_nature —— 同样是垂直应用,
+    判据是「是否安全域」(security_relevant), 不是单纯的 project_nature —— 同样是垂直应用,
     安全运营自动化(Tracecat)、逆向/恶意代码分析的 MCP 服务(Reversecore_MCP)恰恰是我们要的,
     一刀切会把它们误杀。规则放在这里而不是只改数据: 每 15 分钟的资讯重扫会用 review 结论
     重算 status, 只改数据下一轮就被写回「待资料补齐」。
     """
-    if project_nature == "垂直应用" and not security_flag:
+    if project_nature == "垂直应用" and not security_relevant:
         return "已淘汰"
     if decision in ("selected", "watch") and recommended >= 4:
         return "待复现验证"
@@ -278,7 +301,7 @@ def build_store_payload(item: dict[str, Any], review: dict[str, Any]) -> dict[st
             "source_type": item.get("source_type", ""),
         },
     }
-    if str(review.get("project_nature") or "") == "垂直应用" and not item.get("security_flag"):
+    if str(review.get("project_nature") or "") == "垂直应用" and not security_relevant(item, review):
         # 无安全信号的垂直应用不入库(见 capability_status), 也就不是复现候选 —— 别给已淘汰的条目
         # 挂 candidate 戳, 那是「非 Web 却在待复现」同类的自相矛盾(2026-09-15 那 4208 条)。
         payload.pop("repro_status", None)
@@ -395,7 +418,7 @@ class RetryDegradedReviewsStep:
                 score=float(review.get("score") or 0),
                 status=capability_status(decision, int(review.get("recommended_score") or 0),
                                          str(review.get("project_nature") or ""),
-                                         bool(item.get("security_flag"))),
+                                         security_relevant(item, review)),
                 source="asis_raw",
                 source_url=str(item.get("url") or ""),
                 tags=[t for t in (item.get("source_type", ""), review.get("topic", ""), review.get("capability_type", "")) if t],
@@ -438,10 +461,10 @@ class StoreCapabilitiesStep:
 
             # 垂直应用一律已淘汰(见 capability_status): 每 15 分钟的资讯重扫都会重算 status,
             # 只改数据不进这条规则, 下一轮就会被写回「待资料补齐」并重新出现在今日能力里。
-            vertical = str(review.get("project_nature") or "") == "垂直应用" and not item.get("security_flag")
+            vertical = str(review.get("project_nature") or "") == "垂直应用" and not security_relevant(item, review)
             status = capability_status(decision, recommended,
                                        str(review.get("project_nature") or ""),
-                                       bool(item.get("security_flag")))
+                                       security_relevant(item, review))
 
             payload = build_store_payload(item, review)
 

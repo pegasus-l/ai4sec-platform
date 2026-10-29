@@ -29,6 +29,7 @@ from ai4sec_platform.pipelines.steps.capability_raw import (
     RetryDegradedReviewsStep,
     build_store_payload,
     capability_status,
+    security_relevant,
 )
 
 TECH_MAP = AgentTechMap({
@@ -386,11 +387,11 @@ def test_non_security_vertical_app_never_enters_the_library() -> None:
     """
     for decision in ("selected", "watch", "rejected"):
         for recommended in (1, 3, 5):
-            assert capability_status(decision, recommended, "垂直应用", security_flag=False) == "已淘汰"
+            assert capability_status(decision, recommended, "垂直应用", security_relevant=False) == "已淘汰"
     # 垂直应用但**有安全信号**的照旧入库: 安全运营自动化(Tracecat)、逆向 MCP(Reversecore_MCP)
     # 恰恰是我们要的, 一刀切会误杀
-    assert capability_status("watch", 3, "垂直应用", security_flag=True) == "待资料补齐"
-    assert capability_status("watch", 5, "垂直应用", security_flag=True) == "待复现验证"
+    assert capability_status("watch", 3, "垂直应用", security_relevant=True) == "待资料补齐"
+    assert capability_status("watch", 5, "垂直应用", security_relevant=True) == "待复现验证"
     # 其余三类与历史口径不变: 能力框架的 watch/3 照样是待资料补齐
     assert capability_status("watch", 3, "能力框架") == "待资料补齐"
     assert capability_status("watch", 4, "教学演示") == "待复现验证"
@@ -466,3 +467,30 @@ def test_retry_stops_at_budget_and_leaves_the_rest_queued(monkeypatch) -> None:
     assert result.metrics["reviewed"] == 10, "预算到点: 只跑完第一块(正好一波并发)"
     assert result.metrics["stored"] == 10
     assert review_backlog.count(conn) == 20, "没轮到的留在队列里等下一轮"
+
+
+def test_security_relevant_catches_what_the_keyword_flag_misses() -> None:
+    """security_flag 是规则侧扫标题/README 打的标, 会把 Burp 扩展这类项目判成"和安全无关"。
+
+    实测 six2dez/burp-ai-agent: security_flag=False, 而它自己的摘要写满「渗透测试/漏洞赏金」。
+    只看 flag 就会把安全工具当医疗 RAG 一起淘汰掉。
+    """
+    burp = {"security_flag": False, "title": "six2dez/burp-ai-agent",
+            "summary": "面向渗透测试与漏洞赏金场景的 Burp Suite 扩展"}
+    med = {"security_flag": False, "title": "isemsez/med_assistant",
+           "summary": "面向俄语临床指南的本地离线医疗 RAG 问答助手"}
+    flagged = {"security_flag": True, "title": "TracecatHQ/tracecat", "summary": ""}
+
+    assert security_relevant(burp) is True
+    assert security_relevant(med) is False
+    assert security_relevant(flagged) is True
+    assert capability_status("watch", 3, "垂直应用", security_relevant(burp)) == "待资料补齐"
+    assert capability_status("watch", 3, "垂直应用", security_relevant(med)) == "已淘汰"
+
+
+def test_security_relevant_also_reads_the_model_own_text() -> None:
+    """模型写的技术定位/摘要里点明了安全场景, 也算安全信号(与性质判定同一口径: 只信模型的话)。"""
+    item = {"security_flag": False, "title": "netcuter/Hexstrike-AI", "summary": ""}
+    review = {"theme_descriptor": "面向攻击面管理的 MCP 工具总线", "summary_zh": "", "reason": ""}
+    assert security_relevant(item, review) is True
+    assert security_relevant(item, {"summary_zh": "把 Agent 技术用在海事搜救情报分析"}) is False
