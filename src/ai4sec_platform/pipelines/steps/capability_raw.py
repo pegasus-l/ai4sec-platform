@@ -3,7 +3,7 @@ Build→CodeLink+Dedup→RuleFilter→FetchREADME→LLMReview→Store→WebClass
 """
 from __future__ import annotations
 
-import json, os, urllib.request, base64
+import json, os, time, urllib.request, base64
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -308,12 +308,23 @@ class RetryDegradedReviewsStep:
                     "latency": latency, "attempts": attempts}
 
         # 分块跑 + 首块全灭即熔断: 网关宕机时每调用要耗满 3 次重试的退避, 整批一次性提交会把
-        # 一个 15 分钟节拍的跑批拖成半小时, 还会连带饿死后面的步骤。首块 20 条全失败就认定探活
-        # 失败 —— 没轮到的行原样留在队列里, 不烧 attempts。
-        chunk_size = max(1, int(context.params.get("retry_chunk", 20)))
+        # 一个 15 分钟节拍的跑批拖成半小时, 还会连带饿死后面的步骤。首块 10 条(正好一波并发)
+        # 全失败就认定探活失败 —— 没轮到的行原样留在队列里, 不烧 attempts。
+        #
+        # 按时间设预算(2026-10-29 实测): 单次重评约 110s, 100 条要跑 12.9 分钟, 整批 23.7 分钟 ——
+        # 而且每存一条后面还要再多花 10s 做 web 分类, 所以这一段的真实成本不是"100 次调用"。
+        # 预算不是为了让整批压进 15 分钟节拍(那会把排水拖到 5 天), 而是给网关抽风时的**上界**:
+        # 每次调用耗满 3 次重试退避时, 没预算就是 10 块 × 9.5 分钟。到点收工, 处理过的照常落库。
+        chunk_size = max(1, int(context.params.get("retry_chunk", 10)))
+        budget_seconds = float(context.params.get("retry_budget_seconds", 600))
         results: list[dict[str, Any]] = []
         provider_down = False
+        budget_exhausted = False
+        started_at = time.monotonic()
         for start in range(0, len(rows), chunk_size):
+            if results and time.monotonic() - started_at >= budget_seconds:
+                budget_exhausted = True
+                break
             chunk = rows[start:start + chunk_size]
             with ThreadPoolExecutor(max_workers=min(reviewer.CONCURRENCY, len(chunk))) as pool:
                 chunk_results = [future.result() for future in as_completed([pool.submit(_work, row) for row in chunk])]
@@ -325,7 +336,7 @@ class RetryDegradedReviewsStep:
         if provider_down:
             # 探活失败: 模型整批不可用。保留队列原样, 下次再试, 不算这条候选的失败次数。
             return StepResult(metrics={"pending": len(rows), "reviewed": 0, "stored": 0, "rejected": 0,
-                                       "provider_down": 1})
+                                       "provider_down": 1, "budget_exhausted": 0})
 
         stored = rejected = dropped = 0
         for r in results:
@@ -377,7 +388,8 @@ class RetryDegradedReviewsStep:
             stored += 1
         context.conn.commit()
         return StepResult(metrics={"pending": len(rows), "reviewed": len(results), "stored": stored,
-                                   "rejected": rejected, "dropped": dropped, "provider_down": 0})
+                                   "rejected": rejected, "dropped": dropped, "provider_down": 0,
+                                   "budget_exhausted": int(budget_exhausted)})
 
 
 # ─────────────────── Step 6: Store（写库） ───────────────────

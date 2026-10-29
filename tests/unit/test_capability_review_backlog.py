@@ -384,3 +384,26 @@ def test_build_store_payload_keeps_v1_contract() -> None:
         assert key in payload
     assert payload["repro_status"] == "candidate"
     assert payload["assessment"]["recommended_score"] == review["recommended_score"]
+
+
+def test_retry_stops_at_budget_and_leaves_the_rest_queued(monkeypatch) -> None:
+    """排水要连着跑几十轮: 单轮跑过 15 分钟节拍, 下一轮会被自己的全局锁 skip 掉。
+
+    2026-10-29 实测: 单次重评约 110s, 100 条 = 12.9 分钟, 整批 15.5 分钟 —— 刚好越过节拍。
+    到点收工时已经处理过的照常落库, 没轮到的原样留在队列里(不烧 attempts, 不算失败)。
+    """
+    conn = _conn()
+    for i in range(30):
+        _seed_backlog(conn, item_key=f"asis:raw:{i}",
+                      item={"code_url": f"https://github.com/example/repo-{i}"})
+    monkeypatch.setattr(reviewer, "LLMRouter", _StubRouter)
+    monkeypatch.setattr(reviewer, "_call_model_api", _model_ok(_good_review()))
+
+    result = RetryDegradedReviewsStep().run(
+        _ctx(conn, None, retry_budget_seconds=0, retry_chunk=10)
+    )
+
+    assert result.metrics["budget_exhausted"] == 1
+    assert result.metrics["reviewed"] == 10, "预算到点: 只跑完第一块(正好一波并发)"
+    assert result.metrics["stored"] == 10
+    assert review_backlog.count(conn) == 20, "没轮到的留在队列里等下一轮"
