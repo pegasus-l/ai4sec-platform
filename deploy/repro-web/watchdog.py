@@ -3,6 +3,10 @@
 
 职责一(原行为): 按 tasks.json 逐个任务探端口, 端口无服务就用 task-{id}.sh 拉起。
 
+职责零(2026-10-29 新增): 把任务服务进程的 oom_score_adj 调到 800, 让容器的内存 OOM
+  只在任务服务里挑受害者, 而不是把 PID1 的 opencode 杀掉导致整箱重启。只调高不调低,
+  不重启任何在跑的服务; 详见下面 TASK_OOM_ADJ 的注释。
+
 职责二(2026-09-17 新增): 回收「平台已作废」的任务目录 /workspace/repo-{id}。
   新链路平台前端点「清理」只改 DB 状态(没有宿主容器/工作区可删), 复现卷里的 clone+venv、
   常驻服务进程、nginx 分发条目都不会自动消失 —— 空间只增不减(实测: 12 个状态已是 cleaned
@@ -51,6 +55,17 @@ PLATFORM_ERR_LOG_SECONDS = 600  # 平台不可达的告警最小间隔(秒), 防
 ERR_STAMP = f"{D}/.gc-platform-err"
 DIR_RE = re.compile(r"^repo-(\d+)$")
 
+# ── 容器内存吃紧时「谁来挨刀」(2026-10-29) ──────────────────────────────────
+# 整个容器共用一个 cgroup 上限, 内存打满时内核按 oom_score_adj 挑受害者; 全都一样时按 RSS 挑,
+# 而 PID1 的 opencode 恰恰是大户(实测 620MB) —— 它一死整个容器重启, 所有复现页面同时 502,
+# 正在跑的复现也一起没了(10-29「用 demo 账号登录没反应」就是这么来的)。
+# 把任务服务调到 800, 内核就只在任务服务里挑: 死一个由本脚本 10s 内拉起, 只坏一个页面。
+# 只能调高不能调低 —— 调低 PID1 需要 CAP_SYS_RESOURCE, 容器里写 /proc/1/oom_score_adj 直接失败。
+TASK_OOM_ADJ = 800
+# glibc arena 只进不退会让常驻 python 服务 RSS 虚高(本平台 10-13 OOM 的根因)。
+# 只在「看护拉起」时带上, 不重启正在跑的服务。
+LAUNCH_ENV = {"MALLOC_ARENA_MAX": "2"}
+
 
 def log(msg: str) -> None:
     print(f'[{time.strftime("%Y-%m-%dT%H:%M:%S")}] {msg}', flush=True)
@@ -85,7 +100,81 @@ def ensure_services() -> None:
         if not os.path.exists(script):
             continue
         log(f"task#{tid} port {port} down, relaunch {launch}")
-        subprocess.Popen(["sh", script])
+        proc = subprocess.Popen(["sh", script], env={**os.environ, **LAUNCH_ENV})
+        # 子进程继承 oom_score_adj, 在这里设一次整棵子孙树都带上
+        _set_oom_adj(proc.pid)
+
+
+def _set_oom_adj(pid: int) -> bool:
+    """把 pid 的 oom_score_adj 调到 TASK_OOM_ADJ; 已经是这个值就不写。返回是否改动。"""
+    try:
+        with open(f"/proc/{pid}/oom_score_adj") as f:
+            if f.read().strip() == str(TASK_OOM_ADJ):
+                return False
+    except OSError:
+        return False
+    try:
+        with open(f"/proc/{pid}/oom_score_adj", "w") as f:
+            f.write(str(TASK_OOM_ADJ))
+        return True
+    except OSError:  # 进程刚退出 / 权限不足: 不阻断看护
+        return False
+
+
+def _task_roots() -> list[str]:
+    """任务服务所在的目录: /workspace/repo-{id}(与回收逻辑同一批目录)。"""
+    roots: list[str] = []
+    try:
+        for name in os.listdir(WORKSPACE):
+            if DIR_RE.match(name):
+                roots.append(f"{WORKSPACE}/{name}")
+    except OSError:
+        pass
+    return [r for r in roots if os.path.isdir(r)]
+
+
+def _belongs(pid: int, roots: list[str]) -> bool:
+    """cwd 或命令行指向某个任务目录 = 属于任务服务(与 _pids_in 同一判据)。"""
+    try:
+        cwd = os.readlink(f"/proc/{pid}/cwd")
+    except OSError:
+        cwd = ""
+    for r in roots:
+        if cwd == r or cwd.startswith(r + "/"):
+            return True
+    try:
+        with open(f"/proc/{pid}/cmdline", "rb") as f:
+            argv = f.read().split(b"\0")
+    except OSError:
+        return False
+    for raw in argv:
+        arg = raw.decode("utf-8", "replace")
+        for r in roots:
+            if arg == r or arg.startswith(r + "/"):
+                return True
+    return False
+
+
+def mark_task_services() -> None:
+    """把已经在跑的任务服务也调到 TASK_OOM_ADJ。只改 oom_score_adj, 不重启任何进程。
+
+    每 tick 跑一遍: 已经调过的不重写不记日志, 新冒出来的子孙进程会被补上。
+    """
+    roots = _task_roots()
+    if not roots:
+        return
+    me = os.getpid()
+    changed = 0
+    for name in os.listdir("/proc"):
+        if not name.isdigit():
+            continue
+        pid = int(name)
+        if pid == me:
+            continue
+        if _belongs(pid, roots) and _set_oom_adj(pid):
+            changed += 1
+    if changed:
+        log(f"保护 PID1: {changed} 个任务服务进程 oom_score_adj → {TASK_OOM_ADJ}")
 
 
 # ---------------------------------------------------------------------------
@@ -258,7 +347,10 @@ def gc_sweep(dry: bool = False) -> None:
 
 def main() -> None:
     """一个 tick: 先看护(原行为), 再回收。回收每 tick 都跑 —— 一次本地 HTTP + 一次 listdir,
-    代价可忽略, 换来「前端点清理后 ≤10s 生效」。"""
+    代价可忽略, 换来「前端点清理后 ≤10s 生效」。
+
+    任务服务的 oom_score_adj 在每次看护前后都补一遍: 先给已跑着的补(不重启), 再拉起掉线的。"""
+    mark_task_services()
     ensure_services()
     gc_sweep()
 

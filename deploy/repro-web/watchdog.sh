@@ -9,6 +9,9 @@ D=/workspace/.repro-web
 NGX_CONF=$D/nginx/nginx.conf
 PID_FILE=$D/nginx/nginx.pid
 mkdir -p "$D/nginx"
+# 无头浏览器自检脚本(全新 volume 时从镜像补种; 浏览器本体与 node 依赖在 $D/tools, 已在卷里)
+[ -f "$D/render-check.js" ] || cp /opt/repro-web/render-check.js "$D/render-check.js" 2>/dev/null
+[ -f "$D/render-check.js" ] && chmod +x "$D/render-check.js" 2>/dev/null
 
 ts() { date +%FT%T; }
 
