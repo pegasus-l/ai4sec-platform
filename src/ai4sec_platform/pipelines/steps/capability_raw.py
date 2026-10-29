@@ -290,7 +290,7 @@ class RetryDegradedReviewsStep:
         from ai4sec_platform.domains.news.tech_map import AgentTechMap
 
         project_root = Path(context.settings.project_root) if hasattr(context.settings, 'project_root') else Path("/opt/ai-security-fusion-v2/ai4sec")
-        limit = int(context.params.get("retry_limit", 200))
+        limit = int(context.params.get("retry_limit", 100))
         rows = review_backlog.pending(context.conn, limit)
         if not rows:
             return StepResult(metrics={"pending": 0, "reviewed": 0, "stored": 0, "rejected": 0})
@@ -307,13 +307,22 @@ class RetryDegradedReviewsStep:
             return {**row, "result": result, "failed": failed, "provider": provider,
                     "latency": latency, "attempts": attempts}
 
+        # 分块跑 + 首块全灭即熔断: 网关宕机时每调用要耗满 3 次重试的退避, 整批一次性提交会把
+        # 一个 15 分钟节拍的跑批拖成半小时, 还会连带饿死后面的步骤。首块 20 条全失败就认定探活
+        # 失败 —— 没轮到的行原样留在队列里, 不烧 attempts。
+        chunk_size = max(1, int(context.params.get("retry_chunk", 20)))
         results: list[dict[str, Any]] = []
-        with ThreadPoolExecutor(max_workers=reviewer.CONCURRENCY) as pool:
-            futures = [pool.submit(_work, row) for row in rows]
-            for future in as_completed(futures):
-                results.append(future.result())
+        provider_down = False
+        for start in range(0, len(rows), chunk_size):
+            chunk = rows[start:start + chunk_size]
+            with ThreadPoolExecutor(max_workers=min(reviewer.CONCURRENCY, len(chunk))) as pool:
+                chunk_results = [future.result() for future in as_completed([pool.submit(_work, row) for row in chunk])]
+            results.extend(chunk_results)
+            if start == 0 and all(r["failed"] for r in chunk_results):
+                provider_down = True
+                break
 
-        if all(r["failed"] for r in results):
+        if provider_down:
             # 探活失败: 模型整批不可用。保留队列原样, 下次再试, 不算这条候选的失败次数。
             return StepResult(metrics={"pending": len(rows), "reviewed": 0, "stored": 0, "rejected": 0,
                                        "provider_down": 1})

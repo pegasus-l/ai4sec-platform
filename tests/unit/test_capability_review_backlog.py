@@ -288,6 +288,28 @@ def test_retry_provider_down_keeps_queue_and_burns_no_attempts(monkeypatch) -> N
     assert row is not None and row["attempts"] == 0
 
 
+def test_retry_aborts_on_first_chunk_when_gateway_is_down(monkeypatch) -> None:
+    """网关宕机时不能把整批都提交出去: 每调用要耗满 3 次重试的退避, 会把一个 15 分钟节拍拖成半小时。"""
+    conn = _conn()
+    for i in range(25):
+        _seed_backlog(conn, item_key=f"asis:raw:{i}")
+    calls = []
+
+    def _down(router, *, model_profile, prompt, input_payload):
+        calls.append(1)
+        return _model_down()(router, model_profile=model_profile, prompt=prompt, input_payload=input_payload)
+
+    monkeypatch.setattr(reviewer, "LLMRouter", _StubRouter)
+    monkeypatch.setattr(reviewer, "_call_model_api", _down)
+
+    result = RetryDegradedReviewsStep().run(_ctx(conn, None, retry_chunk=20))
+
+    assert result.metrics["provider_down"] == 1
+    assert len(calls) == 20, "首块全灭就该熔断, 不该继续调后面的 5 条"
+    assert review_backlog.count(conn) == 25
+    assert {r["attempts"] for r in review_backlog.pending(conn, 30)} == {0}
+
+
 def test_retry_rejected_leaves_the_library_alone(monkeypatch) -> None:
     """重评结论是 rejected: 出队, 但绝不写库(降级时的 watch 本来就没有入库资格)。"""
     conn = _conn()
