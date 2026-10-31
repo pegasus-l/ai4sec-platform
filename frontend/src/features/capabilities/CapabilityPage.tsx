@@ -710,13 +710,14 @@ function ReproDetailContent({ task, capabilityItem, openDetail }: { task: ReproT
     {report && <>
       <section className="repro-section">
         <div className="repro-section-title"><span>复现结论</span><small>{report.level || report.web_framework || report.project_type || '自动报告'}</small></div>
-        <div className={`repro-summary ${report.status === 'success' ? 'success' : report.status === 'partial' ? 'partial' : 'failed'}`}><strong>{report.summary || '暂无摘要'}</strong>{report.verify && <p>验证：{report.verify}</p>}</div>
+        <div className={`repro-summary ${report.status === 'success' ? 'success' : report.status === 'partial' ? 'partial' : 'failed'}`}><strong>{report.summary || '暂无摘要'}</strong>{report.verify && <p>验证：{report.verify}</p>}{report.status === 'partial' && <p>部分可用：{report.partial_reason || 'agent 未说明哪一部分有问题'}</p>}</div>
         <div className="field-grid repro-fields">
           <div className="cap-field"><span>报告状态</span><b>{reproStatusLabel(report.status)}</b></div>
           <div className="cap-field"><span>项目类型</span><b>{report.web_framework || report.project_type || '-'}</b></div>
           <div className="cap-field"><span>Web 分类</span><b>{p.is_web === true ? (p.web_framework ? `Web（${p.web_framework}）` : 'Web') : p.is_web === false ? '非 Web' : '未分类'}</b></div>
           <div className="cap-field"><span>Web 启动</span><b>{report.web_started ? '已启动并验证' : report.is_web === false && p.is_web === true ? '未启动（项目是 Web，本环境未跑起来）' : report.is_web === false ? '未启动（agent 判定本项目没有 Web 界面）' : '未启动'}</b></div>
           <div className="cap-field"><span>启动命令</span><code>{report.start_command || '-'}</code></div>
+          <div className="cap-field"><span>构建证据</span><code>{report.build?.command ? `${report.build.command}${report.build.exit_code === undefined ? '' : ` · exit ${report.build.exit_code}`}${report.build.artifact ? ` · 产物 ${report.build.artifact}` : ''}` : '-'}</code></div>
         </div>
       </section>
       {report.is_web && <section className="repro-section">

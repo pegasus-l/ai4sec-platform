@@ -64,6 +64,10 @@ export interface ReproReport {
   level?: string;
   status: string;
   summary: string;
+  /** status=partial 时 agent 必须写清哪一部分有问题(缺了页面会显式提示未说明) */
+  partial_reason?: string;
+  /** L1 构建证据: 实际命令 + 真实退出码 + 产物路径 */
+  build?: { command?: string; exit_code?: number; artifact?: string };
   project_type?: string;
   environment?: Record<string, unknown>;
   steps?: Array<{ cmd: string; ok: boolean; note?: string }>;
