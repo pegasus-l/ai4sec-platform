@@ -262,18 +262,20 @@ const ENGINEERING_BUCKET_LABEL: Record<string, string> = {
 const ENGINEERING_BUCKET_ORDER = ['demo', 'success', 'partial', 'in_progress', 'pending', 'failed', 'not_supported', 'non_web'] as const;
 
 /** 单条能力卡落在哪个「可体验·复现」桶, 判据与后端 REPRO_PREDICATES 一致:
- *  官方 Demo 是独立维度(有 demo_url 即归它, 不论 is_web); 非 web 不参与复现维度;
- *  其余按 repro_status 落桶(缺失 / candidate / no_code → 待复现)。
+ *  官方 Demo 是独立维度(有 demo_url 即归它, 不论 is_web); 「无需复现」是**结论**、优先于形态
+ *  (2026-10-31: 非 Web 项目本来就以 not_supported 落终态, 若先按形态归到「非 Web」,
+ *  分组里「无需复现」就只剩 Web 那 1 条, 与芯片的 618 又对不上); 其余非 web 归「非 Web」;
+ *  剩下的按 repro_status 落桶(缺失 / candidate / no_code → 待复现)。
  *  前端此前另有一份自己的判据, 且漏了 'succeeded'(分组显示 1 而芯片显示 2) —— 统一到这一处。 */
 function reproBucketOf(p: CapabilityItem['payload'] | undefined): string | null {
   const rs = p?.repro_status;
   if (p?.demo_url) return 'demo';
+  if (rs === 'not_supported') return 'not_supported';
   if (!p?.is_web) return 'non_web';
   if (rs === 'success' || rs === 'succeeded') return 'success';
   if (rs === 'partial') return 'partial';
   if (rs === 'in_progress') return 'in_progress';
   if (rs === 'failed' || rs === 'error') return 'failed';
-  if (rs === 'not_supported') return 'not_supported';
   return 'pending';
 }
 
@@ -282,9 +284,10 @@ function CapabilityLibrary({ stats, search, openDetail, onViewRepro }: { stats?:
   const [viewMode, setViewMode] = useState<'列表视图' | '能力分类' | '应用场景' | '工程可用性'>('列表视图');
   // 【正交双维度多选筛选】形态(Web/非Web) × 可体验·复现(官方Demo/完整复现/…)。
   // 计数全部来自 /items/stats 服务端全量聚合(不受 fetch 窗口/搜索影响)。
-  // 形态默认只选 Web(保持旧默认"隐藏非 Web 噪音"); 可体验默认全放开。
+  // 形态默认只选 Web(保持旧默认"隐藏非 Web 噪音");
+  // 可体验默认选「待复现」(2026-10-31 用户要求: 进页面先看"该复现的"), 再点一次该芯片即取消。
   const [formChips, setFormChips] = useState<string[]>(['Web']);
-  const [reproChips, setReproChips] = useState<string[]>([]);
+  const [reproChips, setReproChips] = useState<string[]>(['待复现']);
   const [page, setPage] = useState(1);
   // 只看非 Web 时, 复现维度整个不适用(非 web 已被 web 把关挡在复现队列外) —— 那排 chip 整排失效,
   // 若还留着已选的复现条件会把列表筛成空, 所以一并清掉。
@@ -318,13 +321,18 @@ function CapabilityLibrary({ stats, search, openDetail, onViewRepro }: { stats?:
   const wantNonWeb = formChips.includes('非Web');
   // 形态沿用"恰选一个才过滤"(两个都不选/都选 = 全部)
   const formParam: LibraryFormKey | null = wantWeb === wantNonWeb ? null : (wantWeb ? 'web' : 'non_web');
+  // 【「无需复现」不受形态筛选约束】(2026-10-31): 芯片数字是服务端按 repro_status 全量聚合的
+  // (后端谓词已去掉 is_web 前置), 而形态默认只勾 Web —— 再叠一层形态过滤, 就会出现
+  // "芯片写 N 条、点进去只有 M 条"。选了它就丢掉形态参数, 让列表与芯片数字同源。
+  const effectiveFormParam: LibraryFormKey | null =
+    reproChips.includes('无需复现') && formParam === 'web' ? null : formParam;
   // 排序去重后进 query key: 否则 ['Web','非Web'] 与 ['非Web','Web'] 会变成两个缓存条目
   const reproKeys = useMemo(
     () => Array.from(new Set(reproChips.map(c => REPRO_CHIP_KEY[c]).filter((k): k is ReproBucketKey => Boolean(k)))).sort(),
     [reproChips],
   );
   const q = dq.trim();
-  const filterKey = `${q}|${formParam ?? ''}|${reproKeys.join(',')}`;
+  const filterKey = `${q}|${effectiveFormParam ?? ''}|${reproKeys.join(',')}`;
   // 【分页重置】依赖必须是"筛选签名"而不是数据引用 —— 若依赖当前页数据, 翻页拿到新数据
   // 会立刻把页码弹回第 1 页(第 2 页永远打不开)。
   useEffect(() => { setPage(1); }, [filterKey]);
@@ -333,7 +341,7 @@ function CapabilityLibrary({ stats, search, openDetail, onViewRepro }: { stats?:
   // 列表视图: 服务端分页, 每页 20 条
   const pageQ = useQuery({
     queryKey: ['cap-library', 'page', filterKey, page],
-    queryFn: () => fetchLibraryPage({ q, form: formParam, repro: reproKeys, page, page_size: PAGE_SIZE }),
+    queryFn: () => fetchLibraryPage({ q, form: effectiveFormParam, repro: reproKeys, page, page_size: PAGE_SIZE }),
     placeholderData: keepPreviousData,   // 翻页时保留上一页内容, 不闪白
     staleTime: 300_000,
   });
@@ -342,7 +350,7 @@ function CapabilityLibrary({ stats, search, openDetail, onViewRepro }: { stats?:
   const showGroups = viewMode !== '列表视图';
   const allQ = useQuery({
     queryKey: ['cap-library', 'all', filterKey],
-    queryFn: () => fetchLibraryPage({ q, form: formParam, repro: reproKeys, limit: 10000 }),
+    queryFn: () => fetchLibraryPage({ q, form: effectiveFormParam, repro: reproKeys, limit: 10000 }),
     enabled: showGroups,
     placeholderData: keepPreviousData,
     staleTime: 300_000,
@@ -362,12 +370,12 @@ function CapabilityLibrary({ stats, search, openDetail, onViewRepro }: { stats?:
     const timer = setTimeout(() => {
       void qc.prefetchQuery({
         queryKey: ['cap-library', 'page', filterKey, page + 1],   // 必须与 pageQ 的 key 完全一致才会命中缓存
-        queryFn: () => fetchLibraryPage({ q, form: formParam, repro: reproKeys, page: page + 1, page_size: PAGE_SIZE }),
+        queryFn: () => fetchLibraryPage({ q, form: effectiveFormParam, repro: reproKeys, page: page + 1, page_size: PAGE_SIZE }),
         staleTime: 300_000,
       });
     }, 1200);
     return () => clearTimeout(timer);
-  }, [showGroups, page, pageCount, filterKey, q, formParam, reproKeys, qc]);
+  }, [showGroups, page, pageCount, filterKey, q, effectiveFormParam, reproKeys, qc]);
 
   const allItems = allQ.data?.items ?? [];
   // 懒查询用 isPending || isFetching 判断: enabled=false 时 v5 的 isLoading 恒为 false,
@@ -628,6 +636,10 @@ function ReproDetailContent({ task, capabilityItem, openDetail }: { task: ReproT
 
   const report = liveReport ?? currentTask.report ?? capabilityItem?.payload?.repro_report;
   const p = capabilityItem?.payload ?? {};
+  // 「报告里的 is_web」是 agent 当时的自述, 不是平台分类: 2026-10-29 之前的提示词要求
+  // 「项目必须 Docker」时一律报 is_web=false, 于是自带前端的项目(agent-go #10711、kAIm56 #50500)
+  // 报告里写「非 Web」, 能力库里却标着 Web。分类以条目 payload 为准, 报告只回答「这轮 Web 服务
+  // 起没起来」—— 两个字段分开显示, 不让报告的 is_web 冒充分类结论。
   // 头部徽标同样以条目结论为准(见 taskShownStatus): 否则列表已写「无需复现」, 选中后的控制台还写
   // 「复现失败」。日志流、自动滚动、停止按钮仍按真实任务状态工作 —— 覆盖的只是对外那句话。
   const shownStatus = currentTask.item_repro_status === 'not_supported' ? 'not_supported' : liveStatus;
@@ -687,7 +699,8 @@ function ReproDetailContent({ task, capabilityItem, openDetail }: { task: ReproT
         <div className="field-grid repro-fields">
           <div className="cap-field"><span>报告状态</span><b>{reproStatusLabel(report.status)}</b></div>
           <div className="cap-field"><span>项目类型</span><b>{report.web_framework || report.project_type || '-'}</b></div>
-          <div className="cap-field"><span>Web 启动</span><b>{report.is_web === true ? (report.web_started ? '已启动并验证' : '未启动') : report.is_web === false ? '非 Web 项目' : '未判定（agent 未给出结论）'}</b></div>
+          <div className="cap-field"><span>Web 分类</span><b>{p.is_web === true ? (p.web_framework ? `Web（${p.web_framework}）` : 'Web') : p.is_web === false ? '非 Web' : '未分类'}</b></div>
+          <div className="cap-field"><span>Web 启动</span><b>{report.web_started ? '已启动并验证' : report.is_web === false && p.is_web === true ? '未启动（项目是 Web，本环境未跑起来）' : report.is_web === false ? '未启动（agent 判定本项目没有 Web 界面）' : '未启动'}</b></div>
           <div className="cap-field"><span>启动命令</span><code>{report.start_command || '-'}</code></div>
         </div>
       </section>

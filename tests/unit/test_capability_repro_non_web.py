@@ -277,3 +277,41 @@ def test_final_status_detects_docker_and_kvm_env_limit() -> None:
     assert f("failed", {"summary": "docker build failed: npm ERR! 404"}) == "failed"
     # 非 failed 结论一律原样返回
     assert f("success", {"summary": "本环境不支持 Docker"}) == "success"
+
+
+# ---------------------------------------------------------------------------
+# 「无需复现」芯片 (2026-10-31)
+# ---------------------------------------------------------------------------
+def test_not_supported_chip_does_not_require_is_web() -> None:
+    """芯片「无需复现」是**结论**不是进度, 不该前置 is_web —— 否则被复现报告改错过分类的
+    Web 项目会整条消失。
+
+    真实案例 item#50500(kAIm56): 它是自带 Web manager 的项目(GitHub 描述里就写着 web UI,
+    规则预筛 11 分, LLM 置信 0.95), 但 2026-09-24 那次复现跑在旧提示词下 —— 旧版要求
+    「部署必须 Docker」时一律报 is_web=false, 于是 payload.is_web 被改成 False 并留了
+    web_reclass=repro-corrected-2026-09-24。加上原来的 `_IS_WEB` 前置, 芯片就只剩 1 条。
+    """
+    conn = _db()
+    item_id = _mk_item(conn, {"is_web": False, "web_framework": "", "repro_status": "not_supported",
+                              "repro_skip_reason": "env_unsupported",
+                              "web_reclass": "repro-corrected-2026-09-24"}, status="无需复现")
+    # 同一批里再放一条形态正常、但结论不同的, 确认桶间不串
+    _mk_item(conn, {"is_web": True, "repro_status": "candidate"}, status="待复现验证")
+
+    stats = repo.filter_stats_by_domain(conn, "capabilities")
+    assert stats["repro"]["not_supported"] == 1
+    assert stats["repro"]["pending"] == 1
+    # 计数与列表必须同源: 芯片写 1 条, 点进去也得是 1 条
+    items = repo.list_domain_items(conn, "capabilities", exclude_status="已淘汰",
+                                   repro_chips=["not_supported"])
+    assert [i["id"] for i in items] == [item_id]
+
+
+def test_not_supported_chip_still_hides_eliminated_rows() -> None:
+    """已淘汰仍然整库不可见 —— 616 条「分类阶段判死为非 Web」的条目不该因为这个改动冒出来。"""
+    conn = _db()
+    _mk_item(conn, {"is_web": False, "repro_status": "not_supported",
+                    "repro_skip_reason": "non_web"}, status="已淘汰")
+    stats = repo.filter_stats_by_domain(conn, "capabilities")
+    assert stats["total"] == 0
+    assert stats["repro"]["not_supported"] == 0

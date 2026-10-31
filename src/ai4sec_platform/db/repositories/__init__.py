@@ -535,7 +535,14 @@ FORM_PREDICATES: dict[str, str] = {
 }
 
 # 可体验·复现。除 demo 外一律前置「无 demo + is_web 为真」: demo 是独立维度、不算复现结论;
-# 非 web 条目不参与复现维度(已被 web 把关挡在复现队列外, 不该在任何复现桶里冒充"待复现")。
+# 非 web 条目不参与复现**进度**维度(已被 web 把关挡在复现队列外, 不该在任何复现桶里冒充"待复现")。
+#
+# 2026-10-31 例外: `not_supported` 去掉 is_web 前置。「无需复现」不是进度而是**结论** ——
+# "这个项目我们不打算复现了", 它成立于两种互斥的成因: ①项目本身不是 Web(分类阶段判死);
+# ②是 Web 但当前环境跑不起来(Docker/KVM 硬依赖, 复现阶段判死)。结论与形态无关, 再套一层
+# is_web 只会把 ② 里被复现报告改错过分类的那条挡掉(实测: 芯片 1 条, status=无需复现 2 条;
+# 见 item#50500 的 web_reclass=repro-corrected-2026-09-24)。其余五个桶是**进度**, 保持 is_web。
+# 注: 616 条 ① 已经被 status=已淘汰 挡在整库之外, 与本谓词无关 —— 这里放开 is_web 只影响 ②。
 REPRO_PREDICATES: dict[str, str] = {
     "demo": _HAS_DEMO,
     "success": f"{_NO_DEMO} AND {_IS_WEB} AND {_REPRO_STATUS} IN ('success', 'succeeded')",
@@ -543,7 +550,8 @@ REPRO_PREDICATES: dict[str, str] = {
     "in_progress": f"{_NO_DEMO} AND {_IS_WEB} AND {_REPRO_STATUS} = 'in_progress'",
     "pending": f"{_NO_DEMO} AND {_IS_WEB} AND ({_REPRO_STATUS} IN ('candidate', 'no_code') OR {_REPRO_STATUS} IS NULL)",
     "failed": f"{_NO_DEMO} AND {_IS_WEB} AND {_REPRO_STATUS} IN ('failed', 'error')",
-    "not_supported": f"{_NO_DEMO} AND {_IS_WEB} AND {_REPRO_STATUS} = 'not_supported'",
+    # 不前置 _IS_WEB: 见上方注释。demo 仍然排除(demo 与复现结论互斥, 与其余桶同口径)。
+    "not_supported": f"{_NO_DEMO} AND {_REPRO_STATUS} = 'not_supported'",
 }
 REPRO_KEYS: tuple[str, ...] = ("success", "partial", "in_progress", "pending", "failed", "not_supported")
 
@@ -791,8 +799,9 @@ def filter_stats_by_domain(conn: sqlite3.Connection, domain: str) -> dict[str, A
 
     与 /items 列表同人口(domain + status != '已淘汰'),保证 chip 计数与列表一致。
     桶划分与前端 engineeringGroups 一致:官方 Demo 为独立维度(demo_url 有即归它),
-    repro 桶全部前置「无 demo + is_web 为真」条件(非 web 不参与复现维度, 见下方 SQL 注释),各桶互斥;
-    非 web 条目不落在任何 repro 桶里, 由前端「非 Web(不参与复现)」组承载。
+    repro 桶全部前置「无 demo」条件, 其中进度类五个桶再前置「is_web 为真」(非 web 不参与复现进度,
+    见下方 SQL 注释),各桶互斥;结论类 `not_supported` 只看结论不看形态(2026-10-31)。
+    非 web 条目不落在任何 repro 进度桶里, 由前端「非 Web(不参与复现)」组承载。
     json_extract 对缺失键/非法 JSON 返回 NULL → 落入"不匹配"桶(非 Web / 待复现),
     与 Python 端 loads(payload_json, {}) 兜底语义一致。is_web 兼容 JSON true(=1) 与字符串 "true"/"1"。
     """
@@ -808,9 +817,11 @@ def filter_stats_by_domain(conn: sqlite3.Connection, domain: str) -> dict[str, A
             SUM(CASE WHEN %s THEN 1 ELSE 0 END) AS demo_count,
             -- 桶谓词集中在 REPRO_PREDICATES(唯一真源): 列表筛选(build_item_filters)复用同一批
             -- 片段, 所以「芯片上的数字」与「列表里的条数」结构性同源, 不会再各算一套(2026-09-15)。
-            -- repro 各桶一律前置 is_web 为真: 非 web 条目已被 web 把关挡在复现队列外,
+            -- repro 进度桶一律前置 is_web 为真: 非 web 条目已被 web 把关挡在复现队列外,
             -- 不该在任何复现桶里冒充"待复现"(实测旧口径 2029 条"待复现"里 1696 条是非 web)。
-            -- 「官方 Demo」是独立维度, 不算复现结论, 故不设此门槛。
+            -- 例外: `not_supported` 是**结论**不是进度, 不设形态门槛 —— 否则"是 Web 但环境不支持
+            -- Docker"的条目在被复现报告改错过 is_web 时会整条消失(2026-10-31, item#50500)。
+            -- 「官方 Demo」同理是独立维度, 不算复现结论, 也不设门槛。
             %s
         FROM domain_items
         WHERE domain = ? AND status != ?
