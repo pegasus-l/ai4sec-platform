@@ -102,8 +102,24 @@ class ASISSessionMiddleware(BaseHTTPMiddleware):
         # 非 admin 一律只读: 嵌入票是 viewer, ASIS 的只读账号也是 viewer/user。
         # 这条同时堵住旧行为 —— 以前只要签名有效, viewer 也能调写接口。
         if user.get("role") != "admin" and request.method not in READ_ONLY_METHODS:
+            # 2026-10-31: 403 必须说清"为什么只读"。以前这里只回一句"当前会话只读",
+            # 而 cookie 过期后会静默回退到入口网关的嵌入票(永远是 viewer) —— 于是
+            # "你登录失效了"被伪装成"你没权限", 前端只认 401 ⇒ 不弹横幅、不提示登录,
+            # 用户看到的就是"点复现报 403, 怎么刷新都不跳登录页"。
+            #   session_expired   = 没有有效 cookie, 靠嵌入票进来 ⇒ 重新登录即可写
+            #   insufficient_role = cookie 有效但角色不是 admin ⇒ 换账号才有用
+            reason = "session_expired" if _embedded else "insufficient_role"
             return JSONResponse(
-                {"error": "forbidden", "detail": "当前会话只读, 不支持写操作"},
+                {
+                    "error": "read_only_session",
+                    "reason": reason,
+                    "detail": (
+                        "平台登录已失效, 当前为只读访问, 不支持写操作。重新登录后可执行。"
+                        if reason == "session_expired"
+                        else "当前账号为只读, 不支持写操作。"
+                    ),
+                    "login": LOGIN_PATH,
+                },
                 status_code=403,
             )
         request.state.user = user

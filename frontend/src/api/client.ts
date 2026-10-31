@@ -3,18 +3,48 @@ export const BASE = '/insights';  // ASIS 反代挂载路径
 /** 入口网关(136 radar)的登录页; 与后端 SEC_AI_LOGIN_URL 保持同一取值。 */
 export const LOGIN_PATH = '/login';
 
-/** 401 时派发的全局事件: 由 AuthExpiredBanner 监听(见该组件注释)。 */
+/** 401/403 时派发的全局事件: 由 AuthExpiredBanner 监听(见该组件注释)。 */
 export const AUTH_REQUIRED_EVENT = 'ai4sec:auth-required';
 
-// 会话过期后页面上会有一串轮询(复现状态每 5s 一次)同时 401 —— 事件节流, 避免横幅反复重挂。
+/**
+ * 横幅要显示的三种处境。区别很关键: 前两种登录一下就能解决, 第三种登录也没用。
+ *   expired        401, 完全没有有效会话
+ *   readonly_login 403 + reason=session_expired, 有嵌入票但没有本平台登录 ⇒ 掉线了
+ *   readonly_account 403 + reason=insufficient_role, 登录有效但账号本身是只读
+ */
+export type AuthNoticeKind = 'expired' | 'readonly_login' | 'readonly_account';
+
+// 会话过期后页面上会有一串轮询(复现状态每 5s 一次)同时报错 —— 事件节流, 避免横幅反复重挂。
 const AUTH_NOTICE_INTERVAL_MS = 5000;
 let lastAuthNoticeAt = 0;
 
-function notifyAuthRequired(): void {
+function notifyAuthRequired(kind: AuthNoticeKind): void {
   const now = Date.now();
   if (now - lastAuthNoticeAt < AUTH_NOTICE_INTERVAL_MS) return;
   lastAuthNoticeAt = now;
-  window.dispatchEvent(new CustomEvent(AUTH_REQUIRED_EVENT));
+  window.dispatchEvent(new CustomEvent(AUTH_REQUIRED_EVENT, { detail: { kind } }));
+}
+
+/**
+ * 401/403 的统一处置。
+ *
+ * 2026-10-31: 以前只认 401。但会话过期时后端会静默回退到入口网关的嵌入票(viewer),
+ * 写操作因此返回 403 而不是 401 —— 前端把它当成普通报错, 用户看到"点复现报 403 且
+ * 怎么刷新都不跳登录页"。现在按后端给的 reason 区分, 让横幅说人话。
+ */
+async function handleAuthFailure(response: Response): Promise<void> {
+  if (response.status === 401) {
+    notifyAuthRequired('expired');
+    return;
+  }
+  if (response.status !== 403) return;
+  try {
+    const body = await response.clone().json();
+    if (body?.reason === 'session_expired') notifyAuthRequired('readonly_login');
+    else if (body?.error === 'read_only_session') notifyAuthRequired('readonly_account');
+  } catch {
+    // 不是 JSON 的 403(来自别处)与登录态无关, 保持原样抛错
+  }
 }
 
 /** 当前页面地址 → 登录页回跳链接(重新登录后回到用户原来看的那一页)。 */
@@ -25,8 +55,8 @@ export function loginUrl(): string {
 
 export async function getJson<T>(path: string): Promise<T> {
   const response = await fetch(BASE + path, { cache: 'no-store' });
-  if (response.status === 401) notifyAuthRequired();  // 会话过期: 让横幅出来(后端 401 JSON)
   if (!response.ok) {
+    await handleAuthFailure(response);
     throw new Error(`${path}: ${response.status}`);
   }
   return response.json() as Promise<T>;
@@ -39,14 +69,14 @@ export async function postJson<T>(path: string, body?: unknown): Promise<T> {
     cache: 'no-store',
     body: body ? JSON.stringify(body) : undefined,
   });
-  if (response.status === 401) notifyAuthRequired();  // 会话过期: 让横幅出来(后端 401 JSON)
   if (!response.ok) {
+    await handleAuthFailure(response);
     throw new Error(`${path}: ${response.status}`);
   }
   return response.json() as Promise<T>;
 }
 
-/** PATCH 与 POST 同一套约定(401 派发横幅事件 / 非 2xx 抛错)。案例库的字段编辑用它。 */
+/** PATCH 与 POST 同一套约定(401/403 派发横幅事件 / 非 2xx 抛错)。案例库的字段编辑用它。 */
 export async function patchJson<T>(path: string, body?: unknown): Promise<T> {
   const response = await fetch(BASE + path, {
     method: 'PATCH',
@@ -54,8 +84,8 @@ export async function patchJson<T>(path: string, body?: unknown): Promise<T> {
     cache: 'no-store',
     body: body ? JSON.stringify(body) : undefined,
   });
-  if (response.status === 401) notifyAuthRequired();
   if (!response.ok) {
+    await handleAuthFailure(response);
     throw new Error(`${path}: ${response.status}`);
   }
   return response.json() as Promise<T>;
@@ -63,8 +93,8 @@ export async function patchJson<T>(path: string, body?: unknown): Promise<T> {
 
 export async function deleteJson<T>(path: string): Promise<T> {
   const response = await fetch(BASE + path, { method: 'DELETE', cache: 'no-store' });
-  if (response.status === 401) notifyAuthRequired();  // 会话过期: 让横幅出来(后端 401 JSON)
   if (!response.ok) {
+    await handleAuthFailure(response);
     throw new Error(`${path}: ${response.status}`);
   }
   return response.json() as Promise<T>;
