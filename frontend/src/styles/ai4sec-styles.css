@@ -863,6 +863,7 @@
 .repro-metrics .repro-skipped { color: var(--muted); }
 /* 第 5 格: 条目被判「无需复现」的任务不算失败也不算成功, 单独一格, 免得四个数与总数对不上 */
 .repro-metrics.five { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+.repro-metrics.six { grid-template-columns: repeat(6, minmax(0, 1fr)); }
 .repro-workbench { display: grid; grid-template-columns: minmax(290px, 350px) minmax(0, 1fr); gap: 12px; align-items: start; }
 .repro-task-panel, .repro-detail-panel { min-width: 0; }
 .repro-task-list { display: grid; gap: 8px; max-height: calc(100vh - 310px); overflow-y: auto; }
@@ -933,7 +934,7 @@
   .field-grid { grid-template-columns: 1fr; }
   .repro-workbench { grid-template-columns: 1fr; }
   .repro-task-list { max-height: 320px; }
-  .repro-metrics, .repro-usage, .repro-metrics.five { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .repro-metrics, .repro-usage, .repro-metrics.five, .repro-metrics.six { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
 /* === 颜色变量重定义: ai4sec 用 ASIS 设计系统 === */

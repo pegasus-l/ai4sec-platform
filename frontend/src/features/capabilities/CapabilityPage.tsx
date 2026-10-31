@@ -46,14 +46,24 @@ function hasReproResult(p: CapabilityItem['payload'] | undefined): boolean {
 /** 复现状态徽标文案/色调(含 not_supported=无需复现)。
  *  2026-10-29 更名: 原「无法复现」。它同时覆盖两种互不相干的情形 —— 项目根本不是 Web(复现维度不适用)、
  *  依赖 Docker 等本环境没有的条件(跑了也只会 FAILURE)。两者都是「平台决定不跑/跑了没有意义」，
- *  共同点是**不该被读成「这个项目复现不出来」**。具体哪一种只在抽屉里按 repro_skip_reason 说明，
- *  徽标只写「无需复现」以免卡片上出现两种措辞。色调从 red 改 slate: 它不是失败。 */
+ *  共同点是**不该被读成「这个项目复现不出来」**。色调从 red 改 slate: 它不是失败。
+ *
+ *  2026-10-31 按用户要求把两种成因在页面上分开, 文案读 repro_skip_reason:
+ *  `non_web` → 「非 Web(不参与复现)」(项目根本没有浏览器界面, 复现维度不适用);
+ *  `env_unsupported`(或缺字段的旧数据)→ 仍写「无需复现」(是 Web, 但本环境缺 Docker/KVM)。
+ *  10-29 那版故意统一措辞是为了不让卡片上两种说法打架; 现在看, 打架的是「不是 Web」与
+ *  「跑不起来」这两件事挤在一个词里 —— 分开才不误导。 */
 const REPRO_LABEL: Record<string, string> = {
   candidate: '可复现', in_progress: '复现中', no_code: '无代码', success: '已复现',
   succeeded: '已复现', partial: '部分复现', failed: '复现失败', error: '复现异常',
   not_supported: '无需复现', demo_verified: '官方Demo',
 };
-const reproBadgeLabel = (rs?: string) => REPRO_LABEL[rs ?? ''] ?? rs ?? '未知';
+/** 「无需复现」终态的两种成因 → 展示文案。缺 repro_skip_reason 的旧数据按 Docker 口径兜底,
+ *  与抽屉「复现说明」的兜底一致(那里也是 non_web 以外一律当环境边界)。 */
+const reproNotSupportedLabel = (skipReason?: string): string =>
+  skipReason === 'non_web' ? '非 Web(不参与复现)' : '无需复现';
+const reproBadgeLabel = (rs?: string, skipReason?: string) =>
+  rs === 'not_supported' ? reproNotSupportedLabel(skipReason) : REPRO_LABEL[rs ?? ''] ?? rs ?? '未知';
 const reproBadgeTone = (rs?: string): 'green' | 'sky' | 'slate' | 'amber' | 'red' =>
   rs === 'candidate' ? 'green' : rs === 'in_progress' ? 'sky' : rs === 'no_code' ? 'slate' : rs === 'not_supported' ? 'slate' : 'amber';
 
@@ -227,7 +237,7 @@ function CapabilityCard({ item, rank, onClick, onViewRepro }: { item: Capability
   const p = item.payload ?? {};
   const sourceType = p.source_type || (item.source_url?.includes('github.com') ? 'github' : 'arxiv');
   const reproTag = p.repro_status === 'candidate' ? 'green' : p.repro_status === 'in_progress' ? 'sky' : p.repro_status === 'no_code' ? 'slate' : p.repro_status === 'not_supported' ? 'slate' : 'amber';
-  const reproText = reproBadgeLabel(p.repro_status);
+  const reproText = reproBadgeLabel(p.repro_status, p.repro_skip_reason);
   return <div className="asis-card clickable" onClick={onClick}>
     <div className="rank">{rank}</div>
     <div>
@@ -262,15 +272,16 @@ const ENGINEERING_BUCKET_LABEL: Record<string, string> = {
 const ENGINEERING_BUCKET_ORDER = ['demo', 'success', 'partial', 'in_progress', 'pending', 'failed', 'not_supported', 'non_web'] as const;
 
 /** 单条能力卡落在哪个「可体验·复现」桶, 判据与后端 REPRO_PREDICATES 一致:
- *  官方 Demo 是独立维度(有 demo_url 即归它, 不论 is_web); 「无需复现」是**结论**、优先于形态
- *  (2026-10-31: 非 Web 项目本来就以 not_supported 落终态, 若先按形态归到「非 Web」,
- *  分组里「无需复现」就只剩 Web 那 1 条, 与芯片的 618 又对不上); 其余非 web 归「非 Web」;
+ *  官方 Demo 是独立维度(有 demo_url 即归它, 不论 is_web); 「无需复现」是终态但有两种成因,
+ *  按 repro_skip_reason 分开(2026-10-31): 分类阶段判死「不是 Web」→ 归「非 Web」组;
+ *  是 Web 但环境缺 Docker/KVM → 留「无需复现」组。芯片 not_supported 数的是后端谓词,
+ *  与后者同源, 所以分组与芯片对得上; 其余非 web 归「非 Web」;
  *  剩下的按 repro_status 落桶(缺失 / candidate / no_code → 待复现)。
  *  前端此前另有一份自己的判据, 且漏了 'succeeded'(分组显示 1 而芯片显示 2) —— 统一到这一处。 */
 function reproBucketOf(p: CapabilityItem['payload'] | undefined): string | null {
   const rs = p?.repro_status;
   if (p?.demo_url) return 'demo';
-  if (rs === 'not_supported') return 'not_supported';
+  if (rs === 'not_supported') return p?.repro_skip_reason === 'non_web' ? 'non_web' : 'not_supported';
   if (!p?.is_web) return 'non_web';
   if (rs === 'success' || rs === 'succeeded') return 'success';
   if (rs === 'partial') return 'partial';
@@ -441,7 +452,7 @@ function CapabilityLibrary({ stats, search, openDetail, onViewRepro }: { stats?:
         <td><div className="table-title">{p.display_title || item.title}</div><div className="table-sub">{st}</div></td>
         <td style={{maxWidth: '320px'}} className="small muted">{ov.slice(0, 120)}{ov.length > 120 ? '…' : ''}</td>
         <td><div className="score-ring">{item.score}</div></td>
-        <td><div className="badges">{p.capability_type && <Badge tone="green">{p.capability_type}</Badge>}{showReproBadge(p) && <Badge tone={reproBadgeTone(p.repro_status)}>{reproBadgeLabel(p.repro_status)}</Badge>}{p.is_web ? <Badge tone="amber">Web</Badge> : <Badge tone="slate">非Web</Badge>}{p.demo_url && <Badge tone="green">官方 Demo</Badge>}{hasReproResult(p) && <button className="btn" style={{ padding: '1px 8px', fontSize: 11 }} onClick={(e) => { e.stopPropagation(); onViewRepro(item); }}>查看复现 →</button>}</div></td>
+        <td><div className="badges">{p.capability_type && <Badge tone="green">{p.capability_type}</Badge>}{showReproBadge(p) && <Badge tone={reproBadgeTone(p.repro_status)}>{reproBadgeLabel(p.repro_status, p.repro_skip_reason)}</Badge>}{p.is_web ? <Badge tone="amber">Web</Badge> : <Badge tone="slate">非Web</Badge>}{p.demo_url && <Badge tone="green">官方 Demo</Badge>}{hasReproResult(p) && <button className="btn" style={{ padding: '1px 8px', fontSize: 11 }} onClick={(e) => { e.stopPropagation(); onViewRepro(item); }}>查看复现 →</button>}</div></td>
       </tr>; })}
     </tbody></table>
     {pageCount > 1 && <div style={{ display: 'flex', justifyContent: 'center', gap: 8, alignItems: 'center', padding: '10px 12px', borderTop: '1px solid var(--line)' }}>
@@ -520,18 +531,22 @@ function CapabilityRepro({ runs, openDetail, targetItemId, onTargetConsumed }: {
   const runningCount = runs.filter(run => taskShownStatus(run) === 'running' || taskShownStatus(run) === 'queued').length;
   const successCount = runs.filter(run => ['success', 'partial'].includes(taskShownStatus(run))).length;
   const failedCount = runs.filter(run => ['failed', 'timeout'].includes(taskShownStatus(run))).length;
-  const notSupportedCount = runs.filter(run => taskShownStatus(run) === 'not_supported').length;
+  // 「无需复现」按成因拆两格(2026-10-31): 非 Web 项目本就不该参与复现维度; 是 Web 但环境缺
+  // Docker/KVM 才是「无需复现」。两格之和 = 全部 not_supported 任务。
+  const nonWebCount = runs.filter(run => taskShownStatus(run) === 'not_supported' && run.item_repro_skip_reason === 'non_web').length;
+  const notSupportedCount = runs.filter(run => taskShownStatus(run) === 'not_supported' && run.item_repro_skip_reason !== 'non_web').length;
 
   return <div className="grid">
     {targetHint && <div style={{ padding: '8px 12px', marginBottom: 8, borderRadius: 6, border: '1px solid var(--amber, #f5b83d)', background: 'var(--amber-bg, rgba(245,184,61,0.12))', fontSize: 12, color: 'var(--faint)' }}>ℹ {targetHint}</div>}
     {runs.length === 0 && <EmptyState title="暂无复现任务" description="从今日能力或能力库点击「加入复现」触发" />}
     {runs.length > 0 && <>
-      <div className="repro-metrics five">
+      <div className="repro-metrics six">
         <div><span>全部任务</span><b>{runs.length}</b></div>
         <div><span>正在复现</span><b className="repro-running">{runningCount}</b></div>
         <div><span>复现成功</span><b className="repro-success">{successCount}</b></div>
         <div><span>失败 / 超时</span><b className="repro-failed">{failedCount}</b></div>
         <div><span>无需复现</span><b className="repro-skipped">{notSupportedCount}</b></div>
+        <div><span>非 Web</span><b className="repro-skipped">{nonWebCount}</b></div>
       </div>
       <div className="repro-workbench">
         <div className="panel repro-task-panel">
@@ -543,7 +558,7 @@ function CapabilityRepro({ runs, openDetail, targetItemId, onTargetConsumed }: {
                 <strong>{run.title || run.repo_url?.split('/').filter(Boolean).slice(-1)[0] || `task-${run.id}`}</strong>
                 <small>#{run.id} · {run.trigger || 'manual'} · {formatReproTime(run.created_at)}</small>
               </span>
-              <span className={`repro-status status-${taskShownStatus(run)}`}>{reproStatusLabel(taskShownStatus(run))}</span>
+              <span className={`repro-status status-${taskShownStatus(run)}`}>{reproStatusLabel(taskShownStatus(run), run.item_repro_skip_reason)}</span>
               {index === 0 && (run.status === 'running' || run.status === 'queued') && <span className="repro-live">LIVE</span>}
             </button>)}
           </div>
@@ -649,7 +664,7 @@ function ReproDetailContent({ task, capabilityItem, openDetail }: { task: ReproT
 
   return <div className="repro-console">
     <div className="repro-console-head">
-      <div><span className={`repro-status status-${shownStatus}`}>{reproStatusLabel(shownStatus)}</span><strong>{currentTask.repo_url?.split('/').filter(Boolean).slice(-1)[0]}</strong></div>
+      <div><span className={`repro-status status-${shownStatus}`}>{reproStatusLabel(shownStatus, currentTask.item_repro_skip_reason)}</span><strong>{currentTask.repo_url?.split('/').filter(Boolean).slice(-1)[0]}</strong></div>
       <div className="repro-meta">任务 #{currentTask.id}{currentTask.web_port ? ` · Web ${currentTask.web_port}` : ''}</div>
     </div>
     <div className="repro-actions">
@@ -774,8 +789,9 @@ const TEST_RESULT_LABEL: Record<string, string> = {
   not_found: '仓库没有测试',
 };
 
-function reproStatusLabel(status: string): string {
-  return { queued: '排队中', running: '复现中', success: '复现成功', partial: '部分成功', failed: '复现失败', stopped: '已停止', timeout: '已超时', cleaned: '已清理', not_supported: '无需复现' }[status] ?? status;
+function reproStatusLabel(status: string, skipReason?: string): string {
+  if (status === 'not_supported') return reproNotSupportedLabel(skipReason);
+  return { queued: '排队中', running: '复现中', success: '复现成功', partial: '部分成功', failed: '复现失败', stopped: '已停止', timeout: '已超时', cleaned: '已清理' }[status] ?? status;
 }
 
 function formatReproTime(value?: string): string {
@@ -864,7 +880,7 @@ function CapabilityDetailContent({ itemId, initialItem, onRepro, onConvert, onVi
     {/* 复现 & 转化 */}
     {p.demo_url && <div className="drawer-section"><h3>官方在线演示</h3><p style={{ color: 'var(--green)' }}>项目已提供官方 Demo，按复现策略直接使用官方环境，不启动本地容器。</p><p><a href={p.demo_url} target="_blank" rel="noopener" style={{ color: 'var(--sky)' }}>{p.demo_url}</a></p></div>}
     {!p.demo_url && p.repro_summary && <div className="drawer-section"><h3>复现摘要</h3><p style={{ color: 'var(--green)' }}>{p.repro_summary}</p></div>}
-    <div className="drawer-section"><h3>复现 & 转化</h3><div className="badges">{showReproBadge(p) && <Badge tone={reproBadgeTone(p.repro_status)}>{reproBadgeLabel(p.repro_status)}</Badge>}<Badge tone="violet">{p.conversion_status ?? '待评估'}</Badge>{p.is_web ? <Badge tone="amber">Web{p.web_framework ? `:${p.web_framework}` : ''}</Badge> : <Badge tone="slate">非Web</Badge>}{p.demo_url && <Badge tone="green">官方 Demo</Badge>}</div></div>
+    <div className="drawer-section"><h3>复现 & 转化</h3><div className="badges">{showReproBadge(p) && <Badge tone={reproBadgeTone(p.repro_status)}>{reproBadgeLabel(p.repro_status, p.repro_skip_reason)}</Badge>}<Badge tone="violet">{p.conversion_status ?? '待评估'}</Badge>{p.is_web ? <Badge tone="amber">Web{p.web_framework ? `:${p.web_framework}` : ''}</Badge> : <Badge tone="slate">非Web</Badge>}{p.demo_url && <Badge tone="green">官方 Demo</Badge>}</div></div>
 
     {/* 无需复现说明(2026-10-29): 徽标只写「无需复现」, 为什么不需要放在这里 —— 两种原因互不相干,
         合成一句话就会两种都说错。旧数据没有 repro_skip_reason 时按 Docker 口径兜底(那是这个终态
