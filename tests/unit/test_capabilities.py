@@ -7,7 +7,6 @@
   - builders: CapabilityCard + ConversionRecord 构造
   - scorers: 多维度评分（5 维度 + 1-5 映射 + 资讯分先验）
   - repro_runner: classify_log_line 7 类 + strip_ansi + extract_report
-  - repro_results: 报告状态映射
   - selectors: repo URL 解析
   - assessments: parse_github_url + extract_demo_urls + rule_based_classify
 """
@@ -18,8 +17,6 @@ import sqlite3
 from ai4sec_platform.db.repositories import get_succeeded_repro_item_ids
 from ai4sec_platform.domains.capabilities.adapters.from_news import capability_candidates_from_news
 from ai4sec_platform.domains.capabilities.adapters.repro_runner import (
-    _build_web_repro_prompt,
-    _repo_archive_url,
     classify_log_line,
     enforce_report_acceptance,
     extract_report,
@@ -27,7 +24,6 @@ from ai4sec_platform.domains.capabilities.adapters.repro_runner import (
     strip_ansi,
     task_status_from_report,
 )
-from ai4sec_platform.domains.capabilities.adapters.repro_results import update_capability_from_report
 from ai4sec_platform.domains.capabilities.assessments import (
     extract_demo_urls,
     parse_github_url,
@@ -302,16 +298,6 @@ def test_web_without_started_service_cannot_succeed() -> None:
     assert report["status"] == "failed"
 
 
-def test_web_prompt_requires_real_core_evidence() -> None:
-    prompt = _build_web_repro_prompt()
-    assert "首页 200 = 复现成功" in prompt
-    assert '"mode": "real|mock"' in prompt
-    assert "真实证据" in prompt
-    assert "无需用户额外配置" in prompt
-    assert "schema 校验失败" in prompt
-    assert "至少重试 2 次" in prompt
-
-
 def test_partial_repro_is_not_considered_succeeded() -> None:
     connection = sqlite3.connect(":memory:")
     connection.row_factory = sqlite3.Row
@@ -323,12 +309,6 @@ def test_partial_repro_is_not_considered_succeeded() -> None:
     assert get_succeeded_repro_item_ids(connection) == {1}
 
 
-def test_github_archive_uses_codeload_fallback() -> None:
-    assert _repo_archive_url("https://github.com/example/tool.git") == (
-        "https://codeload.github.com/example/tool/zip/refs/heads/main"
-    )
-
-
 def test_log_redaction_hides_key_and_jwt(monkeypatch) -> None:
     monkeypatch.setattr(
         "ai4sec_platform.domains.capabilities.adapters.repro_runner.REPRO_LLM_API_KEY",
@@ -337,19 +317,6 @@ def test_log_redaction_hides_key_and_jwt(monkeypatch) -> None:
     value = redact_sensitive_log_value("key=sk-test-secret-value token=eyJabc.def.ghi")
     assert "sk-test-secret-value" not in value
     assert "eyJabc.def.ghi" not in value
-
-
-# ============================================================================
-# repro_results: 报告状态映射
-# ============================================================================
-def test_update_capability_from_report_status_mapping() -> None:
-    """验证报告 status → domain_item status 映射（不实际写 DB）"""
-    status_map = {"success": "已复现", "partial": "部分复现", "failed": "复现失败"}
-    for rep_status, expected in status_map.items():
-        report = {"status": rep_status, "summary": "test"}
-        # 不传 conn，只验证映射逻辑（update_capability_from_report 内部会 from ai4sec_platform.db import repositories）
-        # 这里只验证 status_map 正确
-        assert status_map[report["status"]] == expected
 
 
 # ============================================================================

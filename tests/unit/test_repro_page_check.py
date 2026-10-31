@@ -167,3 +167,21 @@ def test_web_prompt_requires_render_and_tests():
     assert "npx --yes playwright" not in prompt
     assert '"page_check"' in prompt and '"tests"' in prompt
     assert "/insights/repro-web/task/7/" in prompt
+
+
+def test_web_prompt_carries_e0_evidence_requirements():
+    """E0 证据链: 提示词必须要求可复核证据, 且由平台定级、agent 不自评。"""
+    prompt = repro._build_repro_prompt("https://github.com/a/b", 7)
+    assert "平台按证据算等级, 你不需要自己评级" in prompt
+    # L1 构建 / L4 核心工作流: 要命令、退出码、真实响应片段
+    assert chr(34) + "build" + chr(34) in prompt
+    assert chr(34) + "exit_code" + chr(34) in prompt and chr(34) + "artifact" + chr(34) in prompt
+    assert "core_workflow.evidence" in prompt
+    assert "禁止只写" in prompt
+    # L3 冒烟: 测试从「顺便跑」变成必跑
+    assert "必须跑一套" in prompt and "平台按没跑处理" in prompt
+    # partial 必须说清哪一部分坏了
+    assert chr(34) + "partial_reason" + chr(34) in prompt and "哪一部分有问题" in prompt
+    # 旧口径废止: 用 mock 不再自动降级, "未执行核心业务链不得报 success" 已删除
+    assert "只能报 partial" not in prompt
+    assert "未执行核心业务链不得报 success" not in prompt

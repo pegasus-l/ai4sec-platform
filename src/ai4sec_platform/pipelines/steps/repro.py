@@ -138,6 +138,8 @@ _WEB_REPORT_EXAMPLE = """{
   "is_web": true/false,
   "status": "success|partial|failed",
   "summary": "一句话结论(中文)。若项目本身无 Web 界面, 明确说明它是什么类型、为什么没界面",
+  "partial_reason": "status=partial 时必填: 哪一部分有问题、用户在哪一步会碰到、影响多大; 非 partial 填空字符串",
+  "build": {"command": "实际执行的安装/构建命令", "exit_code": 0, "artifact": "构建产物路径或可执行入口; 无则空"},
   "web_started": true/false,
   "web_framework": "如 Streamlit / Gradio / FastAPI / React+Vite; 无则填空",
   "start_command": "你启动服务的命令; 没启动填空",
@@ -246,12 +248,18 @@ def _build_repro_prompt(code_url: str, task_id: int) -> str:
         f"- 核心链依赖 LLM/API/数据库时, 必须检查真实 provider/model、响应内容、错误信息, 不能只看 HTTP 状态码。"
         f"核心 LLM 阶段超时/JSON 解析失败/schema 校验失败时不要立刻判失败: 先读错误详情, 优先降低 temperature、启用 JSON/structured-output 模式(若支持), "
         f"对同一阶段至少重试 2 次; 重试成功以成功产物为最终结论, 早先失败记入 gotchas; 全部失败才报 partial/failed。\n"
-        f"- status 定义: success=核心业务链完整跑通且结果可用; partial=页面和部分功能可用但核心链仅部分跑通、用 mock、超时或关键阶段失败; "
-        f"failed=页面不可用或核心入口完全无法执行。未执行核心业务链不得报 success。"
-        f"core_workflow.mode 必须区分 real/mock, 用 mock/fixture/静态占位只能报 partial。\n"
+        f"- status 定义(判据是「用户拿到手能不能正常用」, 不是「跑得完不完美」): "
+        f"success=服务起来了、页面能打开、主要功能可以正常用; 只验证了其中一部分功能、但没发现影响使用的缺陷, 也报 success。"
+        f"partial=能用, 但存在用户实际会碰到的缺口——某个核心页面/入口报错、关键功能只能靠 mock/fixture 演示、"
+        f"需要用户自行补齐大量配置才能用、或时间用尽只验证到一半且剩余部分未知; "
+        f"报 partial 时 partial_reason 必须写清哪一部分有问题、在哪一步碰到、影响多大, 不允许只写\"部分功能不可用\"这类空话。"
+        f"failed=服务起不来, 或核心入口完全无法使用。\n"
+        f"core_workflow.mode 要如实区分 real/mock; 用 mock 数据本身不构成降级理由, 但必须在 limitations(若因此判 partial 则同时写 partial_reason)说清楚。\n"
         f"- 检查关键页面入口是否真实可点击; 核心路由/API 可用但页面无可发现入口时, 允许做最小导航修复(如加\"进入项目\"按钮), "
         f"但不得重写业务功能, 并必须在 gotchas 和 steps 中记录修改。\n\n"
-        f"# 顺便跑仓库自带的测试(有就跑, 跑挂了先自己修)\n"
+        f"# 跑仓库自带的测试(必须跑一套; 仓库确实没有测试才填 not_found)\n"
+        f"- 这是平台判「冒烟是否通过」的唯一依据: 必须真的执行测试命令, 并把 totals(通过/失败数)如实填进报告; "
+        f"不跑、或只跑 --collect-only/--co 探一下, 平台按没跑处理。\n"
         f"- 先看仓库有没有测试: tests/、test_*.py、*_test.go、*.test.ts、src/test/、package.json 的 scripts.test、"
         f"[tool.pytest] 配置、Cargo.toml、pom.xml/build.gradle、*Tests.csproj。\n"
         f"- 只挑【一套】覆盖核心模块的单元测试跑通, 不要跑全量; 测试阶段时间预算不超过 6 分钟。\n"
@@ -265,6 +273,15 @@ def _build_repro_prompt(code_url: str, task_id: int) -> str:
         f"- 结果如实写进报告的 tests 字段(framework/command/result/通过失败数/修了什么/失败用例)。"
         f"测试失败不改复现 status(可能是项目自身 bug), 但必须写进 tests 与 gotchas。仓库根本没有测试就填 not_found, "
         f"不要编造, 也不要现写测试。\n\n"
+        f"# 证据要求(平台按证据算等级, 你不需要自己评级)\n"
+        f"报告里的每条结论都要能被别人独立复核, 所以下面四块必须带【可复算的证据】; 缺哪块, 平台就认为那一级没通过:\n"
+        f"  ① 构建: build.command(实际执行的安装/构建命令) + build.exit_code(真实退出码) + build.artifact(产物路径或可执行入口)。\n"
+        f"  ② 启动: web_started + start_command + verify(带端口的 curl 结果片段)。\n"
+        f"  ③ 冒烟: page_check(页面自检结论) + tests(至少一套测试的 command 与 totals; 仓库确实没有测试则 result=not_found, 并写明找过哪些位置)。\n"
+        f"  ④ 核心工作流: core_workflow.evidence 必须是能被复核的东西——实际调用/操作的命令或请求, 加上从响应或产物里摘出的片段"
+        f"(如 curl 请求的返回 JSON 关键字段、生成文件的路径与大小、页面截图路径)。"
+        f"禁止只写\"已成功验证\"\"功能正常\"这类结论句。\n"
+        f"因环境限制(无 Docker/GPU 等)确实做不到某一级, 就如实留空并在 blockers 说明缺什么, 不要编造证据。\n\n"
         f"# 最后必须输出结构化报告(用标记包裹, JSON 必须合法, status/summary/usage 用中文)\n"
         f"===REPRO_REPORT_START===\n"
         f"{_WEB_REPORT_EXAMPLE}\n"
