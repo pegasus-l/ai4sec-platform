@@ -14,15 +14,25 @@ export const AUTH_REQUIRED_EVENT = 'ai4sec:auth-required';
  */
 export type AuthNoticeKind = 'expired' | 'readonly_login' | 'readonly_account';
 
+/** 事件载荷。autoRedirect 决定横幅能不能替用户跳登录页(见 AuthExpiredBanner)。 */
+export interface AuthNoticeDetail {
+  kind: AuthNoticeKind;
+  /** 这次失败来自用户主动点的写操作 ⇒ 允许自动跳登录页; 后台轮询永远不许。 */
+  autoRedirect: boolean;
+}
+
 // 会话过期后页面上会有一串轮询(复现状态每 5s 一次)同时报错 —— 事件节流, 避免横幅反复重挂。
 const AUTH_NOTICE_INTERVAL_MS = 5000;
 let lastAuthNoticeAt = 0;
 
-function notifyAuthRequired(kind: AuthNoticeKind): void {
+function notifyAuthRequired(kind: AuthNoticeKind, autoRedirect: boolean = false): void {
   const now = Date.now();
-  if (now - lastAuthNoticeAt < AUTH_NOTICE_INTERVAL_MS) return;
+  // 后台轮询的报错要节流; 但用户主动写操作触发的这一次必须放行 —— 否则可能出现
+  // "轮询刚把事件节流掉, 紧接着点按钮的 403 被丢弃", 自动跳转永远不触发。
+  if (!autoRedirect && now - lastAuthNoticeAt < AUTH_NOTICE_INTERVAL_MS) return;
   lastAuthNoticeAt = now;
-  window.dispatchEvent(new CustomEvent(AUTH_REQUIRED_EVENT, { detail: { kind } }));
+  const detail: AuthNoticeDetail = { kind, autoRedirect };
+  window.dispatchEvent(new CustomEvent<AuthNoticeDetail>(AUTH_REQUIRED_EVENT, { detail }));
 }
 
 /**
@@ -31,16 +41,19 @@ function notifyAuthRequired(kind: AuthNoticeKind): void {
  * 2026-10-31: 以前只认 401。但会话过期时后端会静默回退到入口网关的嵌入票(viewer),
  * 写操作因此返回 403 而不是 401 —— 前端把它当成普通报错, 用户看到"点复现报 403 且
  * 怎么刷新都不跳登录页"。现在按后端给的 reason 区分, 让横幅说人话。
+ *
+ * autoRedirect 只由写请求传 true: 用户点了按钮才值得把人送到登录页; 后台轮询触发的
+ * 过期(比如正开着复现日志页)只提示、不动页面。
  */
-async function handleAuthFailure(response: Response): Promise<void> {
+async function handleAuthFailure(response: Response, autoRedirect: boolean = false): Promise<void> {
   if (response.status === 401) {
-    notifyAuthRequired('expired');
+    notifyAuthRequired('expired', autoRedirect);
     return;
   }
   if (response.status !== 403) return;
   try {
     const body = await response.clone().json();
-    if (body?.reason === 'session_expired') notifyAuthRequired('readonly_login');
+    if (body?.reason === 'session_expired') notifyAuthRequired('readonly_login', autoRedirect);
     else if (body?.error === 'read_only_session') notifyAuthRequired('readonly_account');
   } catch {
     // 不是 JSON 的 403(来自别处)与登录态无关, 保持原样抛错
@@ -70,7 +83,7 @@ export async function postJson<T>(path: string, body?: unknown): Promise<T> {
     body: body ? JSON.stringify(body) : undefined,
   });
   if (!response.ok) {
-    await handleAuthFailure(response);
+    await handleAuthFailure(response, true);
     throw new Error(`${path}: ${response.status}`);
   }
   return response.json() as Promise<T>;
@@ -85,7 +98,7 @@ export async function patchJson<T>(path: string, body?: unknown): Promise<T> {
     body: body ? JSON.stringify(body) : undefined,
   });
   if (!response.ok) {
-    await handleAuthFailure(response);
+    await handleAuthFailure(response, true);
     throw new Error(`${path}: ${response.status}`);
   }
   return response.json() as Promise<T>;
@@ -94,7 +107,7 @@ export async function patchJson<T>(path: string, body?: unknown): Promise<T> {
 export async function deleteJson<T>(path: string): Promise<T> {
   const response = await fetch(BASE + path, { method: 'DELETE', cache: 'no-store' });
   if (!response.ok) {
-    await handleAuthFailure(response);
+    await handleAuthFailure(response, true);
     throw new Error(`${path}: ${response.status}`);
   }
   return response.json() as Promise<T>;
