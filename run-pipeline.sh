@@ -1,7 +1,7 @@
 #!/bin/bash
 PIPELINE_NAME=$1
 KEYWORD_PROFILE=$2
-cd /opt/ai-security-fusion/ai4sec
+cd "$(dirname "$0")"
 set -a; . ./.env; set +a
 . .venv/bin/activate
 python -c "
