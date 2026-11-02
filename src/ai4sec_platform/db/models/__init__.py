@@ -493,6 +493,7 @@ CREATE TABLE IF NOT EXISTS capability_eval_levels (
     domain TEXT NOT NULL DEFAULT 'capabilities',
     e0_level INTEGER NOT NULL DEFAULT 0,
     e0_method TEXT NOT NULL DEFAULT '',
+    e0_source TEXT NOT NULL DEFAULT '',
     e0_evidence_json TEXT NOT NULL DEFAULT '{}',
     e0_verified_at TEXT NOT NULL DEFAULT '',
     source_task_id INTEGER,
@@ -515,6 +516,9 @@ def init_db(conn: sqlite3.Connection) -> None:
     try: conn.execute("ALTER TABLE vulnerability_manual_keywords ADD COLUMN last_used_at TEXT NOT NULL DEFAULT ''")
     except Exception: pass
     try: conn.execute("ALTER TABLE vulnerability_manual_keywords ADD COLUMN last_used_profile TEXT NOT NULL DEFAULT ''")
+    except Exception: pass
+    # e0_source(2026-11-02): 同上, 表 11-02 已经建过, CREATE TABLE IF NOT EXISTS 补不了列。
+    try: conn.execute("ALTER TABLE capability_eval_levels ADD COLUMN e0_source TEXT NOT NULL DEFAULT ''")
     except Exception: pass
     conn.commit()
 

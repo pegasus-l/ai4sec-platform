@@ -119,6 +119,8 @@ export interface E0Rung {
   name: string;
   /** true=通过 / false=没通过 / null=报告里没有这一级的证据 */
   ok: boolean | null;
+  /** 这一级的证据是谁采的: platform=平台自己采的(目前只有 page_check) / agent=agent 写进报告的 */
+  owner?: 'platform' | 'agent' | string;
   source?: string;
   detail?: string;
 }
@@ -129,6 +131,10 @@ export interface E0Level {
   /** contract=2026-10-31 起的结构化证据口径(阶梯严格累积); backfill=历史报告(封顶 L3) */
   e0_method?: 'contract' | 'backfill' | string;
   e0_method_label?: string;
+  /** 证据来源(与 e0_method 正交): agent_only=全在 agent 报告里 / platform_page=用到了平台页面自检
+   *  / platform_replay=用到了平台重放(未上线)。等级相同、来源不同, 证据的分量不同。 */
+  e0_source?: 'agent_only' | 'platform_page' | 'platform_replay' | string;
+  e0_source_label?: string;
   e0_verified_at?: string;
   source_task_id?: number | null;
   /** 以下三项只有详情端点返回(列表只带等级, 证据链 1~2KB 不塞进列表) */

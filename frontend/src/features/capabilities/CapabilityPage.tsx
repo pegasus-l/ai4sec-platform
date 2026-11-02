@@ -894,7 +894,13 @@ function CapabilityDetailContent({ itemId, initialItem, onRepro, onConvert, onVi
     {item?.e0 && <div className="drawer-section">
       <h3>有效性等级 · E0 L{item.e0.e0_level} {item.e0.e0_label}</h3>
       <p className="small muted">等级由平台按证据算，与 agent 自报的结论无关；没证据的那一级会写明缺什么。口径：{item.e0.e0_method_label || item.e0.e0_method || '未知'}。</p>
-      {(item.e0.rungs ?? []).map(r => <div key={r.level} className="cap-field"><span>{r.ok === true ? '✓' : r.ok === false ? '✗' : '—'} L{r.level} {r.name}</span><code>{r.detail || '—'}</code></div>)}
+      {/* 证据来源(2026-11-02): 同样的 L3/L4, 证据可能是平台自己采的, 也可能全是 agent 写在报告里的 ——
+          不写出来, 徽标会把这两种情况显示成一样。 */}
+      <p className="small muted">证据来源：<b>{item.e0.e0_source_label || (item.e0.e0_source === 'platform_page' ? '含平台页面自检' : '仅 agent 报告')}</b>
+        {item.e0.e0_source === 'platform_page'
+          ? '（等级里有一级是平台自己探测页面得到的）'
+          : '（构建、启动、测试、核心工作流四项都是 agent 写进报告的，平台没有亲自复核执行）'}</p>
+      {(item.e0.rungs ?? []).map(r => <div key={r.level} className="cap-field"><span>{r.ok === true ? '✓' : r.ok === false ? '✗' : '—'} L{r.level} {r.name}{r.owner === 'platform' ? ' ·平台采' : ''}</span><code>{r.detail || '—'}</code></div>)}
       {(item.e0.caveats ?? []).map(c => <p key={c} className="small muted" style={{ marginTop: 6 }}>⚠ {c}</p>)}
     </div>}
 

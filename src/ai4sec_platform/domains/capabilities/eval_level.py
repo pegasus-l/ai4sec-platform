@@ -14,6 +14,12 @@
                 旧报告的核心工作流证据是 agent 的自由叙述, 够不上 L4 要求的可复核证据。
                 缺证据的每一级都写进 caveats, 页面上要能看见。
 
+两种来源(写在 e0_source, 2026-11-02 追加):
+    agent_only    —— 撑起这一级的证据全在 agent 写的报告里(构建命令/退出码/测试结果/核心工作流)
+    platform_page —— 用到了平台自己采的 page_check(唯一一项平台亲自采的证据)
+    platform_replay —— 预留: 将来平台重放(执行命令/跑测试)上线后才会有
+    e0_method 说「用哪套规则算的」, e0_source 说「证据是谁采的」, 两者正交。
+
 为什么单独建表而不是加列/塞 payload: 列表页要按能力条目一次取全部等级, 而
 domain_items.payload_json 已经是列表体积的主要来源(见 2026-10-17 那次 129MB 事故),
 塞进去会重写全表; 这张表一行几十字节, 还能 DROP TABLE 一键回滚(与 threat_repo_filters 同思路)。
@@ -27,6 +33,17 @@ from typing import Any
 
 LEVEL_NAMES = {0: "未验", 1: "构建", 2: "启动", 3: "冒烟", 4: "核心工作流"}
 METHOD_LABELS = {"contract": "当前口径", "backfill": "历史口径"}
+
+# e0_source: 这条等级背后的证据, **平台亲自采到了哪一步**(与 e0_method 正交)。
+#   e0_method 回答「用哪套规则算的」(contract / backfill);
+#   e0_source 回答「证据是谁采的」—— 今天平台只自己采 page_check 一项, 其余全是 agent 写进报告的。
+# 没有这一列时, 一个「L4」徽标无论底下全是 agent 的自述、还是真有平台探测, 看起来一模一样。
+SOURCE_LABELS = {
+    "agent_only": "仅 agent 报告",
+    "platform_page": "含平台页面自检",
+    "platform_replay": "含平台重放",
+}
+SOURCE_ORDER = {"": 0, "agent_only": 1, "platform_page": 2, "platform_replay": 3}
 
 _BUILD_HINTS = ("install", "build", "compile", "make", "pip ", "pip3", "pnpm", "npm ", "yarn",
                 "cargo", "go build", "go mod", "mvn", "gradle", "setup.py", "poetry", "uv ",
@@ -131,7 +148,9 @@ def compute_e0_level(report: dict[str, Any] | None) -> dict[str, Any] | None:
             detail = "报告没有构建证据"
             source = ""
             caveats.append("构建: 旧版报告没有构建证据")
-    rungs.append({"level": 1, "name": LEVEL_NAMES[1], "ok": l1, "source": source, "detail": detail})
+    # owner = 这一级的证据是谁采的。平台今天只自己采 page_check, 其余全是 agent 写进报告的。
+    rungs.append({"level": 1, "name": LEVEL_NAMES[1], "ok": l1, "owner": "agent",
+                  "source": source, "detail": detail})
 
     # ---- L2 启动 ----
     web_started = _truthy(report.get("web_started"))
@@ -140,7 +159,7 @@ def compute_e0_level(report: dict[str, Any] | None) -> dict[str, Any] | None:
     verify_text = _short("; ".join(str(v) for v in verify[:3])) if isinstance(verify, list) else _short(verify)
     l2 = bool(verify_text) and (web_started or bool(start_cmd))
     rungs.append({
-        "level": 2, "name": LEVEL_NAMES[2], "ok": l2, "source": "agent 报告",
+        "level": 2, "name": LEVEL_NAMES[2], "ok": l2, "owner": "agent", "source": "agent 报告",
         "detail": f"web_started={web_started} · {verify_text or '没有探测结果(verify 为空)'}",
     })
     if not l2 and (web_started or start_cmd):
@@ -178,7 +197,14 @@ def compute_e0_level(report: dict[str, Any] | None) -> dict[str, Any] | None:
         detail = "既没有跑通的测试, 也没有平台页面自检"
         if pc.get("ok") is True:
             caveats.append(f"冒烟: 页面自检虽然返回 ok, 但正文只有 {visible_chars} 字符, 不足以证明页面可用")
-    rungs.append({"level": 3, "name": LEVEL_NAMES[3], "ok": l3, "source": "平台自检 + agent 报告", "detail": detail})
+    if page_strong:
+        l3_owner, l3_source = "platform", "平台自检 + agent 报告"
+    elif tests_ok:
+        l3_owner, l3_source = "agent", "agent 报告的测试结果"
+    else:
+        l3_owner, l3_source = "agent", "平台自检 + agent 报告"
+    rungs.append({"level": 3, "name": LEVEL_NAMES[3], "ok": l3, "owner": l3_owner,
+                  "source": l3_source, "detail": detail})
 
     # ---- L4 核心工作流 ----
     cw = report.get("core_workflow") if isinstance(report.get("core_workflow"), dict) else {}
@@ -196,7 +222,8 @@ def compute_e0_level(report: dict[str, Any] | None) -> dict[str, Any] | None:
             caveats.append("核心工作流: 声称验证过, 但没有一条能独立复核的证据")
     else:
         detail = "报告没有 core_workflow"
-    rungs.append({"level": 4, "name": LEVEL_NAMES[4], "ok": l4, "source": "agent 报告", "detail": detail})
+    rungs.append({"level": 4, "name": LEVEL_NAMES[4], "ok": l4, "owner": "agent",
+                  "source": "agent 报告", "detail": detail})
 
     # ---- 定级 ----
     if contract:
@@ -215,6 +242,15 @@ def compute_e0_level(report: dict[str, Any] | None) -> dict[str, Any] | None:
         if l4:
             caveats.append("历史口径不计 L4: 旧报告的核心工作流证据是 agent 自由叙述, 要拿 L4 需按当前提示词重跑")
 
+    # ---- 证据来源 ----
+    # 只看**真正撑起这一级**的那几级(ok=True 且 level <= 定级), 里面只要有一级是平台自己采的,
+    # 就算 platform_page。L3 用测试结果过关而 page_check 没采到东西时, 等级照样是 L3,
+    # 但来源仍是 agent_only —— 这正是这一列存在的意义: 等级相同, 证据的分量不同。
+    contributing = [r for r in rungs if r["ok"] is True and r["level"] <= level]
+    source_kind = "agent_only"
+    for rung in contributing:
+        if rung.get("owner") == "platform":
+            source_kind = "platform_page"
     missing = [r["name"] for r in rungs if r["ok"] is not True]
     # 报告里到底有没有结构化证据(哪怕结论是失败的)。全空 = 超时兜底生成的那种报告,
     # 它算出的 L0 不代表项目退化, 不该覆盖已有的结论; 而「构建 exit 2」这种 L0 是有证据的结论。
@@ -228,6 +264,8 @@ def compute_e0_level(report: dict[str, Any] | None) -> dict[str, Any] | None:
         "e0_level": level,
         "e0_label": LEVEL_NAMES.get(level, ""),
         "e0_method": method,
+        "e0_source": source_kind,
+        "e0_source_label": SOURCE_LABELS.get(source_kind, ""),
         "rungs": rungs,
         "missing": missing,
         "caveats": caveats,
@@ -241,6 +279,7 @@ CREATE TABLE IF NOT EXISTS capability_eval_levels (
     domain TEXT NOT NULL DEFAULT 'capabilities',
     e0_level INTEGER NOT NULL DEFAULT 0,
     e0_method TEXT NOT NULL DEFAULT '',
+    e0_source TEXT NOT NULL DEFAULT '',
     e0_evidence_json TEXT NOT NULL DEFAULT '{}',
     e0_verified_at TEXT NOT NULL DEFAULT '',
     source_task_id INTEGER,
@@ -253,6 +292,12 @@ CREATE INDEX IF NOT EXISTS idx_cap_eval_level ON capability_eval_levels(e0_level
 def ensure_table(conn) -> None:
     """与 db/models 的 SCHEMA_SQL 同源, 重复执行安全(init_db 每次 get_db 都跑 CREATE IF NOT EXISTS)。"""
     conn.executescript(CREATE_SQL)
+    # 2026-11-02 追加 e0_source: 表已经存在时 CREATE TABLE IF NOT EXISTS **补不了列**, 只能 ALTER。
+    # init_db / get_db 每次都跑, 所以必须幂等(duplicate column 静默跳过)。
+    try:
+        conn.execute("ALTER TABLE capability_eval_levels ADD COLUMN e0_source TEXT NOT NULL DEFAULT ''")
+    except Exception:  # noqa: BLE001 - 列已存在
+        pass
 
 
 def record_eval_level(conn, *, item_id: int, task_id: int | None, report: dict[str, Any] | None,
@@ -275,14 +320,16 @@ def record_eval_level(conn, *, item_id: int, task_id: int | None, report: dict[s
     ts = computed_at or _utc_now()
     conn.execute(
         "INSERT INTO capability_eval_levels"
-        " (item_id, domain, e0_level, e0_method, e0_evidence_json, e0_verified_at, source_task_id, computed_at)"
-        " VALUES (?, 'capabilities', ?, ?, ?, ?, ?, ?)"
+        " (item_id, domain, e0_level, e0_method, e0_source, e0_evidence_json, e0_verified_at,"
+        "  source_task_id, computed_at)"
+        " VALUES (?, 'capabilities', ?, ?, ?, ?, ?, ?, ?)"
         " ON CONFLICT(item_id) DO UPDATE SET"
-        "  e0_level=excluded.e0_level, e0_method=excluded.e0_method,"
+        "  e0_level=excluded.e0_level, e0_method=excluded.e0_method, e0_source=excluded.e0_source,"
         "  e0_evidence_json=excluded.e0_evidence_json, e0_verified_at=excluded.e0_verified_at,"
         "  source_task_id=excluded.source_task_id, computed_at=excluded.computed_at",
         (
             int(item_id), int(result["e0_level"]), result["e0_method"],
+            result.get("e0_source") or "",
             json.dumps(result, ensure_ascii=False), ts, int(task_id) if task_id else None, ts,
         ),
     )
@@ -300,7 +347,7 @@ def fetch_levels(conn, item_ids: list[int]) -> dict[int, dict[str, Any]]:
         marks = ",".join("?" * len(chunk))
         try:
             rows = conn.execute(
-                "SELECT item_id, e0_level, e0_method, e0_verified_at, source_task_id"
+                "SELECT item_id, e0_level, e0_method, e0_source, e0_verified_at, source_task_id"
                 f" FROM capability_eval_levels WHERE item_id IN ({marks})",
                 chunk,
             ).fetchall()
@@ -311,8 +358,10 @@ def fetch_levels(conn, item_ids: list[int]) -> dict[int, dict[str, Any]]:
                 "e0_level": int(row[1]),
                 "e0_label": LEVEL_NAMES.get(int(row[1]), ""),
                 "e0_method": str(row[2] or ""),
-                "e0_verified_at": str(row[3] or ""),
-                "source_task_id": int(row[4]) if row[4] else None,
+                "e0_source": str(row[3] or ""),
+                "e0_source_label": SOURCE_LABELS.get(str(row[3] or ""), ""),
+                "e0_verified_at": str(row[4] or ""),
+                "source_task_id": int(row[5]) if row[5] else None,
             }
     return out
 
@@ -321,7 +370,7 @@ def fetch_evidence(conn, item_id: int) -> dict[str, Any] | None:
     """取单个条目的完整证据链(详情抽屉用)。"""
     try:
         row = conn.execute(
-            "SELECT e0_level, e0_method, e0_evidence_json, e0_verified_at, source_task_id"
+            "SELECT e0_level, e0_method, e0_source, e0_evidence_json, e0_verified_at, source_task_id"
             " FROM capability_eval_levels WHERE item_id = ?", (int(item_id),),
         ).fetchone()
     except Exception:  # noqa: BLE001
@@ -329,7 +378,7 @@ def fetch_evidence(conn, item_id: int) -> dict[str, Any] | None:
     if not row:
         return None
     try:
-        payload = json.loads(row[2] or "{}")
+        payload = json.loads(row[3] or "{}")
     except Exception:  # noqa: BLE001
         payload = {}
     if not isinstance(payload, dict):
@@ -339,8 +388,10 @@ def fetch_evidence(conn, item_id: int) -> dict[str, Any] | None:
         "e0_label": LEVEL_NAMES.get(int(row[0]), ""),
         "e0_method": str(row[1] or ""),
         "e0_method_label": METHOD_LABELS.get(str(row[1] or ""), ""),
-        "e0_verified_at": str(row[3] or ""),
-        "source_task_id": int(row[4]) if row[4] else None,
+        "e0_source": str(row[2] or ""),
+        "e0_source_label": SOURCE_LABELS.get(str(row[2] or ""), ""),
+        "e0_verified_at": str(row[4] or ""),
+        "source_task_id": int(row[5]) if row[5] else None,
     })
     return payload
 
@@ -383,7 +434,7 @@ def backfill(conn, *, dry_run: bool = False, limit: int | None = None) -> dict[s
         " WHERE d.domain = 'capabilities'"
     ).fetchall()
     stats = {"items": 0, "written": 0, "skipped_not_supported": 0, "skipped_no_report": 0,
-             "by_level": {}, "by_method": {}, "items_detail": []}
+             "by_level": {}, "by_method": {}, "by_source": {}, "items_detail": []}
     targets = rows[:limit] if limit else rows
     for item_id, _item_status, repro_status in targets:
         stats["items"] += 1
@@ -401,10 +452,12 @@ def backfill(conn, *, dry_run: bool = False, limit: int | None = None) -> dict[s
         level, method = result["e0_level"], result["e0_method"]
         stats["by_level"][str(level)] = stats["by_level"].get(str(level), 0) + 1
         stats["by_method"][method] = stats["by_method"].get(method, 0) + 1
+        source_kind = result.get("e0_source") or ""
+        stats["by_source"][source_kind] = stats["by_source"].get(source_kind, 0) + 1
         stats["items_detail"].append({
             "item_id": int(item_id), "task_id": task["id"], "status": task["status"],
             "e0_level": level, "e0_label": result["e0_label"], "e0_method": method,
-            "missing": result["missing"],
+            "e0_source": source_kind, "missing": result["missing"],
         })
         if not dry_run:
             record_eval_level(conn, item_id=int(item_id), task_id=task["id"], report=task["report"])

@@ -224,3 +224,68 @@ def test_backfill_picks_latest_usable_task_and_skips_not_supported():
 @pytest.mark.parametrize("report", [None, {}, {"foo": "bar"}])
 def test_unusable_reports_return_none(report):
     assert e0.compute_e0_level(report) is None
+
+
+# --------------------------------------------------------- 证据来源(e0_source)
+def test_source_is_platform_when_page_check_carries_the_level():
+    """L4 里 L3 是平台自己采的 page_check ⇒ 这条 L4 的证据不是纯 agent 自述。"""
+    result = e0.compute_e0_level(_report())
+    assert result["e0_source"] == "platform_page"
+    assert result["e0_source_label"] == "含平台页面自检"
+    assert [r["owner"] for r in result["rungs"]] == ["agent", "agent", "platform", "agent"]
+
+
+def test_source_is_agent_only_when_smoke_came_from_agent_tests():
+    """同为 L3: 靠 agent 报告的测试结果过关, 与靠平台页面自检过关, 等级一样但分量不同。"""
+    result = e0.compute_e0_level(_report(page_check={}, core_workflow={}))
+    assert result["e0_level"] == 3
+    assert result["e0_source"] == "agent_only"
+    assert result["rungs"][2]["source"] == "agent 报告的测试结果"
+
+
+def test_source_ignores_platform_evidence_that_did_not_carry_the_level():
+    """page_check 跑挂了, 等级只到 L2 ⇒ 撑起这一级的是 agent 报告, 不能因为「平台采过」就算 platform。"""
+    result = e0.compute_e0_level(_report(page_check={"ok": False, "issues": ["502"]}))
+    assert result["e0_level"] == 2
+    assert result["e0_source"] == "agent_only"
+
+
+def test_backfill_page_check_also_counts_as_platform():
+    """历史口径封顶 L3, 但 L3 照样可以是平台自检撑起来的。"""
+    result = e0.compute_e0_level({
+        "status": "success", "steps": [{"cmd": "npm install", "ok": True}],
+        "web_started": True, "verify": "ok",
+        "page_check": {"ok": True, "visible_chars": 500},
+    })
+    assert result["e0_method"] == "backfill"
+    assert result["e0_level"] == 3
+    assert result["e0_source"] == "platform_page"
+
+
+def test_source_is_persisted_and_read_back():
+    """列表/详情都要能直接读到来源, 不能只留在 evidence json 里。"""
+    conn = _db()
+    e0.ensure_table(conn)
+    e0.record_eval_level(conn, item_id=7, task_id=1, report=_report())
+    assert e0.fetch_levels(conn, [7])[7]["e0_source"] == "platform_page"
+    detail = e0.fetch_evidence(conn, 7)
+    assert detail["e0_source"] == "platform_page"
+    assert detail["e0_source_label"] == "含平台页面自检"
+    # 换成一份没有 page_check 的报告, 来源要跟着降下来(不是一次写成平台就永远是平台)
+    e0.record_eval_level(conn, item_id=7, task_id=2, report=_report(page_check={}))
+    assert e0.fetch_levels(conn, [7])[7]["e0_source"] == "agent_only"
+
+
+def test_ensure_table_adds_source_column_to_an_existing_table():
+    """上线时表已经存在(11-02 建过), CREATE TABLE IF NOT EXISTS 补不了列, 靠 ALTER 追。"""
+    conn = sqlite3.connect(":memory:")
+    conn.execute(
+        "CREATE TABLE capability_eval_levels (item_id INTEGER PRIMARY KEY,"
+        " domain TEXT NOT NULL DEFAULT 'capabilities', e0_level INTEGER NOT NULL DEFAULT 0,"
+        " e0_method TEXT NOT NULL DEFAULT '', e0_evidence_json TEXT NOT NULL DEFAULT '{}',"
+        " e0_verified_at TEXT NOT NULL DEFAULT '', source_task_id INTEGER, computed_at TEXT NOT NULL)"
+    )
+    e0.ensure_table(conn)
+    cols = [r[1] for r in conn.execute("PRAGMA table_info(capability_eval_levels)")]
+    assert "e0_source" in cols
+    e0.ensure_table(conn)  # 幂等: 第二遍不能让 duplicate column 冒出来
