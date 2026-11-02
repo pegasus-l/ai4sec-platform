@@ -289,3 +289,36 @@ def test_ensure_table_adds_source_column_to_an_existing_table():
     cols = [r[1] for r in conn.execute("PRAGMA table_info(capability_eval_levels)")]
     assert "e0_source" in cols
     e0.ensure_table(conn)  # 幂等: 第二遍不能让 duplicate column 冒出来
+
+
+def test_placeholder_build_command_is_not_a_passed_build():
+    """2026-11-02 线上实测: AutoCVE 判定必须 Docker 后停手, 报告写
+    build.command="未执行（判定项目必须 Docker 后按规则停止复现）" + exit_code=0,
+    旧规则把它算成 L1「构建通过」—— 一个根本没跑的项目拿到了 E0 等级。"""
+    result = e0.compute_e0_level(_report(build={
+        "command": "未执行（判定项目必须 Docker 后按规则停止复现）",
+        "exit_code": 0,
+        "artifact": "",
+    }))
+    assert result["e0_method"] == "contract"
+    assert result["e0_level"] == 0
+    assert result["rungs"][0]["ok"] is False
+    assert any("未执行" in c for c in result["caveats"])
+
+
+def test_record_skips_items_judged_not_supported(monkeypatch):
+    """「无需复现」是终态, 这类条目不该有 E0 行 —— 回填侧一直跳过它们,
+    复现收尾的写入侧原先没有同一道闸(同一次事故的另一半)。"""
+    from ai4sec_platform.pipelines.steps import repro as repro_step
+
+    def _boom():
+        raise AssertionError("判定「无需复现」的条目不该写 E0 行")
+
+    logs: list[str] = []
+    monkeypatch.setattr(repro_step, "_connect", _boom)
+    monkeypatch.setattr(repro_step, "_append_log", lambda task_id, msg: logs.append(msg))
+    repro_step._record_eval_level(120223, 1042, _report(), "not_supported")
+    assert logs and "无需复现" in logs[0]
+    # 闸门只对 not_supported 关: 别的结论照旧写库(这里用 _connect 抛错来证明它走到了写库)
+    with pytest.raises(AssertionError):
+        repro_step._record_eval_level(120223, 1042, _report(), "success")

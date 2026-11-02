@@ -781,7 +781,8 @@ def _update_task(task_id: int, **fields: Any) -> None:
         conn.close()
 
 
-def _record_eval_level(item_id: int, task_id: int, report: dict[str, Any] | None) -> None:
+def _record_eval_level(item_id: int, task_id: int, report: dict[str, Any] | None,
+                       payload_status: str | None = None) -> None:
     """复现收尾时算一次 E0 等级并落库(见 domains/capabilities/eval_level.py)。
 
     等级由**平台**从报告里的证据算, 与 agent 自报的 status 无关 —— 报告说 success 但拿不出
@@ -789,6 +790,12 @@ def _record_eval_level(item_id: int, task_id: int, report: dict[str, Any] | None
     失败影响复现本身的收尾。
     """
     if not isinstance(report, dict) or not report:
+        return
+    if payload_status == "not_supported":
+        # 「无需复现」(non_web / env_unsupported)是终态: E0 讲的是「跑起来了有没有用」,
+        # 没跑起来的条目不该有等级。回填侧一直跳过它们, 但复现收尾这条写路径原先没有同一道闸 ——
+        # 2026-11-02 AutoCVE 判定必须 Docker 后停手, 报告里的 build.command="未执行" 照样写出了 L1。
+        _append_log(task_id, "E0 等级跳过: 本项目判定为「无需复现」")
         return
     conn = _connect()
     try:
@@ -1090,8 +1097,8 @@ def _run_task_body(task_id: int, item_id: int, code_url: str, title: str, timeou
             web_url=_task_web_url(task_id) if web_started else "",
             web_port=8080 if web_started else None,
         )
-        _record_eval_level(item_id, task_id, report_json)
         payload_status = _final_payload_status(verdict, report)
+        _record_eval_level(item_id, task_id, report_json, payload_status)
         _write_payload(item_id, payload_status, {
             "verdict": verdict,
             "summary": summary,
@@ -1137,13 +1144,13 @@ def _run_task_body(task_id: int, item_id: int, code_url: str, title: str, timeou
                 web_url=_task_web_url(task_id) if web_started else "",
                 web_port=8080 if web_started else None,
             )
-            _record_eval_level(item_id, task_id, report)
+            payload_status = _final_payload_status(verdict, report)
+            _record_eval_level(item_id, task_id, report, payload_status)
             _append_log(task_id, f"✗ {emsg}")
             if salvaged.strip():
                 _append_log(task_id, f"⏱ 通道超时, 已从会话拉取 {len(salvaged.splitlines())} 行已产出文本:")
                 for line in salvaged.splitlines():
                     _append_log(task_id, line)
-            payload_status = _final_payload_status(verdict, report)
             _write_payload(item_id, payload_status, {
                 "verdict": verdict, "error": emsg, "session_id": session_id, "summary": report.get("summary"),
             }, item_status=_STATUS_TO_ITEM.get(payload_status), web_report=report)
@@ -1332,7 +1339,7 @@ def _recover_task(task_id: int, item_id: int, status: str, log: str, reason: str
     finally:
         conn.close()
     if latest_id == task_id:
-        _record_eval_level(item_id, task_id, report)
+        _record_eval_level(item_id, task_id, report, _final_payload_status(verdict, report))
         _write_payload(item_id, verdict if verdict in ("success", "partial", "failed") else "failed",
                        {"verdict": verdict, "error": reason, "session_id": session_id,
                         "summary": (report.get("summary") or "")},

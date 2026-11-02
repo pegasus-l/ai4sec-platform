@@ -113,6 +113,21 @@ def _find_build_step(steps: Any) -> dict | None:
     return None
 
 
+_NOT_EXECUTED_HINTS = ("未执行", "未运行", "未尝试", "未进行", "not executed", "not run",
+                       "skipped", "n/a", "未启动")
+
+
+def _is_placeholder_command(command: Any) -> bool:
+    """报告里的「构建命令」其实是「未执行」这类占位说明 —— exit_code=0 不能算构建通过。
+
+    2026-11-02 实测踩到: AutoCVE 判定必须 Docker 后停止复现, 报告写
+    build.command="未执行（判定项目必须 Docker 后按规则停止复现）" + exit_code=0,
+    旧规则原样算成 L1「构建通过」, 一个根本没跑的项目拿到了 E0 等级。
+    """
+    text = str(command or "").strip().lower()
+    return any(h in text for h in _NOT_EXECUTED_HINTS)
+
+
 def compute_e0_level(report: dict[str, Any] | None) -> dict[str, Any] | None:
     """算 E0 等级。报告不可用(空/僵尸)时返回 None —— 调用方不要落行, 页面按「未验」显示。"""
     if not isinstance(report, dict) or not report:
@@ -129,8 +144,11 @@ def compute_e0_level(report: dict[str, Any] | None) -> dict[str, Any] | None:
     # ---- L1 构建 ----
     if contract:
         exit_code = build.get("exit_code")
-        l1 = _int(exit_code) == 0
+        placeholder = _is_placeholder_command(build.get("command"))
+        l1 = _int(exit_code) == 0 and not placeholder
         detail = f"{_short(build.get('command'))} · exit {exit_code if exit_code is not None else '未给出'}"
+        if placeholder:
+            caveats.append("构建: 报告里的构建命令是「未执行」这类占位说明, 退出码不能当作构建通过")
         if build.get("artifact"):
             detail += f" · 产物 {_short(build.get('artifact'), 80)}"
         if exit_code is None:
