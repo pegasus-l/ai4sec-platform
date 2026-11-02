@@ -11,7 +11,7 @@ import {
   fetchDetail, fetchReproTask, fetchReproFullLog, startRepro, stopRepro, cleanupRepro, markConversion,
   streamReproLogs, classifyLogLine, stripAnsi,
 } from './capabilityQueries';
-import type { CapabilityItem, ReproTask, ConversionRecord, CapabilityView, LibraryStats, LibraryFormKey, ReproBucketKey } from './capabilityTypes';
+import type { CapabilityItem, E0Level, ReproTask, ConversionRecord, CapabilityView, LibraryStats, LibraryFormKey, ReproBucketKey } from './capabilityTypes';
 import { CapabilityOps, CapabilityOpsQuality, CapabilityOpsRuns } from './CapabilityOps';
 
 const navGroups: Array<{ title: string; items: Array<{ id: CapabilityView; icon: LucideIcon; title: string }> }> = [
@@ -72,6 +72,13 @@ const reproBadgeTone = (rs?: string): 'green' | 'sky' | 'slate' | 'amber' | 'red
  *  放它入队走 CLI 复现、由复现报告回写 is_web 自我纠正), 但那是**队列**口径, 不该让界面
  *  继续对外宣称"可复现"。实测 LOWCONF 有 103 条, 用户在页面上看到的就是它们。 */
 const isNonWebBlocked = (p: CapabilityItem['payload'] | undefined): boolean => p?.is_web === false;
+/** E0 有效性等级徽标(2026-11-02): 平台按复现报告里的证据定级, agent 自报的 status 不参与。
+ *  L0「未验」不挂徽标 —— 否则每张卡都挂一个「未验」, 真正验过的反而看不出来。 */
+const e0Tone = (level: number): 'green' | 'sky' | 'amber' | 'slate' =>
+  level >= 4 ? 'green' : level === 3 ? 'sky' : level === 2 ? 'amber' : 'slate';
+const e0Badge = (e0?: E0Level) =>
+  (e0?.e0_level ?? 0) > 0 ? <Badge tone={e0Tone(e0!.e0_level)}>{`E0 L${e0!.e0_level} ${e0!.e0_label}`}</Badge> : null;
+
 /** 是否渲染"可复现"徽标: 非 web 且仍是 candidate(待复现) 时不渲染 —— 同排已有「非Web」徽标承载
  *  该信息, 直接省略以免两个"非Web"并排。其余状态(无需复现/复现失败等)仍有信息量, 照常显示。 */
 const showReproBadge = (p: CapabilityItem['payload'] | undefined): boolean =>
@@ -247,6 +254,7 @@ function CapabilityCard({ item, rank, onClick, onViewRepro }: { item: Capability
         <Badge tone={sourceType === 'github' ? 'sky' : 'violet'}>{sourceType}</Badge>
         {p.capability_type && <Badge tone="green">{p.capability_type}</Badge>}
         {showReproBadge(p) && <Badge tone={reproTag as 'green' | 'sky' | 'slate' | 'amber' | 'red'}>{reproText}</Badge>}
+        {e0Badge(item.e0)}
         {p.is_web ? <Badge tone="amber">Web{p.web_framework ? `:${p.web_framework}` : ''}</Badge> : <Badge tone="slate">非Web</Badge>}
         {p.demo_url && <Badge tone="green">官方 Demo</Badge>}
       </div>
@@ -452,7 +460,7 @@ function CapabilityLibrary({ stats, search, openDetail, onViewRepro }: { stats?:
         <td><div className="table-title">{p.display_title || item.title}</div><div className="table-sub">{st}</div></td>
         <td style={{maxWidth: '320px'}} className="small muted">{ov.slice(0, 120)}{ov.length > 120 ? '…' : ''}</td>
         <td><div className="score-ring">{item.score}</div></td>
-        <td><div className="badges">{p.capability_type && <Badge tone="green">{p.capability_type}</Badge>}{showReproBadge(p) && <Badge tone={reproBadgeTone(p.repro_status)}>{reproBadgeLabel(p.repro_status, p.repro_skip_reason)}</Badge>}{p.is_web ? <Badge tone="amber">Web</Badge> : <Badge tone="slate">非Web</Badge>}{p.demo_url && <Badge tone="green">官方 Demo</Badge>}{hasReproResult(p) && <button className="btn" style={{ padding: '1px 8px', fontSize: 11 }} onClick={(e) => { e.stopPropagation(); onViewRepro(item); }}>查看复现 →</button>}</div></td>
+        <td><div className="badges">{p.capability_type && <Badge tone="green">{p.capability_type}</Badge>}{showReproBadge(p) && <Badge tone={reproBadgeTone(p.repro_status)}>{reproBadgeLabel(p.repro_status, p.repro_skip_reason)}</Badge>}{e0Badge(item.e0)}{p.is_web ? <Badge tone="amber">Web</Badge> : <Badge tone="slate">非Web</Badge>}{p.demo_url && <Badge tone="green">官方 Demo</Badge>}{hasReproResult(p) && <button className="btn" style={{ padding: '1px 8px', fontSize: 11 }} onClick={(e) => { e.stopPropagation(); onViewRepro(item); }}>查看复现 →</button>}</div></td>
       </tr>; })}
     </tbody></table>
     {pageCount > 1 && <div style={{ display: 'flex', justifyContent: 'center', gap: 8, alignItems: 'center', padding: '10px 12px', borderTop: '1px solid var(--line)' }}>
@@ -882,6 +890,13 @@ function CapabilityDetailContent({ itemId, initialItem, onRepro, onConvert, onVi
     {p.demo_url && <div className="drawer-section"><h3>官方在线演示</h3><p style={{ color: 'var(--green)' }}>项目已提供官方 Demo，按复现策略直接使用官方环境，不启动本地容器。</p><p><a href={p.demo_url} target="_blank" rel="noopener" style={{ color: 'var(--sky)' }}>{p.demo_url}</a></p></div>}
     {!p.demo_url && p.repro_summary && <div className="drawer-section"><h3>复现摘要</h3><p style={{ color: 'var(--green)' }}>{p.repro_summary}</p></div>}
     <div className="drawer-section"><h3>复现 & 转化</h3><div className="badges">{showReproBadge(p) && <Badge tone={reproBadgeTone(p.repro_status)}>{reproBadgeLabel(p.repro_status, p.repro_skip_reason)}</Badge>}<Badge tone="violet">{p.conversion_status ?? '待评估'}</Badge>{p.is_web ? <Badge tone="amber">Web{p.web_framework ? `:${p.web_framework}` : ''}</Badge> : <Badge tone="slate">非Web</Badge>}{p.demo_url && <Badge tone="green">官方 Demo</Badge>}</div></div>
+    {/* E0 有效性等级(2026-11-02): 逐级写清「凭什么算到这一级」—— 没通过/没证据的那一级要能看见原因 */}
+    {item?.e0 && <div className="drawer-section">
+      <h3>有效性等级 · E0 L{item.e0.e0_level} {item.e0.e0_label}</h3>
+      <p className="small muted">等级由平台按证据算，与 agent 自报的结论无关；没证据的那一级会写明缺什么。口径：{item.e0.e0_method_label || item.e0.e0_method || '未知'}。</p>
+      {(item.e0.rungs ?? []).map(r => <div key={r.level} className="cap-field"><span>{r.ok === true ? '✓' : r.ok === false ? '✗' : '—'} L{r.level} {r.name}</span><code>{r.detail || '—'}</code></div>)}
+      {(item.e0.caveats ?? []).map(c => <p key={c} className="small muted" style={{ marginTop: 6 }}>⚠ {c}</p>)}
+    </div>}
 
     {/* 无需复现说明(2026-10-29): 徽标只写「无需复现」, 为什么不需要放在这里 —— 两种原因互不相干,
         合成一句话就会两种都说错。旧数据没有 repro_skip_reason 时按 Docker 口径兜底(那是这个终态

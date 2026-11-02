@@ -28,6 +28,7 @@ from ai4sec_platform.pipelines.context import PipelineContext
 from ai4sec_platform.pipelines.results import StepResult
 from ai4sec_platform.db import repositories as repo
 from ai4sec_platform.domains.capabilities.assessments import is_non_web_blocked
+from ai4sec_platform.domains.capabilities import eval_level as capability_eval_level
 
 
 def _env(key: str, default: str = "") -> str:
@@ -780,6 +781,25 @@ def _update_task(task_id: int, **fields: Any) -> None:
         conn.close()
 
 
+def _record_eval_level(item_id: int, task_id: int, report: dict[str, Any] | None) -> None:
+    """复现收尾时算一次 E0 等级并落库(见 domains/capabilities/eval_level.py)。
+
+    等级由**平台**从报告里的证据算, 与 agent 自报的 status 无关 —— 报告说 success 但拿不出
+    构建命令/退出码/可复核证据的, 这里照样上不去。算不出来就什么都不写, 绝不能因为这一步
+    失败影响复现本身的收尾。
+    """
+    if not isinstance(report, dict) or not report:
+        return
+    conn = _connect()
+    try:
+        capability_eval_level.record_eval_level(conn, item_id=item_id, task_id=task_id, report=report)
+        conn.commit()
+    except Exception as e:  # noqa: BLE001 - E0 落库失败不影响复现结论
+        _append_log(task_id, f"E0 等级计算失败(不影响本次复现结论): {e}")
+    finally:
+        conn.close()
+
+
 def _final_payload_status(verdict: str, report: dict[str, Any] | None) -> str:
     """终态 payload 归一: 环境不支持(Docker 等外部依赖缺失)导致的复现失败 → 'not_supported'(无需复现)。
     判定依据: 复现结论为 FAILURE, 且 report 的 summary/blockers 明确写出"本环境不支持 Docker / 按规则不复现"
@@ -1070,6 +1090,7 @@ def _run_task_body(task_id: int, item_id: int, code_url: str, title: str, timeou
             web_url=_task_web_url(task_id) if web_started else "",
             web_port=8080 if web_started else None,
         )
+        _record_eval_level(item_id, task_id, report_json)
         payload_status = _final_payload_status(verdict, report)
         _write_payload(item_id, payload_status, {
             "verdict": verdict,
@@ -1116,6 +1137,7 @@ def _run_task_body(task_id: int, item_id: int, code_url: str, title: str, timeou
                 web_url=_task_web_url(task_id) if web_started else "",
                 web_port=8080 if web_started else None,
             )
+            _record_eval_level(item_id, task_id, report)
             _append_log(task_id, f"✗ {emsg}")
             if salvaged.strip():
                 _append_log(task_id, f"⏱ 通道超时, 已从会话拉取 {len(salvaged.splitlines())} 行已产出文本:")
@@ -1310,6 +1332,7 @@ def _recover_task(task_id: int, item_id: int, status: str, log: str, reason: str
     finally:
         conn.close()
     if latest_id == task_id:
+        _record_eval_level(item_id, task_id, report)
         _write_payload(item_id, verdict if verdict in ("success", "partial", "failed") else "failed",
                        {"verdict": verdict, "error": reason, "session_id": session_id,
                         "summary": (report.get("summary") or "")},

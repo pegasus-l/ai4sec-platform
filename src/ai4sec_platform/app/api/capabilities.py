@@ -34,6 +34,7 @@ from ai4sec_platform.db import repositories as repo
 from ai4sec_platform.domains.capabilities.adapters.repro_runner import classify_log_line
 from ai4sec_platform.pipelines.steps.repro import start_repro_task, stop_repro_task, cleanup_repro_task
 from ai4sec_platform.domains.capabilities.assessments import classify_batch, is_non_web_blocked
+from ai4sec_platform.domains.capabilities import eval_level as capability_eval_level
 from ai4sec_platform.domains.capabilities.schemas import ReproTaskResponse
 from ai4sec_platform.domains.capabilities.selectors import pick_top_repro_candidates, _resolve_repo_url
 from ai4sec_platform.services import domain_items, operations
@@ -103,6 +104,19 @@ def _slim_repro_runs(items: Any) -> None:
                 task.pop(key, None)
 
 
+def _attach_e0(conn: sqlite3.Connection, items: Any) -> None:
+    """把 E0 等级挂到条目上(2026-11-02)。列表只带等级/口径, 证据链在详情端点按单个条目查 ——
+    等级一行几十字节, 四段证据链有 1~2KB, 塞进 500 条列表会把列表体积又拱回去。"""
+    rows = [it for it in (items or []) if isinstance(it, dict) and it.get("id")]
+    if not rows:
+        return
+    levels = capability_eval_level.fetch_levels(conn, [int(it["id"]) for it in rows])
+    for it in rows:
+        e0 = levels.get(int(it["id"]))
+        if e0:
+            it["e0"] = e0
+
+
 def _item_repro_verdicts(conn: sqlite3.Connection, item_ids: list[Any]) -> dict[int, dict[str, str]]:
     """取任务所属能力条目的**终态结论**(payload.repro_status / repro_skip_reason), 按 item_id 批量查。
 
@@ -144,6 +158,7 @@ def today(limit: int = Query(200, ge=1, le=500), conn: sqlite3.Connection = Depe
     data["window"] = {"since": since, "hours": 24, "label": "最近 24 小时"}
     # 今日能力与能力库列表同形(卡片/表格读同一批键), 同样摘零引用重键 —— 见 _ITEM_PAYLOAD_DROP_KEYS
     _slim_items(data.get("items"))
+    _attach_e0(conn, data.get("items"))
     return data
 
 
@@ -176,6 +191,7 @@ def items(
     )
     # 列表瘦身: 见 _ITEM_PAYLOAD_DROP_KEYS(2026-09-15 摘 readme/review; 2026-09-16 再摘 16 个零引用重键)
     _slim_items(data.get("items"))
+    _attach_e0(conn, data.get("items"))
     return data
 
 
@@ -194,6 +210,10 @@ def item_detail(item_id: int, conn: sqlite3.Connection = Depends(get_db)) -> dic
     item = domain_items.detail(conn, DOMAIN, item_id)
     if not item:
         raise HTTPException(status_code=404, detail="capability item not found")
+    # 详情带完整 E0 证据链(列表只带等级): 抽屉里要能逐级看到「凭什么算到这一级」
+    evidence = capability_eval_level.fetch_evidence(conn, item_id)
+    if evidence:
+        item["e0"] = evidence
     return item
 
 

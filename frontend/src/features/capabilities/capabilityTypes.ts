@@ -58,6 +58,8 @@ export interface CapabilityItem {
     source_news_item?: Record<string, unknown>;
   };
   metrics?: Record<string, unknown>;
+  /** E0 有效性等级(列表带等级, 详情带完整证据链) */
+  e0?: E0Level;
 }
 
 export interface ReproReport {
@@ -109,6 +111,30 @@ export interface ReproReport {
     failed_tests?: string[];
     notes?: string;
   };
+}
+
+/** E0 有效性等级的一级证据(平台按复现报告算, 见后端 domains/capabilities/eval_level.py) */
+export interface E0Rung {
+  level: number;
+  name: string;
+  /** true=通过 / false=没通过 / null=报告里没有这一级的证据 */
+  ok: boolean | null;
+  source?: string;
+  detail?: string;
+}
+
+export interface E0Level {
+  e0_level: number;
+  e0_label: string;
+  /** contract=2026-10-31 起的结构化证据口径(阶梯严格累积); backfill=历史报告(封顶 L3) */
+  e0_method?: 'contract' | 'backfill' | string;
+  e0_method_label?: string;
+  e0_verified_at?: string;
+  source_task_id?: number | null;
+  /** 以下三项只有详情端点返回(列表只带等级, 证据链 1~2KB 不塞进列表) */
+  rungs?: E0Rung[];
+  caveats?: string[];
+  missing?: string[];
 }
 
 export interface ReproTask {

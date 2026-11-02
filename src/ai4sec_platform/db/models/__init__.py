@@ -483,6 +483,22 @@ CREATE TABLE IF NOT EXISTS capability_review_backlog (
     updated_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_capability_review_backlog_attempts ON capability_review_backlog(attempts, id);
+
+-- 能力库 E0 有效性等级(2026-11-02)。口径的唯一实现在 domains/capabilities/eval_level.py,
+-- 本表只存结论: 平台按复现报告里的证据定级(L0 未验 / L1 构建 / L2 启动 / L3 冒烟 / L4 核心工作流),
+-- 被测 agent 不自评。单独建表而不是塞 domain_items.payload_json: 列表页要按条目批量取等级,
+-- 而 payload 已经是列表体积的主要来源(2026-10-17 那次 129MB 的教训); 一行几十字节, DROP TABLE 即可回滚。
+CREATE TABLE IF NOT EXISTS capability_eval_levels (
+    item_id INTEGER PRIMARY KEY,
+    domain TEXT NOT NULL DEFAULT 'capabilities',
+    e0_level INTEGER NOT NULL DEFAULT 0,
+    e0_method TEXT NOT NULL DEFAULT '',
+    e0_evidence_json TEXT NOT NULL DEFAULT '{}',
+    e0_verified_at TEXT NOT NULL DEFAULT '',
+    source_task_id INTEGER,
+    computed_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_cap_eval_level ON capability_eval_levels(e0_level);
 """
 
 
