@@ -17,6 +17,10 @@
    `resolve()` 之后落到 `/usr/local/bin`; 不激活 venv, semgrep 恒找不到, 静态扫描每条都
    以 `ScanError` 收场 —— run 10 的 raw/*.stderr 里每条都是 `tool=run_static_scan
    error=ScanError duration_ms=0.2`。
+5. **认 evidence 第一行的 `{path}:{line}` 前缀**。一条答卷里往往有 2~3 条 finding, 只有第一条的
+   evidence 是 `{"finding": {...}}` 的 JSON, 其余是工具 `_finding_evidence()` 拼的纯文本
+   `/<abs>/code.c:158` + message + snippet。只解析 JSON 的话, 第 2 条起行号全空 ——
+   而契约是"任何一条 finding 不合法 → 整份答卷作废", 于是 2 条以上 finding 的答卷**全废**。
 
 诚实的边界: 工具没给行号时, **不编**。这样的 finding 会让答卷落成 invalid_output
 (契约没有"找到了但报不出位置"这种形态), 这是工具的真实表现, 不是适配层造出来的。
@@ -50,6 +54,23 @@ def as_dict(x):
     return {"evidence": str(x)}
 
 
+def _path_line_from_evidence(text):
+    """evidence 的第一行是 `{path}:{line}`。
+
+    这是工具自己的格式: `agent.py:_finding_evidence()` 拼的就是
+    `f"{finding['path']}:{finding['line']}"` + 换行 + message + 换行 + snippet。
+    工具的 Finding schema 里没有独立行号字段, 所以除了这条前缀没有别的地方能拿到位置。
+    """
+    first = (text or "").strip().split("\n", 1)[0].strip()
+    if ":" not in first:
+        return None
+    _path, _, tail = first.rpartition(":")
+    tail = tail.strip()
+    if not tail.isdigit():
+        return None
+    return int(tail)
+
+
 def _unwrap(d):
     """拆掉 {"finding": {...}, "explanation": ...} 这一层, 并尝试从 evidence 里取位置。"""
     d = dict(d or {})
@@ -76,6 +97,11 @@ def _unwrap(d):
                             d[key] = inner[key]
                 if not d.get("message") and isinstance(blob.get("explanation"), str):
                     d["message"] = blob["explanation"]
+        # 普通文本形态: `/<abs>/code.c:158\nmessage\nsnippet`。拿不到就留空 (不编)。
+        if not _int_line(d, "line_start", "start_line", "line", "line_number"):
+            line = _path_line_from_evidence(text)
+            if line is not None:
+                d["line"] = line
     return d
 
 
