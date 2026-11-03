@@ -1,0 +1,59 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "ai4sec/eval/class1_ground_truth/v1",
+  "title": "第 1 类真值（仅判分脚本可读）",
+  "description": "放在 truth/ 目录内，与 samples/ 物理隔离。适配 agent、parser、被测工具均不得读取（class1_llm_audit.md §7 第 2 条）。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["sample_id", "case_id", "variant", "gt", "patch_hunks"],
+  "properties": {
+    "sample_id": { "type": "string", "pattern": "^s_[0-9]{4,}$" },
+    "case_id": { "type": "integer", "minimum": 1 },
+    "variant": {
+      "type": "string",
+      "enum": ["pre", "post"],
+      "description": "pre = 修复前文件（正样本，按 §4.1 判 hit/near/other/miss）；post = 修复后文件（负样本，只要 found=true 即 false_positive）。"
+    },
+    "canonical_id": {
+      "type": "string",
+      "description": "如 CVE-2026-78162。仅用于追溯，不参与判分。"
+    },
+    "gt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["file", "function", "line_start", "line_end"],
+      "properties": {
+        "file": { "type": "string", "minLength": 1 },
+        "function": { "type": "string" },
+        "line_start": { "type": "integer", "minimum": 1 },
+        "line_end": { "type": "integer", "minimum": 1 },
+        "cwe": { "type": "string", "pattern": "^CWE-[0-9]+$" }
+      },
+      "description": "来自案例库 vulnerability_case_context.context_type='vuln_site' 且 provenance='llm_extracted' 的行；llm_extracted_unverified 不进样本集。"
+    },
+    "patch_hunks": {
+      "type": "array",
+      "description": "补丁里全部 hunk 的修复前行区间 [[start,end], ...]。用于判定 other_hunk —— 落在这些区间但不与 gt 相交的报出，单列为 other_hunk，既不算命中也不算漏报。",
+      "items": {
+        "type": "array",
+        "minItems": 2,
+        "maxItems": 2,
+        "items": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "valid_until": {
+      "type": "string",
+      "description": "样本有效期（R12）。被测模型知识截止日晚于该日则标'可能见过'。"
+    },
+    "published_at": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
+      "description": "漏洞公开日期（YYYY-MM-DD）。用于报表的 window 字段（PRD §8 要求）：缺这一列就说不清这批样本覆盖哪段时间。仅用于追溯，不参与判分。"
+    },
+    "needs_manual_check": {
+      "type": "boolean",
+      "default": false,
+      "description": "parser 走 agent_translate 的样本置 true，进入人工抽检。"
+    }
+  }
+}

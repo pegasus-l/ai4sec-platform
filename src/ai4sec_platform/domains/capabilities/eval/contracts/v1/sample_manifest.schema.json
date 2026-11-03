@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "ai4sec/eval/class1_sample_manifest/v1",
+  "title": "第 1 类样本清单（工具与适配 agent 可见）",
+  "description": "放在 samples/ 目录内，只含题面信息。绝不可包含真值、补丁、CVE 编号、仓库名或 commit（违反 class1_llm_audit.md §7 第 1 条）。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["sample_id", "file_path", "content_sha256", "variant"],
+  "properties": {
+    "sample_id": {
+      "type": "string",
+      "pattern": "^s_[0-9]{4,}$"
+    },
+    "file_path": {
+      "type": "string",
+      "minLength": 1,
+      "description": "题面里给出的相对路径。真实仓库路径，但不得是绝对路径、不得含主机名。"
+    },
+    "content_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "description": "发给工具的代码内容哈希（剥题后的版本），用于复算校验。"
+    },
+    "variant": {
+      "type": "string",
+      "enum": ["pre", "post"],
+      "description": "pre = 修复前（正样本，期望报出）；post = 修复后（负样本，期望不报）。"
+    },
+    "paired_with": {
+      "type": "string",
+      "pattern": "^s_[0-9]{4,}$",
+      "description": "同一对样本中另一半的 sample_id。pre 与 post 指向彼此。"
+    },
+    "prompt_locale": {
+      "type": "string",
+      "enum": ["en", "zh"],
+      "default": "en",
+      "description": "题面语言。整批必须一致，不得每个工具换一种。"
+    }
+  }
+}

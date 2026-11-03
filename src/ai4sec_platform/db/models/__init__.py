@@ -500,6 +500,155 @@ CREATE TABLE IF NOT EXISTS capability_eval_levels (
     computed_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_cap_eval_level ON capability_eval_levels(e0_level);
+
+-- ---------------------------------------------------------------------------
+-- 能力评测 E1 五张表(2026-11-02)。口径见 PRD §8 + 契约 v1。
+-- 与 capability_eval_levels(E0)分开: E0 记"跑到哪一步"(能不能起来), 这里记
+-- "在标准样本上判得对不对"(判得准不准)。E1 只对已有 E0 等级的条目开放。
+--
+-- 为什么样本正文不进库: 代码放文件系统、库里只存路径 + sha256。库已经是 15.5GB 的
+-- 热表, 40 个源码文件塞进去会把列表接口一起拖慢(2026-10-17 那次 129MB 的教训);
+-- 哈希列的另一半用处是判分前核对 —— 评测容器里样本目录只读, 被改过就当场发现,
+-- 而不是等指标对不上再回头查。
+-- ---------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS capability_eval_samples (
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    category          TEXT NOT NULL,          -- 评测类别, 当前只有 class1_llm_audit
+    case_id           INTEGER NOT NULL,       -- vulnerability_cases.id, 只用于追溯
+    sample_key        TEXT NOT NULL,          -- 样本编号 s_0001, 与答卷文件名对齐
+    pair_key          TEXT NOT NULL,          -- 同一对 pre/post 共用一个键
+    polarity          TEXT NOT NULL CHECK (polarity IN ('pre', 'post')),
+    artifact_hash     TEXT NOT NULL,          -- 文件正文 sha256
+    artifact_path     TEXT NOT NULL,          -- 相对数据集根, 如 samples/s_0001/code.py
+    ground_truth_json TEXT NOT NULL CHECK (json_valid(ground_truth_json)),
+    published_at      TEXT,                   -- 漏洞公开日, 报表 window 由它算
+    valid_until       TEXT,                   -- R12 样本有效期
+    created_at        TEXT NOT NULL,
+    -- 一对样本只能有一个 pre 和一个 post; 少了 post 就没有误报率可言
+    UNIQUE(category, pair_key, polarity),
+    UNIQUE(category, sample_key)
+);
+CREATE INDEX IF NOT EXISTS idx_cap_eval_samples_case
+    ON capability_eval_samples(category, case_id);
+
+CREATE TABLE IF NOT EXISTS capability_eval_recipes (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    item_id       INTEGER NOT NULL,
+    category      TEXT NOT NULL,
+    tool_version  TEXT NOT NULL,   -- 冻结时的工具指纹: 工具一改, recipe 立即失效
+    recipe_json   TEXT NOT NULL CHECK (json_valid(recipe_json)),
+    exploit_note  TEXT NOT NULL DEFAULT '',
+    verified_at   TEXT,
+    superseded_by INTEGER,         -- 自引用: 重适配后旧 recipe 指向新的, 不删行
+    created_at    TEXT NOT NULL,
+    UNIQUE(item_id, tool_version)
+);
+CREATE INDEX IF NOT EXISTS idx_cap_eval_recipes_item
+    ON capability_eval_recipes(item_id, category);
+
+CREATE TABLE IF NOT EXISTS capability_eval_runs (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    item_id        INTEGER NOT NULL,
+    category       TEXT NOT NULL,
+    tool_version   TEXT NOT NULL,
+    status         TEXT NOT NULL CHECK (
+                       status IN ('running', 'success', 'failed', 'budget_exceeded')),
+    started_at     TEXT NOT NULL,
+    finished_at    TEXT,
+    -- R11: 每轮 >=3 次重复并报运行间方差。存进 runs 而不是靠调用方记得传
+    repeats        INTEGER NOT NULL DEFAULT 3 CHECK (repeats >= 1),
+    -- 预算实际用了多少: 模型调用次数/分钟数与上限分开记, 超支时能说清超在哪
+    budget_json    TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(budget_json)),
+    cost_json      TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(cost_json)),
+    -- PRD §8 的失败枚举: install_failed/build_failed/start_failed/tests_failed/
+    -- no_output/needs_paid_key/needs_gpu/needs_external_service/unsupported_os/
+    -- repo_unavailable/timeout/resource_limit/agent_gave_up/other; 空串 = 没失败
+    failure_reason TEXT NOT NULL DEFAULT '',
+    work_dir       TEXT NOT NULL DEFAULT '',   -- 评测容器内的工作目录, 排障用
+    created_at     TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_cap_eval_runs_item
+    ON capability_eval_runs(item_id, started_at DESC);
+CREATE INDEX IF NOT EXISTS idx_cap_eval_runs_status
+    ON capability_eval_runs(status);
+
+-- L5: 一 run 一个受限模型令牌。评测容器里跑的是第三方工具, 给它一个真 key 等于把 key
+-- 交给被测工具; 给它一个只能调平台自己入口、且带次数/token 上限的令牌, 才能既跑得起来
+-- 又收得住账。
+-- 只存 sha256: 库被读走也拿不到可用的凭证; 明文只在 claim 响应里出现一次。
+-- 为什么没有金额列: 网关对未登记价目表的模型一律记 $0.0, 按美元限额等于不限额。
+CREATE TABLE IF NOT EXISTS capability_eval_llm_tokens (
+    token_hash        TEXT PRIMARY KEY,
+    run_id            INTEGER NOT NULL REFERENCES capability_eval_runs(id) ON DELETE CASCADE,
+    created_at        TEXT NOT NULL,
+    expires_at        TEXT NOT NULL,
+    max_calls         INTEGER NOT NULL DEFAULT 0,   -- 0 = 不限
+    max_tokens        INTEGER NOT NULL DEFAULT 0,   -- 0 = 不限
+    calls             INTEGER NOT NULL DEFAULT 0,
+    prompt_tokens     INTEGER NOT NULL DEFAULT 0,
+    completion_tokens INTEGER NOT NULL DEFAULT 0,
+    revoked_at        TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_cap_eval_llm_tokens_run
+    ON capability_eval_llm_tokens(run_id, created_at DESC);
+
+-- 原始答卷(R8 可复现): 工具每轮的输出**逐字**存在这里, 判分只读它、不回写。
+-- 单独一张表而不是塞进 results: 答卷在判分之前就到了, 此时 verdict 还不存在;
+-- 塞进 results 就得先写一个占位标签, 那就是在库里留下假数据。
+-- 放库而不是只放 work_dir, 是因为 work_dir 会被 GC 回收, 而指标要能被重新算一遍。
+CREATE TABLE IF NOT EXISTS capability_eval_answers (
+    run_id       INTEGER NOT NULL REFERENCES capability_eval_runs(id) ON DELETE CASCADE,
+    sample_id    INTEGER NOT NULL REFERENCES capability_eval_samples(id) ON DELETE CASCADE,
+    repeat_index INTEGER NOT NULL CHECK (repeat_index >= 0),
+    -- 两列是**两件事**, 不能合并(R8): raw_answer 是工具自己的原生输出, 原样存,
+    -- 是"它当时到底说了什么"的唯一证据; answer_json 是 parser 翻成契约格式的结果,
+    -- 为空表示翻译失败 —— 判分按 invalid_output 算, 而不是拿原生输出硬凑。
+    raw_answer   TEXT NOT NULL,
+    answer_json  TEXT,
+    -- D4-5: 工具自报「这一类样本我不覆盖」(语言/平台不支持)时的原因。
+    -- 非空 = 这条**不进分母**, 不是答错、也不是翻译失败。与 answer_json 为空是两件事:
+    -- 后者是"它答了但答不成格式", 归工具的分数; 前者是"它明说这事不归它管"。
+    excluded_reason TEXT,
+    created_at   TEXT NOT NULL,
+    UNIQUE(run_id, sample_id, repeat_index)
+);
+
+CREATE TABLE IF NOT EXISTS capability_eval_results (
+    run_id      INTEGER NOT NULL REFERENCES capability_eval_runs(id) ON DELETE CASCADE,
+    sample_id   INTEGER NOT NULL REFERENCES capability_eval_samples(id) ON DELETE CASCADE,
+    -- 契约 v1 §4.1 的标签 + 'unstable'。为什么要 unstable: 一个样本跑 >=3 轮,
+    -- 三轮回不一样的标签时, 取多数会掩盖抖动、取最好的会美化结果 —— 两种都是
+    -- 用规则制造结论。抖动本身就是结论(PRD R11「方差大于差值本身就是结论」),
+    -- 所以三轮回不一致就照实标 unstable, 每轮的标签留在 detail_json.per_repeat。
+    -- 注意: PRD §8 原来写的是 hit/near_hit/miss/false_positive/refused/error,
+    -- 第 1 类以契约 v1 为准(PRD 那句是通用枚举, 落地前的占位)。
+    -- 'excluded'(D4-5)是"工具明说这类样本不覆盖", 不是答错: 它不进任何分母。
+    -- 单独成一个标签而不再借用 invalid_output —— 借用的话, 报表上"语言不支持"会伪装成
+    -- "工具输出不合规", 那是拿我们挑样本的口径去扣工具的分。
+    verdict     TEXT NOT NULL CHECK (verdict IN (
+                    'strict_hit', 'near_hit', 'other_hunk', 'miss',
+                    'false_positive', 'true_negative', 'invalid_output', 'excluded',
+                    'unstable')),
+    -- 产出这个 verdict 的那一轮报的位置; unstable 时为空(每轮各自的位置在 detail_json)
+    location    TEXT NOT NULL DEFAULT '',
+    detail_json TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(detail_json)),
+    UNIQUE(run_id, sample_id)
+);
+CREATE INDEX IF NOT EXISTS idx_cap_eval_results_sample
+    ON capability_eval_results(sample_id);
+
+CREATE TABLE IF NOT EXISTS capability_eval_reports (
+    run_id       INTEGER PRIMARY KEY REFERENCES capability_eval_runs(id) ON DELETE CASCADE,
+    -- PRD §8 的硬约束: 报表里没有样本数和时间窗, 就等于让读者自己猜覆盖范围
+    metrics_json TEXT NOT NULL CHECK (
+                     json_valid(metrics_json)
+                     AND json_extract(metrics_json, '$.n_samples') IS NOT NULL
+                     AND json_extract(metrics_json, '$.window') IS NOT NULL),
+    -- 口径提醒必须写: 空 caveats 的报表比没有报表更糟, 它看起来像结论
+    caveats      TEXT NOT NULL CHECK (length(trim(caveats)) > 0),
+    created_at   TEXT NOT NULL
+);
 """
 
 
@@ -520,11 +669,60 @@ def init_db(conn: sqlite3.Connection) -> None:
     # e0_source(2026-11-02): 同上, 表 11-02 已经建过, CREATE TABLE IF NOT EXISTS 补不了列。
     try: conn.execute("ALTER TABLE capability_eval_levels ADD COLUMN e0_source TEXT NOT NULL DEFAULT ''")
     except Exception: pass
+    # excluded_reason(2026-11-02, D4-5): 答案表已建过, 同上只能补列。
+    try: conn.execute("ALTER TABLE capability_eval_answers ADD COLUMN excluded_reason TEXT")
+    except Exception: pass
+    _migrate_results_verdict_excluded(conn)
     conn.commit()
+
+
+def _migrate_results_verdict_excluded(conn: sqlite3.Connection) -> None:
+    """把 `capability_eval_results.verdict` 的 CHECK 补上 'excluded'(D4-5)。
+
+    CHECK 不能 ALTER, 只能重建表。**只在旧表结构上跑**: 新建库走 `SCHEMA_SQL` 就已经带
+    'excluded', 这里是给"库里已经有这张表"的环境补的。判据直接读建表语句, 不看版本号 ——
+    版本号这种东西没人维护, 而建表语句就是事实。
+
+    这张表每个 run 只有几十行(样本数), 重建是一次毫秒级操作, 不碰其它表。
+    """
+    row = conn.execute("SELECT sql FROM sqlite_master WHERE type='table'"
+                       " AND name='capability_eval_results'").fetchone()
+    if row is None or "'excluded'" in (row[0] or ""):
+        return
+    conn.executescript(
+        """
+        CREATE TABLE capability_eval_results_new (
+            run_id      INTEGER NOT NULL REFERENCES capability_eval_runs(id) ON DELETE CASCADE,
+            sample_id   INTEGER NOT NULL REFERENCES capability_eval_samples(id) ON DELETE CASCADE,
+            verdict     TEXT NOT NULL CHECK (verdict IN (
+                            'strict_hit', 'near_hit', 'other_hunk', 'miss',
+                            'false_positive', 'true_negative', 'invalid_output', 'excluded',
+                            'unstable')),
+            location    TEXT NOT NULL DEFAULT '',
+            detail_json TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(detail_json)),
+            UNIQUE(run_id, sample_id)
+        );
+        INSERT INTO capability_eval_results_new
+            (run_id, sample_id, verdict, location, detail_json)
+            SELECT run_id, sample_id, verdict, location, detail_json
+            FROM capability_eval_results;
+        DROP TABLE capability_eval_results;
+        ALTER TABLE capability_eval_results_new RENAME TO capability_eval_results;
+        CREATE INDEX IF NOT EXISTS idx_cap_eval_results_sample
+            ON capability_eval_results(sample_id);
+        """
+    )
 
 
 def reset_db(conn: sqlite3.Connection) -> None:
     tables = [
+        # 能力评测 E1: 子先父后
+        "capability_eval_reports",
+        "capability_eval_results",
+        "capability_eval_answers",
+        "capability_eval_runs",
+        "capability_eval_samples",
+        "capability_eval_recipes",
         "threat_links",
         "threat_repo_filters",
         "threat_source_targets",

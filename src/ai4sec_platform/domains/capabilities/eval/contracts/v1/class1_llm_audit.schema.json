@@ -1,0 +1,65 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "ai4sec/eval/class1_llm_audit/v1",
+  "title": "第 1 类 LLM 代码审计 —— 输出契约 v1",
+  "description": "被测工具的原始输出经 parser 翻译后必须满足本 schema。判分脚本只读这一层，不读工具原生输出。字段定义见 class1_llm_audit.md §3。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["found", "findings"],
+  "properties": {
+    "found": {
+      "type": "boolean",
+      "description": "是否在该文件中发现安全漏洞。false 时 findings 必须为空数组。"
+    },
+    "findings": {
+      "type": "array",
+      "maxItems": 5,
+      "description": "按置信度降序排列，最多 5 条。超过 5 条由 harness 截断并记 truncated=true。",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["file", "function", "line_start", "line_end"],
+        "properties": {
+          "file": {
+            "type": "string",
+            "minLength": 1,
+            "description": "仓库内相对路径，须与题面给出的路径归一化后一致。"
+          },
+          "function": {
+            "type": "string",
+            "description": "漏洞所在函数/方法名。文件级漏洞（如全局配置）可填空字符串。"
+          },
+          "line_start": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "漏洞行区间起点（1-based，闭合区间）。"
+          },
+          "line_end": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "漏洞行区间终点，必须 >= line_start。"
+          },
+          "type_cwe": {
+            "type": "string",
+            "pattern": "^CWE-[0-9]+$",
+            "description": "漏洞类型，形如 CWE-502。可选，缺失不影响命中判定（类型匹配是附加信息，不参与 locate_rate）。"
+          },
+          "evidence": {
+            "type": "string",
+            "description": "工具给出的判断依据原文。原样保留，不重写。"
+          }
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "found": { "const": false } }, "required": ["found"] },
+      "then": { "properties": { "findings": { "maxItems": 0 } } }
+    },
+    {
+      "if": { "properties": { "found": { "const": true } }, "required": ["found"] },
+      "then": { "properties": { "findings": { "minItems": 1 } } }
+    }
+  ]
+}

@@ -5,6 +5,7 @@ import socket
 import time
 import urllib.error
 from dataclasses import dataclass
+from typing import Any
 
 from ai4sec_platform.core.env import load_env_file
 from ai4sec_platform.models.local_rules import LocalRuleProvider
@@ -60,11 +61,28 @@ class FallbackProvider:
         return getattr(providers[0], name)
 
     def complete_json(self, *, prompt: str, payload: dict) -> dict:
+        return self._call("complete_json", prompt=prompt, payload=payload)
+
+    def chat_completion(self, *, messages: list[dict], max_tokens: int | None = None,
+                        temperature: float | None = None,
+                        tools: list[dict] | None = None, tool_choice: Any = None,
+                        response_format: dict | None = None) -> dict:
+        """给第三方工具用的原样转发(L5)。降级口径与 `complete_json` 完全一样 ——
+        两处各写一套的话, "适配 agent 能降级、被测工具不能"会变成一类查不出的差异。
+
+        `tools` / `tool_choice` / `response_format` 一并透传: 换了 provider 也得带上,
+        否则降级到第二家时工具会突然收到一段散文而不是 tool_calls。"""
+        return self._call("chat_completion", messages=messages,
+                          max_tokens=max_tokens, temperature=temperature,
+                          tools=tools, tool_choice=tool_choice,
+                          response_format=response_format)
+
+    def _call(self, method: str, **kwargs) -> dict:
         ordered = self._ordered()
         last_error: Exception | None = None
         for index, provider in enumerate(ordered):
             try:
-                result = provider.complete_json(prompt=prompt, payload=payload)
+                result = getattr(provider, method)(**kwargs)
             except Exception as exc:  # noqa: BLE001 —— 判断要不要换下一家
                 if index >= len(ordered) - 1 or not self._should_fallback(exc):
                     raise
@@ -107,6 +125,17 @@ class LLMRouter:
 
     def complete_json(self, *, profile: str = "configured_model", prompt: str, payload: dict) -> dict:
         return self.provider_for(profile).complete_json(prompt=prompt, payload=payload)
+
+    def chat_completion(self, *, profile: str = "configured_model",
+                        messages: list[dict], max_tokens: int | None = None,
+                        temperature: float | None = None,
+                        tools: list[dict] | None = None, tool_choice: Any = None,
+                        response_format: dict | None = None) -> dict:
+        """给被测工具用的原样转发(L5)。没配模型时 `provider_for` 会退回本地规则引擎,
+        而那东西不实现 chat_completion —— 调用方必须先看 `active_config` 再走这一步。"""
+        return self.provider_for(profile).chat_completion(
+            messages=messages, max_tokens=max_tokens, temperature=temperature,
+            tools=tools, tool_choice=tool_choice, response_format=response_format)
 
     def active_config(self, profile: str = "configured_model") -> dict[str, str | bool]:
         if self._force_local_rules(profile):
@@ -170,7 +199,9 @@ def _config_from_prefix(prefix: str, *, profile: str = "configured_model") -> Mo
 
 def _model_timeout_seconds(profile: str) -> float:
     profile_key = _profile_key(profile)
-    default = "180" if profile in {"vulnerability_content_extractor", "vulnerability_material_reviewer", "vulnerability_knowledge_extractor", "vulnerability_vuln_site_extractor", "vulnerability_dataflow_extractor"} else "45"
+    # capability_eval_tool(L5)是被测工具自己在调: 它的提示词比我们的长得多(整个文件的
+    # 上下文 + 7 个阶段), 45 秒那种口径会把它正常的一次调用判成超时。
+    default = "180" if profile in {"vulnerability_content_extractor", "vulnerability_material_reviewer", "vulnerability_knowledge_extractor", "vulnerability_vuln_site_extractor", "vulnerability_dataflow_extractor", "capability_eval_tool"} else "45"
     try:
         timeout = float(os.getenv(f"AI4SEC_{profile_key}_TIMEOUT_SECONDS", os.getenv("AI4SEC_MODEL_TIMEOUT_SECONDS", default)))
     except ValueError:
@@ -180,7 +211,7 @@ def _model_timeout_seconds(profile: str) -> float:
 
 def _model_max_output_tokens(profile: str) -> int:
     profile_key = _profile_key(profile)
-    default = "16384" if profile == "vulnerability_content_extractor" else "4096" if profile == "vulnerability_knowledge_extractor" else "2048" if profile == "vulnerability_material_reviewer" else "4096"
+    default = "16384" if profile == "vulnerability_content_extractor" else "4096" if profile == "vulnerability_knowledge_extractor" else "2048" if profile == "vulnerability_material_reviewer" else "8192" if profile == "capability_eval_tool" else "4096"
     try:
         max_tokens = int(os.getenv(f"AI4SEC_{profile_key}_MAX_OUTPUT_TOKENS", os.getenv("AI4SEC_MODEL_MAX_OUTPUT_TOKENS", default)))
     except ValueError:
