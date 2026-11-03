@@ -11,16 +11,23 @@
    行号只出现在模型写进 `evidence` 的那段 JSON 里(`{"finding": {"path":…, "line":…}}`)。
    第一版只看顶层, 于是每条都 `line_start=null` → 整份答卷被判 invalid_output。
 3. **`type_cwe` 只放真正的 CWE 编号**。第一版把 `rule_id`(`secondpass.logic-review`)
-   塞进去, 不匹配 `CWE-\\d+` 同样会让整份答卷作废。
+   塞进去, 不匹配 `CWE-\\d+` 同样会让整份答卷作废。这个工具的 finding 里本来就没有 CWE,
+   所以现在是**整个键不写** —— 契约里它是可选的, 写了就必须是 `CWE-\\d+` 字符串 (写 null 不满足)。
 4. **把工具自己的 venv 放进 PATH**(等价 `source .venv/bin/activate`)。工具的
    `_resolve_semgrep()` 先找 `sys.executable` 的同目录, 而 `.venv/bin/python` 是符号链接,
    `resolve()` 之后落到 `/usr/local/bin`; 不激活 venv, semgrep 恒找不到, 静态扫描每条都
    以 `ScanError` 收场 —— run 10 的 raw/*.stderr 里每条都是 `tool=run_static_scan
    error=ScanError duration_ms=0.2`。
-5. **认 evidence 第一行的 `{path}:{line}` 前缀**。一条答卷里往往有 2~3 条 finding, 只有第一条的
-   evidence 是 `{"finding": {...}}` 的 JSON, 其余是工具 `_finding_evidence()` 拼的纯文本
-   `/<abs>/code.c:158` + message + snippet。只解析 JSON 的话, 第 2 条起行号全空 ——
-   而契约是"任何一条 finding 不合法 → 整份答卷作废", 于是 2 条以上 finding 的答卷**全废**。
+5. **认 evidence 第一行的 `{path}:{line}` 前缀**。一条答卷里往往有 2~3 条 finding,
+   `_finding_evidence()` 拼的是 `/<abs>/code.c:158` + message + snippet 的纯文本;
+   一部分 finding 的 evidence 会整段是 `{"finding": {...}}` 的 JSON, 另一部分是纯文本,
+   两种形态谁先谁后都可能 (run 10 的 s_0009 就是 `[None, 67]` —— 抓不到行号的那条排在第一位)。
+   只解析 JSON 的话这些全空 —— 而契约是"任何一条 finding 不合法 → 整份答卷作废",
+   于是一条拿不到行号就把整份答卷废掉。
+6. **按置信度降序再截断到 5 条**。契约 §3.1 #2 要求 findings "按置信度降序排列,
+   超过 5 条的按前 5 条计", 而工具自己不排序 (`app/agent.py` / `supervisor.py` 里没有对
+   findings 的 sort)。启用静态扫描后一条答卷超过 5 条是可能的, 不排序就会把低置信的留下、
+   高置信的丢掉。排序是契约对**转换层**的要求, 不是在改工具的判定。
 
 诚实的边界: 工具没给行号时, **不编**。这样的 finding 会让答卷落成 invalid_output
 (契约没有"找到了但报不出位置"这种形态), 这是工具的真实表现, 不是适配层造出来的。
@@ -105,6 +112,20 @@ def _unwrap(d):
     return d
 
 
+def _confidence_rank(d):
+    """把 confidence 归一成 0~100 的整数, 认不出就排到最后 (不猜)。"""
+    value = d.get("confidence")
+    if isinstance(value, bool) or value is None:
+        return -1
+    try:
+        value = float(value)
+    except (TypeError, ValueError):
+        return -1
+    if 0 < value <= 1:          # 0~1 的写法
+        value *= 100.0
+    return int(round(max(0.0, min(100.0, value))))
+
+
 def flatten_findings(sec):
     candidates = []
     rr = sec.get("review_result") or {}
@@ -157,10 +178,13 @@ def to_finding(d, rel_path):
         "file": rel_path,
         "line_start": start,
         "line_end": end,
-        "type_cwe": cwe,
         "evidence": str(evidence)[:2000],
     }
-    # 契约里 function 出现就必须是字符串; 拿不到就整个键不写, 不能写 null。
+    # function / type_cwe 都是**可选**字段, 但一旦出现就必须是字符串:
+    # schema 写的是 `"type": "string"`, 写 null 不满足。所以拿不到就整个键不写。
+    # (`validate_answer()` 对 null 是放行的, 但契约文件与执行者必须同口 —— 见 9986e48)
+    if cwe:
+        out["type_cwe"] = cwe
     func = d.get("function") or d.get("function_name")
     if isinstance(func, str) and func.strip():
         out["function"] = func.strip()
@@ -189,6 +213,9 @@ def main():
     result = review_path(a.file, memory_enabled=False)
     sec = result.get("security") or {}
     raw = flatten_findings(sec)
+    # 契约要求"按置信度降序, 最多 5 条"; 工具自己不排序, 排是转换层的活。
+    # sort 是稳定的, 同一置信度保持工具原有顺序。
+    raw.sort(key=_confidence_rank, reverse=True)
     findings = [to_finding(d, a.path) for d in raw[:MAX_FINDINGS]]
     # 契约只允许 found / findings 两个顶层字段, 任何附加说明都会被判 invalid。
     print(json.dumps({"found": bool(findings), "findings": findings}, ensure_ascii=False))
