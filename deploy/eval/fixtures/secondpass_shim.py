@@ -12,6 +12,11 @@
    第一版只看顶层, 于是每条都 `line_start=null` → 整份答卷被判 invalid_output。
 3. **`type_cwe` 只放真正的 CWE 编号**。第一版把 `rule_id`(`secondpass.logic-review`)
    塞进去, 不匹配 `CWE-\\d+` 同样会让整份答卷作废。
+4. **把工具自己的 venv 放进 PATH**(等价 `source .venv/bin/activate`)。工具的
+   `_resolve_semgrep()` 先找 `sys.executable` 的同目录, 而 `.venv/bin/python` 是符号链接,
+   `resolve()` 之后落到 `/usr/local/bin`; 不激活 venv, semgrep 恒找不到, 静态扫描每条都
+   以 `ScanError` 收场 —— run 10 的 raw/*.stderr 里每条都是 `tool=run_static_scan
+   error=ScanError duration_ms=0.2`。
 
 诚实的边界: 工具没给行号时, **不编**。这样的 finding 会让答卷落成 invalid_output
 (契约没有"找到了但报不出位置"这种形态), 这是工具的真实表现, 不是适配层造出来的。
@@ -145,6 +150,12 @@ def main():
 
     logging.disable(logging.CRITICAL)
     os.environ.setdefault("LLM_PROVIDER", "eval")
+    # 等价于 `source .venv/bin/activate`: 工具自己的 _resolve_semgrep() 先看
+    # sys.executable 的同目录, 而 .venv/bin/python 是符号链接, resolve() 之后
+    # 指向 /usr/local/bin, 于是只能用 PATH 找 semgrep。不把 venv 的 bin 放进
+    # PATH, 静态扫描恒以 ScanError 收场 —— 那是"没激活虚拟环境", 不是工具不行。
+    venv_bin = os.path.join(a.tool_dir, ".venv", "bin")
+    os.environ["PATH"] = venv_bin + os.pathsep + os.environ.get("PATH", "")
     sys.path.insert(0, a.tool_dir)
     from app.agent import review_path  # noqa: E402
 
@@ -155,6 +166,19 @@ def main():
     findings = [to_finding(d, a.path) for d in raw[:MAX_FINDINGS]]
     # 契约只允许 found / findings 两个顶层字段, 任何附加说明都会被判 invalid。
     print(json.dumps({"found": bool(findings), "findings": findings}, ensure_ascii=False))
+    # 诊断走 stderr(runner 会落到 raw/*.stderr), 不进答卷: 事后要能分清
+    # "没扫" "扫了没有" "截断到 12k 字符没看完" "模型答非所问"。
+    diag = {
+        "static_scan_error": sec.get("static_scan_error"),
+        "static_scan_empty": sec.get("static_scan_empty"),
+        "inconclusive": sec.get("inconclusive"),
+        "logic_review_status": sec.get("logic_review_status"),
+        "source_truncated": sec.get("source_truncated"),
+        "model": sec.get("model"),
+        "raw_findings": len(raw),
+        "message": str(sec.get("message") or "")[:200],
+    }
+    print("[shim] " + json.dumps(diag, ensure_ascii=False), file=sys.stderr)
 
 
 if __name__ == "__main__":
