@@ -28,6 +28,10 @@
    超过 5 条的按前 5 条计", 而工具自己不排序 (`app/agent.py` / `supervisor.py` 里没有对
    findings 的 sort)。启用静态扫描后一条答卷超过 5 条是可能的, 不排序就会把低置信的留下、
    高置信的丢掉。排序是契约对**转换层**的要求, 不是在改工具的判定。
+7. **同一处漏洞去重**。工具的输出里同一处漏洞常常有**两份**: 扫描器原始 finding 带 `line`
+   字段、evidence 只有消息; supervisor 的 StructuredFinding 带 `path:line` 前缀和代码片段。
+   按 evidence 原文去重对不上 (两份原文不同), 于是同一条洞占掉 5 个名额里的 2 个。
+   改成按 (行号, 首行消息) 去重 —— run 10 的 `s_0009` 就是这么报出两条一模一样的。
 
 诚实的边界: 工具没给行号时, **不编**。这样的 finding 会让答卷落成 invalid_output
 (契约没有"找到了但报不出位置"这种形态), 这是工具的真实表现, 不是适配层造出来的。
@@ -139,13 +143,38 @@ def flatten_findings(sec):
     out = []
     for item in candidates:
         d = _unwrap(as_dict(item))
-        key = (str(d.get("evidence")), str(d.get("finding_type")), str(d.get("line")),
-               str(d.get("line_start")))
+        key = _fingerprint(d)
         if key in seen:
             continue
         seen.add(key)
         out.append(d)
     return out
+
+
+def _first_message_line(text):
+    """evidence 去掉 `{path}:{line}` 前缀后的第一行; 用来认"同一处漏洞的两种写法"。"""
+    lines = [line.strip() for line in str(text or "").split("\n") if line.strip()]
+    if lines and _path_line_from_evidence(text) is not None:
+        lines = lines[1:]
+    return " ".join(lines[0].split())[:120] if lines else ""
+
+
+def _fingerprint(d):
+    """去重键 = (行号, 首行消息)。
+
+    不能拿 evidence 原文当键: 同一处漏洞在工具输出里常常有**两份** —— 扫描器原始 finding
+    (`line` 字段齐全, evidence 只有消息)与 supervisor 的 StructuredFinding
+    (evidence = `path:line` + 消息 + 片段)。原文不同、指的是同一行同一件事。
+    run 10 的 s_0009 就是这样报出两条: 一条 `line_start=None`(有前缀没解析)、
+    一条 `line_start=67`(来自 `line` 字段), 内容一模一样。
+    """
+    line = _int_line(d, "line_start", "start_line", "line", "line_number")
+    evidence = d.get("evidence")
+    if line is None:
+        line = _path_line_from_evidence(evidence)
+    message = _first_message_line(evidence) or " ".join(str(d.get("message") or "").split())[:120]
+    # 不带 finding_type: 同一处漏洞的两份记录里, 一份有类型名一份没有, 带上就永远对不上。
+    return (line, message)
 
 
 def _int_line(d, *keys):
