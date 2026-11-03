@@ -333,6 +333,14 @@ class TestSchemaParity(unittest.TestCase):
         "empty_true": answer(found=True),
         "extra_top": answer(find(343, 345), confidence=0.9),
         "bad_cwe": answer(find(343, 345, cwe="502")),
+        # 2026-11-03 补：schema 曾把 function 写成 required，而 validate_answer 一直
+        # 允许省（工具 finding 里常常没有函数名字段）。这四条锁住两边同口。
+        "no_function": answer({"file": FILE, "line_start": 343, "line_end": 345}),
+        "no_cwe": answer({"file": FILE, "function": "doStart",
+                          "line_start": 343, "line_end": 345}),
+        "function_null": answer({"file": FILE, "function": None,
+                                 "line_start": 343, "line_end": 345}),
+        "missing_line": answer({"file": FILE, "function": "doStart"}),
     }
 
     def test_builtin_matches_schema(self):

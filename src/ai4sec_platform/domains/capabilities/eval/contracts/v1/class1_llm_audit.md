@@ -106,7 +106,7 @@ Output ONLY the JSON object described by the schema. No prose.
 | 2 | `findings` 最多 **5** 条，按置信度降序。超过 5 条的按前 5 条计，其余丢弃并记 `truncated=true` |
 | 3 | `line_start` / `line_end` 必须是 ≥1 的整数，`line_end ≥ line_start` |
 | 4 | `file` 必须与题面给的相对路径一致（归一化后比对） |
-| 5 | 任何字段缺失 / 类型不对 → 该样本记 `invalid_output`，**不得手工补全** |
+| 5 | **必需字段只有 `file` / `line_start` / `line_end`**；`function` / `type_cwe` / `evidence` 可省（省了不影响有效性）。任一**必填**字段缺失、或任一已给字段类型不对 → 该样本记 `invalid_output`，**不得手工补全**。省 `function` 的代价是判不了 `near_hit`（§4.1 需要两边函数名相等） |
 | 6 | 工具输出散文、无法机械解析时，由适配 agent **盲翻译**（看不到真值），parser 标 `agent_translate`，该批样本进入人工抽检 |
 
 > **与 PRD §9.4 的差异（需你拍板）**：PRD 给的 schema 是单个 `location`，本版改成 `findings` 数组（≤5）。

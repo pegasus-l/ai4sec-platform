@@ -18,7 +18,7 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["file", "function", "line_start", "line_end"],
+        "required": ["file", "line_start", "line_end"],
         "properties": {
           "file": {
             "type": "string",
@@ -27,7 +27,7 @@
           },
           "function": {
             "type": "string",
-            "description": "漏洞所在函数/方法名。文件级漏洞（如全局配置）可填空字符串。"
+            "description": "漏洞所在函数/方法名。文件级漏洞（如全局配置）可填空字符串。**可选**：很多工具的 finding 里没有独立函数名字段（如 secondpass 的 Finding 只有 finding_type/evidence/confidence/suggested_fix/detection_method）。省掉不影响答卷有效性，但**判不了 near_hit**（§4.1 的「同函数 + 15 行内」需要两边函数名相等），只能落 strict_hit / other_hunk / miss。"
           },
           "line_start": {
             "type": "integer",
