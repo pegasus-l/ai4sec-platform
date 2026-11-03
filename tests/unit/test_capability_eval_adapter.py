@@ -296,9 +296,87 @@ def test_adapt_returns_a_recipe_only_after_it_runs(adapter, tmp_path):
         run={"item_id": 7, "category": "class1_llm_audit"}, tool_dir=tool, sample=sample,
         workdir=tmp_path, ask_fn=ask, freeze=False)
 
-    assert recipe is not None and source == "adapted:v1" and detail == {"steps": 2}
+    assert recipe is not None and source == "adapted:v1"
+    assert detail == {"steps": 2, "smoke_sample": "s_0001"}
     # 第一次调用必须已经把目录内容给了模型, 否则它只能瞎猜
     assert ask.calls[0]["initial_snapshot"]["manifests"]["README.md"] == "audit tool"
+
+
+def _mixed_pool(tmp_path: Path) -> list[dict]:
+    """第一份是 C, 第二份是 Python —— 2026-11-03 run 5 的真实形状。"""
+    c_file = tmp_path / "code.c"
+    c_file.write_text("int main(void){return 0;}\n", encoding="utf-8")
+    py_file = tmp_path / "code.py"
+    py_file.write_text("import os\nos.system('id')\n", encoding="utf-8")
+    return [{"sample_key": "s_0001", "file": c_file, "relative_path": "src/a.c"},
+            {"sample_key": "s_0002", "file": py_file, "relative_path": "src/b.py"}]
+
+
+def test_a_tool_covering_only_some_languages_can_still_be_adapted(adapter, tmp_path):
+    """自检样本默认是第一份, 但 agent 可以点名换一份。
+
+    2026-11-03 run 5 就死在这: 第一份样本是 C, 被测工具只认 `.py`, 于是
+    "排除这条样本"(exclude_exit_codes)和"自检必须过"互相矛盾 —— 一个本来能评
+    4 条 Python 样本的工具被判成「无法适配」。整批交给 agent 挑就够了。
+    """
+    tool = tmp_path / "tool"
+    tool.mkdir()
+    pool = _mixed_pool(tmp_path)
+    invoke = _py("import json,sys;sys.exit(3) if not sys.argv[2].endswith('.py') "
+                 "else print(json.dumps({'found': False, 'findings': [], 'file': sys.argv[2]}))")
+    recipe = {"tool_version": "v1", "output_parser": {"kind": "json"}, "invoke": invoke,
+              "ok_exit_codes": [0], "exclude_exit_codes": {"3": "language_not_supported"}}
+    ask = _asker([{"action": "recipe", "recipe": recipe, "smoke_sample": "s_0002"}])
+
+    got, source, detail = adapter.adapt(
+        run={"item_id": 7, "category": "class1_llm_audit"}, tool_dir=tool,
+        sample=pool[0], sample_pool=pool, workdir=tmp_path, ask_fn=ask, freeze=False)
+
+    assert got is not None and source == "adapted:v1"
+    assert detail["smoke_sample"] == "s_0002"
+    # agent 得先看得见整批样本, 否则它没法知道还有别的语言可挑
+    assert [s["sample_key"] for s in ask.calls[0]["sample_pool"]] == ["s_0001", "s_0002"]
+    assert ask.calls[0]["sample_pool"][1]["file_name"] == "code.py"
+
+
+def test_without_a_smoke_sample_the_first_one_is_still_used(adapter, tmp_path):
+    """不给 `smoke_sample` 时行为与从前逐字一致 —— 老 recipe 不受影响。"""
+    tool = tmp_path / "tool"
+    tool.mkdir()
+    pool = _mixed_pool(tmp_path)
+    recipe = {"tool_version": "v1", "output_parser": {"kind": "json"},
+              "invoke": _py("import json,sys;sys.exit(3) if not sys.argv[2].endswith('.py') "
+                            "else print(json.dumps({'found': False, 'findings': []}))"),
+              "exclude_exit_codes": {"3": "language_not_supported"}}
+    ask = _asker([
+        {"action": "recipe", "recipe": recipe},
+        {"action": "give_up", "reason": "agent_gave_up", "detail": "只认 Python"},
+    ])
+
+    got, reason, _ = adapter.adapt(
+        run={"item_id": 7, "category": "class1_llm_audit"}, tool_dir=tool,
+        sample=pool[0], sample_pool=pool, workdir=tmp_path, ask_fn=ask, freeze=False)
+
+    assert got is None and reason == "agent_gave_up"
+    # 被拒的理由要能指向真正的原因, 不能只说"自检失败"
+    assert "不覆盖" in ask.calls[1]["history"][-1]["result"]
+
+
+def test_an_unknown_smoke_sample_is_bounced_instead_of_silently_ignored(adapter, tmp_path):
+    tool = tmp_path / "tool"
+    tool.mkdir()
+    pool = _mixed_pool(tmp_path)
+    ask = _asker([
+        {"action": "recipe", "smoke_sample": "s_9999", "recipe": {
+            "tool_version": "v1", "output_parser": {"kind": "json"},
+            "invoke": _py("import json;print(json.dumps({'found': False, 'findings': []}))")}},
+        {"action": "give_up", "reason": "agent_gave_up", "detail": "算了"},
+    ])
+
+    adapter.adapt(run={"item_id": 7, "category": "class1_llm_audit"}, tool_dir=tool,
+                  sample=pool[0], sample_pool=pool, workdir=tmp_path, ask_fn=ask, freeze=False)
+
+    assert "不在本轮样本里" in ask.calls[1]["history"][-1]["result"]
 
 
 def test_adapt_stamps_the_version_before_freezing(adapter, tmp_path):

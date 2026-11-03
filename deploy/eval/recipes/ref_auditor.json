@@ -1,0 +1,10 @@
+{
+  "tool_version": "fixture-ref-auditor-1",
+  "install": [],
+  "invoke": ["python3", "/opt/eval/fixtures/ref_auditor.py", "--file", "{sample_file}", "--path", "{relative_path}"],
+  "output_parser": {"kind": "json"},
+  "needs_host_agent": false,
+  "host_model": null,
+  "timeout_seconds": 120,
+  "notes": "测试夹具, 纯正则, 不调模型。只用于打通链路, 分数不许进产品报表。"
+}

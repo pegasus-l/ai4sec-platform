@@ -1,0 +1,21 @@
+{
+  "tool_version": "",
+  "install": [
+    "python3 -m pip install --no-cache-dir --disable-pip-version-check {tool_dir}/libs/openant-core",
+    "if [ -d \"{tool_dir}/libs/openant-core/parsers/javascript\" ]; then cd \"{tool_dir}/libs/openant-core/parsers/javascript\" && npm install --no-audit --no-fund; fi"
+  ],
+  "invoke": [
+    "python3", "/opt/eval/fixtures/openant_shim.py",
+    "--file", "{sample_file}",
+    "--path", "{relative_path}",
+    "--out", "{workdir}/out/{sample_key}"
+  ],
+  "output_parser": {"kind": "json"},
+  "ok_exit_codes": [0],
+  "exclude_exit_codes": {"3": "language_not_supported"},
+  "needs_host_agent": false,
+  "host_model": null,
+  "timeout_seconds": 960,
+  "tool_version_source": "stamp_version",
+  "notes": "D4 试点(knostic/OpenAnt)。tool_version 留空, 由 adapter.stamp_version 用工具目录的 git sha / 目录指纹补上 —— 手写一个没核过的版本号会让'换了版本就重探'这条失效。invoke 走执行位烘进镜像的 shim(/opt/eval/fixtures/openant_shim.py): OpenAnt 的 findings 没有行号, 行号只能从它自己的 dataset.json 里查, 而这件事不能让适配 agent 每轮现写。退出码 3 = 该文件的语言 OpenAnt 不支持, 声明为 excluded(不计入分母), 不是一次失败的调用。install 失败是终态(整轮 failed = install_failed), 刻意不给 `|| true` 兜底: npm 装不上时 JS/TS 样本会被解析失败计成工具的分数, 把这个失败藏起来比失败本身更糟。"
+}
