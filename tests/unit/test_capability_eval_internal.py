@@ -270,6 +270,75 @@ def test_llm_requires_the_token(client):
                  {"profile": "capability_eval_adapter", "prompt": "x"}, token="").status_code == 401
 
 
+def test_llm_charges_its_calls_to_the_run_that_asked(client, conn, monkeypatch):
+    """适配阶段的模型调用必须记进**这一轮**的预算(PRD R6)。
+
+    2026-11-03 run 6 实测: 适配侧 60 次调用、1,122,409 tokens, 而 `llm_key` 里只有工具
+    自己那 6 次 —— 入口只认 `EVAL_TOKEN`(证明"我是执行位"), 说不出"我是哪一轮"。
+    现在请求体里带 `run_id`, 两条路就记在同一本账上。
+    """
+    from ai4sec_platform.app.api import internal_eval
+    from ai4sec_platform.domains.capabilities.eval import llm_tokens
+
+    run_id = store.create_run(conn, item_id=1, repeats=1)
+    llm_tokens.mint(conn, run_id, max_calls=10, max_tokens=10_000)
+
+    class FakeRouter:
+        def active_config(self, profile):
+            return {"provider": "deepseek", "configured": True, "model": "m"}
+
+        def complete_json(self, *, profile, prompt, payload):
+            return {"parsed": {"action": "bash"},
+                    "usage": {"prompt_tokens": 7, "completion_tokens": 3}}
+
+    monkeypatch.setattr(internal_eval, "LLMRouter", FakeRouter)
+    body = {"profile": "capability_eval_adapter", "prompt": "x", "payload": {}, "run_id": run_id}
+    assert _post(client, "/api/internal/eval/llm", body).status_code == 200
+    summary = llm_tokens.summary(conn, run_id)
+    assert summary["calls"] == 1 and summary["total_tokens"] == 10
+
+
+def test_llm_refuses_once_the_run_budget_is_gone(client, conn, monkeypatch):
+    """预算用完就回 429, 由执行位落成 `model_budget_exceeded`。
+
+    这条是"账记上了"和"账管住了"的分界: 只记账不拦截, 报表上好看, 钱照花。
+    """
+    from ai4sec_platform.app.api import internal_eval
+    from ai4sec_platform.domains.capabilities.eval import llm_tokens
+
+    run_id = store.create_run(conn, item_id=1, repeats=1)
+    minted = llm_tokens.mint(conn, run_id, max_calls=1, max_tokens=0)
+    llm_tokens.charge(conn, llm_tokens.verify(conn, minted["token"])["token_hash"],
+                      {"prompt_tokens": 1, "completion_tokens": 1})
+
+    class FakeRouter:
+        def active_config(self, profile):
+            return {"provider": "deepseek", "configured": True, "model": "m"}
+
+        def complete_json(self, *, profile, prompt, payload):  # pragma: no cover - 不该被调到
+            raise AssertionError("预算已用尽还在调模型")
+
+    monkeypatch.setattr(internal_eval, "LLMRouter", FakeRouter)
+    body = {"profile": "capability_eval_adapter", "prompt": "x", "payload": {}, "run_id": run_id}
+    assert _post(client, "/api/internal/eval/llm", body).status_code == 429
+
+
+def test_llm_refuses_a_run_id_without_a_token(client, monkeypatch):
+    """带着一个没有令牌的 run_id 来要模型 = 又回到账外。直接拒, 不静默放行。"""
+    from ai4sec_platform.app.api import internal_eval
+
+    class FakeRouter:
+        def active_config(self, profile):
+            return {"provider": "deepseek", "configured": True, "model": "m"}
+
+        def complete_json(self, *, profile, prompt, payload):  # pragma: no cover
+            raise AssertionError("没有令牌还在调模型")
+
+    monkeypatch.setattr(internal_eval, "LLMRouter", FakeRouter)
+    body = {"profile": "capability_eval_adapter", "prompt": "x", "payload": {}, "run_id": 99999}
+    assert _post(client, "/api/internal/eval/llm", body).status_code == 401
+
+
 def test_llm_proxies_to_the_platform_model(client, monkeypatch):
     from ai4sec_platform.app.api import internal_eval
 

@@ -110,13 +110,10 @@ def _row(conn: sqlite3.Connection, token: str) -> Mapping[str, Any] | None:
         (_hash(token),)).fetchone()
 
 
-def verify(conn: sqlite3.Connection, token: str) -> dict[str, Any]:
-    """校验并返回这一轮的令牌行。不通过就抛 —— 没有"降级放行"这一档。"""
-    if not (token or "").startswith(TOKEN_PREFIX):
-        raise LlmTokenError(401, "invalid_token")
-    row = _row(conn, token)
-    if row is None:
-        raise LlmTokenError(401, "invalid_token")
+def _check(row: Mapping[str, Any]) -> None:
+    """一条令牌行还能不能用。`verify`(拿着明文)与 `verify_run`(按 run 查)共用这套判据 ——
+    两条路各写一遍, 迟早会有一边少一条规则, 而少的那条正好是"预算已经用尽"。
+    """
     if row["revoked_at"]:
         raise LlmTokenError(401, "revoked")
     if datetime.fromisoformat(row["expires_at"]) <= _now():
@@ -126,6 +123,35 @@ def verify(conn: sqlite3.Connection, token: str) -> dict[str, Any]:
     used = row["prompt_tokens"] + row["completion_tokens"]
     if row["max_tokens"] and used >= row["max_tokens"]:
         raise LlmTokenError(429, f"token 预算已用尽 ({used}/{row['max_tokens']})")
+
+
+def verify(conn: sqlite3.Connection, token: str) -> dict[str, Any]:
+    """校验并返回这一轮的令牌行。不通过就抛 —— 没有"降级放行"这一档。"""
+    if not (token or "").startswith(TOKEN_PREFIX):
+        raise LlmTokenError(401, "invalid_token")
+    row = _row(conn, token)
+    if row is None:
+        raise LlmTokenError(401, "invalid_token")
+    _check(row)
+    return dict(row)
+
+
+def verify_run(conn: sqlite3.Connection, run_id: int) -> dict[str, Any]:
+    """按 run 取这一轮**最新**的令牌行并校验。
+
+    给适配 agent 的模型入口(`/api/internal/eval/llm`)用。那条入口认的是平台自己的
+    `EVAL_TOKEN`, 它只能证明"我是执行位", 说不出"我是哪一轮" —— 于是适配阶段的模型调用
+    **一分钱都没记进这一轮的预算**(2026-11-03 run 6 实测: 适配侧 1,122,409 tokens 全部账外)。
+    调用方在请求体里带上 `run_id`, 这里就能把它记到同一本账上。
+
+    没有令牌行就**直接拒**(401): 放行等于又回到账外, 而且会让人以为预算被管住了。
+    """
+    row = conn.execute(
+        "SELECT * FROM capability_eval_llm_tokens WHERE run_id=?"
+        " ORDER BY created_at DESC, rowid DESC LIMIT 1", (int(run_id),)).fetchone()
+    if row is None:
+        raise LlmTokenError(401, f"这一轮(run {run_id})没有可用的模型令牌")
+    _check(row)
     return dict(row)
 
 

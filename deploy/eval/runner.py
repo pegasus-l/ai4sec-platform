@@ -68,6 +68,10 @@ TIMEOUT_RC = 124
 ADAPTER_ENABLED = os.environ.get("EVAL_ADAPTER_ENABLED", "1") == "1"
 TOOL_ROOT = Path(os.environ.get("EVAL_TOOL_ROOT", "/work/tools"))
 TRANSLATE_PROFILE = os.environ.get("EVAL_TRANSLATE_PROFILE", "capability_eval_translate")
+
+# 当前这一轮的 id。翻译节点也要带上它, 否则它的模型调用同样是账外成本
+# (`/api/internal/eval/llm` 靠这个字段把用量记进该轮预算)。
+RUN_ID: int | None = None
 READY_TIMEOUT = int(os.environ.get("EVAL_READY_TIMEOUT", "120"))
 
 
@@ -319,13 +323,16 @@ def translate_answer(raw: str, context: Mapping[str, Any], returncode: int) -> A
     返回 None 表示翻译失败 —— 判分按 invalid_output 算。**不推断**: 模型回
     `found=null`(它自己认输)与接口报错, 都是 None, 不给一个"看起来像结论"的默认值。
     """
+    body: dict[str, Any] = {
+        "profile": TRANSLATE_PROFILE, "prompt": _translate_prompt(),
+        "payload": {"tool_output": raw[:MAX_TRANSLATE_CHARS],
+                    "file": context.get("relative_path") or context.get("file_name", ""),
+                    "exit_code": returncode},
+    }
+    if RUN_ID is not None:
+        body["run_id"] = RUN_ID
     try:
-        result = _post("/api/internal/eval/llm", {
-            "profile": TRANSLATE_PROFILE, "prompt": _translate_prompt(),
-            "payload": {"tool_output": raw[:MAX_TRANSLATE_CHARS],
-                        "file": context.get("relative_path") or context.get("file_name", ""),
-                        "exit_code": returncode},
-        }, timeout=180)
+        result = _post("/api/internal/eval/llm", body, timeout=180)
     except Exception as exc:  # noqa: BLE001 —— 翻译失败不能带崩整轮
         log(f"翻译失败({context.get('sample_key', '?')}): {exc}")
         return None
@@ -376,6 +383,55 @@ def parse_answer(parser: Any, raw: str, *, returncode: int,
 
 # ── 单次跑 ────────────────────────────────────────────────────────────────────
 
+def _peak_rss_mb() -> float | None:
+    """本进程的峰值常驻内存(`/proc/self/status` 的 `VmHWM`)。
+
+    内核自己记的高水位, 不用采样线程去轮询 —— 轮询既抓不到尖峰, 又会在被测工具
+    吃满 CPU 的时候和它抢时间片。
+    """
+    try:
+        with open("/proc/self/status", encoding="utf-8") as handle:
+            for line in handle:
+                if line.startswith("VmHWM:"):
+                    return round(int(line.split()[1]) / 1024.0, 1)
+    except Exception:  # noqa: BLE001 —— 读不到就是读不到, 不该影响这一轮收尾
+        return None
+    return None
+
+
+def _resource_snapshot() -> dict[str, float | None]:
+    """资源快照。跑前跑后各取一次, 差值 = 这一轮真正花掉的 CPU。
+
+    峰值内存**只能取高水位**, 不能做差(`ru_maxrss` 是"曾经最大", 不是"当前")。
+    所以它记的是"进程/容器自启动以来的峰值", 多轮共用一个进程时含历史轮次 —— 这一点
+    在 `_cost` 里如实标出来, 不假装是这一轮的数字。
+    """
+    import resource
+
+    children = resource.getrusage(resource.RUSAGE_CHILDREN)
+    return {
+        "self_cpu_seconds": time.process_time(),
+        "children_cpu_seconds": children.ru_utime + children.ru_stime,
+        "children_max_rss_mb": round(children.ru_maxrss / 1024.0, 1),
+        "self_peak_rss_mb": _peak_rss_mb(),
+    }
+
+
+def _resource_delta(start: dict[str, float | None]) -> dict[str, Any]:
+    end = _resource_snapshot()
+    return {
+        # 差值: 这一轮的子进程 CPU(工具自己的进程都在这里)
+        "children_cpu_seconds": round(
+            float(end["children_cpu_seconds"] or 0) - float(start["children_cpu_seconds"] or 0), 1),
+        "runner_cpu_seconds": round(
+            float(end["self_cpu_seconds"] or 0) - float(start["self_cpu_seconds"] or 0), 1),
+        # 高水位: 不是这一轮的增量, 是"到这一刻为止的最大值"
+        "children_max_rss_mb": end["children_max_rss_mb"],
+        "runner_peak_rss_mb": end["self_peak_rss_mb"],
+        "peak_note": "峰值是进程生命周期内的最大值(无法按轮做差); CPU 是这一轮的差值",
+    }
+
+
 class Outcome:
     def __init__(self) -> None:
         self.answers: dict[str, list[dict[str, Any]]] = {}
@@ -385,10 +441,15 @@ class Outcome:
         # 而是这条样本不该出现在这份分数的分母里(D4-5)。
         self.excluded = 0
         self.started = time.time()
+        # 开跑那一刻的资源基线。`elapsed()` 是墙钟, 这个才是"花了多少 CPU / 吃多大内存"。
+        self.res_baseline = _resource_snapshot()
         self.notes: list[str] = []
 
     def elapsed(self) -> float:
         return time.time() - self.started
+
+    def resources(self) -> dict[str, Any]:
+        return _resource_delta(self.res_baseline)
 
 
 def _safe_join(root: Path, rel_path: str) -> Path:
@@ -790,6 +851,12 @@ def _adapt(run: dict[str, Any], tool_dir: Path, workdir: Path, samples_dir: Path
         recipe, source, detail = adapter.adapt(
             run=run, tool_dir=tool_dir, sample=sample, sample_pool=pool,
             workdir=workdir, render=render)
+    except adapter.AdapterBudgetError as exc:
+        # 这一轮的钱花完了。既不是工具的错, 也不是平台故障 —— 落成 `model_budget_exceeded`,
+        # 让报表能区分"适配不了"和"预算设小了"。返回而不是抛: 抛出去会从 main() 退出容器,
+        # 那一轮就永远停在 running(平台没有僵尸 run 回收)。
+        log(f"适配阶段模型预算用尽: {exc}")
+        return None, "model_budget_exceeded", {"detail": str(exc)[:500]}
     except adapter.AdapterPlatformError as exc:
         # 平台自己的问题(令牌/模型不可用)不能记到工具头上
         raise PlatformError(str(exc)) from exc
@@ -801,8 +868,10 @@ def _adapt(run: dict[str, Any], tool_dir: Path, workdir: Path, samples_dir: Path
 
 
 def run_once(claimed: dict[str, Any]) -> None:
+    global RUN_ID
     run = claimed["run"]
     run_id = int(run["run_id"])
+    RUN_ID = run_id
     # 模型归属台账是按进程累计的, 而执行位一个进程会连跑多轮 —— 不清就会把上一轮的
     # 模型混进这一轮的 cost_json, 那正是 L4 要防的"分数说不清是谁跑的"。
     _load_adapter().reset_serving()
@@ -931,6 +1000,9 @@ def _cost(run: dict[str, Any], outcome: Outcome | None, recipe: dict[str, Any],
         "tool_version": recipe.get("tool_version", ""),
         "work_dir": str(workdir),
         "notes": (outcome.notes if outcome else [])[:40],
+        # 每次重放都记峰值内存与 CPU(PRD §12 第 12 条)。没有这组数, 10-29 那种
+        # "评测把容器撑爆、复现页全 502"就只能靠人回忆, 事后分不清是谁吃掉的。
+        "resources": outcome.resources() if outcome else {},
         # 分数由谁产生: 真实上游模型 / 组 / 上游地址 / 降级次数 / token 用量。
         # 与 `recipe_source` 同一个道理 —— 事后看一条分数时, 第一个该问的就是
         # "它按哪份 recipe、由哪个模型跑出来的"。

@@ -7,10 +7,16 @@
 
 | 东西 | 位置 | 说明 |
 |---|---|---|
-| 被测工具 | `{tool_dir}` | 工具的源码副本，可读可写（可以 `pip install -e .`、可以创建 venv） |
-| 一个样本 | `{sample_file}` | 一个**单文件**源码，工具要审的就是它 |
-| 样本的原路径 | `{relative_path}` | 这个文件在原仓库里的相对路径，例如 `app/models.py` |
+| 被测工具 | payload 的 `tool_dir` | 工具的源码副本，可读可写（可以 `pip install -e .`、可以创建 venv） |
+| 一个样本 | payload 的 `sample.file` | 盘上的**绝对路径**，一个**单文件**源码，工具要审的就是它 |
+| 本轮全部样本 | payload 的 `sample_pool` | 每项有 `sample_key` / `file_name` / `relative_path`（只有名字，不含内容） |
+| 样本的原路径 | payload 的 `sample.relative_path` | 这个文件在原仓库里的相对路径，例如 `app/models.py` |
 | 契约要求的答案格式 | 见下 | 工具的输出最终要被翻译成这个格式 |
+
+> **探索阶段用 `sample.file` 这个绝对路径把工具跑起来**（例如
+> `.venv/bin/audit --path /work/runs/run-7-xxx/samples/s_0001/code.py`）。
+> 下面 recipe 里写的 `{sample_file}` / `{relative_path}` 是**占位符**，只在自检与实跑时
+> 由平台替换成真实值；你自己探索时它不会自动变，别把它们当成字面路径去用。
 
 **这个容器里没有真值（ground truth），也没有平台的任何密钥。** 你不需要、也不可能知道
 「这个文件里到底有没有洞、在第几行」。所以：**不要试图猜测答案，也不要为了让输出好看去
@@ -230,7 +236,10 @@ OpenAnt 的 recipe 长这样（`{tool_dir}` 是平台克隆下来的源码目录
    `needs_paid_key`、`needs_gpu`、`needs_external_service`、`unsupported_os`、
    `repo_unavailable`、`install_failed`、`build_failed`、`start_failed`、`no_output`、
    `tests_failed`、`timeout`、`resource_limit`、`agent_gave_up`。
-6. **步数有限**（默认 60 步，2026-11-03 从 40 抬高）。先看 README / 安装脚本 / 入口文件，再动手装。
+6. **步数有限**（默认 120 步，2026-11-03 从 60 抬到 120）。以 payload 里的 `steps_left` 为准。
+   payload 里还有两个字段是给你省步数的：`phase_hint`（现在该读代码还是该跑工具）和
+   `already_read`（这个文件你已经读了几次）。**同一个文件读第二遍就该停下来** ——
+   内容在第几步给过就是给过了，重复读只会把步数烧光；缺的是某一段，就让 `sed -n` 只取那一段。
    同一个命令不要重复执行第二次来「确认一下」。
    **探索预算：读代码不超过 20 步**。过了 20 步还没跑过一次工具，就别再读了，直接装、
    直接拿一条样本试跑 —— 跑一次看到真实输出，比再读五个文件有用。每轮的 payload 里

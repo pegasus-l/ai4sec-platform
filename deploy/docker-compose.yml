@@ -54,7 +54,7 @@ services:
     ports:
       - 4097:4096
     environment:
-      - OPENCODE_SERVER_PASSWORD=${REPRO_PASSWORD}
+      - OPENCODE_SERVER_PASSWORD=${REPRO_PASSWORD:-repro-secret}
     command: >
       sh -c "mkdir -p /workspace/.repro-web/nginx &&
              cp -n /opt/repro-web/register.py /opt/repro-web/watchdog.py /workspace/.repro-web/ 2>/dev/null;
@@ -67,9 +67,44 @@ services:
       - repro-workspace:/workspace
     security_opt:
       - no-new-privileges:true
-    mem_limit: 2g
+    # 10g: 6 个以上任务服务常驻已占 ~3.8G(含页缓存), 6g 上限下再开一个重型页面
+    # (n8n 前端 / 无头浏览器自检)就会触发 cgroup OOM, 而 OOM killer 选中的常是
+    # PID1 的 opencode → 整个沙箱重启, 所有复现页面同时 502(10-29 用户登录"没反应"就是这个)。
+    mem_limit: 10g
     cpus: 2.0
     restart: unless-stopped
+    networks:
+      - fusion-net
+
+  # ─── 评测执行位(能力有效性评估 E1) ───
+  # profiles: ["eval"] —— 上线前先 `docker compose -p fusion-v2 --profile eval up -d eval` 单独起,
+  # 不让它跟着全栈重建一起被带上(重建会触发 ai4sec 重启, 那是有窗口要求的操作)。
+  eval:
+    build:
+      context: ./eval
+      dockerfile: Dockerfile
+    environment:
+      EVAL_API_BASE: http://ai4sec:8100
+      # 必须是**独立**令牌, 不该与 REPRO_PASSWORD 相同: 这个容器里跑第三方工具,
+      # 是最该假定会被攻破的一段, 共用一个令牌等于给它开 repro-gc 的门。
+      EVAL_TOKEN: ${EVAL_TOKEN}
+      EVAL_POLL_SECONDS: "30"
+      # 2026-11-03: 40 步不够"探通 + 改 provider 接线 + 真跑冒烟"三件事;抬到 60 后第 6 次 run
+      # 仍在写第二个 shim(第 57 步被切断)。抬到 120:适配阶段的模型调用本就不计入本轮 token 预算
+      # (R6 记账修复后会计入, 所以那一批同时把 llm_max_tokens 显式调大),
+      # 唯一代价是失败 run 的墙钟时间。
+      EVAL_ADAPT_MAX_STEPS: "120"
+      # 夹具冒烟时临时指向 /opt/eval/recipes/ref_auditor.json; 生产留空。
+      EVAL_FALLBACK_RECIPE: ""
+    volumes:
+      - eval-work:/work
+    # 4 GiB / 2 核: 与 repro 分开计量, 它也就能独自撑一次跑批而不挤占复现
+    mem_limit: 4g
+    cpus: 2.0
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+    profiles: ["eval"]
     networks:
       - fusion-net
 
@@ -77,6 +112,7 @@ volumes:
   asis-data:
   ai4sec-data:
   repro-workspace:
+  eval-work:
 
 networks:
   fusion-net:

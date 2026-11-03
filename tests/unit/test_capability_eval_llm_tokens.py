@@ -364,3 +364,38 @@ def test_allow_llm_false_means_no_token_at_all(conn, tmp_path, monkeypatch):
     claimed = TestClient(app).post("/api/internal/eval/claim", json={},
                                    headers={"X-Repro-Token": "eval-secret"}).json()
     assert claimed["llm"] is None
+
+
+# ── 按 run 查令牌: 适配阶段的模型调用要靠它才能记进这一轮 ─────────────────────
+
+def test_a_run_can_be_looked_up_without_the_plaintext(conn):
+    """`/api/internal/eval/llm` 手上只有 `EVAL_TOKEN` 和请求体里的 `run_id`, 没有明文令牌。"""
+    run_id = _run(conn)
+    minted = llm_tokens.mint(conn, run_id)
+    row = llm_tokens.verify_run(conn, run_id)
+    assert row["run_id"] == run_id
+    assert row["token_hash"] == llm_tokens._hash(minted["token"])
+
+
+def test_verify_run_refuses_a_run_that_never_got_a_token(conn):
+    """放行等于又回到账外 —— 而且会让人以为预算被管住了。"""
+    with pytest.raises(llm_tokens.LlmTokenError) as exc:
+        llm_tokens.verify_run(conn, 999)
+    assert exc.value.status == 401
+
+
+def test_verify_run_obeys_the_same_rules_as_verify(conn):
+    """两条路共用一套判据。各写一遍迟早有一边少一条, 而少的那条正好是"预算用尽"。"""
+    run_id = _run(conn)
+    minted = llm_tokens.mint(conn, run_id, max_calls=1, max_tokens=0)
+    llm_tokens.charge(conn, llm_tokens.verify(conn, minted["token"])["token_hash"], None)
+    with pytest.raises(llm_tokens.LlmTokenError) as exc:
+        llm_tokens.verify_run(conn, run_id)
+    assert exc.value.status == 429
+
+    hush = _run(conn)
+    llm_tokens.mint(conn, hush)
+    llm_tokens.revoke(conn, hush)
+    with pytest.raises(llm_tokens.LlmTokenError) as exc:
+        llm_tokens.verify_run(conn, hush)
+    assert exc.value.detail == "revoked"

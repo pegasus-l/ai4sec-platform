@@ -78,6 +78,9 @@ class LlmPayload(BaseModel):
     profile: str = Field("capability_eval_adapter", max_length=64)
     prompt: str = Field(..., max_length=40_000)
     payload: dict[str, Any] = Field(default_factory=dict)
+    # 这一轮是谁在问。带上它, 这次调用就记进该轮的模型预算(PRD R6); 不带就是账外调用,
+    # 只有执行位自己的适配阶段会走到那条路 —— 而它现在总会带。
+    run_id: int | None = None
 
 
 class RecipePayload(BaseModel):
@@ -92,6 +95,7 @@ class RecipePayload(BaseModel):
 def llm(
     payload: LlmPayload,
     x_repro_token: str = Header(""),
+    conn: sqlite3.Connection = Depends(get_db),
 ) -> dict[str, Any]:
     """模型代理: 评测容器里**没有**任何模型密钥, 要模型能力就到这里来要。
 
@@ -100,6 +104,11 @@ def llm(
 
     没配模型时**明确回 503**, 不退回本地规则引擎 —— 后者会返回一段像模像样的摘要,
     被当成"翻译结果"写进答卷, 那比失败难查得多。
+
+    带上 `run_id` 时, 这次调用的用量记进**这一轮**的模型预算: 入口给的 `EVAL_TOKEN` 只能
+    证明"我是执行位", 说不出"我是哪一轮", 于是这条路上的 token 过去全部账外(见
+    `llm_tokens.verify_run` 的说明)。预算用尽回 **429**, 由执行位落成
+    `model_budget_exceeded` —— 不是工具的错, 也不许 agent 继续试。
     """
     _require_token(x_repro_token)
     if not EVAL_PROFILE.fullmatch(payload.profile):
@@ -107,6 +116,14 @@ def llm(
                             detail=f"profile 必须是 capability_eval_*: {payload.profile!r}")
     if len(json.dumps(payload.payload, ensure_ascii=False)) > MAX_LLM_PAYLOAD_BYTES:
         raise HTTPException(status_code=413, detail="payload 太大")
+
+    run_token: dict[str, Any] | None = None
+    if payload.run_id is not None:
+        try:
+            run_token = llm_tokens.verify_run(conn, int(payload.run_id))
+        except llm_tokens.LlmTokenError as exc:
+            raise HTTPException(status_code=exc.status,
+                                detail=f"run {payload.run_id}: {exc.detail}") from exc
 
     router_llm = LLMRouter()
     config = router_llm.active_config(payload.profile)
@@ -119,6 +136,10 @@ def llm(
                                           prompt=payload.prompt, payload=payload.payload)
     except Exception as exc:  # noqa: BLE001 —— 模型侧的错要原样带回去, 由调用方决定重试还是放弃
         raise HTTPException(status_code=502, detail=f"模型调用失败: {str(exc)[:300]}") from exc
+    if run_token is not None:
+        # 先记账再返回: 调用已经花掉了, 这条用量跟这次响应成不成功无关。
+        # 与 L5 入口同一个 `charge` —— 两条路记在同一本账上, 预算才是一个数。
+        llm_tokens.charge(conn, run_token["token_hash"], result.get("usage"))
     parsed = result.get("parsed")
     if not isinstance(parsed, dict):
         parsed = result.get("result") if isinstance(result.get("result"), dict) else None

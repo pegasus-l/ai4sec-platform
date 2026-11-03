@@ -434,6 +434,77 @@ def test_running_out_of_steps_is_a_timeout_not_a_silent_success(adapter, tmp_pat
     assert recipe is None and reason == "timeout" and detail["steps"] == 2
 
 
+# ── 阶段提醒 ─────────────────────────────────────────────────────────────────
+
+def test_the_read_budget_hint_changes_as_steps_burn(adapter):
+    """提示词里的"读代码 ≤20 步"在 run 6/7 里都没被遵守, 所以每轮跟着 payload 递一句话。
+
+    三档必须互相排斥且边界明确, 否则模型会同时收到"还能读"和"别再读了"。
+    """
+    early = adapter._phase_hint(3, 117)
+    assert "还能读 17 步" in early and "不要再" not in early
+
+    spent = adapter._phase_hint(21, 99)
+    assert "预算已经用完" in spent and "sample.file" in spent
+
+    closing = adapter._phase_hint(110, 10)
+    assert "只剩 10 步" in closing and "recipe" in closing
+    # 收口档优先于"读完了": 剩 10 步时唯一该说的是别读了赶紧交
+    assert "不要再读任何源码" in closing
+
+
+def test_the_hint_rides_along_with_every_step(adapter, tmp_path, monkeypatch):
+    """它必须出现在**每一步**的 payload 里, 而不是只在第一步的 snapshot 里 ——
+    run 7 的 45 步读码都发生在中段, 首步给一次等于没给。"""
+    tool = tmp_path / "tool"
+    tool.mkdir()
+    monkeypatch.setattr(adapter, "MAX_STEPS", 5)
+    ask = _asker([{"action": "bash", "command": "true"}] * 5)
+
+    adapter.adapt(run={"item_id": 7, "category": "class1_llm_audit"}, tool_dir=tool,
+                  sample=_sample(tmp_path), workdir=tmp_path, ask_fn=ask, freeze=False)
+
+    hints = [c["phase_hint"] for c in ask.calls]
+    assert len(hints) == 5 and all(hints)
+    # MAX_STEPS=5 时第 1 步 steps_left=5(不是收口档), 最后一步 steps_left=1 → 收口
+    assert "只剩 1 步" in hints[-1]
+
+
+def test_paths_are_picked_out_of_a_read_command(adapter, tmp_path):
+    """`sed -n '1,260p' app/llm.py` 这种命令要能认出它读了哪个文件。
+
+    认不出就等于没有 already_read, 而 run 7 正是这么把同一个文件读了五遍。
+    """
+    tool = tmp_path / "tool"
+    (tool / "app").mkdir(parents=True)
+    (tool / "app" / "llm.py").write_text("x = 1\n", encoding="utf-8")
+    (tool / "README.md").write_text("hi\n", encoding="utf-8")
+
+    got = adapter._paths_in_command(
+        "cd /work/tools/x && sed -n '1,260p' app/llm.py && cat README.md && ls -la", tool)
+    assert got == ["app/llm.py", "README.md"]
+    # 不存在的、带通配的、非源码后缀的一律不认 —— 这句提示宁可少一条, 不要认错
+    assert adapter._paths_in_command("cat nope.py && grep -rn 'def' app/*.py", tool) == []
+
+
+def test_repeated_reads_are_visible_in_every_payload(adapter, tmp_path, monkeypatch):
+    """读过几次必须**每步都摆在 payload 里**, 而不是只在第一次的快照里 ——
+    内容掉出 `_summarize` 的窗口之后, 这是 agent 唯一还能看到的"我读过它"。"""
+    tool = tmp_path / "tool"
+    tool.mkdir()
+    (tool / "llm.py").write_text("x = 1\n", encoding="utf-8")
+    monkeypatch.setattr(adapter, "MAX_STEPS", 4)
+    ask = _asker([{"action": "bash", "command": "sed -n '1,50p' llm.py"}] * 4)
+
+    adapter.adapt(run={"item_id": 7, "category": "class1_llm_audit"}, tool_dir=tool,
+                  sample=_sample(tmp_path), workdir=tmp_path, ask_fn=ask, freeze=False)
+
+    # 第 1 步还没读过任何东西 → None(不是 {})
+    assert ask.calls[0]["already_read"] is None
+    assert ask.calls[1]["already_read"] == {"llm.py": 1}
+    assert ask.calls[3]["already_read"] == {"llm.py": 3}
+
+
 # ── 实际服务方台账(L4)────────────────────────────────────────────────────────
 
 def test_serving_summary_is_empty_when_no_model_was_called(adapter):

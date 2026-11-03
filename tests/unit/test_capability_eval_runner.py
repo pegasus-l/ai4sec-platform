@@ -306,6 +306,34 @@ def test_adaptation_failure_becomes_a_terminal_state(runner, monkeypatch, tmp_pa
     assert finished[0][1]["cost"]["adapt"] == {"steps": 3}
 
 
+def test_exhausted_model_budget_is_not_blamed_on_the_tool(runner, monkeypatch, tmp_path):
+    """适配阶段把这一轮的模型预算花完, 要落 `model_budget_exceeded`。
+
+    记成 `agent_gave_up` 会让报表读成"这个工具适配不了", 而真实原因是预算设小了 ——
+    两者的处置完全不同(换工具 vs 调预算)。
+    """
+    from ai4sec_platform.domains.capabilities.eval.store import FAILURE_REASONS
+
+    class _Adapter:
+        class AdapterBudgetError(RuntimeError):
+            pass
+
+        @staticmethod
+        def adapt(**kwargs):
+            raise _Adapter.AdapterBudgetError("模型代理 429: 调用次数已用尽 (400/400)")
+
+    monkeypatch.setattr(runner, "_load_adapter", lambda: _Adapter)
+    packet = {"sample_key": "s_0001", "file_name": "x.py", "relative_path": "x.py"}
+    recipe, failure, detail = runner._adapt(
+        {"run_id": 13, "item_id": 8}, tmp_path, tmp_path, tmp_path,
+        [packet], runner.Outcome())
+
+    assert recipe is None
+    assert failure == "model_budget_exceeded"
+    assert failure in FAILURE_REASONS       # 枚举里真有这个值, 否则页面归不了类
+    assert "429" in detail["detail"]
+
+
 def test_missing_tool_repo_is_repo_unavailable(runner, monkeypatch, tmp_path):
     finished = []
     monkeypatch.setattr(runner, "finish", lambda rid, status, **kw: finished.append((status, kw)))
@@ -513,6 +541,26 @@ def test_adaptation_that_succeeds_continues_into_the_evaluation(runner, monkeypa
     assert finished[0][1]["cost"]["recipe_source"] == "adapted:v1"
     # 成功即回收工作目录(C6): recipe 与原生输出都已经在平台侧
     assert not any(tmp_path.glob("run-12-*"))
+
+
+def test_every_run_records_peak_memory_and_cpu(runner):
+    """PRD §12 第 12 条: 每次重放记峰值内存与 CPU。
+
+    10-29 那次"评测把容器撑爆、复现页全 502"事后只能靠人回忆, 就是因为没有这组数。
+    CPU 必须能按轮算(差值), 峰值只能取高水位 —— 两者在 cost 里标清楚, 别混成一个数。
+    """
+    outcome = runner.Outcome()
+    cost = runner._cost({"item_id": 1}, outcome, {"tool_version": "v1"}, "adapted:v1",
+                        Path("/tmp/x"))
+
+    res = cost["resources"]
+    for key in ("children_cpu_seconds", "runner_cpu_seconds",
+                "children_max_rss_mb", "runner_peak_rss_mb", "peak_note"):
+        assert key in res
+    # 差值不会为负; 峰值在本进程里一定 > 0(解释器本身就要几 MB)
+    assert res["children_cpu_seconds"] >= 0 and res["runner_cpu_seconds"] >= 0
+    assert res["runner_peak_rss_mb"] is None or res["runner_peak_rss_mb"] > 0
+    assert "生命周期" in res["peak_note"]
 
 
 # ── 分数的来源(L4)────────────────────────────────────────────────────────────

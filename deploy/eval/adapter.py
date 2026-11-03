@@ -35,7 +35,15 @@ PROMPT_PATH = Path(os.environ.get(
     "EVAL_ADAPTER_PROMPT", str(Path(__file__).resolve().parent / "prompts" / "adapter.md")))
 PROFILE = os.environ.get("EVAL_ADAPT_PROFILE", "capability_eval_adapter")
 
-MAX_STEPS = int(os.environ.get("EVAL_ADAPT_MAX_STEPS", "40"))
+# 当前正在适配哪一轮。`/api/internal/eval/llm` 靠它把适配阶段的模型用量记进这一轮的预算;
+# 不带就是账外成本(run 6 实测 1,122,409 tokens 没进任何账)。
+# 用模块级变量而不是给 `ask()` 加参数: ask 是可注入的, 测试与替换实现都按三个位置参数调用,
+# 加参数会把它们一起改掉; 而执行位一次只适配一轮, 不存在两个上下文并存。
+RUN_ID: int | None = None
+
+# 默认值与 docker-compose 的 EVAL_ADAPT_MAX_STEPS 保持一致: 40 → 60 → 120。
+# 代码里留一个更小的默认值, 等于"忘了设环境变量就静默退回 40 步", 而那个值已被 run 6 证伪。
+MAX_STEPS = int(os.environ.get("EVAL_ADAPT_MAX_STEPS", "120"))
 STEP_TIMEOUT = int(os.environ.get("EVAL_ADAPT_STEP_TIMEOUT", "600"))
 MAX_OBS_CHARS = int(os.environ.get("EVAL_ADAPT_MAX_OBS_CHARS", "4000"))
 HISTORY_KEPT = 6                 # 完整回放的最近步数, 更早的压成一行
@@ -76,6 +84,15 @@ class AdapterPlatformError(AdapterError):
     """
 
 
+class AdapterBudgetError(AdapterError):
+    """这一轮的模型预算用完了(平台回 429)。
+
+    单独一类, 因为它既不是工具不行, 也不是平台故障: 是**这一轮的钱花完了**。落成
+    `model_budget_exceeded`, 与"工具跑不完"分开记 —— 混成 `agent_gave_up` 会让报表
+    读成"这个工具适配不了", 而真实原因是预算设小了。
+    """
+
+
 # ── 平台侧接口 ────────────────────────────────────────────────────────────────
 
 def _post(path: str, payload: dict[str, Any], *, timeout: int = 600) -> dict[str, Any]:
@@ -89,12 +106,21 @@ def _post(path: str, payload: dict[str, Any], *, timeout: int = 600) -> dict[str
 
 
 def ask(profile: str, prompt: str, payload: dict[str, Any]) -> dict[str, Any]:
-    """要一次模型判断, 走平台代理。返回模型给的 JSON 对象。"""
+    """要一次模型判断, 走平台代理。返回模型给的 JSON 对象。
+
+    请求体里带上**这一轮**的 `run_id`(由 `adapt()` 设好), 平台才能把这次调用记进该轮的
+    模型预算。不带的话这条路上的 token 就是账外成本 —— run 6 实测账外 1,122,409 tokens。
+    """
+    body: dict[str, Any] = {"profile": profile, "prompt": prompt, "payload": payload}
+    if RUN_ID is not None:
+        body["run_id"] = RUN_ID
     try:
-        result = _post("/api/internal/eval/llm",
-                       {"profile": profile, "prompt": prompt, "payload": payload})
+        result = _post("/api/internal/eval/llm", body)
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode("utf-8", "replace")[:500]
+        if exc.code == 429:
+            # 预算用尽。不能记成工具的问题, 也不能让 agent 接着试 —— 它每试一次都是 429。
+            raise AdapterBudgetError(f"模型预算用尽 {exc.code}: {detail}") from exc
         error = AdapterPlatformError if exc.code in (401, 403, 503) else AdapterError
         raise error(f"模型代理 {exc.code}: {detail}") from exc
     record_serving(profile, result)
@@ -537,6 +563,61 @@ def _load_prompt() -> str:
         raise AdapterError(f"适配提示词读不到: {PROMPT_PATH} ({exc})") from exc
 
 
+READ_BUDGET = 20
+
+
+def _phase_hint(steps: int, steps_left: int) -> str:
+    """按剩余步数给一句话的**当前该干什么**。
+
+    提示词里写了"读代码不超过 20 步", 但 run 6 (60 步) 与 run 7 (120 步) 都在前 45 步
+    反复 `sed -n` 读同一个文件 —— 静态条款在长对话里会被冲淡。所以每轮把它**跟着
+    payload 递过去**, 位置紧挨着 `steps_left`: 模型读字段时必然读到。
+    """
+    if steps_left <= 15:
+        return (f"只剩 {steps_left} 步: 现在就收口 —— 能跑通就交出 recipe, "
+                f"跑不通就 give_up, 不要再读任何源码。")
+    if steps >= READ_BUDGET:
+        return (f"读代码的 {READ_BUDGET} 步预算已经用完 (当前第 {steps} 步)。"
+                f"不要再 sed/grep/cat 读源码 —— 直接用 payload.sample.file 这个绝对路径"
+                f"把工具跑一次, 看真实输出。")
+    return f"还能读 {READ_BUDGET - steps} 步代码; 跑通一次工具比再读五个文件有用。"
+
+
+READ_FILES_LISTED = 20
+_SOURCE_SUFFIXES = {
+    ".py", ".js", ".ts", ".tsx", ".jsx", ".go", ".java", ".rb", ".rs", ".c", ".h",
+    ".cc", ".cpp", ".hpp", ".cs", ".php", ".kt", ".swift", ".md", ".toml", ".cfg",
+    ".ini", ".yml", ".yaml", ".json", ".txt", ".sh",
+}
+
+
+def _paths_in_command(command: str, tool_dir: Path) -> list[str]:
+    """从 bash 命令里认出它读的是 tool_dir 下的哪几个文件。
+
+    为什么值得做: `_summarize` 只把最近 6 步原样保留, 更早的压成一行 —— 于是 agent
+    在 20 步后会**重新** `sed -n '1,260p' app/llm.py`, 而它第 12 步刚读过。run 7 实测
+    58 步里同一个文件读了 5 次, 每次都是整段内容, 把上下文和步数一起吃掉。
+
+    认不出来就返回空 —— 这里只用于给提示, 认错一个文件名的代价是那句提示不准,
+    而不认的代价是 agent 继续重复读。
+    """
+    seen: list[str] = []
+    for raw in re.split(r"[\s|;&<>()`'\"]+", command or ""):
+        token = raw.strip().strip(",")
+        if not token or token.startswith("-") or len(token) > 120:
+            continue
+        if any(ch in token for ch in "*?[$"):
+            continue
+        if Path(token).suffix.lower() not in _SOURCE_SUFFIXES:
+            continue
+        try:
+            if (tool_dir / token).is_file() and token not in seen:
+                seen.append(token)
+        except OSError:
+            continue
+    return seen
+
+
 def _summarize(history: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """步数多了以后, 老步骤只留一行。全量回放会把上下文撑爆, 而撑爆的后果是
     agent 忘记自己要干什么 —— 它会在第 30 步重新 `ls`。"""
@@ -563,6 +644,11 @@ def adapt(
     失败返回 `(None, 失败原因, 摘要)` —— 原因是 PRD §8 的枚举值之一,
     调用方应当把它落成 run 的终态(R9: 适配失败不重试)。
     """
+    global RUN_ID
+    # claim 过来的 run 用的是 `run_id`(见 runner.py 的 `int(run["run_id"])`), 不是 `id`。
+    # 两个都认: 这条上下文只用于"这次调用记到哪一轮", 认错字段的代价是整段账外, 不值得赌。
+    _rid = run.get("run_id", run.get("id"))
+    RUN_ID = int(_rid) if _rid is not None else None
     prompt = _load_prompt()
     history: list[dict[str, Any]] = []
     obs = snapshot(tool_dir)
@@ -572,6 +658,9 @@ def adapt(
     # "自检必须过"互相矛盾, 一个本来能评 4 条 Python 样本的工具被判成无法适配。
     pool = list(sample_pool or [sample])
     pool_by_key = {str(s["sample_key"]): s for s in pool}
+    # 读过哪些文件、各读了几次。压缩后的 history 里看不到内容, 但"已经读过"这件事
+    # 必须一直可见 —— 否则 agent 会把同一个文件读第五遍。
+    reads: dict[str, int] = {}
 
     while steps < MAX_STEPS:
         steps += 1
@@ -583,7 +672,11 @@ def adapt(
             "tool_dir": str(tool_dir),
             "sample": {"sample_key": sample["sample_key"],
                        "relative_path": sample.get("relative_path"),
-                       "file_name": sample["file"].name},
+                       "file_name": sample["file"].name,
+                       # 盘上的**绝对路径**。没有它, agent 只能靠 `find /` 去猜样本在哪 ——
+                       # 2026-11-03 run 7 实测在第 36–38 步连搜三次。探索阶段它必须能直接
+                       # 把这条路径交给工具跑一次, 而不是等平台在自检时才替换 `{sample_file}`。
+                       "file": str(sample["file"])},
             # 让 agent 看见本轮一共有哪些样本(只要文件名和扩展名, 不含内容):
             # 工具只覆盖部分语言时, 它得知道有哪些语言可挑, 否则只能盲猜。
             "sample_pool": [{"sample_key": str(s["sample_key"]),
@@ -593,6 +686,12 @@ def adapt(
             "initial_snapshot": obs if steps == 1 else None,
             "history": _summarize(history),
             "steps_left": MAX_STEPS - steps + 1,
+            "phase_hint": _phase_hint(steps, MAX_STEPS - steps + 1),
+            # 读过几次, 按次数从多到少。只给文件名与次数 —— 重贴内容会把上下文
+            # 越撑越满, 那正是回放被压缩的原因。
+            "already_read": {p: n for p, n in
+                             sorted(reads.items(), key=lambda kv: (-kv[1], kv[0]))
+                             [:READ_FILES_LISTED]} or None,
         }
         reply = ask_fn(PROFILE, prompt, payload)
         action = str(reply.get("action") or "").strip()
@@ -633,6 +732,8 @@ def adapt(
             command = str(reply.get("command") or "")
             log(f"step {steps}: bash {command[:160]}")
             result = run_shell(command, tool_dir)
+            for path in _paths_in_command(command, tool_dir):
+                reads[path] = reads.get(path, 0) + 1
             history.append({"step": steps, "action": f"bash {command[:300]}",
                             "result": f"rc={result['rc']}\n{result['output']}"})
             continue
@@ -640,6 +741,8 @@ def adapt(
         if action == "read":
             path = str(reply.get("path") or "")
             log(f"step {steps}: read {path}")
+            if path:
+                reads[path] = reads.get(path, 0) + 1
             history.append({"step": steps, "action": f"read {path}",
                             "result": read_file(tool_dir, path)})
             continue
