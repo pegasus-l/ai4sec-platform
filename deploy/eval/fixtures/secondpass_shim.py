@@ -1,0 +1,161 @@
+#!/usr/bin/env python3
+"""secondpass → 评测契约适配层。
+
+与适配 agent 第一版 shim 的差别(2026-11-03 修正, 三条都是"把工具的输出读错了"):
+
+1. **不再压工具的迭代次数**。第一版传 `max_iterations=1`, 而工具默认是 6
+   (`app/agent.py: MAX_TOOL_ITERATIONS = 6`)。循环条件是契约明令不许改的东西,
+   压到 1 等于在测一个残废配置 —— run 9 的 0/13 就是在那个配置下得出的, 不能用。
+2. **认包装层与 evidence 里的位置**。工具的结构化 finding 只有
+   `finding_type/evidence/confidence/suggested_fix/detection_method`, **没有行号**;
+   行号只出现在模型写进 `evidence` 的那段 JSON 里(`{"finding": {"path":…, "line":…}}`)。
+   第一版只看顶层, 于是每条都 `line_start=null` → 整份答卷被判 invalid_output。
+3. **`type_cwe` 只放真正的 CWE 编号**。第一版把 `rule_id`(`secondpass.logic-review`)
+   塞进去, 不匹配 `CWE-\\d+` 同样会让整份答卷作废。
+
+诚实的边界: 工具没给行号时, **不编**。这样的 finding 会让答卷落成 invalid_output
+(契约没有"找到了但报不出位置"这种形态), 这是工具的真实表现, 不是适配层造出来的。
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import logging
+import os
+import re
+import sys
+
+CWE_RE = re.compile(r"CWE-\d+")
+MAX_FINDINGS = 5
+
+
+def as_dict(x):
+    if hasattr(x, "model_dump"):
+        try:
+            return x.model_dump()
+        except Exception:  # noqa: BLE001
+            pass
+    if hasattr(x, "dict"):
+        try:
+            return x.dict()
+        except Exception:  # noqa: BLE001
+            pass
+    if isinstance(x, dict):
+        return x
+    return {"evidence": str(x)}
+
+
+def _unwrap(d):
+    """拆掉 {"finding": {...}, "explanation": ...} 这一层, 并尝试从 evidence 里取位置。"""
+    d = dict(d or {})
+    inner = d.get("finding")
+    if isinstance(inner, dict):
+        merged = dict(inner)
+        for key, value in d.items():
+            merged.setdefault(key, value)
+        d = merged
+    ev = d.get("evidence")
+    if isinstance(ev, str):
+        text = ev.strip()
+        if text.startswith("{"):
+            try:
+                blob = json.loads(text)
+            except (ValueError, TypeError):
+                blob = None
+            if isinstance(blob, dict):
+                inner = blob.get("finding")
+                if isinstance(inner, dict):
+                    for key in ("line", "line_start", "path", "file", "message",
+                                "rule_id", "severity", "snippet", "function"):
+                        if key in inner and not d.get(key):
+                            d[key] = inner[key]
+                if not d.get("message") and isinstance(blob.get("explanation"), str):
+                    d["message"] = blob["explanation"]
+    return d
+
+
+def flatten_findings(sec):
+    candidates = []
+    rr = sec.get("review_result") or {}
+    if isinstance(rr, dict) and isinstance(rr.get("findings"), list):
+        candidates.extend(rr.get("findings") or [])
+    for key in ("accepted", "needs_review", "findings", "all_findings"):
+        value = sec.get(key)
+        if isinstance(value, list):
+            candidates.extend(value)
+    seen = set()
+    out = []
+    for item in candidates:
+        d = _unwrap(as_dict(item))
+        key = (str(d.get("evidence")), str(d.get("finding_type")), str(d.get("line")),
+               str(d.get("line_start")))
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(d)
+    return out
+
+
+def _int_line(d, *keys):
+    for key in keys:
+        value = d.get(key)
+        if isinstance(value, bool):
+            continue
+        try:
+            value = int(value)
+        except (TypeError, ValueError):
+            continue
+        if value >= 1:
+            return value
+    return None
+
+
+def to_finding(d, rel_path):
+    start = _int_line(d, "line_start", "start_line", "line", "line_number")
+    end = _int_line(d, "line_end", "end_line", "line")
+    if start is not None and (end is None or end < start):
+        end = start
+    cwe = None
+    for key in ("type_cwe", "cwe", "rule_id", "finding_type"):
+        value = d.get(key)
+        if isinstance(value, str) and CWE_RE.search(value):
+            cwe = CWE_RE.search(value).group(0)
+            break
+    evidence = d.get("evidence") or d.get("message") or json.dumps(d, default=str)
+    out = {
+        "file": rel_path,
+        "line_start": start,
+        "line_end": end,
+        "type_cwe": cwe,
+        "evidence": str(evidence)[:2000],
+    }
+    # 契约里 function 出现就必须是字符串; 拿不到就整个键不写, 不能写 null。
+    func = d.get("function") or d.get("function_name")
+    if isinstance(func, str) and func.strip():
+        out["function"] = func.strip()
+    return out
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--file", required=True)
+    ap.add_argument("--path", required=True)
+    ap.add_argument("--tool-dir", default=os.getcwd())
+    a = ap.parse_args()
+
+    logging.disable(logging.CRITICAL)
+    os.environ.setdefault("LLM_PROVIDER", "eval")
+    sys.path.insert(0, a.tool_dir)
+    from app.agent import review_path  # noqa: E402
+
+    # 不传 max_iterations: 用工具自己的默认值(6)。压它就是在改工具的循环条件。
+    result = review_path(a.file, memory_enabled=False)
+    sec = result.get("security") or {}
+    raw = flatten_findings(sec)
+    findings = [to_finding(d, a.path) for d in raw[:MAX_FINDINGS]]
+    # 契约只允许 found / findings 两个顶层字段, 任何附加说明都会被判 invalid。
+    print(json.dumps({"found": bool(findings), "findings": findings}, ensure_ascii=False))
+
+
+if __name__ == "__main__":
+    main()

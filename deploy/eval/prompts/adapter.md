@@ -40,6 +40,16 @@
 - `file`：**必须是上面那个 `{relative_path}` 原样**。工具报绝对路径或只报文件名时，
   你的 `invoke` 必须把它扭转过来（很多工具支持 `--base-path` / `--path-prefix` 之类的参数）。
   这一条最容易出问题：判分按路径比对，路径对不上时，一次真命中会被记成「没找到」。
+- **行号必须是真取到的整数。** 契约里 `line_start` / `line_end` 是 `>=1` 的整数，填 `null`
+  或被判成字符串，会让**整份答卷**作废（不是这一条作废）。很多工具（含 secondpass，
+  2026-11-03 实测）的模型层只把行号写进 `evidence` 文本里的 JSON，或者包成
+  `{"finding": {...}}` 这一层 —— 你的转换脚本要把这两层都拆开去找 `line` / `line_start`。
+  **找不到就承认找不到**：如实让这条答卷落 invalid，不要用别的行号凑数。
+- `type_cwe` 只放**真正的 CWE 编号**（`CWE-89` 这种）。把工具的 `rule_id`
+  （`secondpass.logic-review`）或 `finding_type` 塞进去同样会让整份答卷作废。
+- 契约的 `findings` 里**只有** `file` / `function` / `line_start` / `line_end` / `type_cwe` /
+  `evidence` 六个键，多一个键也是 invalid；顶层只允许 `found` / `findings`，别加 `note`、
+  `error` 之类的说明字段（要说明写到 `notes` 里，或干脆不写）。
 - 工具原生就吐 SARIF 或这种 JSON 时，`output_parser` 写 `sarif` / `json`，**不用**写翻译节点。
 - 工具只吐人类可读文本时，`output_parser` 写 `agent_translate`，由平台在判分前翻译。
   但翻译有失真风险，**能拿到结构化输出就不要选它**（`--json` / `--format sarif` / `--sarif`
@@ -236,7 +246,12 @@ OpenAnt 的 recipe 长这样（`{tool_dir}` 是平台克隆下来的源码目录
    `needs_paid_key`、`needs_gpu`、`needs_external_service`、`unsupported_os`、
    `repo_unavailable`、`install_failed`、`build_failed`、`start_failed`、`no_output`、
    `tests_failed`、`timeout`、`resource_limit`、`agent_gave_up`。
-6. **步数有限**（默认 120 步，2026-11-03 从 60 抬到 120）。以 payload 里的 `steps_left` 为准。
+6. **不许把工具的"努力程度"调低。** 迭代次数、重试次数、扫描轮数、超时之外的预算，
+   都是工具的**循环条件**——压它们等于在测一个残废配置，分数没有意义。
+   典型错误：secondpass 默认 `max_iterations=6`，第一次适配传了 `max_iterations=1`
+   并自认为"只是限制为单轮"（2026-11-03，实数 run 9 因此作废）。要用工具自己的默认值；
+   嫌慢就调 `timeout_seconds`，别调它的循环。
+7. **步数有限**（默认 120 步，2026-11-03 从 60 抬到 120）。以 payload 里的 `steps_left` 为准。
    payload 里还有两个字段是给你省步数的：`phase_hint`（现在该读代码还是该跑工具）和
    `already_read`（这个文件你已经读了几次）。**同一个文件读第二遍就该停下来** ——
    内容在第几步给过就是给过了，重复读只会把步数烧光；缺的是某一段，就让 `sed -n` 只取那一段。
@@ -244,7 +259,7 @@ OpenAnt 的 recipe 长这样（`{tool_dir}` 是平台克隆下来的源码目录
    **探索预算：读代码不超过 20 步**。过了 20 步还没跑过一次工具，就别再读了，直接装、
    直接拿一条样本试跑 —— 跑一次看到真实输出，比再读五个文件有用。每轮的 payload 里
    `steps_left` 是剩余步数，剩不到 15 步时必须开始交 recipe 或给结论。
-7. **工具只覆盖一部分样本时，不要整个放弃。** payload 里的 `sample_pool` 是本轮全部样本
+8. **工具只覆盖一部分样本时，不要整个放弃。** payload 里的 `sample_pool` 是本轮全部样本
    （`file_name` 后缀就是语言）。如果工具只认某几种语言：
    - 自检**必须**用它支持的那一种：交 recipe 时带上 `"smoke_sample": "<sample_pool 里的 sample_key>"`，
      默认是第一份样本，正好撞上它不认的语言时自检必然失败；
