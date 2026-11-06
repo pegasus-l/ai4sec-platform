@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "ai4sec/eval/class1_llm_audit/v1",
   "title": "第 1 类 LLM 代码审计 —— 输出契约 v1",
-  "description": "被测工具的原始输出经 parser 翻译后必须满足本 schema。判分脚本只读这一层，不读工具原生输出。字段定义见 class1_llm_audit.md §3。",
+  "description": "被测工具的原始输出经 parser 翻译后必须满足本 schema。判分脚本只读这一层，不读工具原生输出。字段定义见 class1_llm_audit.md §3。v1 增补（2026-11-06）：新增两个可选诊断字段 no_answer / limits，见 §3.2。",
   "type": "object",
   "additionalProperties": false,
   "required": ["found", "findings"],
@@ -10,6 +10,17 @@
     "found": {
       "type": "boolean",
       "description": "是否在该文件中发现安全漏洞。false 时 findings 必须为空数组。"
+    },
+    "no_answer": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S",
+      "description": "可选。工具**扫了但给不出结论**时，用它说明原因（稳定的桶名，如 source_truncated / static_scan_error / logic_review_inconclusive）。带这个字段的答卷判为 no_answer 标签：不进主分母，单列一格。found=true 时不得出现（自相矛盾）。"
+    },
+    "limits": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1, "pattern": "\\S" },
+      "description": "可选。记录这份答案是在什么受限视角下给出的（如 source_truncated：只看到文件前若干字符）。只做覆盖面的如实标注，不改变任何判分。"
     },
     "findings": {
       "type": "array",
@@ -60,6 +71,11 @@
     {
       "if": { "properties": { "found": { "const": true } }, "required": ["found"] },
       "then": { "properties": { "findings": { "minItems": 1 } } }
+    },
+    {
+      "description": "found=true 时不得同时声明 no_answer（自相矛盾）：真找到了就按找到算。",
+      "if": { "properties": { "found": { "const": true } }, "required": ["found"] },
+      "then": { "properties": { "no_answer": false } }
     }
   ]
 }

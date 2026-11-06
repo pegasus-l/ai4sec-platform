@@ -1,7 +1,7 @@
 # 第 1 类 类别契约 v1 —— LLM 代码审计 / 漏洞发现
 
-- 版本：**v1**
-- 日期：2026-11-02
+- 版本：**v1.3**
+- 日期：2026-11-06（v1 首版 2026-11-02；变更见 §9）
 - 依据：`/home/liuqi777/ai4sec-capability-eval-prd-20261031.md` §7.1、§9.2–§9.4
 - 状态：**待评审**（评审通过后冻结，此后任何改动必须升版本号）
 
@@ -113,11 +113,26 @@ Output ONLY the JSON object described by the schema. No prose.
 > 理由：真实审计器几乎都会报多处；只允许报一处等于把评测变成 precision@1，会低估工具。
 > 想改回单条：把 `maxItems` 改成 1，判分逻辑不变（取第一条）。
 
+### 3.2 两个可选诊断字段（v1 增补，2026-11-06）
+
+工具**扫了但没给结论**时，答卷必须如实说，不能打一个 `{"found": false}` 了事。
+两个字段都可选；不带它们时判分结果与增补前**逐字一致**（单测 `test_no_new_fields_scores_identically` 锁住）。
+
+| 字段 | 类型 | 含义 | 判分影响 |
+|---|---|---|---|
+| `no_answer` | string（非空） | 工具自报「给不出结论」的**桶名**：`source_truncated`（只看到文件前若干字符）、`static_scan_error`（静态扫描失败）、`logic_review_inconclusive`（模型没答 / 限流 / 读不了文件）。多个原因用 `+` 连接 | 该样本记 `no_answer`，**不进主分母**（§4.1.2）。`found=true` 时不得出现 |
+| `limits` | string[] | 这份答案是在什么**受限视角**下给出的（如 `source_truncated`） | 只做覆盖面的如实标注，**不改变任何分数** |
+
+为什么必须区分：`{"found": false}` 在报表上有两种完全相反的含义 ——
+「看过了，没有洞」和「我看不了，没给结论」。混在一起的直接后果是：正样本被记漏报、
+负样本被记真阴性，**两边的数都失真**，而且没有任何一格数字会露馅。
+比对时 `no_answer` 优先于 `found`：一条既写 `found=false` 又写 `no_answer` 的答卷记 `no_answer`，不记 `true_negative`。
+
 ---
 
 ## 4. 判分规则
 
-### 4.1 四级标签
+### 4.1 标签
 
 对每个样本，把每条 finding 与真值比对，取**最高等级**的那条：
 
@@ -136,6 +151,9 @@ Output ONLY the JSON object described by the schema. No prose.
 | `true_negative` | `found=false` |
 
 `invalid_output` 单独统计，**既不算命中也不算漏报**，但会拉低有效性（见 §6）。
+
+`no_answer`（§3.2）同样单独统计，**既不算命中也不算漏报**，也不拉低有效性 ——
+它记的是「这条样本工具没给结论」，不是「工具答错了」。判据见 §4.1.2。
 
 ### 4.1.1 `excluded`：工具声明「这类样本我不覆盖」
 
@@ -156,16 +174,69 @@ Output ONLY the JSON object described by the schema. No prose.
   只能说明它在剩下那些样本上的表现」；
 - 超时（`124`）**永远不允许**声明为排除 —— 跑不完是工具的问题。
 
+### 4.1.2 `no_answer`：工具看了，但给不出结论
+
+**不是一个成绩，是一个缺口。** 判定顺序（先判它，再判 §4.1 的其余标签）：
+
+| 优先 | 条件 | 标签 |
+|---|---|---|
+| 1 | 答卷过不了 schema（`validate_answer` 报错） | `invalid_output` |
+| 2 | `no_answer` 是非空字符串 | **`no_answer`**，`detail` 记原因桶名（`source_truncated` / `static_scan_error` / `logic_review_inconclusive`，多因用 `+`） |
+| 3 | 其余 | 按 §4.1 正常判 |
+
+**分母怎么算**（这是这一条存在的全部理由）：
+
+- `locate_rate` / `strict_locate_rate` / `false_positive_rate` / `balanced_accuracy` 的分母
+  是**工具真正作答的样本**（`answered` = 进分母的样本 − `no_answer`）。
+- 同一批样本若按老口径算（把 `no_answer` 当 `found=false`），报表同时给出 `legacy_*` 一组
+  数字，名字就叫 `*_silence_as_no_finding` —— **不隐藏**，但**不作主口径**。
+- `excluded` / `invalid_output` 的既有处理不变：都不进主分母。
+
+为什么主口径要剔除：把「没看/没看完/没答上来」计成漏报，等于在测**运行环境**；
+计成真阴性更糟 —— 它会让一个**从不作答**的工具拿到 100% 的 `false_positive_rate` 优势。
+但也不能全无痕迹：`no_answer_rate` 必须和 `locate_rate` 并排出现，一个 0.45 的 `locate_rate`
+配上 0.60 的 `no_answer_rate`，读的人自然知道这个数只代表「它答上来的那 40%」。
+
+**`limits`（§3.2）不参与判分**，只做覆盖面标注：报表的 `coverage_limits` 给出每种受限视角
+出现在多少条作答上。它回答的是「这些答案是在只看得到文件前 12000 个字符的情况下给出的」，
+而不是「这些答案有多准」。
+
 ### 4.2 指标（必须成对报，缺一不可）
 
 | 指标 | 分子 / 分母 |
 |---|---|
-| `locate_rate` | (`strict_hit` + `near_hit`) / 正样本数 |
-| `strict_locate_rate` | `strict_hit` / 正样本数 |
-| `false_positive_rate` | `false_positive` / 负样本数 |
+| `locate_rate` | (`strict_hit` + `near_hit`) / **作答的正样本数**（正样本 − `no_answer`，下同） |
+| `strict_locate_rate` | `strict_hit` / 作答的正样本数 |
+| `false_positive_rate` | `false_positive` / 作答的负样本数 |
 | `balanced_accuracy` | (`locate_rate` + (1 − `false_positive_rate`)) / 2 |
+| `answered_rate` | 作答样本数 / **进分母的样本数**（总样本数 − `excluded`） |
+| `no_answer_rate` | `no_answer` / 进分母的样本数（**单列**，§4.1.2） |
 | `invalid_output_rate` | `invalid_output` / **进分母的样本数**（总样本数 − `excluded`） |
 | `excluded_rate` | `excluded` / 总样本数（**单列**，不进上面任何一格的分母） |
+
+> 没有 `no_answer` 的 run，`answered_rate=1`、`no_answer_rate=0`，其余数字与 v1.1 完全相同。
+
+### 4.2.1 位置保真度 `locator_fidelity`（v1.3 增补）
+
+给了样本源码时，逐条 finding 把 `evidence` 里的代码片段回源码里找，看它**实际**落在第几行：
+
+| 桶 | 含义 |
+|---|---|
+| `content_ok` | 片段落在答卷行号的 ±3 行内 |
+| `content_far` | 片段找得到，但离答卷写的行号很远 —— **工具自己报错了行号** |
+| `content_not_found` | 片段一行都找不到（散文 / 被改写 / 源码被截断），无法判断 |
+| `content_na` | evidence 里没有代码片段，或没拿到源码 |
+
+三条硬规矩：
+
+1. **分母是 finding 条数，不是样本数。** 一份答卷可以报 3 条，其中 1 条对不上。
+2. **不改变任何分数。** 它回答的是「这个工具的定位可不可信」，不是「它找没找到」——
+   在纯判分里，「诚实地没找到」和「报了但位置是错的」在正样本上都显示 `miss`。
+3. **没给源码就整项不跑**（`checked=0`），不猜、不标 0 分。
+
+`content_far > 0` 时报表的 caveats 必须写明「这些 finding 的定位不可信，命中/漏报的判定
+可能因此失真」。这条与 `verify_answers.py`（D5 离线自查）是同一套算法，单测
+`TestLocatorParity` 对拍，两边给出的桶必须一致。
 
 **每个指标都必须带**：
 - 95% 置信区间（Wilson）
@@ -283,6 +354,12 @@ answers/
 |---|---|---|---|
 | v1 | 2026-11-02 | 首版 | — |
 | v1.1 | 2026-11-02 | 新增 §4.1.1 `excluded`（工具声明不覆盖的样本不进分母）与 `_excluded.json` 清单 | **minor**：没有任何既有标签的定义变化；**没有排除时报表逐字段不变**（单测 `test_no_manifest_keeps_old_numbers` 锁住这一点）。有排除的 run 会多出 `n_excluded` / `excluded_reasons` / 每轮的 `n.excluded`，分母照实小了一截 |
+| v1.2 | 2026-11-06 | 新增 §3.2 两个**可选**答卷字段 `no_answer` / `limits`、§4.1.2 `no_answer` 标签、§4.2 的 `answered_rate` / `no_answer_rate` | **minor**：既有标签定义一字未改。**不带这两个字段的答卷判分逐字不变**（单测 `test_no_new_fields_scores_identically` 锁住）。带 `no_answer` 的 run 主分母会如实变小，同时报表多出 `silence_as_no_finding`（老口径，把沉默当 `found=false`）供对照；`limits` 只进 `coverage_limits`，不改任何分数 |
+| v1.3 | 2026-11-06 | 新增 §4.2.1 `locator_fidelity`：给了样本源码时逐条 finding 核对 evidence 里的代码片段与自报行号是否一致（X17） | **minor**：不新增标签、不改任何分数；没给源码时逐字段不变。`content_far > 0` 时多一句 caveat |
+
+> v1.1 / v1.2 / v1.3 都是 **v1 的 minor**：报表里的 `contract_version` 仍然印 `v1`，
+> 因为 `v1` 这三个字符代表"同一套标签定义、数字可以并排比较"。只有 §9 的 major 情形才改成 `v2`。
+> 小版本号只在本文件里用来标记"哪一天加了什么"。
 
 **升版本规则**：
 - 改 §4 判分规则 → **v2**（major，数字不可比）

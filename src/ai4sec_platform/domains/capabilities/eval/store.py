@@ -561,6 +561,16 @@ def score_run(conn: sqlite3.Connection, run_id: int) -> dict[str, Any]:
     if not answers and not excluded:
         raise ValueError(f"run {run_id} 还没有任何答卷, 无法判分")
 
+    # X17：位置保真核对要**样本源码**（核对工具抄的片段是否真在它报的行号附近）。
+    # 读不到就少这一条，该项判 content_na —— 它不参与任何分数，缺了不能影响判分。
+    code_table: dict[str, str] = {}
+    for sample in samples:
+        try:
+            code_table[sample["sample_key"]] = Path(sample["artifact_path"]).read_text(
+                encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+
     work = Path(tempfile.mkdtemp(prefix="eval-score-"))
     try:
         truth_dir = work / "truth"
@@ -583,7 +593,7 @@ def score_run(conn: sqlite3.Connection, run_id: int) -> dict[str, Any]:
                     json.dumps(excluded[index], ensure_ascii=False, indent=2, sort_keys=True),
                     encoding="utf-8")
         try:
-            report = score.build_report(work / "answers", truth_dir)
+            report = score.build_report(work / "answers", truth_dir, code_table)
         except SystemExit as exc:  # score.py 用 SystemExit 报"目录里没东西"
             raise ValueError(f"判分失败: {exc}") from exc
     finally:

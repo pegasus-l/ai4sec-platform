@@ -220,6 +220,26 @@ def to_finding(d, rel_path):
     return out
 
 
+def _no_answer_reason(sec):
+    """工具自报"给不出结论"时, 给出一个稳定的**桶名**(而不是一句自由文本)。
+
+    工具把这件事表达在三个地方(`app/agent.py`): 静态扫描失败、只读到被截断的源码、
+    逻辑评审没跑通(限流 / 模型答非所问 / 读不了文件)。前两个各有字段, 剩下的一律归
+    `logic_review_inconclusive`。分桶是为了报表能回答"没答的这批都是为什么",
+    自由文本每次都不一样, 加起来只有噪音。
+    """
+    if not sec.get("inconclusive"):
+        return ""
+    reasons = []
+    if sec.get("static_scan_error"):
+        reasons.append("static_scan_error")
+    if sec.get("source_truncated"):
+        reasons.append("source_truncated")
+    if not reasons:
+        reasons.append("logic_review_inconclusive")
+    return "+".join(reasons)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--file", required=True)
@@ -246,8 +266,23 @@ def main():
     # sort 是稳定的, 同一置信度保持工具原有顺序。
     raw.sort(key=_confidence_rank, reverse=True)
     findings = [to_finding(d, a.path) for d in raw[:MAX_FINDINGS]]
-    # 契约只允许 found / findings 两个顶层字段, 任何附加说明都会被判 invalid。
-    print(json.dumps({"found": bool(findings), "findings": findings}, ensure_ascii=False))
+
+    # 契约的两个**可选**诊断字段(2026-11-06 增补, 见 score.py 文档头):
+    #   limits     —— 这份答案是在受限视角下给出的(source_truncated)
+    #   no_answer  —— 工具自己说"我给不出结论"
+    # 以前一律打 `{"found": false}`, 于是 X15 里那些"没答"的样本在报表上长成了
+    # "扫过了, 没有问题" —— 正样本记漏报、负样本记真阴性, 两边的数都因此失真。
+    payload = {"found": bool(findings), "findings": findings}
+    limits = []
+    if sec.get("source_truncated"):
+        limits.append("source_truncated")
+    if limits:
+        payload["limits"] = limits
+    if not findings:
+        reason = _no_answer_reason(sec)
+        if reason:
+            payload["no_answer"] = reason
+    print(json.dumps(payload, ensure_ascii=False))
     # 诊断走 stderr(runner 会落到 raw/*.stderr), 不进答卷: 事后要能分清
     # "没扫" "扫了没有" "截断到 12k 字符没看完" "模型答非所问"。
     diag = {

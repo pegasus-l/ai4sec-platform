@@ -248,7 +248,11 @@ class TestEndToEnd(unittest.TestCase):
         self.assertEqual(rep["adaptation_verdict"], "ok")
 
         first = rep["per_repeat"]["r1"]
-        self.assertEqual(first["n"], {"positives": 3, "negatives": 2, "total": 6})
+        self.assertEqual(first["n"]["positives"], 3)
+        self.assertEqual(first["n"]["negatives"], 2)
+        self.assertEqual(first["n"]["total"], 6)
+        # 6 条里 1 条 invalid_output，真正作答的是 5 条（v1.2 起单列）
+        self.assertEqual(first["n"]["answered"], 5)
         # 正样本：1 strict + 1 near + 1 miss（invalid 不计分母）
         self.assertEqual(first["labels"]["strict_hit"], 1)
         self.assertEqual(first["labels"]["near_hit"], 1)
@@ -341,6 +345,15 @@ class TestSchemaParity(unittest.TestCase):
         "function_null": answer({"file": FILE, "function": None,
                                  "line_start": 343, "line_end": 345}),
         "missing_line": answer({"file": FILE, "function": "doStart"}),
+        # 2026-11-06 增补（v1.2）：两个可选诊断字段。两边必须同口，
+        # 尤其是 found=true 与 no_answer 并存这条 —— 只写在 validate_answer 里、
+        # 不写进 schema，就是判分脚本比契约更严，parser 按 schema 产出的答卷会被判废。
+        "no_answer_clean": answer(found=False, no_answer="source_truncated"),
+        "no_answer_conflict": answer(find(343, 345), no_answer="oops"),
+        "no_answer_empty": answer(found=False, no_answer="  "),
+        "limits_ok": answer(found=False, limits=["source_truncated"]),
+        "limits_empty_item": answer(found=False, limits=[""]),
+        "limits_not_list": answer(found=False, limits="source_truncated"),
     }
 
     def test_builtin_matches_schema(self):
@@ -433,7 +446,8 @@ class TestExcluded(unittest.TestCase):
         self.assertEqual(sorted(rep["per_repeat"]["r1"]), sorted(
             ["labels", "n", "locate_rate", "strict_locate_rate",
              "false_positive_rate", "balanced_accuracy", "invalid_output",
-             "excluded", "samples"]))
+             "excluded", "no_answer", "coverage", "limits",
+             "silence_as_no_finding", "locator_fidelity", "samples"]))
         self.assertNotIn(score.EXCLUDED_MANIFEST, rep["per_repeat"]["r1"]["samples"])
 
     def test_no_manifest_keeps_old_numbers(self):
@@ -487,6 +501,353 @@ class TestExcluded(unittest.TestCase):
         row = next(r for r in rep["per_repeat"]["r1"]["samples"] if r["sample_id"] == "s_0003")
         self.assertEqual(row["label"], "excluded")
         self.assertIn("同时存在答卷文件", row["detail"])
+
+
+class TestNoAnswer(unittest.TestCase):
+    """X15（v1.2）：工具说「我给不出结论」时，答卷必须如实说，报表必须单列。
+
+    这一组锁的是「沉默 ≠ 没找到」。老 shim 把"没答"翻译成 `{"found": false}`，
+    于是正样本记漏报、负样本记真阴性 —— 两边的数都失真，而报表上没有任何一格会露馅。
+    """
+
+    def rows(self, limits=()):
+        return [
+            score.Row("s1", "pre", "strict_hit", limits=tuple(limits)),
+            score.Row("s2", "pre", "no_answer", "source_truncated"),
+            score.Row("s3", "post", "false_positive"),
+            score.Row("s4", "post", "no_answer", "logic_review_inconclusive"),
+        ]
+
+    def test_label_and_reason_are_kept(self):
+        row = score.judge_sample(answer(found=False, no_answer="source_truncated"),
+                                 truth())
+        self.assertEqual(row.label, "no_answer")
+        self.assertEqual(row.detail, "source_truncated")
+
+    def test_post_sample_silence_is_not_true_negative(self):
+        # 负样本上沉默会在老口径里变成 100% 的"真阴性"，等于白送分数
+        row = score.judge_sample(answer(found=False,
+                                        no_answer="logic_review_inconclusive"),
+                                 truth("post"))
+        self.assertEqual(row.label, "no_answer")
+        self.assertNotEqual(row.label, "true_negative")
+
+    def test_present_takes_precedence_over_found_false(self):
+        # 既带 no_answer 又带 found=false：记 no_answer，不记 miss
+        row = score.judge_sample(answer(found=False, no_answer="static_scan_error"),
+                                 truth())
+        self.assertEqual(row.label, "no_answer")
+
+    def test_leaves_main_denominator(self):
+        m = score.metrics(self.rows())
+        # 正样本 2 条里 1 条没答 -> 主分母 1；负样本同理
+        self.assertEqual(m["locate_rate"]["n"], 1)
+        self.assertEqual(m["locate_rate"]["value"], 1.0)
+        self.assertEqual(m["false_positive_rate"]["n"], 1)
+        self.assertEqual(m["false_positive_rate"]["value"], 1.0)
+        # 没答的那条单独记账，不进 invalid_output
+        self.assertEqual(m["no_answer"]["k"], 2)
+        self.assertEqual(m["no_answer"]["rate"], 0.5)
+        self.assertEqual(m["invalid_output"]["k"], 0)
+
+    def test_answered_count_is_reported(self):
+        m = score.metrics(self.rows())
+        self.assertEqual(m["n"]["answered"], 2)
+        self.assertEqual(m["coverage"]["answered"], 2)
+        self.assertEqual(m["coverage"]["answered_rate"], 0.5)
+        self.assertEqual(m["n"]["no_answer"], 2)
+
+    def test_silence_as_no_finding_is_the_lower_bound(self):
+        m = score.metrics(self.rows())
+        legacy = m["silence_as_no_finding"]
+        # 老口径：两条正样本里只有 1 条真命中 -> 0.5（主口径是 1.0）
+        self.assertEqual(legacy["locate_rate"]["value"], 0.5)
+        self.assertEqual(legacy["locate_rate"]["n"], 2)
+        # 负样本：1 条误报 / 2 条 = 0.5（主口径是 1.0）
+        self.assertEqual(legacy["false_positive_rate"]["value"], 0.5)
+        self.assertEqual(legacy["false_positive_rate"]["n"], 2)
+
+    def test_reasons_are_bucketed_not_concatenated(self):
+        m = score.metrics(self.rows())
+        self.assertEqual(m["no_answer"]["reasons"],
+                         {"source_truncated": 1, "logic_review_inconclusive": 1})
+
+    def test_limits_do_not_change_any_score(self):
+        plain = score.metrics(self.rows())
+        limited = score.metrics(self.rows(limits=("source_truncated",)))
+        for key in ("locate_rate", "false_positive_rate", "balanced_accuracy"):
+            self.assertEqual(plain[key]["value"], limited[key]["value"], key)
+        # limits 只进覆盖面条目
+        self.assertEqual(limited["limits"], {"source_truncated": 1})
+        self.assertEqual(plain["limits"], {})
+
+
+class TestNoAnswerReport(unittest.TestCase):
+    """报表层：n_no_answer / n_answered / caveats / 摘要都要自己说清楚。"""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        root = Path(self.tmp.name)
+        self.truth_dir = root / "truth"
+        self.answers_dir = root / "answers"
+        self.truth_dir.mkdir()
+        self.answers_dir.mkdir()
+        samples = {
+            "s_0001": (truth("pre", "s_0001"),
+                       answer(find(343, 345), limits=["source_truncated"])),
+            "s_0002": (truth("pre", "s_0002"),
+                       answer(found=False, no_answer="source_truncated",
+                              limits=["source_truncated"])),
+            "s_0003": (truth("post", "s_0003"),
+                       answer(found=False, no_answer="logic_review_inconclusive")),
+        }
+        for sid, (meta, ans) in samples.items():
+            (self.truth_dir / f"{sid}.json").write_text(
+                json.dumps(meta, ensure_ascii=False), encoding="utf-8")
+            (self.answers_dir / f"{sid}.json").write_text(
+                json.dumps(ans, ensure_ascii=False), encoding="utf-8")
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_report_counts(self):
+        rep = score.build_report(self.answers_dir, self.truth_dir)
+        self.assertEqual(rep["n_no_answer"], 2)
+        self.assertEqual(rep["n_answered"], 1)
+        self.assertEqual(rep["no_answer_reasons"],
+                         {"source_truncated": 1, "logic_review_inconclusive": 1})
+        self.assertEqual(rep["coverage_limits"], {"source_truncated": 2})
+        # 唯一的作答是一条命中；负样本一条都没答，FP 分母为 0 -> 不编 0.000
+        first = rep["per_repeat"]["r1"]
+        self.assertEqual(first["locate_rate"]["value"], 1.0)
+        self.assertIsNone(first["false_positive_rate"]["value"])
+        self.assertEqual(rep["adaptation_verdict"], "ok")
+
+    def test_caveat_names_the_silent_count(self):
+        rep = score.build_report(self.answers_dir, self.truth_dir)
+        joined = "\n".join(rep["caveats"])
+        self.assertIn("给不出结论", joined)
+        self.assertIn("主分母是它真正作答的 1 条", joined)
+        self.assertIn("source_truncated", joined)
+
+    def test_summary_shows_both_denominators(self):
+        text = score.format_summary(
+            score.build_report(self.answers_dir, self.truth_dir))
+        self.assertIn("作答率", text)
+        self.assertIn("没答", text)
+        self.assertIn("主口径只统计工具真正作答的样本", text)
+        self.assertIn("受限视角", text)
+
+    def test_no_new_fields_scores_identically(self):
+        """不带 no_answer / limits 的答卷，数字与 v1.1 一模一样（v1.2 的兼容性承诺）。"""
+        for path in self.answers_dir.glob("*.json"):
+            path.unlink()
+        payloads = {
+            "s_0001": answer(find(343, 345)),
+            "s_0002": answer(found=False),
+            "s_0003": answer(found=False),
+        }
+        for sid, ans in payloads.items():
+            (self.answers_dir / f"{sid}.json").write_text(
+                json.dumps(ans, ensure_ascii=False), encoding="utf-8")
+
+        rep = score.build_report(self.answers_dir, self.truth_dir)
+        first = rep["per_repeat"]["r1"]
+        self.assertEqual(rep["n_no_answer"], 0)
+        self.assertEqual(rep["coverage_limits"], {})
+        self.assertNotIn("no_answer", first["n"])      # 没答案就没这一格
+        self.assertEqual(first["locate_rate"]["value"], 0.5)
+        self.assertEqual(first["false_positive_rate"]["value"], 0.0)
+        self.assertEqual(first["n"]["positives"], 2)
+        self.assertEqual(first["n"]["negatives"], 1)
+        # 主口径与老口径重合 —— 没有沉默可剔
+        self.assertEqual(first["silence_as_no_finding"]["locate_rate"]["value"],
+                         first["locate_rate"]["value"])
+        joined = "\n".join(rep["caveats"])
+        self.assertNotIn("给不出结论", joined)
+
+
+class TestNoAnswerValidation(unittest.TestCase):
+    """两个可选字段的类型必须硬：宁可判 invalid_output，也不要静默当成没写。"""
+
+    def test_no_answer_accepts_a_bucket_name(self):
+        self.assertEqual(score.validate_answer(
+            answer(found=False, no_answer="source_truncated")), [])
+
+    def test_no_answer_rejects_empty_and_non_string(self):
+        self.assertTrue(score.validate_answer(answer(found=False, no_answer="  ")))
+        self.assertTrue(score.validate_answer(answer(found=False, no_answer=123)))
+
+    def test_no_answer_conflicting_with_found_true_is_rejected(self):
+        self.assertTrue(score.validate_answer(
+            answer(find(343, 345), no_answer="source_truncated")))
+
+    def test_limits_accepts_string_list(self):
+        self.assertEqual(score.validate_answer(
+            answer(found=False, limits=["source_truncated"])), [])
+
+    def test_limits_rejects_non_list_and_empty_items(self):
+        self.assertTrue(score.validate_answer(answer(found=False, limits="x")))
+        self.assertTrue(score.validate_answer(answer(found=False, limits=[""])))
+        self.assertTrue(score.validate_answer(answer(found=False, limits=[1])))
+
+
+CODE = "\n".join([
+    "public class C {",                              # 1
+    "    void doStart() {",                          # 2
+    "        Object x = context.lookup(name);",      # 3
+    "        return;",                               # 4
+    "    }",                                         # 5
+    "    void other() {",                            # 6
+    "        Object y = context.lookup(other);",     # 7
+    "    }",                                         # 8
+    "}",                                             # 9
+    "",
+])
+
+
+class TestLocatorFidelity(unittest.TestCase):
+    """X17：工具自己抄的代码片段，和它自己报的行号对不上 —— 判分本身看不出来这件事。
+
+    纯判分里，一个"诚实地没找到"和一个"报了但位置是错的"在正样本上都显示 miss；
+    差别只在这条 finding 的 evidence 到底落在源码第几行。
+    """
+
+    def status(self, body_lines, reported, code=CODE):
+        evidence = "repo/C.java:%s\n%s" % (reported, "\n".join(body_lines))
+        return score.locator_status(evidence, code, reported)
+
+    def test_snippet_at_reported_line_is_ok(self):
+        self.assertEqual(
+            self.status(["Object x = context.lookup(name);"], 3), "content_ok")
+
+    def test_snippet_far_from_reported_line_is_far(self):
+        # 工具报第 3 行，片段其实在第 7 行
+        self.assertEqual(
+            self.status(["Object y = context.lookup(other);"], 3), "content_far")
+
+    def test_tolerance_is_three_lines(self):
+        self.assertEqual(
+            self.status(["Object x = context.lookup(name);"], 6), "content_ok")
+        self.assertEqual(
+            self.status(["Object x = context.lookup(name);"], 7), "content_far")
+
+    def test_unmatched_snippet_is_not_found(self):
+        self.assertEqual(
+            self.status(["something that is not in the file"], 3), "content_not_found")
+
+    def test_short_lines_do_not_count_as_matches(self):
+        # `}` / `return;` 这种短行在任何文件里都能撞上，不能拿来当证据
+        self.assertEqual(self.status(["    }"], 3), "content_not_found")
+
+    def test_evidence_without_code_is_na(self):
+        # 只有 `path:line` 一行，没有可核对的片段
+        self.assertEqual(score.locator_status("repo/C.java:3", CODE, 3), "content_na")
+
+    def test_missing_source_is_na(self):
+        self.assertEqual(
+            score.locator_status("repo/C.java:3\nObject x = context.lookup(name);",
+                                 "", 3), "content_na")
+
+    def test_json_evidence_is_na(self):
+        # JSON 形态的 evidence 里没有片段可核 —— 判"无法判断"，不是"对不上"
+        self.assertEqual(
+            score.locator_status('{"finding": {"line": 3}}', CODE, 3), "content_na")
+
+
+class TestLocatorInReport(unittest.TestCase):
+    """保真度进报表：只在给了源码时跑，而且**不改任何一个分数**。"""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        root = Path(self.tmp.name)
+        self.truth_dir = root / "truth"
+        self.answers_dir = root / "answers"
+        self.truth_dir.mkdir()
+        self.answers_dir.mkdir()
+        good = find(3, 3)
+        good["evidence"] = "repo/C.java:3\nObject x = context.lookup(name);"
+        far = find(3, 3)
+        far["evidence"] = "repo/C.java:3\nObject y = context.lookup(other);"
+        samples = {
+            "s_0001": (truth("pre", "s_0001"), answer(good)),        # strict_hit，对得上
+            "s_0002": (truth("pre", "s_0002"), answer(found=False)),  # miss，无片段
+            "s_0003": (truth("post", "s_0003"), answer(far)),        # FP，对不上
+        }
+        for sid, (meta, ans) in samples.items():
+            (self.truth_dir / f"{sid}.json").write_text(
+                json.dumps(meta, ensure_ascii=False), encoding="utf-8")
+            (self.answers_dir / f"{sid}.json").write_text(
+                json.dumps(ans, ensure_ascii=False), encoding="utf-8")
+        self.code_table = {"s_0001": CODE, "s_0002": CODE, "s_0003": CODE}
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_counts_per_finding(self):
+        rep = score.build_report(self.answers_dir, self.truth_dir, self.code_table)
+        fid = rep["locator_fidelity"]
+        self.assertEqual(fid["checked"], 2)      # s_0002 没有 finding，不算
+        self.assertEqual(fid["content_ok"], 1)
+        self.assertEqual(fid["content_far"], 1)
+        self.assertEqual(fid["content_not_found"], 0)
+
+    def test_caveat_calls_out_the_far_count(self):
+        rep = score.build_report(self.answers_dir, self.truth_dir, self.code_table)
+        joined = "\n".join(rep["caveats"])
+        self.assertIn("对不上", joined)
+        self.assertIn("定位不可信", joined)
+
+    def test_scores_are_untouched(self):
+        without = score.build_report(self.answers_dir, self.truth_dir)
+        with_code = score.build_report(self.answers_dir, self.truth_dir, self.code_table)
+        for key in ("locate_rate", "strict_locate_rate",
+                    "false_positive_rate", "balanced_accuracy"):
+            self.assertEqual(without["per_repeat"]["r1"][key],
+                             with_code["per_repeat"]["r1"][key], key)
+        # 不给源码时这一项不跑：checked=0，也不该冒出"对不上"的 caveat
+        self.assertEqual(without["locator_fidelity"]["checked"], 0)
+        self.assertNotIn("定位不可信", "\n".join(without["caveats"]))
+
+    def test_summary_shows_fidelity_line(self):
+        text = score.format_summary(
+            score.build_report(self.answers_dir, self.truth_dir, self.code_table))
+        self.assertIn("位置保真", text)
+
+
+class TestLocatorParity(unittest.TestCase):
+    """报表里的核对与 `deploy/eval/verify_answers.py` 必须同一套算法。
+
+    两份实现分别在"判分"和"离线复查"两条路上跑，对同一批输入给出不同答案的话，
+    报表与 D5 自查会互相打架 —— 而它们本来是用来互相印证的。
+    """
+
+    CASES = [
+        ("repo/C.java:3\nObject x = context.lookup(name);", 3),
+        ("repo/C.java:3\nObject y = context.lookup(other);", 3),
+        ("repo/C.java:3\nsomething that is not in the file", 3),
+        ("repo/C.java:3\n    }", 3),
+        ("repo/C.java:3\njust a message", 3),
+        ('{"finding": {"line": 3}}', 3),
+        ("", 3),
+    ]
+
+    def setUp(self):
+        path = Path(__file__).resolve().parents[7] / "deploy" / "eval" / "verify_answers.py"
+        if not path.is_file():
+            self.skipTest(f"没有离线复查脚本: {path}")
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("_verify_answers", path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)      # type: ignore[union-attr]
+        self.verify = module
+
+    def test_same_bucket_for_the_same_input(self):
+        for evidence, reported in self.CASES:
+            mine = score.locator_status(evidence, CODE, reported)
+            theirs = self.verify._content_check(
+                self.verify._evidence_body_lines(evidence), CODE, reported)[0]
+            self.assertEqual(mine, theirs, evidence)
 
 
 if __name__ == "__main__":

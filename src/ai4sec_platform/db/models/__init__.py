@@ -626,10 +626,12 @@ CREATE TABLE IF NOT EXISTS capability_eval_results (
     -- 'excluded'(D4-5)是"工具明说这类样本不覆盖", 不是答错: 它不进任何分母。
     -- 单独成一个标签而不再借用 invalid_output —— 借用的话, 报表上"语言不支持"会伪装成
     -- "工具输出不合规", 那是拿我们挑样本的口径去扣工具的分。
+    -- 'no_answer'(X15, 2026-11-06)是"扫了但给不出结论": 也不进主分母, 既不是漏报
+    -- 也不是"没发现"。以前它被翻译成 found=false, 于是沉默在报表上长成了结论。
     verdict     TEXT NOT NULL CHECK (verdict IN (
                     'strict_hit', 'near_hit', 'other_hunk', 'miss',
                     'false_positive', 'true_negative', 'invalid_output', 'excluded',
-                    'unstable')),
+                    'no_answer', 'unstable')),
     -- 产出这个 verdict 的那一轮报的位置; unstable 时为空(每轮各自的位置在 detail_json)
     location    TEXT NOT NULL DEFAULT '',
     detail_json TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(detail_json)),
@@ -672,22 +674,26 @@ def init_db(conn: sqlite3.Connection) -> None:
     # excluded_reason(2026-11-02, D4-5): 答案表已建过, 同上只能补列。
     try: conn.execute("ALTER TABLE capability_eval_answers ADD COLUMN excluded_reason TEXT")
     except Exception: pass
-    _migrate_results_verdict_excluded(conn)
+    _migrate_results_verdict_labels(conn)
     conn.commit()
 
 
-def _migrate_results_verdict_excluded(conn: sqlite3.Connection) -> None:
-    """把 `capability_eval_results.verdict` 的 CHECK 补上 'excluded'(D4-5)。
+def _migrate_results_verdict_labels(conn: sqlite3.Connection) -> None:
+    """把 `capability_eval_results.verdict` 的 CHECK 补上 'excluded'(D4-5)与
+    'no_answer'(X15, 2026-11-06)。
 
     CHECK 不能 ALTER, 只能重建表。**只在旧表结构上跑**: 新建库走 `SCHEMA_SQL` 就已经带
-    'excluded', 这里是给"库里已经有这张表"的环境补的。判据直接读建表语句, 不看版本号 ——
+    两个标签, 这里是给"库里已经有这张表"的环境补的。判据直接读建表语句, 不看版本号 ——
     版本号这种东西没人维护, 而建表语句就是事实。
+
+    判据用 `'no_answer'`: 它是后加的那个, 没有它就说明这张表还没补过。漏掉这步的后果
+    不是少一个标签 —— INSERT 会撞 CHECK, 整轮判分在写结果那一步失败。
 
     这张表每个 run 只有几十行(样本数), 重建是一次毫秒级操作, 不碰其它表。
     """
     row = conn.execute("SELECT sql FROM sqlite_master WHERE type='table'"
                        " AND name='capability_eval_results'").fetchone()
-    if row is None or "'excluded'" in (row[0] or ""):
+    if row is None or "'no_answer'" in (row[0] or ""):
         return
     conn.executescript(
         """
@@ -697,7 +703,7 @@ def _migrate_results_verdict_excluded(conn: sqlite3.Connection) -> None:
             verdict     TEXT NOT NULL CHECK (verdict IN (
                             'strict_hit', 'near_hit', 'other_hunk', 'miss',
                             'false_positive', 'true_negative', 'invalid_output', 'excluded',
-                            'unstable')),
+                            'no_answer', 'unstable')),
             location    TEXT NOT NULL DEFAULT '',
             detail_json TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(detail_json)),
             UNIQUE(run_id, sample_id)
