@@ -1,4 +1,97 @@
-export type CapabilityView = 'today' | 'library' | 'repro' | 'conversion' | 'ops-overview' | 'ops-quality' | 'ops-runs';
+export type CapabilityView = 'today' | 'library' | 'repro' | 'conversion' | 'eval' | 'ops-overview' | 'ops-quality' | 'ops-runs';
+
+// ========== 能力评测(E1) ==========
+// 与 E0(复现跑没跑起来)是两件事: E0 回答"能不能起来", E1 回答"在标准样本上判得准不准"。
+// 页面上必须分开写, 否则读者会把 E0 的等级当成准确率。
+
+/** 一个指标: value 是各轮的中位数, ci95 是"各轮中位数"的区间(不是单轮的样本区间)。
+ *  value 为 null 表示**没算出来**, 不是 0 —— 页面直接显示「—」, 不补零。 */
+export interface EvalMetric {
+  value: number | null;
+  ci95: [number | null, number | null] | null;
+  values: number[];
+  /** 各轮数值是否完全相同。false 说明这份分数对随机性敏感, 不能拿去和别的工具比一次输赢。 */
+  identical?: boolean | null;
+}
+
+/** 报表摘要(后端 _headline)。所有数字原样来自 score.py, 前端不二次计算。 */
+export interface EvalHeadline {
+  n_samples: number | null;
+  /** 被工具声明为"不覆盖"、未计入分母的样本数(D4-5)。 */
+  n_excluded: number | null;
+  excluded_reasons: Record<string, number>;
+  window: { start?: string | null; end?: string | null; missing?: number } | null;
+  adaptation_verdict: string | null;
+  repeats: number;
+  locate_rate: EvalMetric;
+  strict_locate_rate: EvalMetric;
+  false_positive_rate: EvalMetric;
+  balanced_accuracy: EvalMetric;
+}
+
+export interface EvalRunSummary {
+  run_id: number;
+  status: string;
+  tool_version: string | null;
+  started_at: string;
+  finished_at: string | null;
+  repeats: number;
+  failure_reason: string | null;
+  /** null = 这一轮没有报表(失败/预算超限/还在跑), 不等于"跑出来是 0 分"。 */
+  metrics: EvalHeadline | null;
+  caveats: string;
+}
+
+export interface EvalTool {
+  item_id: number;
+  title: string;
+  status: string;
+  e0: { level: number; method: string | null; source: string | null; verified_at: string | null };
+  /** null = **尚未评测**。页面必须与"评测失败"分开写, 否则"没被评"会被读成"评了不行"。 */
+  latest_run: EvalRunSummary | null;
+}
+
+export interface EvalCategory {
+  id: string;
+  name: string;
+  contract_version: string;
+  /** 这一类测的是什么。 */
+  what: string;
+  /** 这一类**测不出**什么。 */
+  cannot: string;
+  n_samples: number;
+  n_runs: number;
+}
+
+/** 逐样本结论。verdict 取值见契约 §4.1: strict_hit / near_hit / other_hunk / miss /
+ *  false_positive / true_negative / invalid_output / excluded。 */
+export interface EvalSampleResult {
+  sample_id: number;
+  sample_key: string;
+  polarity: string;
+  verdict: string;
+  location: unknown;
+  per_repeat: Array<Record<string, unknown>>;
+}
+
+export interface EvalToolDetail {
+  item_id: number;
+  title: string;
+  status: string;
+  category: string;
+  e0: { level: number; method: string | null; source: string | null; verified_at: string | null } | null;
+  runs: Array<{
+    id: number; status: string; tool_version: string | null; started_at: string;
+    finished_at: string | null; repeats: number; failure_reason: string | null;
+  }>;
+  latest: null | {
+    run: Record<string, unknown> & { id: number; status: string; caveats: string; report: EvalHeadline | null };
+    metrics: EvalHeadline | null;
+    results: EvalSampleResult[];
+  };
+  /** 这份分数**回答不了**的问题。页面上一律不折叠 —— 没有边界说明的准确率, 读者一定会外推。 */
+  cannot_answer: string[];
+}
 
 export interface CapabilityItem {
   id: number;

@@ -1,5 +1,5 @@
 import { getJson, postJson, BASE } from '../../api/client';
-import type { CapabilityItem, ReproTask, ConversionRecord, ClassifyStats, CapStats, LibraryStats, LibraryItemsResponse, LibraryFormKey, ReproBucketKey } from './capabilityTypes';
+import type { CapabilityItem, ReproTask, ConversionRecord, ClassifyStats, CapStats, LibraryStats, LibraryItemsResponse, LibraryFormKey, ReproBucketKey, EvalCategory, EvalTool, EvalToolDetail, EvalRunSummary, EvalHeadline, EvalSampleResult } from './capabilityTypes';
 
 export function fetchToday(): Promise<{ items: CapabilityItem[] }> {
   return getJson('/api/capabilities/today?limit=200');
@@ -57,6 +57,32 @@ export function fetchClassifyStats(): Promise<ClassifyStats> {
 
 export function fetchStats(): Promise<CapStats> {
   return getJson('/api/capabilities/stats');
+}
+
+// ========== 能力评测(E1) ==========
+// 三个只读接口 + 一个发起接口。发起接口在执行位没上线时回 503 —— 前端要如实显示那句话,
+// 不能吞掉当"点了没反应"。
+
+export function fetchEvalCategories(): Promise<{ items: EvalCategory[]; runner_ready: boolean }> {
+  return getJson('/api/capabilities/eval/categories');
+}
+
+export function fetchEvalTools(category?: string): Promise<{ category: string; total: number; items: EvalTool[] }> {
+  const qs = category ? `?category=${encodeURIComponent(category)}` : '';
+  return getJson(`/api/capabilities/eval/tools${qs}`);
+}
+
+export function fetchEvalToolDetail(itemId: number, category?: string): Promise<EvalToolDetail> {
+  const qs = category ? `?category=${encodeURIComponent(category)}` : '';
+  return getJson(`/api/capabilities/eval/tools/${itemId}${qs}`);
+}
+
+export function fetchEvalRun(runId: number): Promise<{ run: EvalRunSummary; metrics: EvalHeadline | null; results: EvalSampleResult[] }> {
+  return getJson(`/api/capabilities/eval/runs/${runId}`);
+}
+
+export function startEvalRun(itemId: number, repeats = 3): Promise<{ run_id: number; status: string; n_samples: number }> {
+  return postJson('/api/capabilities/eval/run', { item_id: itemId, repeats });
 }
 
 export function startRepro(itemId: number, web = false): Promise<{
