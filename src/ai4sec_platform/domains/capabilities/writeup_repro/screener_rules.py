@@ -31,7 +31,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
-SCREENER_VERSION = "rules-v1"
+SCREENER_VERSION = "rules-v2"
 
 #: 拒绝桶。固定枚举 —— 新值要改代码,不允许管道里随手回传自由文本。
 REJECT_REASONS: tuple[str, ...] = (
@@ -40,6 +40,9 @@ REJECT_REASONS: tuple[str, ...] = (
     "target_unknown",    # 有 PoC,但定不下仓库 / CVE / 版本
     "article_incomplete",  # 留给 L2:原文讲了一半
     "online_service",      # 留给 L2:目标是线上服务,只读不打
+    # 留给 L2:模型说有 PoC,但摘出来的那段代码在原文里找不到(编的)。与 no_poc 是两件事 ——
+    # 混在一起统计, 会把"模型瞎编"读成"文章没料", 而前者是我们要盯的模型缺陷。
+    "poc_unverified",
 )
 
 #: 代码块分类。
@@ -185,6 +188,11 @@ def is_command_line(line: str) -> bool:
     return token.startswith("./")
 
 
+def _is_comment(line: str) -> bool:
+    s = line.strip()
+    return s.startswith("#") or s.startswith("//")
+
+
 def classify_block(lang: str, body: str) -> str:
     """把一个代码块归到 ``command`` / ``source`` / ``config`` / ``data`` / ``empty``。
 
@@ -198,10 +206,15 @@ def classify_block(lang: str, body: str) -> str:
     tag = lang.strip().lower().split()[0] if lang.strip() else ""
     n = len(lines)
     cmd_lines = sum(1 for ln in lines if is_command_line(ln))
+    # 注释行不占"命令行占多数"的分母。真实 writeup 的 exploit 块几乎都长这样:
+    # 每条命令上面一行 "# 这里在干什么", 下面一行 "# 预期响应"。按全部行数算,
+    # 两条 curl 对四条注释永远占不到多数, 整块被判成 data, 规则层直接以 no_poc 拒稿 ——
+    # 2026-11-10 在 GHSL/Quarkus 那条上实测到, 而那篇的 PoC 是完整可跑的。
+    live = n - sum(1 for ln in lines if not is_command_line(ln) and _is_comment(ln))
 
     if tag in _COMMAND_LANGS and n <= 40:
         return "command"
-    if cmd_lines and cmd_lines * 2 >= n:
+    if cmd_lines and cmd_lines * 2 >= max(live, 1):
         return "command"
     if n <= 3 and cmd_lines >= 1:
         return "command"

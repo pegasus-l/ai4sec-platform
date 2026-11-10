@@ -201,7 +201,11 @@ def _model_timeout_seconds(profile: str) -> float:
     profile_key = _profile_key(profile)
     # capability_eval_tool(L5)是被测工具自己在调: 它的提示词比我们的长得多(整个文件的
     # 上下文 + 7 个阶段), 45 秒那种口径会把它正常的一次调用判成超时。
-    default = "180" if profile in {"vulnerability_content_extractor", "vulnerability_material_reviewer", "vulnerability_knowledge_extractor", "vulnerability_vuln_site_extractor", "vulnerability_dataflow_extractor", "capability_eval_tool"} else "45"
+    default = "180" if profile in {"vulnerability_content_extractor", "vulnerability_material_reviewer", "vulnerability_knowledge_extractor", "vulnerability_vuln_site_extractor", "vulnerability_dataflow_extractor", "capability_eval_tool",
+    # writeup 复现预筛(T1.2): 输入是 8k 字正文 + 最多 6 个代码块, 输出是一整段 JSON。
+    # 45 秒在网关排队时会被判成超时, 而超时的条目不落库、要等下一轮 —— 没必要
+    # 用默认值给整批预筛加一个固定比例的无声损耗。
+    "capability_writeup_screener"} else "45"
     try:
         timeout = float(os.getenv(f"AI4SEC_{profile_key}_TIMEOUT_SECONDS", os.getenv("AI4SEC_MODEL_TIMEOUT_SECONDS", default)))
     except ValueError:

@@ -651,6 +651,45 @@ CREATE TABLE IF NOT EXISTS capability_eval_reports (
     caveats      TEXT NOT NULL CHECK (length(trim(caveats)) > 0),
     created_at   TEXT NOT NULL
 );
+-- 研究复现: 预筛结果(writeup 复现 T0.1, 2026-11-10)。一条素材一行, **没入选的也留证** ——
+-- "这篇为什么不可复现"本身就是结论, 页面要能回答它, 而不是让读者以为没被收进来。
+-- 独立建表而不塞 domain_items.payload_json: 素材列表已是库体积主要来源(7.5GB), 这里一行几百字节,
+-- 出问题 DROP TABLE 即可回滚。判据的唯一实现在 domains/capabilities/writeup_repro/{screener_rules,screener}.py,
+-- 本表只存结论; 结论可复算 = 重跑一遍预筛就能对上。
+CREATE TABLE IF NOT EXISTS writeup_repro_candidates (
+    material_id     INTEGER PRIMARY KEY,          -- domain_items(id), domain='vulnerabilities'
+    screenable      INTEGER NOT NULL DEFAULT 0,   -- 1=可进复现队列
+    -- 固定枚举, 新值要改代码不是改数据:
+    -- not_writeup|no_poc|poc_unverified|target_unknown|article_incomplete|online_service
+    -- poc_unverified 与 no_poc 是两件事: 前者模型说有 PoC 但**原文里找不到那段代码**(编的),
+    -- 后者是本来就没有。混在一起会把"模型瞎编"统计成"文章没料"。
+    reject_reason   TEXT NOT NULL DEFAULT '',
+    has_poc         INTEGER NOT NULL DEFAULT 0,
+    poc_lang        TEXT NOT NULL DEFAULT '',
+    -- 模型摘出来的 PoC 是否在原文里原样找到。0 = 不可信, 此时一律 screenable=0(不降级放行)
+    poc_verified    INTEGER NOT NULL DEFAULT 0,
+    target_kind     TEXT NOT NULL DEFAULT 'unknown', -- oss_repo|package|ctf|online_service|self_contained|unknown
+    target_repo     TEXT NOT NULL DEFAULT '',     -- 已归一成 github:org/name; 归不了一律空
+    target_version  TEXT NOT NULL DEFAULT '',     -- 必须是原文出现过的串, 否则空
+    env_hint        TEXT NOT NULL DEFAULT '',
+    claimed_effect  TEXT NOT NULL DEFAULT '',     -- 作者声称的效果(一句话)
+    evidence_quote  TEXT NOT NULL DEFAULT '',     -- 支撑上面判断的原文原句
+    rule_json       TEXT NOT NULL DEFAULT '{}',   -- 规则层结论(可复算)
+    screen_json     TEXT NOT NULL DEFAULT '{}',   -- 模型原始输出 + 校验备注(答"它凭什么这么判")
+    rule_version    TEXT NOT NULL DEFAULT '',     -- 规则层版本变更后可知哪些行是旧口径
+    model_profile   TEXT NOT NULL DEFAULT '',
+    screened_by     TEXT NOT NULL DEFAULT 'llm',
+    screened_at     TEXT NOT NULL,
+    -- 以下四列给 T1.5(按我司资产排优先级)预留, 该步未上线前**恒为空/0**。
+    -- 空表示"没算过", 不是"算出来是 P2" —— 用一个能区分这两种状态的默认值。
+    asset_hit       INTEGER NOT NULL DEFAULT 0,
+    asset_ids       TEXT NOT NULL DEFAULT '[]',
+    asset_confidence REAL,
+    priority        TEXT NOT NULL DEFAULT '',     -- P0|P1|P2|''(未计算)
+    priority_reason TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_wrc_screenable ON writeup_repro_candidates(screenable, screened_at);
+CREATE INDEX IF NOT EXISTS idx_wrc_target     ON writeup_repro_candidates(target_repo);
 """
 
 
