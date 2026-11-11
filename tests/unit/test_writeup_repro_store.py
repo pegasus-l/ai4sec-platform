@@ -33,7 +33,8 @@ def _row(material_id: int, **kw) -> dict:
     base = {
         "material_id": material_id, "screenable": 1, "reject_reason": "", "has_poc": 1,
         "poc_lang": "c", "poc_verified": 1, "target_kind": "oss_repo",
-        "target_repo": "github:acme/foo", "target_version": "2.3.1", "env_hint": "",
+        "target_repo": "github:acme/foo", "target_version": "2.3.1",
+        "target_cve": "", "target_product": "", "target_source": "model", "env_hint": "",
         "claimed_effect": "", "evidence_quote": "", "rule_json": "{}", "screen_json": "{}",
         "rule_version": "rules-v1", "model_profile": "capability_writeup_screener",
         "screened_by": "llm", "screened_at": "2026-11-10T12:00:00Z",

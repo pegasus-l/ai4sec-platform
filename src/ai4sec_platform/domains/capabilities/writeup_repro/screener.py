@@ -36,9 +36,15 @@ import json
 import re
 from typing import Any
 
+from ai4sec_platform.domains.capabilities.writeup_repro.cve_targets import (
+    LookupDeferred,
+    ResolvedTarget,
+    TargetLookupUnavailable,
+)
 from ai4sec_platform.domains.capabilities.writeup_repro.screener_rules import (
     SCREENER_VERSION,
     RuleScreen,
+    find_cves,
     normalize_repo,
     screen_rules,
 )
@@ -69,6 +75,7 @@ SCREENER_PROMPT = """你是漏洞复现工程师。下面给出一篇安全 writ
   "target_kind": "oss_repo|package|ctf|online_service|self_contained|unknown",
   "target_repo": "原文里出现的代码仓库地址,原样照抄;没有就空字符串",
   "target_version": "原文里出现的受影响版本号,原样照抄;没有就空字符串",
+  "target_cve": "这篇文章讲的这个漏洞对应的 CVE 编号(形如 CVE-2024-12345);文章不是针对某个具体 CVE 就空字符串",
   "env_hint": "复现所需环境(系统/架构/依赖),原文没写就空字符串",
   "claimed_effect": "作者声称达成的效果,一句话",
   "evidence_quote": "原文里支撑上面 target/version/effect 的原句,原样照抄",
@@ -83,6 +90,9 @@ SCREENER_PROMPT = """你是漏洞复现工程师。下面给出一篇安全 writ
 - 这里说的 PoC 是**能拿去复现的攻击代码或命令序列**(HTTP 请求、脚本、合约、命令行),
   配置片段、代码定位片段、程序菜单都不算。
 - **target_repo / target_version 只在原文明确写了才填**,不要凭常识补。不知道就空字符串。
+- **target_cve 只填这篇文章真正在讲的那个洞**。正文里顺带提到的编号(对比、举例、"类似
+  CVE-xxxx-xxxx 之类")不要填 —— 那些编号我们会拿去查产品,填错了复现的就是别的洞。
+  文章讲的是通用手法(堆溢出、chroot 逃逸、PATH 提权)而不是某个具体洞,就留空字符串。
 - 目标是**线上还在运行的第三方服务**(某个网站、某个 SaaS、别人的生产系统)→ target_kind 填 online_service。
   打自己的靶场、CTF 题目、本地部署的开源项目都不算 online_service。
 - 文章的代码块里**自带完整的漏洞目标**(示例合约、靶场程序、可编译的漏洞样例), 不需要
@@ -242,8 +252,45 @@ def verify_repo(raw_repo: str, text: str) -> tuple[str, str]:
     return "", f"模型给的目标 {raw!r} 在原文里找不到"
 
 
-def decide(rule: RuleScreen, result: dict[str, Any], *, poc_ok: bool, repo: str, version: str) -> tuple[bool, str]:
-    """把模型结论 + 校验结果收敛成 (是否可复现, 拒绝桶)。"""
+def verify_target_cve(raw_cve: str, text: str, title: str) -> tuple[str, str]:
+    """模型指认的"这篇文章讲的那个 CVE"是否可信。返回 (编号, 不可信的原因)。
+
+    和 PoC / 仓库 / 版本同一条纪律: **原文没写 = 不认**。CVE 编号尤其要查,因为它是唯一
+    一条会被拿去外部查产品、进而决定"复现谁"的线索 —— 模型编一个号,我们就会去复现
+    另一个洞,而且整条链上每一步都看起来是对的。
+    """
+    raw = str(raw_cve or "").strip().upper()
+    if not raw:
+        return "", ""
+    if not re.fullmatch(r"CVE-\d{4}-\d{4,}", raw):
+        return "", f"模型给的目标 CVE {raw!r} 不是合法编号"
+    if raw in find_cves(text, title):
+        return raw, ""
+    return "", f"模型给的目标 CVE {raw!r} 在原文里找不到"
+
+
+def decide(
+    result: dict[str, Any],
+    *,
+    poc_ok: bool,
+    repo: str,
+    version: str,
+    product: str = "",
+) -> tuple[bool, str]:
+    """把模型结论 + 校验结果收敛成 (是否可复现, 拒绝桶)。
+
+    2026-11-11(T1.4 两刀,rules-v3)去掉了两个会放行"无目标"稿子的口子:
+
+    1. **"正文里出现过某个 CVE"不算目标**。T1.4 实测这条最松: 25 条 F 档稿子的编号只是
+       文章举的例子(CSP 绕过手册提到 CVE-2020-6519、CTF 题解列了 5 个编号),拿它去查
+       只会查到一个跟本文无关的产品。
+    2. **``self_contained`` 不再凭"有源码块"放行**。它当初是为"原文自带完整漏洞样例"开的
+       门,实测进来的全是教程: 堆溢出入门、chroot 逃逸、ret2plt、PATH 提权 —— 跑通只证明
+       我们会编译,证明不了任何真实目标有洞。
+
+    现在只有三种东西能让一条稿子过线: **仓库 / 版本 / CVE 反查出来的产品**。
+    文章真的在讲某个 CVE 的情况走 ``cve_targets`` 反查,查到才放行 —— 不是"有编号就放行"。
+    """
     if not bool(result.get("is_writeup", True)):
         return False, "not_writeup"
     if not bool(result.get("has_poc")) or not poc_ok:
@@ -251,15 +298,9 @@ def decide(rule: RuleScreen, result: dict[str, Any], *, poc_ok: bool, repo: str,
     kind = str(result.get("target_kind") or "").strip()
     if kind == "online_service":
         return False, "online_service"
-    cves = rule.cve_ids
-    if not (repo or version or cves):
-        # 自包含(原文自带完整漏洞目标)不需要仓库 —— 但它必须**真的有源码块**。
-        # 只信模型一句 "self_contained" 等于给它开一道无门槛的后门: 别的都是"找不到
-        # 仓库就拒", 这一档可以随手声明。规则层见过 source 块才算数。
-        if kind == "self_contained" and rule.has_source:
-            return True, ""
-        return False, "target_unknown"
-    return True, ""
+    if repo or version or product:
+        return True, ""
+    return False, "target_unknown"
 
 
 def build_rule_only_candidate(material_id: int, screened_at: str, rule: RuleScreen) -> dict[str, Any]:
@@ -279,6 +320,9 @@ def build_rule_only_candidate(material_id: int, screened_at: str, rule: RuleScre
         "target_kind": "unknown",
         "target_repo": rule.target_repo,
         "target_version": "",
+        "target_cve": "",
+        "target_product": "",
+        "target_source": "",
         "env_hint": "",
         "claimed_effect": "",
         "evidence_quote": "",
@@ -301,15 +345,27 @@ def build_rule_only_candidate(material_id: int, screened_at: str, rule: RuleScre
     }
 
 
-def build_candidate(material_id: int, screened_at: str, outcome: dict[str, Any]) -> dict[str, Any]:
+def build_candidate(
+    material_id: int,
+    screened_at: str,
+    outcome: dict[str, Any],
+    *,
+    resolver: Any = None,
+) -> dict[str, Any]:
     """把一次成功调用变成 ``writeup_repro_candidates`` 的一行。
 
     ``screen_json`` 存模型原始输出 —— 页面要能回答"它凭什么这么判",靠的是这份原文,
     而不是事后重编的话术。
+
+    ``resolver`` 是**第二刀**: 模型给不出仓库/版本、但指认了"本文讲的是哪个 CVE"时,
+    拿这个编号去案例库/OSV/NVD 查产品与版本(见 ``cve_targets``)。它可以抛
+    ``TargetLookupUnavailable``(外部源崩了)或 ``LookupDeferred``(本轮查够了)——
+    两种都**不是结论**,调用方必须一个字都不落库,下一轮重挑。
     """
     rule: RuleScreen = outcome["rule"]
     result: dict[str, Any] = outcome["result"] or {}
     text = str(outcome.get("text") or "")
+    title = str(outcome.get("title") or "")
 
     block_bodies: list[str] = []
     matches = list(re.finditer(r"```([^\n]*)\n(.*?)```", text, re.S))
@@ -321,9 +377,24 @@ def build_candidate(material_id: int, screened_at: str, outcome: dict[str, Any])
     poc_ok, poc_reason = verify_poc(poc_code, text, block_bodies)
     repo, repo_reason = verify_repo(str(result.get("target_repo") or ""), text + " " + str(outcome.get("url") or ""))
     version, version_reason = verify_version(str(result.get("target_version") or ""), text)
-    screenable, reject_reason = decide(rule, result, poc_ok=poc_ok, repo=repo, version=version)
+    target_cve, cve_reason = verify_target_cve(str(result.get("target_cve") or ""), text, title)
 
-    notes = [r for r in (poc_reason, repo_reason, version_reason) if r]
+    notes = [r for r in (poc_reason, repo_reason, version_reason, cve_reason) if r]
+    source = "model" if (repo or version) else ""
+    product = ""
+    if not (repo or version):
+        # 模型指认的编号不可信时, 退到标题里那个 —— 标题是确定性的、不经过模型。
+        # (实测有文章的编号只写在标题里;模型读正文反而没提。)
+        if not target_cve:
+            title_cves = find_cves(title)
+            target_cve = title_cves[0] if title_cves else ""
+        if target_cve and resolver is not None:
+            resolved: ResolvedTarget = resolver(target_cve)
+            repo, version, product, source = resolved.repo, resolved.version, resolved.product, resolved.source
+            if resolved.usable:
+                notes.append(f"目标由 {resolved.source} 按 {target_cve} 反查补全")
+            else:
+                notes.append(f"{target_cve} 在案例库/OSV/NVD 里都查不到产品信息")
     if poc_ok and not bool(result.get("has_poc")):
         # 模型自相矛盾: 摘出了原文里的代码, 却说"没有 PoC"。按没有处理(宁可少收),
         # 但必须留痕 —— 否则统计上它会和"文章真的没代码"混在一个桶里。
@@ -331,12 +402,22 @@ def build_candidate(material_id: int, screened_at: str, outcome: dict[str, Any])
     target_kind = str(result.get("target_kind") or "unknown").strip()
     if target_kind not in TARGET_KINDS:
         target_kind = "unknown"
+    if target_kind == "self_contained" and (repo or version or product):
+        # 反查出了真实目标, 却还挂着"原文自带的样例"这种分类 —— 两列互相打脸。
+        # 下游按 target_kind 决定怎么准备环境, 分类错了就把复现引到文章自带的演示程序上。
+        target_kind = "oss_repo" if repo else "package"
+        if not repo and not version:
+            notes.append("目标是反查出来的产品, 不是文章自带的样例; target_kind 已从 self_contained 纠正")
 
     confidence = result.get("confidence")
     try:
         confidence = min(max(float(confidence), 0.0), 1.0)
     except (TypeError, ValueError):
         confidence = None
+
+    screenable, reject_reason = decide(
+        result, poc_ok=poc_ok, repo=repo, version=version, product=product,
+    )
 
     return {
         "material_id": int(material_id),
@@ -348,6 +429,9 @@ def build_candidate(material_id: int, screened_at: str, outcome: dict[str, Any])
         "target_kind": target_kind,
         "target_repo": repo,
         "target_version": version,
+        "target_cve": target_cve,
+        "target_product": product[:200],
+        "target_source": source,
         "env_hint": str(result.get("env_hint") or "")[:400],
         "claimed_effect": str(result.get("claimed_effect") or "")[:400],
         "evidence_quote": str(result.get("evidence_quote") or "")[:1200],

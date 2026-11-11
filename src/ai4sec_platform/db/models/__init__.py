@@ -670,7 +670,13 @@ CREATE TABLE IF NOT EXISTS writeup_repro_candidates (
     poc_verified    INTEGER NOT NULL DEFAULT 0,
     target_kind     TEXT NOT NULL DEFAULT 'unknown', -- oss_repo|package|ctf|online_service|self_contained|unknown
     target_repo     TEXT NOT NULL DEFAULT '',     -- 已归一成 github:org/name; 归不了一律空
-    target_version  TEXT NOT NULL DEFAULT '',     -- 必须是原文出现过的串, 否则空
+    target_version  TEXT NOT NULL DEFAULT '',     -- 原文出现过的串, 或 CVE 反查出来的区间(`< 1.2.3`)
+    -- 以下三列是 rules-v3(2026-11-11, T1.4 两刀)加的: "正文里出现过某个 CVE"不再等于有目标,
+    -- 必须能把编号反查成产品/版本才算。target_source 记录这个目标是谁给的 —— 模型读出来的,
+    -- 还是案例库/OSV/NVD 查出来的; 事后要能分开统计"模型抽出来的"和"反查救回来的"。
+    target_cve      TEXT NOT NULL DEFAULT '',     -- 模型指认 + 原文校验过的那个洞
+    target_product  TEXT NOT NULL DEFAULT '',     -- 反查得到的产品(vendor:product / npm:vite)
+    target_source   TEXT NOT NULL DEFAULT '',     -- model|db|osv|nvd; 空 = 没定住目标
     env_hint        TEXT NOT NULL DEFAULT '',
     claimed_effect  TEXT NOT NULL DEFAULT '',     -- 作者声称的效果(一句话)
     evidence_quote  TEXT NOT NULL DEFAULT '',     -- 支撑上面判断的原文原句
@@ -712,6 +718,14 @@ def init_db(conn: sqlite3.Connection) -> None:
     except Exception: pass
     # excluded_reason(2026-11-02, D4-5): 答案表已建过, 同上只能补列。
     try: conn.execute("ALTER TABLE capability_eval_answers ADD COLUMN excluded_reason TEXT")
+    except Exception: pass
+    # target_cve / target_product / target_source(2026-11-11, rules-v3): 同上, 表 11-10 已建过,
+    # CREATE TABLE IF NOT EXISTS 补不了列。
+    try: conn.execute("ALTER TABLE writeup_repro_candidates ADD COLUMN target_cve TEXT NOT NULL DEFAULT ''")
+    except Exception: pass
+    try: conn.execute("ALTER TABLE writeup_repro_candidates ADD COLUMN target_product TEXT NOT NULL DEFAULT ''")
+    except Exception: pass
+    try: conn.execute("ALTER TABLE writeup_repro_candidates ADD COLUMN target_source TEXT NOT NULL DEFAULT ''")
     except Exception: pass
     _migrate_results_verdict_labels(conn)
     conn.commit()

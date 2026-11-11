@@ -131,23 +131,23 @@ def test_empty_version_is_not_an_error() -> None:
 
 def test_app_menu_without_poc_is_no_poc() -> None:
     result = {**RESULT_OK, "has_poc": False, "poc_code": ""}
-    assert screener.decide(_rule(), result, poc_ok=False, repo="", version="") == (False, "no_poc")
+    assert screener.decide(result, poc_ok=False, repo="", version="") == (False, "no_poc")
 
 
 def test_listing_page_is_not_writeup() -> None:
     result = {**RESULT_OK, "is_writeup": False}
-    assert screener.decide(_rule(), result, poc_ok=True, repo="", version="") == (False, "not_writeup")
+    assert screener.decide(result, poc_ok=True, repo="", version="") == (False, "not_writeup")
 
 
 def test_claimed_poc_that_cannot_be_found_is_its_own_bucket() -> None:
     """模型说有 PoC 但原文找不到 → poc_unverified, 不是 no_poc(后者会把模型缺陷记成文章问题)。"""
     result = {**RESULT_OK, "poc_code": "完全不存在的一段代码"}
-    assert screener.decide(_rule(), result, poc_ok=False, repo="", version="") == (False, "poc_unverified")
+    assert screener.decide(result, poc_ok=False, repo="", version="") == (False, "poc_unverified")
 
 
 def test_online_service_is_rejected_even_with_poc() -> None:
     result = {**RESULT_OK, "target_kind": "online_service"}
-    assert screener.decide(_rule(), result, poc_ok=True, repo="", version="") == (False, "online_service")
+    assert screener.decide(result, poc_ok=True, repo="", version="") == (False, "online_service")
 
 
 SOLIDITY = """```c
@@ -157,12 +157,23 @@ int main(void) { return 0; }
 """
 
 
-def test_self_contained_target_passes_without_any_repo() -> None:
-    """原文自带完整漏洞目标(示例合约 / 靶场), 没有仓库也可以复现 —— 而且最省事。"""
+def test_self_contained_is_no_longer_a_target_on_its_own() -> None:
+    """rules-v3(2026-11-11): 原文自带源码块不再算"有目标"。
+
+    这条口子当初是为"文章自带可编译的漏洞程序"开的, 实测进来的全是教程 ——
+    堆溢出入门、chroot 逃逸、ret2plt、PATH 提权。跑通只证明我们会编译,
+    证明不了任何**真实目标**有洞, 所以连同源码块一起拒。
+    """
     rule = screen_rules(SOLIDITY)
     assert rule.has_source and not rule.cve_ids and not rule.versions and not rule.target_repo
     result = {**RESULT_OK, "target_kind": "self_contained", "target_repo": "", "target_version": ""}
-    assert screener.decide(rule, result, poc_ok=True, repo="", version="") == (True, "")
+    assert screener.decide(result, poc_ok=True, repo="", version="") == (False, "target_unknown")
+
+
+def test_resolved_product_counts_as_a_target() -> None:
+    """第二刀: 模型给不出仓库/版本, 但编号反查到了产品 —— 这就是目标, 不该丢。"""
+    result = {**RESULT_OK, "target_kind": "unknown", "target_repo": "", "target_version": ""}
+    assert screener.decide(result, poc_ok=True, repo="", version="", product="npm:vite") == (True, "")
 
 
 def test_self_contained_without_any_source_block_is_not_trusted() -> None:
@@ -170,13 +181,12 @@ def test_self_contained_without_any_source_block_is_not_trusted() -> None:
     rule = screen_rules("```\njust some text\n```\n")
     assert not rule.has_source
     result = {**RESULT_OK, "target_kind": "self_contained", "target_repo": "", "target_version": ""}
-    assert screener.decide(rule, result, poc_ok=True, repo="", version="") == (False, "target_unknown")
+    assert screener.decide(result, poc_ok=True, repo="", version="") == (False, "target_unknown")
 
 
 def test_no_target_clue_at_all_is_target_unknown() -> None:
     result = {**RESULT_OK, "target_kind": "unknown"}
-    rule = screen_rules("```c\nint x;\n```\n", title="t")
-    assert screener.decide(rule, result, poc_ok=True, repo="", version="") == (False, "target_unknown")
+    assert screener.decide(result, poc_ok=True, repo="", version="") == (False, "target_unknown")
 
 
 # ---------------------------------------------------------------- 落库行
@@ -188,7 +198,7 @@ def test_candidate_row_carries_verified_fields() -> None:
     assert row["target_repo"] == "github:acme/foo"
     assert row["target_version"] == "2.3.1"
     assert row["poc_verified"] == 1 and row["has_poc"] == 1
-    assert row["rule_version"] == "rules-v2"
+    assert row["rule_version"] == "rules-v3"
     assert '"confidence": 0.92' in row["screen_json"]
 
 
@@ -222,7 +232,7 @@ def test_rule_only_row_marks_it_did_not_see_the_model() -> None:
     row = screener.build_rule_only_candidate(5, "t", rule)
     assert row["screenable"] == 0 and row["reject_reason"] == "not_writeup"
     assert row["screened_by"] == "rules" and row["model_profile"] == ""
-    assert row["rule_version"] == "rules-v2"
+    assert row["rule_version"] == "rules-v3"
 
 
 # ---------------------------------------------------------------- 送模型的内容
@@ -347,7 +357,9 @@ def test_screen_material_rejects_result_missing_verdict_keys(monkeypatch) -> Non
     assert "缺字段" in outcome["reason"]
 
 
-@pytest.mark.parametrize("kind", screener.TARGET_KINDS)
+@pytest.mark.parametrize("kind", [k for k in screener.TARGET_KINDS if k != "self_contained"])
 def test_target_kinds_are_a_closed_set(kind: str) -> None:
+    # self_contained 单独排除: 它只在"确实没有真实目标"时才留得住, 一旦给出仓库/版本
+    # 就会被纠正成 oss_repo/package(见 test_writeup_repro_target_gate.py 同名用例)。
     row = screener.build_candidate(1, "t", _outcome({**RESULT_OK, "target_kind": kind}))
     assert row["target_kind"] == kind

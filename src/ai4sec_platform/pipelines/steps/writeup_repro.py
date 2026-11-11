@@ -32,6 +32,12 @@ from typing import Any
 
 from ai4sec_platform.db import repositories as repo
 from ai4sec_platform.domains.capabilities.writeup_repro import screener_rules, store
+from ai4sec_platform.domains.capabilities.writeup_repro.cve_targets import (
+    DEFAULT_MAX_LOOKUPS,
+    CaseTargetResolver,
+    LookupDeferred,
+    TargetLookupUnavailable,
+)
 from ai4sec_platform.pipelines.context import PipelineContext
 from ai4sec_platform.pipelines.results import StepResult
 
@@ -53,6 +59,10 @@ def _empty_metrics(pending: int) -> dict[str, Any]:
         "skipped_no_model": 0,
         "provider_down": 0,
         "budget_exhausted": 0,
+        "cve_resolved": 0,
+        "cve_unresolved": 0,
+        "lookup_deferred": 0,
+        "lookup_unavailable": 0,
         "remaining": int(pending),
     }
 
@@ -112,6 +122,10 @@ class ScreenWriteupMaterialsStep:
     - ``writeup_screen_budget_seconds``:本轮时间预算(默认 900);到点收工,已筛的照常落库
     - ``writeup_screen_ids``:只筛指定素材(配合 ``writeup_screen_force`` 用来重筛)
     - ``writeup_screen_force``:忽略 ``rule_version`` 过滤,指定 id 一律重筛
+    - ``writeup_screen_resolve_cve``:模型没给出仓库/版本时,拿它指认的 CVE 去案例库/OSV/NVD
+      反查目标(默认开)。关掉 = 回到"无目标一律拒"的一刀切口径
+    - ``writeup_screen_cve_lookups``:本轮最多查几条 CVE(默认 25);用完的素材**不落库**,
+      下一轮重挑 —— 预算不够时宁可晚一轮,也不能用"没查"冒充"查不到"
     """
 
     name: str = "screen_writeup_materials"
@@ -140,6 +154,13 @@ class ScreenWriteupMaterialsStep:
             return StepResult(metrics=metrics)
 
         from ai4sec_platform.domains.capabilities.writeup_repro import screener
+
+        resolver = None
+        if bool(params.get("writeup_screen_resolve_cve", True)):
+            resolver = CaseTargetResolver(
+                context.conn,
+                max_lookups=int(params.get("writeup_screen_cve_lookups", DEFAULT_MAX_LOOKUPS)),
+            )
 
         reasons: dict[str, int] = {}
         error_kinds: dict[str, int] = {}
@@ -200,14 +221,32 @@ class ScreenWriteupMaterialsStep:
                     continue
 
                 metrics["model_called"] += 1
-                row = screener.build_candidate(material["id"], screened_at, result)
+                try:
+                    row = screener.build_candidate(
+                        material["id"], screened_at, result, resolver=resolver,
+                    )
+                except LookupDeferred:
+                    # 预算用完 = 这一条**没查**,不是查不到。一个字都不写,下一轮重挑;
+                    # 写成 target_unknown 等于用"没查"冒充"没有"(最难发现的一类谎)。
+                    metrics["lookup_deferred"] += 1
+                    _bump(error_kinds, "cve_lookup_deferred")
+                    continue
+                except TargetLookupUnavailable:
+                    # 外部源(OSV/NVD)挂了 —— 同上,不落库。
+                    metrics["lookup_unavailable"] += 1
+                    _bump(error_kinds, "cve_lookup_unavailable")
+                    continue
                 store.upsert_candidate(context.conn, row)
                 metrics["written"] += 1
                 if row["screenable"]:
                     metrics["screenable"] += 1
+                    if row["target_source"] in ("db", "osv", "nvd"):
+                        metrics["cve_resolved"] += 1
                 else:
                     metrics["rejected"] += 1
                     _bump(reasons, row["reject_reason"])
+                    if row["reject_reason"] == "target_unknown" and row.get("target_cve"):
+                        metrics["cve_unresolved"] += 1
                 repo.create_model_call(
                     context.conn,
                     run_id=context.run_id,

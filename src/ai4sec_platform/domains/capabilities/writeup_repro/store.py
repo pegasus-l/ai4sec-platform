@@ -26,7 +26,8 @@ ITEM_TYPE = "material"
 
 _COLUMNS = (
     "material_id", "screenable", "reject_reason", "has_poc", "poc_lang", "poc_verified",
-    "target_kind", "target_repo", "target_version", "env_hint", "claimed_effect",
+    "target_kind", "target_repo", "target_version", "target_cve", "target_product",
+    "target_source", "env_hint", "claimed_effect",
     "evidence_quote", "rule_json", "screen_json", "rule_version", "model_profile",
     "screened_by", "screened_at",
 )

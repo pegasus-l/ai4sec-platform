@@ -11,6 +11,13 @@
 3. **L1 有命令或源码,但定不下目标** → ``target_unknown``。目标只能来自三种**硬证据**:
    仓库 URL、CVE 编号、三段式版本号。定不下来就不进队列,因为"复现谁"都不知道。
 
+> **``rules-v3``(2026-11-11,T1.4 两刀)**:L1 过线只代表"值得送去模型看",不再代表可复现。
+> T1.4 基线发现 102 条"可复现"里 47 条既无仓库也无版本 —— 其中"正文里出现过某个 CVE"
+> 这条最松的口子放了 25 条教程进来(编号只是文章举的例子)。所以现在 **CVE 只是线索,
+> 要能反查成产品/版本才算目标**:模型层指认 CVE → ``cve_targets`` 去查 → 查到才放行。
+> 规则层这里放宽不放宽都不影响最终结论,留着它的唯一理由是"没有仓库也没有编号的稿子
+> 连模型都不用调"。
+
 通过 L1 的素材才允许进 L2(模型抽取 target/spec)。
 
 两条刻意的克制
@@ -31,7 +38,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
-SCREENER_VERSION = "rules-v2"
+SCREENER_VERSION = "rules-v3"
 
 #: 拒绝桶。固定枚举 —— 新值要改代码,不允许管道里随手回传自由文本。
 REJECT_REASONS: tuple[str, ...] = (
@@ -128,6 +135,19 @@ _NON_REPO_SEGMENTS = frozenset({
 _CVE_RE = re.compile(r"\bCVE-\d{4}-\d{4,}\b", re.I)
 #: 三段式(1.2.3)或带 v 的两段式(v1.2)。``1.2`` 单看不认。
 _VERSION_RE = re.compile(r"(?<![\w.])(?:v\d+\.\d+(?:\.\d+)?|\d+\.\d+\.\d+)(?![\w.])", re.I)
+
+
+def find_cves(*texts: str) -> tuple[str, ...]:
+    """从若干段文本里抽出 CVE 编号(统一大写、去重、排序)。
+
+    单独暴露出来是因为 T1.4 之后有两处要用同一个口径: 规则层判"有没有目标线索",
+    以及模型层核对"模型指的那个 CVE 是不是真的在原文里"(2026-11-11)。
+    """
+    found: set[str] = set()
+    for text in texts:
+        for match in _CVE_RE.finditer(str(text or "")):
+            found.add(match.group(0).upper())
+    return tuple(sorted(found))
 
 
 @dataclass(frozen=True)
@@ -310,7 +330,7 @@ def screen_rules(text: str, *, title: str = "", url: str = "") -> RuleScreen:
     repo_match = _REPO_RE.search(haystack)
     if repo_match:
         repo = normalize_repo(repo_match.group(0))
-    cves = tuple(sorted({m.group(0).upper() for m in _CVE_RE.finditer(haystack)}))
+    cves = find_cves(haystack)
     versions = tuple(sorted({m.group(0) for m in _VERSION_RE.finditer(haystack)}))
 
     reasons: list[str] = []
