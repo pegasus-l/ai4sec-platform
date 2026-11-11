@@ -225,6 +225,25 @@ def test_resolved_target_corrects_self_contained_kind(monkeypatch) -> None:
     assert row["target_kind"] == "oss_repo"
 
 
+def test_resolved_target_corrects_unknown_kind(monkeypatch) -> None:
+    """模型说"不知道是什么目标", 反查查到了仓库 —— 分类也得纠正。
+
+    1229 条实测有 7 条可复现的挂着 ``unknown``: 判定没问题(它们确实有目标), 但下游要按
+    ``target_kind`` 决定怎么准备环境, ``unknown`` 等于"有目标却不知道是什么"。
+    """
+    conn = _conn()
+    _material(conn, 10, CVE_TEXT)
+    _patch_model(monkeypatch, _Provider(_cve_result(target_kind="unknown", target_cve="CVE-2026-31979")))
+    _patch_resolver(monkeypatch, lambda cve: cve_targets.ResolvedTarget(
+        repo="github:acme/foo", source="osv", cve=cve,
+    ))
+
+    ScreenWriteupMaterialsStep().run(_ctx(conn))
+
+    row = store.get_candidate(conn, 10)
+    assert row["screenable"] == 1 and row["target_kind"] == "oss_repo"
+
+
 def test_model_supplied_repo_is_marked_as_model(monkeypatch) -> None:
     """模型自己读出来的仓库不该被算成"反查救回来的"。"""
     conn = _conn()

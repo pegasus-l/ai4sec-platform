@@ -696,6 +696,60 @@ CREATE TABLE IF NOT EXISTS writeup_repro_candidates (
 );
 CREATE INDEX IF NOT EXISTS idx_wrc_screenable ON writeup_repro_candidates(screenable, screened_at);
 CREATE INDEX IF NOT EXISTS idx_wrc_target     ON writeup_repro_candidates(target_repo);
+
+-- T2.1(2026-11-11): 复现任务。一行 = "把这一篇素材真的跑一遍"。
+-- 与候选表分工: 候选回答"这篇值不值得跑"(一次预筛, 可复算); 任务回答"跑了没、算不算成"
+-- (有生命周期, 有证据)。候选重筛会重写自己的行, 任务行**不受影响** —— 否则重跑预筛会把
+-- 正在跑的任务连带改掉。
+--
+-- material_id 上 UNIQUE: 同一篇素材只允许一条任务。重复点"复现"返回已有那行, 不插新行
+-- (T2.3 幂等)。要重跑走 T3 的重跑入口重建任务, 不把已完成的记录改回 running ——
+-- 否则证据包与结论会对不上。
+CREATE TABLE IF NOT EXISTS writeup_repro_tasks (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    material_id      INTEGER NOT NULL UNIQUE,     -- domain_items(id), domain='vulnerabilities'
+    case_id          INTEGER,                     -- 关联的漏洞案例(vulnerability_cases.id), 可空
+    subject_kind     TEXT NOT NULL DEFAULT 'writeup_material',
+    -- 复现对象的描述: claim 来自 T1, spec 生成后可被更准确的版本覆盖
+    claim            TEXT NOT NULL DEFAULT '',
+    claim_quote      TEXT NOT NULL DEFAULT '',
+    target_kind      TEXT NOT NULL DEFAULT 'unknown',
+    target_repo      TEXT NOT NULL DEFAULT '',
+    target_version   TEXT NOT NULL DEFAULT '',
+    -- T2.2 的验收标准。放 JSON 而不是拆列: spec 是模型产物 + 人工可编辑, 拆列等于把
+    -- 一套还在变的 schema 固化进主键表。要查的字段(claim/target)已在上面对应列冗余。
+    spec_json        TEXT NOT NULL DEFAULT '{}',
+    spec_source      TEXT NOT NULL DEFAULT '',    -- llm|human; human 优先(文档 §5.3)
+    -- 模型说"文章够了"却给不出能对上的引用时的累计次数(网关报错不计)。到上限收 spec_failed:
+    -- 那是我们建不出 spec, 不是原文不可复现 —— 单独一个终态, 不和 cannot_repro 混计。
+    spec_attempts    INTEGER NOT NULL DEFAULT 0,
+    -- 状态机见 domains/capabilities/writeup_repro/tasks.py: 非法迁移直接抛错, 不静默写
+    status           TEXT NOT NULL DEFAULT 'pending',
+    -- verdict 与 failure_reason 必须成对(§7.2)。cannot_repro = 原文的锅, failed = 我们的锅,
+    -- 两者混着统计,"原文不可复现"会被读成"我们做不出来"
+    verdict          TEXT NOT NULL DEFAULT '',    -- success|partial|cannot_repro|failed|blocked
+    failure_reason   TEXT NOT NULL DEFAULT '',    -- probe_not_matched|review_conflict|degraded|
+                                                  -- article_incomplete|version_mismatch|env_error|online_target
+    review_verdict   TEXT NOT NULL DEFAULT '',    -- 人工复核结论
+    review_reason    TEXT NOT NULL DEFAULT '',
+    recipe_id        INTEGER,                     -- T4 的 recipe(writeup_repro_recipes), 未上线恒空
+    container_name   TEXT NOT NULL DEFAULT '',
+    session_id       TEXT NOT NULL DEFAULT '',
+    evidence_json    TEXT NOT NULL DEFAULT '{}',  -- 判定依据(命令输出片段/截图路径/校验结果)
+    recipe_json      TEXT NOT NULL DEFAULT '{}',  -- 这次实际怎么跑起来的(可复用成 recipe)
+    log              TEXT NOT NULL DEFAULT '',
+    duration_seconds INTEGER,
+    tool_calls       INTEGER,
+    trigger          TEXT NOT NULL DEFAULT 'manual', -- manual|pipeline|rerun
+    created_by       TEXT NOT NULL DEFAULT '',
+    created_at       TEXT NOT NULL,
+    updated_at       TEXT NOT NULL DEFAULT '',
+    finished_at      TEXT,
+    cleaned_at       TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_wrt_status   ON writeup_repro_tasks(status, id);
+CREATE INDEX IF NOT EXISTS idx_wrt_verdict  ON writeup_repro_tasks(verdict, id);
+CREATE INDEX IF NOT EXISTS idx_wrt_material ON writeup_repro_tasks(material_id);
 """
 
 

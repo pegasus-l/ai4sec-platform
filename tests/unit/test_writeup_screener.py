@@ -214,9 +214,13 @@ def test_candidate_row_keeps_reject_reason_for_rejected_items() -> None:
     assert row["screenable"] == 0 and row["reject_reason"] == "no_poc"
 
 
-def test_unknown_target_kind_falls_back_to_unknown() -> None:
-    row = screener.build_candidate(1, "t", _outcome({**RESULT_OK, "target_kind": "whatever"}))
-    assert row["target_kind"] == "unknown"
+def test_bogus_target_kind_is_never_written_as_is() -> None:
+    """模型给的非法分类不许原样落库 —— 有目标就按目标纠正, 什么都没有才是 unknown。"""
+    assert screener.build_candidate(1, "t", _outcome({**RESULT_OK, "target_kind": "whatever"}))["target_kind"] == "oss_repo"
+    only_version = _outcome({**RESULT_OK, "target_kind": "whatever", "target_repo": ""})
+    assert screener.build_candidate(2, "t", only_version)["target_kind"] == "package"
+    bare = _outcome({**RESULT_OK, "target_kind": "whatever", "target_repo": "", "target_version": ""})
+    assert screener.build_candidate(3, "t", bare)["target_kind"] == "unknown"
 
 
 def test_contradictory_poc_is_recorded_in_notes() -> None:
@@ -357,9 +361,10 @@ def test_screen_material_rejects_result_missing_verdict_keys(monkeypatch) -> Non
     assert "缺字段" in outcome["reason"]
 
 
-@pytest.mark.parametrize("kind", [k for k in screener.TARGET_KINDS if k != "self_contained"])
+@pytest.mark.parametrize("kind", ["oss_repo", "package", "ctf", "online_service"])
 def test_target_kinds_are_a_closed_set(kind: str) -> None:
-    # self_contained 单独排除: 它只在"确实没有真实目标"时才留得住, 一旦给出仓库/版本
-    # 就会被纠正成 oss_repo/package(见 test_writeup_repro_target_gate.py 同名用例)。
+    # 只测"本来就该原样保留"的四种。self_contained / unknown 单独排除: 它们只在模型确实
+    # 给不出目标时才留得住, 一旦反查/摘录出了仓库或版本就会被纠正成 oss_repo/package
+    # (见 test_writeup_repro_target_gate.py 的两个 "*_corrects_*_kind" 用例)。
     row = screener.build_candidate(1, "t", _outcome({**RESULT_OK, "target_kind": kind}))
     assert row["target_kind"] == kind

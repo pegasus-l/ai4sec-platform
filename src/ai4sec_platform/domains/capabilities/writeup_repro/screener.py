@@ -402,11 +402,13 @@ def build_candidate(
     target_kind = str(result.get("target_kind") or "unknown").strip()
     if target_kind not in TARGET_KINDS:
         target_kind = "unknown"
-    if target_kind == "self_contained" and (repo or version or product):
-        # 反查出了真实目标, 却还挂着"原文自带的样例"这种分类 —— 两列互相打脸。
-        # 下游按 target_kind 决定怎么准备环境, 分类错了就把复现引到文章自带的演示程序上。
+    if target_kind in ("self_contained", "unknown") and (repo or version or product):
+        # 模型说"原文自带的样例"或"不知道", 反查却给出了真实目标 —— 两列互相打脸。
+        # 下游按 target_kind 决定怎么准备环境, 挂着 self_contained 会把复现引到文章里那个
+        # 演示程序上, 挂着 unknown 则等于"有目标但不知道是什么"(1229 条实测 7 条)。
+        was_kind = target_kind
         target_kind = "oss_repo" if repo else "package"
-        if not repo and not version:
+        if was_kind == "self_contained" and not repo and not version:
             notes.append("目标是反查出来的产品, 不是文章自带的样例; target_kind 已从 self_contained 纠正")
 
     confidence = result.get("confidence")
