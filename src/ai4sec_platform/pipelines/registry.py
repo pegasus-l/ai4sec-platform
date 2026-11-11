@@ -6,6 +6,7 @@ from ai4sec_platform.domains.capabilities.pipelines import (
     capability_from_news_pipeline,
     capability_repro_pipeline,
     capability_web_classify_pipeline,
+    capability_writeup_repro_prescreen_pipeline,
 )
 from ai4sec_platform.domains.news.pipelines import (
     news_daily_pipeline,
@@ -45,6 +46,9 @@ def default_registry() -> PipelineRegistry:
     registry.register(capability_web_classify_pipeline())
     registry.register(capability_repro_pipeline())
     registry.register(capability_conversion_pipeline())
+    # 2026-11-11 T1.3: writeup 复现预筛(素材 → 能否复现的结论)。手动触发, **还没排调度** ——
+    # 等 T1.4 的基线数字出来再定跑的时刻;回滚 = 注释掉这一行, 表与结论都留着。
+    registry.register(capability_writeup_repro_prescreen_pipeline())
     registry.register(huawei_collect_sources_pipeline())
     registry.register(huawei_cve_scout_pipeline())
     registry.register(huawei_attack_surface_pipeline())

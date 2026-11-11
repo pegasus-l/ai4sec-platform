@@ -21,6 +21,7 @@ from ai4sec_platform.pipelines.steps.capability_raw import (
     StoreCapabilitiesStep,
 )
 from ai4sec_platform.pipelines.steps.repro import TriggerReproStep
+from ai4sec_platform.pipelines.steps.writeup_repro import ScreenWriteupMaterialsStep
 from ai4sec_platform.domains.capabilities.builders import build_conversion_record
 
 
@@ -207,4 +208,18 @@ def capability_conversion_pipeline() -> PipelineDefinition:
         name="capabilities.conversion_pipeline",
         domain="capabilities",
         steps=[SelectConversionCandidatesStep(), BuildConversionRecordStep()],
+    )
+
+
+def capability_writeup_repro_prescreen_pipeline() -> PipelineDefinition:
+    """writeup 复现预筛(T1.3): 素材 → 规则层 → 模型层 → ``writeup_repro_candidates``。
+
+    单独一条而不是挂进 ``from_news_pipeline``: 预筛只读素材、不产生能力条目, 挂进主链路后
+    一次模型网关故障会连带影响能力库当晚的产出, 而两者失败后的补救方式完全不同(预筛下一轮
+    自动重挑, 能力库要人工看)。**暂不排调度** —— 等 T1.4 拿到基线数字再定跑的时刻。
+    """
+    return PipelineDefinition(
+        name="capabilities.writeup_repro_prescreen",
+        domain="capabilities",
+        steps=[ScreenWriteupMaterialsStep()],
     )

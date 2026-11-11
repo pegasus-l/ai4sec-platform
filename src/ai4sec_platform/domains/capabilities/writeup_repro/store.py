@@ -46,12 +46,17 @@ def pending_materials(
     limit: int = 200,
     rule_version: str = "",
     material_ids: Iterable[int] | None = None,
+    force: bool = False,
 ) -> list[dict[str, Any]]:
     """还没按当前规则版本预筛过的素材。
 
     ``cleaned_text`` 走 ``json_extract`` 而不是把 ``payload_json`` 整列拉出来 ——
     素材 payload 平均几十到几百 KB(库里 ``search_candidate`` 的 payload 合计 7.5 GB),
     整列取回来只为读一个字段是白给内存。
+
+    ``force=True`` 时**不看** ``rule_version``,只按 ``material_ids`` 挑 —— 给"我就是要
+    重筛这几条"(改完提示词、怀疑某几条判错)用。不带 id 就别用:那等于整表重筛,会白花
+    一整轮模型调用,而且没有任何新信息(同版本同输入,结论必然相同)。
     """
     sql = [
         "SELECT d.id, d.title, d.source_url, d.source, d.primary_date,",
@@ -60,9 +65,11 @@ def pending_materials(
         "  FROM domain_items d",
         "  LEFT JOIN writeup_repro_candidates c ON c.material_id = d.id",
         " WHERE d.domain = ? AND d.item_type = ? AND d.status != '已淘汰'",
-        "   AND (c.material_id IS NULL OR c.rule_version != ?)",
     ]
-    params: list[Any] = [DOMAIN, ITEM_TYPE, rule_version]
+    params: list[Any] = [DOMAIN, ITEM_TYPE]
+    if not force:
+        sql.append("   AND (c.material_id IS NULL OR c.rule_version != ?)")
+        params.append(rule_version)
     ids = [int(i) for i in (material_ids or [])]
     if ids:
         sql.append(f"   AND d.id IN ({','.join('?' * len(ids))})")
