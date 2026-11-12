@@ -7,7 +7,9 @@
     POST   /api/writeup-repro/tasks                    建任务(同一素材幂等)
     POST   /api/writeup-repro/tasks/{id}/spec          调模型生成 spec 并校验
     PATCH  /api/writeup-repro/tasks/{id}/spec          人工改 spec(spec_source=human)
-    POST   /api/writeup-repro/tasks/{id}/transition    状态机迁移(T3 的执行器调)
+    POST   /api/writeup-repro/tasks/{id}/transition    状态机迁移(执行器调)
+    POST   /api/writeup-repro/tasks/{id}/run           真的跑一遍(T3, 后台线程)
+    POST   /api/writeup-repro/tasks/{id}/stop          停止正在跑的任务
     POST   /api/writeup-repro/tasks/{id}/cancel        人取消
     GET    /api/writeup-repro/stats                    漏斗统计
 
@@ -32,6 +34,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 from ai4sec_platform.app.dependencies import current_user, get_db
+from ai4sec_platform.domains.capabilities.writeup_repro import executor
 from ai4sec_platform.domains.capabilities.writeup_repro import spec as spec_module
 from ai4sec_platform.domains.capabilities.writeup_repro import store, tasks
 
@@ -152,6 +155,45 @@ def cancel_task(task_id: int, conn: sqlite3.Connection = Depends(get_db)) -> dic
         return {"task": tasks.cancel(conn, task_id)}
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/tasks/{task_id}/run")
+def run_task(
+    task_id: int,
+    timeout: int | None = Query(None, ge=120, le=7200, description="本次执行的时间上限(秒)"),
+    conn: sqlite3.Connection = Depends(get_db),
+) -> dict[str, Any]:
+    """真的按 spec 跑一遍。**后台线程执行**, 立刻返回。
+
+    三道前置检查都在这里挡住, 不让"没有 spec 的任务"白开一个会话:
+
+    - 已是终态 → 400(要重跑得新开任务行, 否则证据与结论对不上);
+    - 没有 steps → 400(先调 ``POST /tasks/{id}/spec``);
+    - 已有执行线程 → 200 + ``started=false``(不重起, 不双跑)。
+    """
+    task = _must_get(conn, task_id)
+    if task["status"] in tasks.TERMINAL_STATES:
+        raise HTTPException(status_code=400, detail=f"任务 {task_id} 已是终态 {task['status']}, 不能重跑")
+    if not (task.get("spec_json") or {}).get("steps"):
+        raise HTTPException(status_code=400, detail="任务还没有可执行的 spec, 先调 POST /tasks/{id}/spec")
+    started = executor.start_task(task_id, timeout=timeout)
+    latest = tasks.get_task(conn, task_id) or task
+    return {
+        "started": started,
+        "reason": "" if started else "已有执行线程在跑, 不重复启动",
+        "task": latest,
+    }
+
+
+@router.post("/tasks/{task_id}/stop")
+def stop_task(task_id: int, conn: sqlite3.Connection = Depends(get_db)) -> dict[str, Any]:
+    """停止执行。只置进程内的停止标志, 线程在下一个心跳点退出并落 ``cancelled``。"""
+    _must_get(conn, task_id)
+    signalled = executor.stop_task(task_id)
+    return {
+        "signalled": signalled,
+        "reason": "" if signalled else "进程内没有这条任务的执行线程(可能已结束, 或进程重启过)",
+    }
 
 
 @router.post("/tasks/{task_id}/transition")

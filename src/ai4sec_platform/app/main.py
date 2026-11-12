@@ -423,6 +423,16 @@ def create_app() -> FastAPI:
             print(f'[repro-recover] {n} orphaned repro task(s) recovered', flush=True)
         except Exception as e:  # noqa: BLE001 - 清扫失败不影响启动
             print(f'[repro-recover] error: {e}', flush=True)
+        # writeup 复现的执行线程同样随进程消亡。这里先扫一遍: 进程内没有活线程的 running 行
+        # 按已产出的会话证据收尾(并中止 serve 会话止损), 不留在"执行中"。
+        try:
+            from ai4sec_platform.domains.capabilities.writeup_repro.executor import (
+                recover_orphaned_tasks as recover_orphaned_writeup_tasks,
+            )
+            n = recover_orphaned_writeup_tasks()
+            print(f'[writeup-recover] {n} orphaned writeup task(s) recovered', flush=True)
+        except Exception as e:  # noqa: BLE001 - 清扫失败不影响启动
+            print(f'[writeup-recover] error: {e}', flush=True)
         # 容器重启会把在跑的 pipeline runner 线程杀死, DB 行卡 running(实测 14 个僵尸)。
         # 启动清扫全部翻 interrupted, 保证无 running 行在重启后存活。
         try:

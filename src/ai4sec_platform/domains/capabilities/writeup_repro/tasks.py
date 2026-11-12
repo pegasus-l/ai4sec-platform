@@ -50,11 +50,15 @@ TERMINAL_STATES: tuple[str, ...] = (
 STATES: tuple[str, ...] = ACTIVE_STATES + TERMINAL_STATES
 
 #: 允许的迁移。终态不在表里 ⇒ 任何从终态出发的迁移都会被拒。
+#: ``cancelled`` 从每个非终态都可达 —— 模块 docstring 写的就是"任意非终态 → cancelled",
+#: 这里少了它的话, 用户点"停止"只会得到一句 400(排队中/执行中的任务恰恰最需要能停)。
+#: ``blocked`` 从 ``spec_ready`` / ``queued`` 也直接可达: 安全边界在**开跑前**就拦下来的任务
+#: 从未执行过, 不该先假装 running 再落 blocked。
 _TRANSITIONS: dict[str, set[str]] = {
     "pending": {"spec_ready", "queued", "cannot_repro", "cancelled", "spec_failed"},
-    "spec_ready": {"queued", "cannot_repro", "cancelled", "spec_failed"},
-    "queued": {"running", "failed", "cancelled"},
-    "running": {"success", "partial", "failed", "cannot_repro", "blocked"},
+    "spec_ready": {"queued", "cannot_repro", "cancelled", "spec_failed", "blocked"},
+    "queued": {"running", "failed", "cancelled", "blocked"},
+    "running": {"success", "partial", "failed", "cannot_repro", "blocked", "cancelled"},
 }
 
 #: spec 生成连续失败几次就收成 ``spec_failed``。设上限是因为它会花模型调用,
@@ -303,6 +307,46 @@ def transition(
 def cancel(conn: sqlite3.Connection, task_id: int) -> dict[str, Any]:
     """人取消。终态任务再取消会抛错(而不是"看起来取消了")。"""
     return transition(conn, task_id, "cancelled")
+
+
+#: 任务日志的保留上限(字符)。一次执行会落几千行(含提示词与命令输出), 不封顶的话
+#: 单行能长到几十 MB, 详情接口跟着变慢 —— 只留尾部, 开头是早就没用的提示词。
+LOG_LIMIT = 400_000
+
+
+def append_log(conn: sqlite3.Connection, task_id: int, line: str) -> None:
+    """追加一行日志。执行线程每 15 秒就会调一次, 所以必须轻。
+
+    超过 ``LOG_LIMIT`` 时保留尾部: 出问题时要看的是**最后**发生了什么, 而不是开头的提示词。
+    """
+    text = f"{now()} {line}" if line else ""
+    if not text:
+        return
+    conn.execute(
+        "UPDATE writeup_repro_tasks SET log = substr(log || ? || char(10), -?) WHERE id = ?",
+        (text, LOG_LIMIT, int(task_id)),
+    )
+    conn.commit()
+
+
+_RUNTIME_FIELDS = frozenset({"session_id", "container_name", "duration_seconds", "tool_calls"})
+
+
+def set_runtime(conn: sqlite3.Connection, task_id: int, **fields: Any) -> None:
+    """执行途中更新运行时字段(会话 id / 耗时 / 工具调用数)。**不改状态**。
+
+    与 ``transition`` 分开: 那些字段在任务还是 ``running`` 时就一直在变, 走状态机既啰嗦
+    又容易写出非法迁移。
+    """
+    updates = {key: value for key, value in fields.items() if key in _RUNTIME_FIELDS}
+    if not updates:
+        return
+    sets = ", ".join(f"{key} = ?" for key in updates)
+    conn.execute(
+        f"UPDATE writeup_repro_tasks SET {sets}, updated_at = ? WHERE id = ?",
+        [*updates.values(), now(), int(task_id)],
+    )
+    conn.commit()
 
 
 def list_tasks(

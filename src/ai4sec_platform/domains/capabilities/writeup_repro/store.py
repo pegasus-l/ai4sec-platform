@@ -103,6 +103,33 @@ def upsert_candidate(conn: sqlite3.Connection, row: dict[str, Any]) -> None:
     )
 
 
+def get_material(conn: sqlite3.Connection, material_id: int) -> dict[str, Any] | None:
+    """读一条素材的正文。**只取需要的字段**, 不 ``SELECT *``。
+
+    素材 payload 动辄几十上百 KB(全库 search_candidate 的 payload 合计 7.5 GB), 而执行器
+    与 spec 生成器要的只是标题 / 地址 / 正文。返回结构与 ``pending_materials`` 一致, 免得
+    同一条素材在两个调用点长得不一样。
+    """
+    row = conn.execute(
+        "SELECT d.id, d.title, d.source_url, d.source, d.primary_date,"
+        "       COALESCE(json_extract(d.payload_json, '$.cleaned_text'),"
+        "                json_extract(d.payload_json, '$.markdown'), '') AS body"
+        "  FROM domain_items d"
+        " WHERE d.id = ? AND d.domain = ? AND d.item_type = ?",
+        (int(material_id), DOMAIN, ITEM_TYPE),
+    ).fetchone()
+    if row is None:
+        return None
+    return {
+        "id": row[0],
+        "title": row[1] or "",
+        "url": row[2] or "",
+        "source": row[3] or "",
+        "primary_date": row[4] or "",
+        "cleaned_text": row[5] or "",
+    }
+
+
 def get_candidate(conn: sqlite3.Connection, material_id: int) -> dict[str, Any] | None:
     cur = conn.execute(
         "SELECT * FROM writeup_repro_candidates WHERE material_id = ?", (int(material_id),)
