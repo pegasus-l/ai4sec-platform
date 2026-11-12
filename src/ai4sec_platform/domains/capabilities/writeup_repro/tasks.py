@@ -27,8 +27,12 @@
 为什么建任务要幂等
 ==================
 
-同一篇素材被点两次"复现", 不该出现两条并行任务去抢同一个容器。`material_id` 上加了
-UNIQUE, 重复创建返回**已有那一行** + `created=False`, 调用方据此决定是"继续跑"还是"新开跑"。
+同一篇素材被点两次"复现", 不该出现两条并行任务去抢同一个容器。``UNIQUE(material_id, attempt)``
+加上"已有任务就返回当前那一遍", 重复创建返回**已有那一行** + `created=False`, 调用方据此决定是
+"继续跑"还是"新开跑"。
+
+要跑第二遍**不是**建一条同 attempt 的行(那会撞唯一键), 而是 `rerun()`: attempt+1 新建一行,
+上一行原样留着。2026-11-12 用户拍板的口径 —— 见 `rerun()` 的 docstring。
 """
 
 from __future__ import annotations
@@ -104,12 +108,23 @@ def get_task(conn: sqlite3.Connection, task_id: int) -> dict[str, Any] | None:
 
 
 def get_task_by_material(conn: sqlite3.Connection, material_id: int) -> dict[str, Any] | None:
+    """这条素材**当前这一遍**的任务(最新一遍)。历史几遍留在库里, 各带各的证据。"""
     conn.row_factory = conn.row_factory or sqlite3.Row
     row = conn.execute(
-        "SELECT * FROM writeup_repro_tasks WHERE material_id = ? ORDER BY id DESC LIMIT 1",
+        "SELECT * FROM writeup_repro_tasks WHERE material_id = ?"
+        " ORDER BY attempt DESC, id DESC LIMIT 1",
         (int(material_id),),
     ).fetchone()
     return _parse(row)
+
+
+def next_attempt(conn: sqlite3.Connection, material_id: int) -> int:
+    """这条素材下一遍是第几遍(空表 → 1)。"""
+    value = conn.execute(
+        "SELECT COALESCE(MAX(attempt), 0) FROM writeup_repro_tasks WHERE material_id = ?",
+        (int(material_id),),
+    ).fetchone()[0]
+    return int(value or 0) + 1
 
 
 def create_task(
@@ -137,14 +152,16 @@ def create_task(
         return existing, False
 
     stamp = now()
+    attempt = next_attempt(conn, material_id)
     cur = conn.execute(
         "INSERT OR IGNORE INTO writeup_repro_tasks ("
-        " material_id, case_id, subject_kind, claim, claim_quote, target_kind,"
+        " material_id, attempt, case_id, subject_kind, claim, claim_quote, target_kind,"
         " target_repo, target_version, spec_json, spec_source, status,"
         " trigger, created_by, created_at, updated_at"
-        ") VALUES (?, ?, 'writeup_material', ?, ?, ?, ?, ?, '{}', '', 'pending', ?, ?, ?, ?)",
+        ") VALUES (?, ?, ?, 'writeup_material', ?, ?, ?, ?, ?, '{}', '', 'pending', ?, ?, ?, ?)",
         (
             int(material_id),
+            attempt,
             int(case_id) if case_id else None,
             str(candidate.get("claimed_effect") or ""),
             str(candidate.get("evidence_quote") or ""),
@@ -163,6 +180,66 @@ def create_task(
         return get_task_by_material(conn, material_id), False  # type: ignore[return-value]
     conn.commit()
     return get_task(conn, int(cur.lastrowid)), True
+
+
+def rerun(conn: sqlite3.Connection, task_id: int, *, created_by: str = "") -> dict[str, Any]:
+    """把一条**终态**任务重跑一遍: 新开一行 ``attempt+1``, 上一行原样保留。
+
+    为什么不是"归档证据 + 重置状态"(2026-11-12 用户拍板的 (material_id, attempt) 口径):
+
+    - **会话跑完就 404**(opencode 不留 transcript), 重置会把唯一一次真实执行的记录冲掉;
+    - "上一边判 partial、这一遍判 success"本身就是要留的事实, 覆盖掉等于把平台的判断
+      变化藏起来 —— 这正是这套东西最不该做的事。
+
+    新行带着上一遍的 spec(跑什么不改, 只是再跑一次), 所以它不是 ``pending`` 而是
+    ``spec_ready``, 建完可以直接 ``POST /tasks/{id}/run``。``trigger='rerun'`` 让统计能
+    把"第一次跑"和"重跑"分开看。
+    """
+    task = get_task(conn, task_id)
+    if task is None:
+        raise ValueError(f"任务 {task_id} 不存在")
+    if task["status"] not in TERMINAL_STATES:
+        raise ValueError(
+            f"任务 {task_id} 还在 {task['status']}, 只有终态任务能重跑(在跑的请先 stop)"
+        )
+
+    spec = task.get("spec_json") or {}
+    status = "spec_ready" if (spec.get("steps") or []) else "pending"
+    attempt = next_attempt(conn, task["material_id"])
+    stamp = now()
+    cur = conn.execute(
+        "INSERT INTO writeup_repro_tasks ("
+        " material_id, attempt, case_id, subject_kind, claim, claim_quote, target_kind,"
+        " target_repo, target_version, spec_json, spec_source, status,"
+        " trigger, created_by, created_at, updated_at"
+        ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'rerun', ?, ?, ?)",
+        (
+            int(task["material_id"]),
+            attempt,
+            task.get("case_id"),
+            str(task.get("subject_kind") or "writeup_material"),
+            str(task.get("claim") or ""),
+            str(task.get("claim_quote") or ""),
+            str(task.get("target_kind") or "unknown"),
+            str(task.get("target_repo") or ""),
+            str(task.get("target_version") or ""),
+            json.dumps(spec, ensure_ascii=False),
+            str(task.get("spec_source") or ""),
+            status,
+            str(created_by or ""),
+            stamp,
+            stamp,
+        ),
+    )
+    new_id = int(cur.lastrowid)
+    conn.commit()
+    append_log(
+        conn, new_id,
+        f"↻ 重跑自任务 #{task_id}(第 {task.get('attempt') or 1} 遍, 结论 "
+        f"{task.get('verdict') or task.get('status')}"
+        f"{('/' + task['failure_reason']) if task.get('failure_reason') else ''})",
+    )
+    return get_task(conn, new_id) or {}
 
 
 def set_spec(

@@ -251,3 +251,119 @@ def test_stats_keeps_our_fault_apart_from_theirs(conn) -> None:
     assert stats["by_verdict"] == {"cannot_repro": 1, "failed": 1}
     assert stats["by_failure_reason"] == {"article_incomplete": 1, "env_error": 1}
     assert stats["active"] == 0
+
+
+# ---------------------------------------------------------------- 重跑: (material_id, attempt)
+
+def _finished(conn, material_id: int = 1, *, verdict: str = "partial") -> dict:
+    """建一条跑到终态的任务, 以便测重跑。"""
+    store.upsert_candidate(conn, _candidate(material_id))
+    task, _ = tasks.create_task(conn, material_id)
+    tasks.set_spec(conn, task["id"], {
+        "claim": "c",
+        "target": {"kind": "oss_repo", "repo": "github:acme/foo"},
+        "steps": [{"run": "python3 poc.py"}],
+        "probe": {"cmd": "python3 poc.py", "success_signal": "exit_code == 0"},
+    })
+    tasks.transition(conn, task["id"], "queued")
+    tasks.transition(conn, task["id"], "running")
+    tasks.transition(conn, task["id"], verdict,
+                     failure_reason="probe_not_matched" if verdict == "partial" else "")
+    return tasks.get_task(conn, task["id"])
+
+
+def test_rerun_opens_a_new_attempt_and_keeps_the_old_row(conn) -> None:
+    """重跑的硬约束: 上一遍那行**一个字都不改**。
+
+    会话跑完就 404(opencode 不留 transcript), 把旧行重置成 running 等于把唯一一次真实执行
+    的记录冲掉, "上一遍 partial、这一遍 success"这个事实也就没了。
+    """
+    first = _finished(conn, 1)
+    before = tasks.get_task(conn, first["id"])
+
+    second = tasks.rerun(conn, first["id"], created_by="alice")
+
+    assert second["id"] != first["id"]
+    assert second["material_id"] == first["material_id"] == 1
+    assert second["attempt"] == 2
+    assert second["trigger"] == "rerun"
+    assert second["status"] == "spec_ready", "上一遍有 spec ⇒ 新行可以直接跑, 不必重新生成"
+    assert second["spec_json"]["probe"]["cmd"] == "python3 poc.py"
+    assert second["created_by"] == "alice"
+    assert tasks.get_task(conn, first["id"]) == before, "旧行连 updated_at 都不该动"
+    assert "重跑自任务 #%d" % first["id"] in second["log"]
+
+
+def test_rerun_chains_to_a_third_attempt(conn) -> None:
+    first = _finished(conn, 1)
+    second = tasks.rerun(conn, first["id"])
+    tasks.transition(conn, second["id"], "queued")
+    tasks.transition(conn, second["id"], "running")
+    tasks.transition(conn, second["id"], "success")
+    third = tasks.rerun(conn, second["id"])
+    assert third["attempt"] == 3
+    assert tasks.get_task_by_material(conn, 1)["id"] == third["id"], "取当前这一遍 = 最新一遍"
+
+
+def test_rerun_refuses_a_task_that_has_not_finished(conn) -> None:
+    store.upsert_candidate(conn, _candidate(1))
+    task, _ = tasks.create_task(conn, 1)
+    with pytest.raises(ValueError, match="只有终态任务能重跑"):
+        tasks.rerun(conn, task["id"])
+
+
+def test_rerun_carries_no_spec_if_there_was_none(conn) -> None:
+    """上一遍是 spec_failed ⇒ 新行回到 pending, 重跑要重新生成 spec, 不假装能跑。"""
+    store.upsert_candidate(conn, _candidate(1))
+    task, _ = tasks.create_task(conn, 1)
+    tasks.transition(conn, task["id"], "spec_failed")
+    again = tasks.rerun(conn, task["id"])
+    assert again["status"] == "pending" and again["attempt"] == 2
+
+
+def test_two_attempts_of_the_same_material_cannot_collide(conn) -> None:
+    """唯一键是 (material_id, attempt): 同 attempt 撞键, 不同 attempt 放行。"""
+    first = _finished(conn, 1)
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute(
+            "INSERT INTO writeup_repro_tasks (material_id, attempt, created_at)"
+            " VALUES (?, ?, 'x')", (1, first["attempt"]),
+        )
+
+
+def test_migration_rebuilds_the_old_single_column_unique(conn) -> None:
+    """老库(UNIQUE(material_id))要被 init_db 重建成 (material_id, attempt), 且数据不丢。
+
+    列级 UNIQUE 建的是自动索引, 删不掉, 只能重建表 —— 这条测试盯的是"重建完列还在、
+    行还在、还能插第二遍"。
+    """
+    conn.executescript(
+        """
+        DROP TABLE writeup_repro_tasks;
+        CREATE TABLE writeup_repro_tasks (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            material_id INTEGER NOT NULL UNIQUE,
+            claim       TEXT NOT NULL DEFAULT '',
+            status      TEXT NOT NULL DEFAULT 'pending',
+            verdict     TEXT NOT NULL DEFAULT '',
+            created_at  TEXT NOT NULL
+        );
+        INSERT INTO writeup_repro_tasks (material_id, claim, created_at) VALUES (42, '老行', 'x');
+        CREATE INDEX IF NOT EXISTS idx_wrt_status ON writeup_repro_tasks(status, id);
+        """
+    )
+    init_db(conn)
+
+    cols = [r[1] for r in conn.execute("PRAGMA table_info(writeup_repro_tasks)").fetchall()]
+    assert "attempt" in cols
+    row = conn.execute("SELECT material_id, attempt, claim FROM writeup_repro_tasks").fetchone()
+    assert tuple(row) == (42, 1, "老行"), "存量行一律算第 1 遍"
+    conn.execute(
+        "INSERT INTO writeup_repro_tasks (material_id, attempt, created_at) VALUES (42, 2, 'x')"
+    )
+    indexes = {r[0] for r in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='writeup_repro_tasks'"
+    ).fetchall()}
+    assert {"idx_wrt_status", "idx_wrt_verdict", "idx_wrt_material"} <= indexes, (
+        "重建表时索引必须重新建在新表上(名字被旧表占着会让 CREATE INDEX IF NOT EXISTS 静默跳过)"
+    )

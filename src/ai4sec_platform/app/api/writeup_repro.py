@@ -167,13 +167,19 @@ def run_task(
 
     三道前置检查都在这里挡住, 不让"没有 spec 的任务"白开一个会话:
 
-    - 已是终态 → 400(要重跑得新开任务行, 否则证据与结论对不上);
+    - 已是终态 → 400(要重跑得调 ``POST /tasks/{id}/rerun`` 新开一行, 否则证据与结论对不上);
     - 没有 steps → 400(先调 ``POST /tasks/{id}/spec``);
     - 已有执行线程 → 200 + ``started=false``(不重起, 不双跑)。
     """
     task = _must_get(conn, task_id)
     if task["status"] in tasks.TERMINAL_STATES:
-        raise HTTPException(status_code=400, detail=f"任务 {task_id} 已是终态 {task['status']}, 不能重跑")
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"任务 {task_id} 已是终态 {task['status']}, 不能重跑;"
+                f" 要再跑一遍请 POST /api/writeup-repro/tasks/{task_id}/rerun"
+            ),
+        )
     if not (task.get("spec_json") or {}).get("steps"):
         raise HTTPException(status_code=400, detail="任务还没有可执行的 spec, 先调 POST /tasks/{id}/spec")
     started = executor.start_task(task_id, timeout=timeout)
@@ -183,6 +189,37 @@ def run_task(
         "reason": "" if started else "已有执行线程在跑, 不重复启动",
         "task": latest,
     }
+
+
+@router.post("/tasks/{task_id}/rerun")
+def rerun_task(
+    request: Request,
+    task_id: int,
+    start: bool = Query(True, description="建完直接开跑(新行带着上一遍的 spec)"),
+    timeout: int | None = Query(None, ge=120, le=7200),
+    conn: sqlite3.Connection = Depends(get_db),
+) -> dict[str, Any]:
+    """重跑一条**终态**任务: 新开 ``attempt+1`` 一行, 上一行(含它的证据与结论)原样保留。
+
+    为什么重跑要新建行而不是重置状态: 会话跑完就 404(opencode 不留 transcript), 重置会把
+    唯一一次真实执行的记录冲掉; 而"上一遍判 partial、这一遍判 success"本身就是要留的事实。
+    """
+    try:
+        created = tasks.rerun(
+            conn, task_id, created_by=str(current_user(request).get("username") or ""),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    started = False
+    reason = ""
+    if start:
+        if (created.get("spec_json") or {}).get("steps"):
+            started = executor.start_task(int(created["id"]), timeout=timeout)
+            reason = "" if started else "已有执行线程在跑, 不重复启动"
+        else:
+            reason = "上一遍没有 spec, 新行是 pending: 先调 /spec 再 /run"
+        created = tasks.get_task(conn, int(created["id"])) or created
+    return {"task": created, "rerun_of": task_id, "started": started, "reason": reason}
 
 
 @router.post("/tasks/{task_id}/stop")

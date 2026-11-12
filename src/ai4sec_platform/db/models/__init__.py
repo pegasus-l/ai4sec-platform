@@ -702,12 +702,16 @@ CREATE INDEX IF NOT EXISTS idx_wrc_target     ON writeup_repro_candidates(target
 -- (有生命周期, 有证据)。候选重筛会重写自己的行, 任务行**不受影响** —— 否则重跑预筛会把
 -- 正在跑的任务连带改掉。
 --
--- material_id 上 UNIQUE: 同一篇素材只允许一条任务。重复点"复现"返回已有那行, 不插新行
--- (T2.3 幂等)。要重跑走 T3 的重跑入口重建任务, 不把已完成的记录改回 running ——
--- 否则证据包与结论会对不上。
+-- material_id + attempt 上 UNIQUE(2026-11-12 改成复合键): 同一篇素材可以跑多遍, 每遍一行。
+-- 重复点"复现"返回**当前这一遍**那行, 不插新行(T2.3 幂等); 要重跑走
+-- POST /tasks/{id}/rerun 建下一遍(attempt+1, trigger='rerun'), 不把已完成的记录改回 running
+-- —— 否则证据包与结论会对不上。
+-- 为什么不是"归档证据 + 重置状态": 会话跑完就 404(opencode 不留 transcript), 重置会把
+-- 唯一一次真实执行的记录冲掉, 而"上一次判了 partial、这一次判了 success"本身就是要留的事实。
 CREATE TABLE IF NOT EXISTS writeup_repro_tasks (
     id               INTEGER PRIMARY KEY AUTOINCREMENT,
-    material_id      INTEGER NOT NULL UNIQUE,     -- domain_items(id), domain='vulnerabilities'
+    material_id      INTEGER NOT NULL,            -- domain_items(id), domain='vulnerabilities'
+    attempt          INTEGER NOT NULL DEFAULT 1,  -- 同一素材的第几遍(1 起), 与 material_id 联合唯一
     case_id          INTEGER,                     -- 关联的漏洞案例(vulnerability_cases.id), 可空
     subject_kind     TEXT NOT NULL DEFAULT 'writeup_material',
     -- 复现对象的描述: claim 来自 T1, spec 生成后可被更准确的版本覆盖
@@ -745,7 +749,8 @@ CREATE TABLE IF NOT EXISTS writeup_repro_tasks (
     created_at       TEXT NOT NULL,
     updated_at       TEXT NOT NULL DEFAULT '',
     finished_at      TEXT,
-    cleaned_at       TEXT
+    cleaned_at       TEXT,
+    UNIQUE(material_id, attempt)
 );
 CREATE INDEX IF NOT EXISTS idx_wrt_status   ON writeup_repro_tasks(status, id);
 CREATE INDEX IF NOT EXISTS idx_wrt_verdict  ON writeup_repro_tasks(verdict, id);
@@ -782,7 +787,62 @@ def init_db(conn: sqlite3.Connection) -> None:
     try: conn.execute("ALTER TABLE writeup_repro_candidates ADD COLUMN target_source TEXT NOT NULL DEFAULT ''")
     except Exception: pass
     _migrate_results_verdict_labels(conn)
+    _migrate_writeup_task_attempt(conn)
     conn.commit()
+
+
+def _writeup_tasks_ddl() -> str:
+    """从 ``SCHEMA_SQL`` 里取出 ``writeup_repro_tasks`` 的建表语句与它的索引。
+
+    重建表时**直接复用这一份**, 不在迁移里再抄一遍 40 列 —— 抄一份就一定会漂(列加在
+    SCHEMA_SQL 里、忘了加到迁移里, 重建完就少一列, 而且是静默少列)。
+    """
+    import re
+
+    table = re.search(r"CREATE TABLE IF NOT EXISTS writeup_repro_tasks \(.*?\n\);", SCHEMA_SQL, re.S)
+    if table is None:  # pragma: no cover - 只有改了 SCHEMA_SQL 的写法才会走到
+        raise RuntimeError("SCHEMA_SQL 里找不到 writeup_repro_tasks 的建表语句")
+    indexes = re.findall(
+        r"CREATE INDEX IF NOT EXISTS idx_wrt_\w+\s+ON\s+writeup_repro_tasks\([^)]*\);", SCHEMA_SQL
+    )
+    if len(indexes) < 3:  # pragma: no cover - 同上, 防止正则悄悄少匹配一条
+        raise RuntimeError(f"SCHEMA_SQL 里 writeup_repro_tasks 的索引数不对: {len(indexes)}")
+    return table.group(0) + "\n" + "\n".join(indexes)
+
+
+def _migrate_writeup_task_attempt(conn: sqlite3.Connection) -> None:
+    """把 ``writeup_repro_tasks`` 的 ``UNIQUE(material_id)`` 换成 ``UNIQUE(material_id, attempt)``。
+
+    2026-11-12 用户拍板的重跑口径: 同一篇素材可以跑第 2、第 3 遍, 每遍一行、各留各的证据。
+    原来的单列 UNIQUE 让终态任务**跑不了第二遍**(`/run` 直接 400), 而会话跑完就 404
+    (opencode 不留 transcript), 重跑是唯一能让一条已被判错的任务重新出结论的路径。
+
+    SQLite 的列级 ``UNIQUE`` 建的是自动索引, **删不掉**, 只能重建表。判据读建表语句而不是
+    版本号(与 `_migrate_results_verdict_labels` 同一口径): 没有 `UNIQUE(material_id, attempt)`
+    就是要补。表里只有几十行, 重建是毫秒级操作。
+    """
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='writeup_repro_tasks'"
+    ).fetchone()
+    if row is None or "UNIQUE(material_id, attempt)" in (row[0] or ""):
+        return
+    conn.execute("ALTER TABLE writeup_repro_tasks RENAME TO writeup_repro_tasks_old")
+    # 索引跟着被改名的表走、**名字还占着**, 不先删掉的话下面 `CREATE INDEX IF NOT EXISTS`
+    # 会被静默跳过, 等 DROP 旧表时索引一起消失 —— 新表就成了没有索引的表。
+    for (index_name,) in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='writeup_repro_tasks_old'"
+        " AND name NOT LIKE 'sqlite_autoindex%'"
+    ).fetchall():
+        conn.execute(f"DROP INDEX IF EXISTS {index_name}")
+    conn.executescript(_writeup_tasks_ddl())
+    old_cols = [r[1] for r in conn.execute("PRAGMA table_info(writeup_repro_tasks_old)").fetchall()]
+    new_cols = [r[1] for r in conn.execute("PRAGMA table_info(writeup_repro_tasks)").fetchall()]
+    # 旧表没有 attempt 列 ⇒ 存量行一律是第 1 遍, 交给列的 DEFAULT 1。
+    shared = ", ".join(c for c in new_cols if c in old_cols)
+    conn.execute(
+        f"INSERT INTO writeup_repro_tasks ({shared}) SELECT {shared} FROM writeup_repro_tasks_old"
+    )
+    conn.execute("DROP TABLE writeup_repro_tasks_old")
 
 
 def _migrate_results_verdict_labels(conn: sqlite3.Connection) -> None:

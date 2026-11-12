@@ -253,3 +253,46 @@ def test_stats_endpoint_counts_active_tasks(conn) -> None:
     api.create_task(api.CreateTaskBody(material_id=1), _request(), conn)
     stats = api.task_stats(conn)
     assert stats["total"] == 1 and stats["active"] == 1
+
+
+# ---------------------------------------------------------------- 重跑
+
+def _finished_task(conn) -> dict:
+    _material(conn)
+    task = api.create_task(api.CreateTaskBody(material_id=1), _request(), conn)["task"]
+    tasks.set_spec(conn, task["id"], SPEC, source="human")
+    tasks.transition(conn, task["id"], "queued")
+    tasks.transition(conn, task["id"], "running")
+    return tasks.transition(conn, task["id"], "partial", failure_reason="probe_not_matched")
+
+
+def test_run_on_a_finished_task_points_at_the_rerun_endpoint(conn) -> None:
+    """终态不能再跑, 而且报错要把人指到正确的入口 —— 否则调用方只会反复点 /run。"""
+    task = _finished_task(conn)
+    with pytest.raises(HTTPException) as exc:
+        api.run_task(task["id"], timeout=None, conn=conn)
+    assert exc.value.status_code == 400
+    assert f"/tasks/{task['id']}/rerun" in exc.value.detail
+
+
+def test_rerun_endpoint_opens_the_next_attempt_and_starts_it(conn, monkeypatch) -> None:
+    task = _finished_task(conn)
+    launched: list[int] = []
+    monkeypatch.setattr(api.executor, "start_task",
+                        lambda task_id, timeout=None: launched.append(task_id) or True)
+
+    out = api.rerun_task(_request("bob"), task["id"], start=True, timeout=600, conn=conn)
+
+    assert out["rerun_of"] == task["id"]
+    assert out["started"] is True and launched == [out["task"]["id"]]
+    assert out["task"]["attempt"] == 2 and out["task"]["trigger"] == "rerun"
+    assert out["task"]["created_by"] == "bob"
+    assert tasks.get_task(conn, task["id"])["status"] == "partial", "上一遍的记录一个字都不改"
+
+
+def test_rerun_endpoint_refuses_an_unfinished_task(conn) -> None:
+    _material(conn)
+    task = api.create_task(api.CreateTaskBody(material_id=1), _request(), conn)["task"]
+    with pytest.raises(HTTPException) as exc:
+        api.rerun_task(_request(), task["id"], start=False, timeout=None, conn=conn)
+    assert exc.value.status_code == 400
