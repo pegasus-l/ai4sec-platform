@@ -157,7 +157,16 @@ def extract_hosts(text: str) -> list[str]:
 def _looks_like_host(host: str) -> bool:
     if host in LOCAL_HOSTS or host in PLACEHOLDER_HOSTS:
         return True
-    if host.startswith("[") or re.fullmatch(r"(?:\d{1,3}\.){3}\d{1,3}", host):
+    if host.startswith("["):
+        # 方括号只可能是 IPv6 字面量。别的一律不是主机 —— 实测 shell 里的
+        # ``${PIPESTATUS[0]}`` / ``${arr[0]}`` 会被抽成 "[0]", 记进证据包就是一条
+        # 无中生有的"出网主机 [0]"。
+        try:
+            ipaddress.ip_address(host.strip("[]"))
+        except ValueError:
+            return False
+        return True
+    if re.fullmatch(r"(?:\d{1,3}\.){3}\d{1,3}", host):
         return True
     parts = host.split(".")
     if len(parts) < 2:

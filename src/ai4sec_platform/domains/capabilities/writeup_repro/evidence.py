@@ -201,17 +201,30 @@ def find_probe_command(commands: list[dict[str, Any]], probe_cmd: str) -> dict[s
     先找"执行记录包含 spec 的 probe.cmd"(模型通常会把命令原样跑一遍), 再反向找
     "probe.cmd 包含执行记录里的那条命令"(spec 可能写得更完整, 比如加了管道)。都没有
     就返回 ``None`` —— **不要拿最后一条命令顶替**: 那会把"跑了个 ls"当成 probe。
+
+    **同一条命令跑了多次时取最后一次**(2026-11-12 真跑暴露)。agent 为了对齐环境常常会
+    先试一次(换 Python 版本、加不加 timeout), 再按 spec 跑一次正式的; 取第一次等于拿
+    "环境还没对齐时的结果"下结论 —— 实测第一次在 3.11.2 上是 SIGSEGV、没有
+    ``free(): invalid pointer``, 最后一次在 3.11.8 上才是原文那个 SIGABRT。最后一次是
+    最终环境里的最终事实, 也是唯一能被"重跑同一条命令"复核的那一次。
+    ``occurrences`` 一并落库, 让复核的人知道这条命令跑过几次。
     """
     wanted = _norm_cmd(probe_cmd)
     if not wanted:
         return None
-    for row in commands:
-        if wanted and wanted in _norm_cmd(row["cmd"]):
-            return row
-    for row in commands:
-        executed = _norm_cmd(row["cmd"])
-        if len(executed) >= 8 and executed in wanted:
-            return row
+    forward = [row for row in commands if wanted in _norm_cmd(row["cmd"])]
+    if forward:
+        found = dict(forward[-1])
+        found["occurrences"] = len(forward)
+        return found
+    backward = [
+        row for row in commands
+        if len(_norm_cmd(row["cmd"])) >= 8 and _norm_cmd(row["cmd"]) in wanted
+    ]
+    if backward:
+        found = dict(backward[-1])
+        found["occurrences"] = len(backward)
+        return found
     return None
 
 
@@ -260,6 +273,8 @@ def build_evidence(
             "matched": judged["matched"],
             "checks": judged["checks"],
             "why": judged.get("why", ""),
+            # 同一条命令跑了几次; >1 时上面记的是**最后一次**。
+            "occurrences": int(found.get("occurrences") or 1),
         }
         if judged["matched"] is None:
             reasons.append(f"probe 判据无法机器判定: {signal[:120]!r}")

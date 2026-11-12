@@ -120,6 +120,22 @@ def test_filenames_are_not_hosts() -> None:
     assert guard.extract_hosts("echo v1.2.3") == []
 
 
+def test_shell_array_indexes_are_not_hosts() -> None:
+    """``${PIPESTATUS[0]}`` 被抽成主机 "[0]" 的话, 证据包里会多一条无中生有的出网记录。
+
+    2026-11-12 真跑里实际出现过: ``echo "EXIT_CODE=${PIPESTATUS[0]}"`` → 出网主机 ``[0]``。
+    """
+    assert guard.extract_hosts('echo "EXIT_CODE=${PIPESTATUS[0]}"') == []
+    assert guard.extract_hosts("echo ${arr[0]}") == []
+    audit = guard.audit_egress([{"cmd": 'echo "EXIT_CODE=${PIPESTATUS[0]}"'}], {})
+    assert audit["domains_accessed"] == []
+    assert audit["external_requests"] == []
+
+
+def test_ipv6_literal_is_still_a_host() -> None:
+    assert "::1" in [h.strip("[]") for h in guard.extract_hosts("curl -g http://[::1]:8080/x")]
+
+
 # ---------------------------------------------------------------- evidence
 
 def _messages(*parts: dict) -> list[dict]:
@@ -176,6 +192,37 @@ def test_find_probe_command_does_not_fall_back_to_the_last_command() -> None:
     ))
     assert evidence.find_probe_command(rows, "./poc 127.0.0.1 2>&1 | tee /tmp/out") is not None
     assert evidence.find_probe_command(rows, "curl -s http://127.0.0.1:8000/verify") is None
+
+
+def test_repeated_probe_uses_the_last_execution() -> None:
+    """同一条命令跑了多次取最后一次(2026-11-12 真跑 CVE-2024-21502 暴露)。
+
+    第一次在系统 python3.11.2 上只是 SIGSEGV、没有原文那句 ``free(): invalid pointer``;
+    换了 3.11.8 之后才复现出原文的 SIGABRT。取第一次 = 拿"环境还没对齐时"的结果下结论。
+    """
+    rows = evidence.extract_commands(_messages(
+        _bash(".venv/bin/python3 -u poc.py 2>&1", "Segmentation fault", 139),
+        _bash("ls", "out", 0),
+        _bash(".venv/bin/python3 -u poc.py 2>&1", "free(): invalid pointer\nAborted", 134),
+    ))
+    found = evidence.find_probe_command(rows, "python3 -u poc.py 2>&1")
+    assert found is not None
+    assert found["exit_code"] == 134
+    assert found["occurrences"] == 2
+    assert evidence.evaluate_signal("stdout 包含 free(): invalid pointer",
+                                    found["exit_code"], found["stdout"])["matched"] is True
+
+
+def test_a_later_failing_run_wins_over_an_earlier_success() -> None:
+    """反过来也一样: 最后一次没命中就是没命中, 不挑"历史上命中过的那一次"。"""
+    rows = evidence.extract_commands(_messages(
+        _bash("python3 poc.py", "free(): invalid pointer", 134),
+        _bash("python3 poc.py", "permission denied", 1),
+    ))
+    found = evidence.find_probe_command(rows, "python3 poc.py")
+    assert found["exit_code"] == 1
+    assert evidence.evaluate_signal("stdout 包含 free(): invalid pointer",
+                                    found["exit_code"], found["stdout"])["matched"] is False
 
 
 def _success_evidence(**kwargs):
