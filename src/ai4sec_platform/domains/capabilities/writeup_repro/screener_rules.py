@@ -126,6 +126,15 @@ _REPO_HOST_MAP = {
     "atomgit.com": "atomgit",
     "bitbucket.org": "bitbucket",
 }
+
+#: 已经归一好的形态 ``platform:org/name``。模型经常直接照 schema 示例填这个, 而它也是
+#: ``normalize_repo`` 自己的输出 —— 不认它等于「归一函数对自己不幂等」: 2026-11-12 实测
+#: 模型答 ``github:acme/foo`` 被 ``verify_repo`` 判成"归一不成仓库", 理由还写着只认那五个
+#: 平台, 模型和看到这句话的人都无从改起。
+_REPO_NORMALIZED_RE = re.compile(
+    r"^(github|gitlab|gitee|gitcode|atomgit|bitbucket):([\w.\-]+)/([\w.\-]+)$",
+    re.I,
+)
 #: 仓库 URL 后面跟的这些段不是仓库名的一部分。
 _NON_REPO_SEGMENTS = frozenset({
     "issues", "issue", "pull", "pulls", "blob", "tree", "commit", "commits",
@@ -272,8 +281,17 @@ def normalize_repo(raw: str) -> str:
     """把仓库 URL 归一成 ``platform:org/name``;不是仓库或归一不了返回空串。
 
     大小写按平台习惯统一成小写 —— 后面要拿去和别的表做相等比较,大小写不同就是两条。
+    **对自己幂等**: ``platform:org/name`` 原样接受(模型常直接填这个形态)。
     """
-    m = _REPO_RE.search(raw or "")
+    raw = str(raw or "").strip()
+    normalized = _REPO_NORMALIZED_RE.match(raw)
+    if normalized:
+        platform, org, name = normalized.group(1).lower(), normalized.group(2), normalized.group(3)
+        name = re.sub(r"\.git$", "", name, flags=re.I)
+        if name.lower() in _NON_REPO_SEGMENTS:
+            return ""
+        return f"{platform}:{org}/{name}".lower()
+    m = _REPO_RE.search(raw)
     if not m:
         return ""
     host, org, name = m.group(1).lower(), m.group(2), m.group(3)

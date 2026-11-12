@@ -14,6 +14,7 @@ from ai4sec_platform.domains.capabilities.writeup_repro import (
     screen_rules,
     split_blocks,
 )
+from ai4sec_platform.domains.capabilities.writeup_repro.screener import verify_repo
 
 
 # ─────────────────────────── L0-a:没有代码块 ───────────────────────────
@@ -145,6 +146,8 @@ def test_poc_without_target_is_target_unknown() -> None:
         ("https://gitcode.com/Ascend/MindIE-Motor", "gitcode:ascend/mindie-motor"),
         ("https://github.com/foo/bar/issues/12", "github:foo/bar"),
         ("https://github.com/foo/bar/blob/main/x.c", "github:foo/bar"),
+        ("github:foo/Bar", "github:foo/bar"),
+        ("GitHub:foo/bar.git", "github:foo/bar"),
         ("https://blog.example.com/foo/bar", ""),
         ("https://github.com/foo", ""),
         ("", ""),
@@ -152,6 +155,18 @@ def test_poc_without_target_is_target_unknown() -> None:
 )
 def test_normalize_repo(raw: str, expected: str) -> None:
     assert normalize_repo(raw) == expected
+
+
+def test_normalize_repo_is_idempotent() -> None:
+    """``normalize_repo`` 自己的输出必须再归一一次还是自己。
+
+    2026-11-12 真跑前查出的反例: 模型照 spec schema 的示例填 ``github:acme/foo``,
+    ``verify_repo`` 却判它"归一不成仓库"(正则只认 URL), 整条 spec 被退回。
+    """
+    for raw in ("https://github.com/foo/bar", "https://gitcode.com/Ascend/MindIE-Motor"):
+        once = normalize_repo(raw)
+        assert once and normalize_repo(once) == once
+    assert verify_repo("github:acme/foo", "详见 https://github.com/acme/foo 的修复")[0] == "github:acme/foo"
 
 
 # ─────────────────────────── 版本与确定性 ───────────────────────────
