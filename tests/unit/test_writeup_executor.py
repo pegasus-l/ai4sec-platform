@@ -262,6 +262,14 @@ def test_a_loop_tail_does_not_make_the_exit_code_unknown() -> None:
     assert status == {"exit_code": 139, "known": True, "source": "shell"}
 
 
+def test_an_and_chain_with_zero_exit_still_proves_the_probe_succeeded() -> None:
+    """``A && B`` 的 shell 退出码为 0 ⇒ A 一定成功过(否则 B 跑不起来); 非 0 则归不到 A 头上。"""
+    ok = evidence.probe_exit_status("cd /w && ./poc && echo ok", 0, "boom\nok", "./poc")
+    assert ok == {"exit_code": 0, "known": True, "source": "shell"}
+    bad = evidence.probe_exit_status("cd /w && ./poc && echo ok", 5, "boom", "./poc")
+    assert bad == {"exit_code": None, "known": False, "source": "unknown"}
+
+
 def test_an_unprinted_exit_code_is_unknown_not_zero() -> None:
     """尾部有别的语句又没打印退出码 ⇒ 判不了。拿 wrapper 的 0 当成功是最坏的结果。"""
     status = evidence.probe_exit_status("python3 -u poc.py; echo done", 0, "boom\ndone",

@@ -248,9 +248,23 @@ _ECHO_LABEL_RE = re.compile(
     r"echo\s+(?:-e\s+)?[\"']?\s*(?P<label>[A-Za-z_][A-Za-z0-9_]*)\s*=", re.I
 )
 #: 切语句的口径与 ``guard._segments`` 一致(``;`` ``&&`` ``||`` ``|`` 与换行)。
-_SEGMENT_SPLIT = re.compile(r"\n|;|&&|\|\||\|")
+_SEGMENT_SPLIT = re.compile(r"(\n|;|&&|\|\||\|)")
 #: 循环/分支的收尾词: 它们不是"又跑了一条命令", 后面的东西不覆盖退出码。
 _STRUCTURAL_SEGMENTS = {"done", "fi", "esac", "}", "})", ")", "end"}
+
+
+def _split_segments(cmd: str) -> list[tuple[str, str]]:
+    """切成 ``[(前置分隔符, 语句), ...]`` —— 分隔符本身有用(见 :func:`probe_exit_status`)。"""
+    out: list[tuple[str, str]] = []
+    separator = ""
+    for piece in _SEGMENT_SPLIT.split(str(cmd or "")):
+        if piece in ("\n", ";", "&&", "||", "|"):
+            separator = piece
+            continue
+        if piece.strip():
+            out.append((separator, piece))
+        separator = ""
+    return out
 
 
 def _echoed_exit_labels(segments: Iterable[str]) -> list[str]:
@@ -288,18 +302,25 @@ def probe_exit_status(cmd: str, shell_exit: int | None, stdout: str,
     - ``shell``: probe 就是最后一段(或在循环体里, 后面只剩 ``done``), shell 退出码可信;
     - ``printed``: 从输出里读回 agent 自己打印的退出码(``EXIT=139`` / ``PROBE_EXIT=$?``);
     - ``unknown``: 后面还有别的语句, 输出里也没有打印 —— **判不了**, 不是 0。
+
+    ``A && B`` 是唯一能"白拿"的例外: shell 退出码是 0 就说明 A 一定成功过(否则 B 跑不起来),
+    非 0 则归不到 A 头上。
     """
-    segments = [s for s in _SEGMENT_SPLIT.split(str(cmd or "")) if s.strip()]
+    segments = _split_segments(cmd)
     wanted = _norm_cmd(probe_cmd)
-    hits = [i for i, s in enumerate(segments) if wanted and wanted in _norm_cmd(s)]
+    hits = [i for i, (_, segment) in enumerate(segments)
+            if wanted and wanted in _norm_cmd(segment)]
     if not hits:
         # 定位不到是哪一段: 沿用 shell 退出码(旧行为), 至少不比原来更差。
         return {"exit_code": shell_exit, "known": shell_exit is not None, "source": "shell"}
     index = hits[-1]
-    tail = [s for s in segments[index + 1:] if _norm_cmd(s) not in _STRUCTURAL_SEGMENTS]
+    tail = [i for i in range(index + 1, len(segments))
+            if _norm_cmd(segments[i][1]) not in _STRUCTURAL_SEGMENTS]
     if not tail:
         return {"exit_code": shell_exit, "known": shell_exit is not None, "source": "shell"}
-    for label in reversed(_echoed_exit_labels(segments[index:])):
+    if shell_exit == 0 and all(segments[i][0] == "&&" for i in tail):
+        return {"exit_code": 0, "known": True, "source": "shell"}
+    for label in reversed(_echoed_exit_labels(segment for _, segment in segments[index:])):
         value = _printed_value(stdout, label)
         if value is not None:
             return {"exit_code": value, "known": True, "source": "printed"}
