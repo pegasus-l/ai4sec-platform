@@ -383,10 +383,12 @@ def _fallback_review(item: dict[str, Any], tech_map: AgentTechMap, reason: str) 
 def _weighted_score(item_type: str, breakdown: dict[str, float]) -> float:
     if not breakdown:
         return 0.0
+    from ai4sec_platform.core.config import PROJECT_ROOT
     from ai4sec_platform.domains.news.scorers import _load_scoring_config
-    # 尝试从配置读权重，读不到用默认
+    # 尝试从配置读权重，读不到用默认。项目根按代码位置推, 不写死线上目录 ——
+    # 写死时在非 119 环境(本地/单测)永远读不到配置, 静默用默认权重。
     try:
-        cfg = _load_scoring_config(Path("/opt/ai-security-fusion-v2/ai4sec"))
+        cfg = _load_scoring_config(PROJECT_ROOT)
         key = "llm_paper_weights" if item_type in ("paper", "arxiv") else "llm_project_weights"
         weights = cfg.get(key, cfg.get("llm_project_weights", {}))
     except Exception:

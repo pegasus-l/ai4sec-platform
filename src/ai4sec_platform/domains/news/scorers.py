@@ -177,7 +177,14 @@ def _resolve_source_authority(item: dict[str, Any], project_root: Path) -> float
     return float(sources.get("unknown", 50))
 
 
-from ai4sec_platform.domains.news.classifiers import classify_item
-def score_news_item(item):
-    from pathlib import Path
-    return score_candidate(item, Path("/opt/ai-security-fusion-v2/ai4sec"))
+def score_news_item(item, project_root: Path | None = None):
+    """规则评分(读 `configs/scoring.yml` 的权重)。
+
+    `project_root` 原来写死成 `/opt/ai-security-fusion-v2/ai4sec` —— 那是 119 线上的部署目录,
+    只有那台机器上存在。在任何别的地方(本地 checkout、单测、别的部署路径)跑 `build_news_items`,
+    `score_candidate` 读配置就 `FileNotFoundError`,整步失败。改成按**代码所在位置**推项目根
+    (与 `core.config.PROJECT_ROOT` 同一个推导),线上取值不变,别处也能跑。
+    """
+    from ai4sec_platform.core.config import PROJECT_ROOT
+
+    return score_candidate(item, Path(project_root) if project_root else PROJECT_ROOT)

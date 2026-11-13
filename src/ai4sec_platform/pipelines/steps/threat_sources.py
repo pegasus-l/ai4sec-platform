@@ -113,6 +113,12 @@ class CollectHuaweiSourcesStep:
             context.conn.commit()
             print(f"[collect] {asset_records.get('source')}: {len(asset_records.get('items') or [])} items written", file=sys.stderr, flush=True)
 
+        # 全量汇总也写一份 —— 逐源的 `threats/{source}.json` 是给"边采边看进度"用的,
+        # 而 `resume_from_run_id` 找的是**固定文件名** `shadow_runs/<run>/threats/huawei_source_records.json`
+        # (见 huawei_sources._load_source_records_from_run)。那次"改成逐源增量写"的重构把它漏了,
+        # 结果 resume 静默失效、下游乖乖重新联外网采一遍 —— 单测一直在红,只是先被网络超时挡住了。
+        artifacts.extend(self._write_records(context, records))
+
         context.outputs["huawei_source_records"] = records
         metrics = self._metrics(records)
         print(f"[collect] Done. {metrics['items']} total items from {metrics['sources']} sources", file=sys.stderr, flush=True)
