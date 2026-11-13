@@ -297,6 +297,66 @@ def test_exit_signal_judged_unknown_caps_the_evidence_at_partial() -> None:
     assert any("退出码" in reason for reason in collected["incomplete_reasons"])
 
 
+# ---------------------------------------------------------------- 判据里的"或"
+#
+# 同一个洞在不同发行版/glibc 上崩溃形态不同: glibc 2.35 报 `free(): invalid pointer`(SIGABRT),
+# 2.36 只报 `Segmentation fault`(SIGSEGV)。判据只写一种, 成功就会被判成 partial。
+
+def test_any_alternative_is_enough() -> None:
+    signal = "stdout 包含 free(): invalid pointer 或 stdout 包含 Segmentation fault"
+    assert evidence.evaluate_signal(signal, 134, "free(): invalid pointer")["matched"] is True
+    assert evidence.evaluate_signal(signal, 139, "Segmentation fault (core dumped)")["matched"] is True
+    assert evidence.evaluate_signal(signal, 0, "all good")["matched"] is False
+
+
+def test_and_binds_tighter_than_or() -> None:
+    """``A 且 B 或 C`` = ``(A 且 B) 或 C``。"""
+    signal = "exit_code == 0 且 stdout 包含 root_shell 或 stdout 包含 bypassed"
+    assert evidence.evaluate_signal(signal, 0, "root_shell")["matched"] is True
+    assert evidence.evaluate_signal(signal, 1, "bypassed")["matched"] is True
+    assert evidence.evaluate_signal(signal, 1, "nothing")["matched"] is False
+
+
+def test_a_satisfied_alternative_wins_even_if_another_cannot_be_judged() -> None:
+    """退出码判不了, 但另一条路已经成立 —— 结论就是成立, 不必等退出码。"""
+    signal = "exit_code == 0 或 stdout 包含 boom"
+    assert evidence.evaluate_signal(signal, None, "boom", exit_code_known=False)["matched"] is True
+    assert evidence.evaluate_signal(signal, None, "quiet", exit_code_known=False)["matched"] is None
+
+
+def test_an_or_inside_a_needle_is_not_a_separator() -> None:
+    """``stdout 包含 成功或失败`` 里的"或"是待匹配串的一部分, 切开就永远匹配不上。"""
+    judged = evidence.evaluate_signal("stdout 包含 成功或失败", 0, "结果：成功或失败")
+    assert judged["matched"] is True
+    assert len(judged["checks"]) == 1
+
+
+def test_a_vertical_bar_inside_a_regex_is_not_an_or() -> None:
+    """``/a|b/`` 里的竖线是正则的"或", 不能被当成组间分隔符拆开。"""
+    signal = "输出匹配 /Segmentation fault|core dumped/"
+    judged = evidence.evaluate_signal(signal, 139, "Segmentation fault (core dumped)")
+    assert judged["matched"] is True
+    assert len(judged["checks"]) == 1
+
+
+def test_two_crash_forms_of_the_same_claim_are_not_a_partial() -> None:
+    """task #2 的实况: 判据只写 glibc 那句时判 partial; 写成"或"之后同一份证据判成功。"""
+    cmd = ('cd /w && .venv/bin/python3 -u poc.py 2>&1 | tee log; echo "EXIT=${PIPESTATUS[0]}"')
+    stdout = "X: 0x0\nY: 0x0\nSegmentation fault (core dumped)\nEXIT=139\n"
+    commands = evidence.extract_commands(_messages(_bash(cmd, stdout, 0)))
+    spec = {
+        "steps": [{"run": "python3 -u poc.py"}],
+        "probe": {"cmd": "python3 -u poc.py 2>&1",
+                  "success_signal": "stdout 包含 free(): invalid pointer 或 "
+                                    "stdout 匹配 /Segmentation fault|core dumped/"},
+    }
+    collected = evidence.build_evidence(spec=spec, report={"self_verdict": "success"},
+                                        commands=commands)
+    assert collected["probe"]["exit_code"] == 139
+    assert collected["probe"]["matched"] is True
+    assert collected["incomplete"] is False
+
+
 def test_recovered_exit_code_turns_a_swallowed_crash_into_a_real_failure() -> None:
     """同一个 probe, 若判据是 ``exit_code == 0``: 旧口径(wrapper 0) 会判成功, 新口径判失败。"""
     cmd = ('cd /w && .venv/bin/python3 -u poc.py 2>&1 | tee log; echo "EXIT=${PIPESTATUS[0]}"')

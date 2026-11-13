@@ -110,6 +110,16 @@ def test_prose_success_signal_is_not_machine_checkable() -> None:
     assert "机器判定" in check.reason
 
 
+def test_a_multi_form_signal_is_accepted_and_kept_verbatim() -> None:
+    """同一现象的多种等价形态用「或」连接 —— 校验层不能把它当成含糊说法打回。"""
+    signal = ("stdout 包含 free(): invalid pointer 或 "
+              "stdout 匹配 /Segmentation fault|core dumped/")
+    check = spec_module.verify_spec(_spec(probe={"cmd": "curl -s http://127.0.0.1:8080/admin",
+                                                 "success_signal": signal}), ARTICLE)
+    assert check.verdict != "invalid"
+    assert check.spec["probe"]["success_signal"] == signal
+
+
 def test_insufficient_spec_becomes_article_incomplete() -> None:
     check = spec_module.verify_spec({"sufficient": False, "insufficient_reason": "没写怎么编译"}, ARTICLE)
     assert check.verdict == "article_incomplete" and check.reason == "没写怎么编译"

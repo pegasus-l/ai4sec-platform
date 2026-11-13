@@ -50,8 +50,17 @@ _CONTAINS_CLAUSE = re.compile(
     r"(?:中包含|中包括|包含|含有|出现|includes?|contains?|匹配|matches?)\s*(?P<needle>.+)$",
     re.I,
 )
-#: 判据里连接多个子条件的词。
+#: 判据里连接多个子条件的词(且)。
 _CLAUSE_SPLIT = re.compile(r"\s*(?:且|并且|而且|\band\b|[;；])\s*", re.I)
+#: 判据里表示"任一满足即可"的词(或)。**AND 结合更紧**, 先按它切组, 再在组内按 AND 切。
+#: 只认词, 不认 ``|`` —— 竖线是正则里的"或", 切了就把 ``/a|b/`` 拆坏。
+#: 后面必须紧跟一个新的子条件(与逗号那条同一道理): ``stdout 包含 成功或失败`` 里的"或"
+#: 是待匹配串的一部分, 不是分隔符。
+_ALT_SPLIT = re.compile(
+    r"\s*(?:或者|或|\bor\b)\s*(?=(?:exit[_\s]?code|returncode|return\s+code|stdout|stderr|"
+    r"输出|标准输出|标准错误|包含|含有|匹配|contains?|includes?|matches?))",
+    re.I,
+)
 #: 逗号**只有**后面紧跟判据关键词时才当分隔符 —— 否则 ``uid=0(root),gid=0(root)`` 这种
 #: 待匹配串会被从中间切开, 判成"有子条件无法解析"。
 _COMMA_SPLIT = re.compile(
@@ -123,69 +132,112 @@ def _clean_needle(raw: str) -> tuple[str, bool]:
     return needle, False
 
 
-def _clauses(signal: str) -> list[str]:
-    out: list[str] = []
-    for chunk in _CLAUSE_SPLIT.split(str(signal or "").strip()):
-        out.extend(_COMMA_SPLIT.split(chunk))
-    return [c for c in out if c.strip()]
+def _clause_groups(signal: str) -> list[list[str]]:
+    """判据 → ``[[子条件, ...], ...]``, **组内是"且", 组间是"或"**。
+
+    ``且`` 结合更紧, 所以先按 ``或`` 切组, 再在组内按 ``且`` 切。
+    同一件事可以有多种等价观测(同一个洞在 glibc 2.35 报 ``free(): invalid pointer``、
+    在 2.36 只报 ``Segmentation fault``), 写成 ``A 或 B`` 时任一成立即算成立 ——
+    否则结论会被绑死在某台机器的措辞上(2026-11-12 task #2 的实况)。
+    """
+    groups: list[list[str]] = []
+    for alternative in _ALT_SPLIT.split(str(signal or "").strip()):
+        out: list[str] = []
+        for chunk in _CLAUSE_SPLIT.split(alternative):
+            out.extend(_COMMA_SPLIT.split(chunk))
+        group = [c for c in out if c.strip()]
+        if group:
+            groups.append(group)
+    return groups
+
+
+def _judge_clause(clause: str, exit_code: int | None, stdout: str, *,
+                  exit_code_known: bool) -> dict[str, Any] | None:
+    """一条子条件 → check; 解析不出来返回 ``None``。"""
+    exit_match = _EXIT_CLAUSE.search(clause)
+    if exit_match:
+        op, raw = exit_match.group(1), int(exit_match.group(2))
+        check: dict[str, Any] = {"clause": clause.strip(), "kind": "exit_code", "op": op,
+                                 "expected": raw, "actual": exit_code, "ok": _compare(exit_code, op, raw)}
+        if not exit_code_known:
+            check["actual"] = None
+            check["ok"] = None
+        return check
+    contains_match = _CONTAINS_CLAUSE.search(clause)
+    if contains_match:
+        needle, is_regex = _clean_needle(contains_match.group("needle"))
+        if not needle:
+            return None
+        haystack = str(stdout or "")
+        if is_regex:
+            try:
+                ok = re.search(needle, haystack, re.S) is not None
+            except re.error:
+                return None
+        else:
+            ok = needle in haystack
+        return {"clause": clause.strip(), "kind": "output_contains",
+                "needle": needle, "regex": is_regex, "ok": bool(ok)}
+    return None
 
 
 def evaluate_signal(signal: str, exit_code: int | None, stdout: str, *,
                     exit_code_known: bool = True) -> dict[str, Any]:
     """把 ``probe.success_signal`` 解析成条件, 用真实 exit_code / stdout 跑一遍。
 
-    ``matched``: ``True`` 全中 / ``False`` 有未满足 / ``None`` 判据解析不出来, 或**退出码本身
-    判不了**(``exit_code_known=False``, 见 :func:`probe_exit_status`) —— 证据不足, 不是失败。
+    ``matched``: ``True`` 有一个"或"组全中 / ``False`` 所有组都不成立 / ``None`` 判据解析不出来,
+    或**退出码本身判不了**(``exit_code_known=False``, 见 :func:`probe_exit_status`) —— 证据不足,
+    不是失败。
+
+    ``或`` 组之间的判定顺序: 只要有一组成立就是 ``True``(哪怕另一组因为退出码不可知而无法判定);
+    没有成立但有一组判不了才是 ``None``。
     """
-    text = str(signal or "").strip()
-    clauses = _clauses(text)
+    groups = _clause_groups(signal)
     checks: list[dict[str, Any]] = []
     unparsed: list[str] = []
-    for clause in clauses:
-        exit_match = _EXIT_CLAUSE.search(clause)
-        if exit_match:
-            op, raw = exit_match.group(1), int(exit_match.group(2))
-            if not exit_code_known:
-                checks.append({"clause": clause.strip(), "kind": "exit_code", "op": op,
-                               "expected": raw, "actual": None, "ok": None})
+    results: list[bool | None] = []
+    for index, clauses in enumerate(groups):
+        group_checks: list[dict[str, Any]] = []
+        group_unparsed: list[str] = []
+        for clause in clauses:
+            check = _judge_clause(clause, exit_code, stdout, exit_code_known=exit_code_known)
+            if check is None:
+                group_unparsed.append(clause.strip())
                 continue
-            ok = _compare(exit_code, op, raw)
-            checks.append({"clause": clause.strip(), "kind": "exit_code", "op": op,
-                           "expected": raw, "actual": exit_code, "ok": ok})
-            continue
-        contains_match = _CONTAINS_CLAUSE.search(clause)
-        if contains_match:
-            needle, is_regex = _clean_needle(contains_match.group("needle"))
-            if not needle:
-                unparsed.append(clause.strip())
-                continue
-            haystack = str(stdout or "")
-            if is_regex:
-                try:
-                    ok = re.search(needle, haystack, re.S) is not None
-                except re.error:
-                    unparsed.append(clause.strip())
-                    continue
-            else:
-                ok = needle in haystack
-            checks.append({"clause": clause.strip(), "kind": "output_contains",
-                           "needle": needle, "regex": is_regex, "ok": bool(ok)})
-            continue
-        unparsed.append(clause.strip())
+            check["group"] = index
+            group_checks.append(check)
+        checks.extend(group_checks)
+        unparsed.extend(group_unparsed)
+        if not group_checks:
+            results.append(None)                       # 整组都解析不出来
+        elif any(c["ok"] is None for c in group_checks):
+            results.append(None)                       # 退出码判不了
+        elif group_unparsed:
+            results.append(False)                      # 有子条件无法解析 → 这组不成立(与旧口径一致)
+        else:
+            results.append(all(c["ok"] for c in group_checks))
 
-    if not checks:
-        return {"matched": None, "checks": [], "unparsed": unparsed,
+    if not checks and not unparsed:
+        return {"matched": None, "checks": [], "unparsed": [],
                 "why": "判据解析不出来, 无法机器判定"}
-    if any(c["ok"] is None for c in checks):
-        return {"matched": None, "checks": checks, "unparsed": unparsed,
-                "why": "退出码无法确定(probe 后面还有别的语句), 不能拿外层 shell 的退出码代替"}
-    matched = all(c["ok"] for c in checks) and not unparsed
-    return {
-        "matched": bool(matched),
-        "checks": checks,
-        "unparsed": unparsed,
-        "why": "" if matched else ("有子条件未满足" if not all(c["ok"] for c in checks) else "有子条件无法解析"),
-    }
+    if any(r is True for r in results):
+        matched: bool | None = True
+    elif any(r is None for r in results):
+        matched = None
+    else:
+        matched = False
+
+    if matched is True:
+        why = ""
+    elif matched is None:
+        unknown_exit = any(c["ok"] is None for c in checks)
+        why = ("退出码无法确定(probe 后面还有别的语句), 不能拿外层 shell 的退出码代替"
+               if unknown_exit else "判据解析不出来, 无法机器判定")
+    elif unparsed and all(c["ok"] for c in checks):
+        why = "有子条件无法解析"
+    else:
+        why = "有子条件未满足"
+    return {"matched": matched, "checks": checks, "unparsed": unparsed, "why": why}
 
 
 def _compare(actual: Any, op: str, expected: int) -> bool:
