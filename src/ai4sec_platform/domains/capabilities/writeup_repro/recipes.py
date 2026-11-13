@@ -60,33 +60,38 @@ _ACQUIRE = re.compile(
     re.I,
 )
 
-#: 环境准备: 装依赖、建虚拟环境、编译。
+#: 环境准备: 装依赖、建虚拟环境、编译、铺工作目录。
+#: 一律按**动词**认, 不按命令首词认 —— 沙箱里 agent 很少激活 venv, 写的是
+#: `.venv/bin/pip install`、`$PY3118 -m venv`, 只认裸 `pip install` 会把真环境步骤全判成 trigger。
 _SETUP = re.compile(
-    r"(?:^|[\s;&|])(?:"
-    r"(?:sudo\s+)?(?:apt-get|apt|apk|yum|dnf|zypper|pacman|brew)\s+(?:install|add|update)|"
-    r"(?:sudo\s+)?(?:pip3?|pipx)\s+install|"
-    r"uv\s+(?:venv|sync|pip\s+install)|"
-    r"(?:python3?|py)\s+-m\s+venv|"
-    r"(?:npm|yarn|pnpm)\s+(?:install|ci|add)|"
-    r"composer\s+install|cargo\s+(?:build|install|fetch)|go\s+(?:mod\s+download|get|build|install)|"
-    r"make(?:\s|$)|cmake\b|meson\b|ninja\b|\./configure\b|"
-    r"(?:gcc|g\+\+|clang|cc)\s|"
-    r"source\s+[^;&|]*activate"
-    r")",
+    r"-m\s+venv"
+    r"|(?:^|[\s;&|(/])(?:[\w./$@-]*/)?(?:pip3?|pipx)\s+install"
+    r"|(?:apt-get|apt|apk|yum|dnf|zypper|pacman|brew)\s+(?:install|add|update)"
+    r"|(?:^|[\s;&|])uv\s+(?:python\s+install|venv|sync|pip\s+install)"
+    r"|(?:npm|yarn|pnpm)\s+(?:install|ci|add)"
+    r"|(?:^|[\s;&|])composer\s+install|cargo\s+(?:build|install|fetch)"
+    r"|(?:^|[\s;&|])go\s+(?:mod\s+download|get|build|install)"
+    r"|(?:^|[\s;&|])make(?!\s+--version)(?:\s|$)|(?:^|[\s;&|])(?:cmake|meson|ninja)\b(?!\s+--version)"
+    r"|(?:^|[\s;&|])gcc\s(?!--version)|(?:^|[\s;&|])g\+\+\s(?!--version)"
+    r"|(?:^|[\s;&|])clang\s(?!--version)|\./configure\b"
+    r"|source\s+[^;&|]*activate"
+    r"|(?:^|[\s;&|])mkdir(?:\s|$)|(?:^|[\s;&|])rm\s+-[rf]{1,2}(?:\s|$)"
+    r"|(?:^|[\s;&|])chmod(?:\s|$)|(?:^|[\s;&|])export\s+\w+="
+    r"|(?:^|[\s;&|])[A-Z_][A-Z0-9_]*=",
     re.I,
 )
 
-#: **纯导航**命令: 对"怎么跑"没有任何信息量的那些。
-#: 只收这几个 —— ``echo``/``cat`` 常常是把 PoC 写进文件的关键步骤(**绝不能**当噪声丢掉),
-#: ``cd`` 只有单独一条时才算噪声(``cd x && ./run`` 里的 cd 属于那条命令的一部分)。
-_NOISE = re.compile(
-    r"^\s*(?:ls(?:\s|$)|pwd\s*$|true\s*$|false\s*$|sleep\s+\d|which\s|command\s+-v\s|cd\s+[^\s;&|]+\s*$)",
+#: 只在**看**、不改变状态的子命令: 拼管道、看版本、看目录、打一行字。
+#: 它们不构成"这一段在跑什么", 所以既不算 setup, 也不该把整条命令拽进 trigger。
+#: **带重定向的一律不算**(`echo code > poc.py` 是写文件, 往往是 PoC 本身)。
+_PLUMBING = re.compile(
+    r"^(?:cd|pwd|ls|echo|printf|head|tail|grep|egrep|fgrep|cat|wc|tee|sleep|true|false|"
+    r"set|which|command|type|uname|id|whoami|env|nproc|date|file|ldd|nm|strings|"
+    r"uv\s+python\s+list)\b"
+    r"|--version\b"
+    r"|\s-c\s+['\"]?import\b",
     re.I,
 )
-
-#: 拆子命令用的分隔符。判类看的是**每个子命令**, 而不是整行 ——
-#: ``cd /w && source .venv/bin/activate && pip install -e .`` 是 setup, 不是 trigger。
-_SUBCMD_SPLIT = re.compile(r"\s*(?:&&|\|\||[;|]|\n)\s*")
 
 #: 攻击面关键词 → 指纹 token。**只做确定性映射, 不做语义推断**:
 #: 匹配不到就不加这个 token, 不写 "unknown" 之类看着像结论的东西。
@@ -121,31 +126,108 @@ def normalize_lang(value: Any) -> str:
 
 
 def _subcommands(cmd: str) -> list[str]:
-    return [part.strip() for part in _SUBCMD_SPLIT.split(str(cmd or "")) if part.strip()]
+    """按 ``&&`` / ``||`` / ``;`` / ``|`` / 换行 拆子命令 —— **引号里的分隔符不拆**。
+
+    判类看的是每个子命令, 而不是整行: ``cd /w && source .venv/bin/activate && pip install -e .``
+    是 setup, 不是 trigger。
+
+    为什么要手写扫描而不是正则 split: 真实命令里遍地是 ``python3 -c "import x; print(x)"``、
+    ``bash -c 'a && b'`` —— 引号内的 ``;`` 属于那段脚本。正则拆会把 ``-c`` 的脚本切成碎片,
+    再按碎片判类就会凭空造出几条并不存在的"准备步骤", 而这些碎片在 report 里根本没有对应
+    的 §3 index, 违反"每一步都能回指证据"。
+    """
+    parts: list[str] = []
+    buf: list[str] = []
+    quote = ""
+    index, length = 0, len(str(cmd or ""))
+    while index < length:
+        char = cmd[index]
+        if quote:
+            buf.append(char)
+            # 双引号里的反斜杠转义: `\"` 不该结束引号。
+            if char == "\\" and quote == '"' and index + 1 < length:
+                buf.append(cmd[index + 1])
+                index += 2
+                continue
+            if char == quote:
+                quote = ""
+            index += 1
+            continue
+        if char in ("'", '"'):
+            quote = char
+            buf.append(char)
+            index += 1
+            continue
+        if char in ("&", "|") and index + 1 < length and cmd[index + 1] == char:
+            parts.append("".join(buf))
+            buf = []
+            index += 2
+            continue
+        if char in (";", "|", "\n"):
+            parts.append("".join(buf))
+            buf = []
+            index += 1
+            continue
+        buf.append(char)
+        index += 1
+    parts.append("".join(buf))
+    return [part.strip() for part in parts if part.strip()]
+
+
+#: 文件描述符重定向(`2>&1`、`>&2`)。删掉再判"有没有写文件", 否则每条带 `2>&1` 的命令
+#: 都会被当成在写文件, 于是 `pip install | tail` 这种再普通不过的准备步骤全进 trigger。
+_FD_REDIRECT = re.compile(r"\d?>&\d")
+
+
+def _is_plumbing(part: str) -> bool:
+    """只看不动的子命令。带真重定向的不算 —— 那是在写文件。
+
+    用 ``search`` 而不是 ``match``: ``--version`` 和 ``-c 'import ...'`` 这两条特征出现在
+    命令**中间**(``python3 --version``、``.venv/bin/python3 -c "import fastecdsa"``),
+    锚在开头的 ``match`` 永远够不着它们 —— 实测任务 3 的 17 条命令里, 两条纯查看的
+    ``--version`` 因此被判成 trigger。
+    """
+    text = _FD_REDIRECT.sub("", part).replace(">/dev/null", "")
+    if ">" in text:
+        return False
+    return bool(_PLUMBING.search(text))
 
 
 def classify_command(cmd: str) -> str:
     """把一条命令分到 ``acquire`` / ``setup`` / ``trigger`` / ``noise``。
 
-    **按子命令判**, 优先级 acquire > setup: 一条命令里既 clone 又 install, 归到 acquire
-    —— 它解决的是"目标从哪来", 复用时这一段换掉就够, 后面的安装往往可以照抄。
+    **按子命令逐段判**:
+    - 只要有一段是"拉目标", 整条归 ``acquire`` —— 它解决的是"目标从哪来",
+      复用时这一段换掉就够, 后面的安装往往可以照抄;
+    - **除导航/查看之外每一段都是环境准备**才算 ``setup``。`rm -rf x && ./run.sh` 里前半段
+      像准备、后半段才是触发, 归成 setup 就把这一行最要紧的部分藏起来了;
+    - 全是"看"的子命令(ls / cat / --version / which…)归 ``noise`` —— 真跑里这类命令
+      占了不少, 收进 recipe 只是把三段都冲淡;
+    - 其余一律 ``trigger`` —— 这是默认档, 宁可多给一条线索, 也不要把触发步骤藏进 setup。
+
+    **"看"优先于"准备"**判: 一条只看的子命令哪怕参数里出现 ``make`` / ``gcc`` 也还是"看" ——
+    ``which uv pyenv gcc make wget curl`` 是在**问装没装**, 不是在编译; 反过来先查 setup 会
+    让它命中 ``make`` 那条特征, 于是一条纯巡检命令被记成"环境准备"(任务 3 实测踩到)。
     """
     text = str(cmd or "").strip()
     if not text:
         return "noise"
-    if _NOISE.match(text):
+    parts = _subcommands(text)
+    if not parts:
         return "noise"
-    kinds = set()
-    for part in _subcommands(text):
-        if _ACQUIRE.search(part):
-            kinds.add("acquire")
-        elif _SETUP.search(part):
-            kinds.add("setup")
-    if "acquire" in kinds:
+    if any(_ACQUIRE.search(part) for part in parts):
         return "acquire"
-    if "setup" in kinds:
+    setup = 0
+    for part in parts:
+        if _is_plumbing(part):
+            continue
+        if _SETUP.search(part):
+            setup += 1
+            continue
+        return "trigger"
+    if setup:
         return "setup"
-    return "trigger"
+    return "noise"
 
 
 def segment_commands(
@@ -300,7 +382,14 @@ def build_recipe(
         "setup": seg["setup"],
         "trigger": seg["trigger"],
         "probe": {
-            **(seg["probe"] or {"index": None, "cmd": probe_cmd, "exit_code": None}),
+            **(seg["probe"] or {"index": None, "cmd": probe_cmd}),
+            # 退出码取**平台重算的那个**(``observed_json``), 不取第 3 节里那条命令的外层
+            # shell 退出码 —— 真跑里 probe 常写成 `python3 poc.py | tee out; echo "EXIT=$?"`,
+            # 第 3 节记的会是 0, 而判定用的是从输出里读回的 134。两个数并排放才说得清
+            # (T3 踩过的坑: `probe.exit_code` 曾是外层 shell 的)。
+            "exit_code": observed.get("exit_code"),
+            "shell_exit_code": seg["probe"].get("exit_code") if seg["probe"] else None,
+            "exit_code_source": str(observed.get("exit_code_source") or ""),
             "success_signal": str(observed.get("success_signal") or ""),
             "matched": matched,
             "occurrences": seg["probe_occurrences"],

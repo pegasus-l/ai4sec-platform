@@ -191,6 +191,63 @@ def test_acquire_wins_over_setup_when_a_command_does_both() -> None:
     assert recipes_module.classify_command("curl -sL https://g/x.tar.gz -o x.tgz") == "acquire"
 
 
+def test_a_chain_that_mixes_preparation_with_running_stays_a_trigger() -> None:
+    """前半段像准备、后半段才是触发, 归成 setup 就把这一行最要紧的部分藏起来了。"""
+    assert recipes_module.classify_command("rm -rf /w && ./run.sh") == "trigger"
+    assert recipes_module.classify_command("mkdir -p /w && rm -rf /w") == "setup"
+    assert recipes_module.classify_command(".venv/bin/pip install fastecdsa==2.3.1") == "setup"
+
+
+def test_a_version_or_import_check_is_inspection_not_preparation() -> None:
+    """`python3 --version` / `-c "import x"` 是**问环境**, 不是准备环境。
+
+    ``--version`` 与 ``-c ...import`` 出现在命令中间 —— 判类若锚在开头就够不着它们,
+    任务 3 实测把两条 `--version` 记成了触发步骤。
+    """
+    assert recipes_module.classify_command("python3 --version") == "noise"
+    assert recipes_module.classify_command(
+        "/root/.local/share/uv/python/cpython-3.11/bin/python3.11 --version"
+    ) == "noise"
+    assert recipes_module.classify_command('.venv/bin/python3 -c "import fastecdsa, sys"') == "noise"
+
+
+def test_a_which_line_naming_build_tools_is_still_inspection() -> None:
+    """`which uv pyenv gcc make wget curl; gcc --version | head -1` 在问"装没装", 不是在编译。
+
+    这条是任务 3 第 10 号命令的原文: 先查 setup 会让它命中 ``make`` 那条特征, 于是一条
+    纯巡检命令被记成"环境准备"。
+    """
+    cmd = (
+        'which uv pyenv gcc make wget curl 2>/dev/null; echo "---"; '
+        'gcc --version | head -1; make --version | head -1; nproc'
+    )
+    assert recipes_module.classify_command(cmd) == "noise"
+
+
+def test_separators_inside_quotes_do_not_split_a_command() -> None:
+    """引号里的 ``;`` / ``&&`` 属于那段脚本, 拆开就会凭空造出不存在的步骤。"""
+    parts = recipes_module._subcommands('python3 -c "import sys; print(sys.version)"')
+    assert parts == ['python3 -c "import sys; print(sys.version)"']
+
+    # `bash -c '... && pip install ...'` 整体仍是准备: 被拆碎的话每一块都判不成 setup。
+    assert recipes_module.classify_command("bash -c 'cd /w && pip install -e .'") == "setup"
+
+    # 双引号里的转义引号不该提前结束引号。
+    assert len(recipes_module._subcommands('echo "a \\" b; c" && ls')) == 2
+
+
+def test_the_probe_exit_code_comes_from_the_platform_not_the_shell() -> None:
+    """真跑里 probe 常是 `poc.py | tee out; echo EXIT=$?`: 第 3 节记 0, 判定用的是读回的 134。"""
+    evidence = _evidence()
+    evidence["commands"][6]["exit_code"] = 0          # 外层 shell
+    evidence["probe"].update({"exit_code": 134, "shell_exit_code": 0, "exit_code_source": "printed"})
+    recipe, _ = recipes_module.build_recipe(_task(), _report(evidence=evidence), _candidate())
+
+    assert recipe["probe"]["exit_code"] == 134
+    assert recipe["probe"]["shell_exit_code"] == 0
+    assert recipe["probe"]["exit_code_source"] == "printed"
+
+
 def test_navigation_noise_is_dropped_but_echo_is_not() -> None:
     """`ls` 是废话; `echo ... > poc.py` 是**把 PoC 写进文件**, 丢了就等于丢了 trigger。"""
     recipe, _ = recipes_module.build_recipe(_task(), _report(), _candidate())
