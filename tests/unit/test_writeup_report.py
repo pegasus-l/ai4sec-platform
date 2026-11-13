@@ -237,6 +237,36 @@ def test_a_root_cause_that_points_nowhere_is_downgraded_but_kept() -> None:
     assert report["pattern_json"]["verified"] is False, "第 6 节没过校验, 规律不许入库"
 
 
+def test_a_location_field_padded_with_prose_is_called_out_as_padding() -> None:
+    """实测(2026-11-13 真模型冒烟): 模型把"curvemath_mul（未初始化 result）；经 … 传导"填进
+    `function`。位置本身是对的, 但逐字匹配必然找不到 —— 降级口径不变, 但**理由必须如实**,
+    否则复核的人会以为原文里没有那个函数名, 去找一段根本不该存在的字符串。"""
+    padded = "curvemath_mul（未初始化 result）；经 pointZZ_pMul 传导"
+    model = dict(GOOD_MODEL, root_cause=dict(
+        GOOD_MODEL["root_cause"],
+        location={"file": "auth.py", "function": padded, "lines": ""},
+    ))
+    report = _build(model)
+
+    assert report["root_cause_json"]["provenance"] == "llm_extracted_unverified"
+    assert report["root_cause_json"]["location"]["function"] == padded, "模型的话要原样留着"
+    assert any("夹了说明" in item for item in report["caveats"])
+    assert not any("在原文里找不到" in item for item in report["caveats"])
+    assert report["evidence_json"]["generation"]["root_cause_verified"] is False
+
+
+def test_an_empty_location_field_means_not_claimed_not_a_failure() -> None:
+    """原文没给行号时模型应当留空。**留空 ≠ 校验不过** —— 否则"不写行号的文章"永远出不了规律。"""
+    model = dict(GOOD_MODEL, root_cause=dict(
+        GOOD_MODEL["root_cause"],
+        location={"file": "auth.py", "function": "check", "lines": ""},
+    ))
+    report = _build(model)
+
+    assert report["evidence_json"]["generation"]["root_cause_verified"] is True
+    assert report["root_cause_json"]["provenance"] == "llm_extracted"
+
+
 def test_a_missing_root_cause_falls_back_to_the_verified_spec_one() -> None:
     report = _build(dict(GOOD_MODEL, root_cause={}))
     root = report["root_cause_json"]

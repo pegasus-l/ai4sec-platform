@@ -43,6 +43,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 from datetime import datetime, timezone
 from typing import Any
@@ -107,11 +108,15 @@ MODEL_SECTIONS_PROMPT = """你是漏洞复现报告的撰写者。平台已经�
     "side": "article|ours|objective",
     // article = 原文的锅(没写清触发/版本对不上); ours = 我们的锅(环境装不起来);
     // objective = 客观限制(目标是在线服务 / 需要特殊硬件)
+    // **复现成功(verdict=success)时这一项留空字符串 ""**, 不要拿 article 之类的值占位
     "reason": "一句话说清是什么导致了对不上; 复现成功就写'复现成功, 无需归因'",
     "evidence_refs": [3, 7]   // 第 3 节命令的 index; 你的判断依据是哪几条命令
   },
   "root_cause": {
-    "location": {"file": "漏洞所在文件", "function": "函数名", "lines": "行号或区间"},
+    // location 三个字段**只写标识符本身**: 文件路径、函数名、行号或区间。
+    // 不写解释、不把多个名字串起来(平台的校验是"原文里逐字找得到", 夹了说明就找不到)。
+    // 原文没给的那一项**留空字符串 "", 不要写"原文未给出"之类的说明** —— 解释写进 broken_by / caveats。
+    "location": {"file": "src/curveMath.c", "function": "curvemath_mul", "lines": "120-133"},
     "invariant": "被破坏的**不变量**(语义层面, 一句话) —— 例如'授权判定用的路径串必须与路由分派用的路径串是同一个'",
     "broken_by": "这个不变量是怎么被破坏的(一两句话)",
     "preconditions": ["要成立还需要什么前提, 逐条"],
@@ -164,6 +169,32 @@ def _found(needle: Any, haystack: str) -> bool:
     """断言是否能在原文里找到。按归一空白后的子串匹配 —— 判据是内容, 不是排版。"""
     text = _norm(needle)
     return bool(text) and text in haystack
+
+
+# 位置字段被塞进解释的痕迹(中文标点/箭头/连续汉字)。实测: 模型把
+# "curvemath_mul（未初始化 result）；经 pointZZ_pMul → pointZZ_pSetToIdentityElement 传导"
+# 填进 `function`, 把"原文未给出源码行号…"填进 `lines` —— 位置本身是对的, 但逐字匹配必然找不到。
+# 这两种情况的处置都是降级, 但**必须如实说是哪一种**: 否则 caveat 会让人以为原文里
+# 根本不存在那个名字, 复核的人就会去原文里找一段本来就不该存在的字符串。
+_PADDING_PUNCT = ("（", "）", "，", "；", "：", "→")
+_CJK_RUN = re.compile(r"[一-鿿]{2,}")
+
+
+def _looks_padded(value: str) -> bool:
+    text = str(value or "").strip()
+    if not text:
+        return False
+    if len(text) > 80:
+        return True
+    if any(mark in text for mark in _PADDING_PUNCT):
+        return True
+    return bool(_CJK_RUN.search(text))
+
+
+def _missing_problem(label: str, value: str) -> str:
+    if _looks_padded(value):
+        return f"{label}字段里夹了说明 {value!r}(该字段只写标识符, 已按未核对处理)"
+    return f"{label} {value!r} 在原文里找不到"
 
 
 def _as_list(value: Any) -> list[str]:
@@ -478,14 +509,14 @@ def _root_cause_section(
 
     problems: list[str] = []
     if file_path and not _found(file_path, haystack):
-        problems.append(f"文件 {file_path!r} 在原文里找不到")
+        problems.append(_missing_problem("文件", file_path))
     if function and not _found(function, haystack):
-        problems.append(f"函数 {function!r} 在原文里找不到")
+        problems.append(_missing_problem("函数", function))
     if code_quote and not _found(code_quote, haystack):
         problems.append("摘录的代码行在原文里找不到")
     if lines and not _found(lines, haystack):
         # 行号常常是模型从代码块里数出来的; 对不上不单独判死, 但要留痕。
-        problems.append(f"行号 {lines!r} 在原文里找不到")
+        problems.append(_missing_problem("行号", lines))
     if not (file_path or function or code_quote):
         problems.append("没给出任何可核对的位置")
     if not invariant:
