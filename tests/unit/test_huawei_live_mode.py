@@ -74,13 +74,21 @@ def test_huawei_source_records_can_resume_downstream_pipeline(monkeypatch, tmp_p
         {"source": "cve_findings", "path": "generated:test", "exists": True, "items": [], "raw": {}, "mode": "generated"},
     ]
 
+    # 这个用例要验的是"采集结果写进 run 之后, 下游能靠 resume_from_run_id 读回来"。
+    # 采集侧必须打桩: `CollectHuaweiSourcesStep` 直接调 `_collect_repo_records` /
+    # `_collect_live_assets`(逐仓 / 逐页打 gitcode、atomgit、hiascend), 它**不经过**
+    # `load_huawei_live` —— 只打 load_huawei_live 的桩, 用例会真的去联外网:
+    # 网络不通时按退避重试能拖到 150s 以上, 整轮单测就这么"卡住"了。
     calls = {"count": 0}
 
-    def fake_live(params):
+    def fake_collect(*args, **kwargs):
         calls["count"] += 1
-        return records
+        return [records[0]]
 
-    monkeypatch.setattr(huawei_sources, "load_huawei_live", fake_live)
+    from ai4sec_platform.pipelines.steps import threat_sources
+
+    monkeypatch.setattr(threat_sources, "_collect_repo_records", fake_collect)
+    monkeypatch.setattr(threat_sources, "_collect_live_assets", lambda *a, **k: [])
     settings = load_settings()
     settings = settings.model_copy(update={"output_dir": tmp_path})
     conn = sqlite3.connect(":memory:")
@@ -130,27 +138,34 @@ def test_huawei_source_cache_refreshes_selected_sources(monkeypatch, tmp_path) -
     assert [record["items"][0]["name"] for record in refreshed] == ["repo-2", "fw-1"]
 
 
-def test_full_scan_repo_collection_uses_deep_page_limit() -> None:
-    requested_pages = []
+def test_full_scan_repo_collection_asks_the_connector_for_deep_pages() -> None:
+    """"full 档要不要更深的页"这件事, 现在落在 **per_page** 上, 不在这一层的翻页循环上。
+
+    `_collect_live_repos` 固定 `page_limit=1`, 因为 GitCode/AtomGit 连接器的 `fetch()` 内部
+    自己翻完所有页 —— 这一层再去循环 page, 每个 org 会被完整采 N 遍(重复仓库, 且白烧配额)。
+    所以 depth 的唯一旋钮是 per_page(100 vs 50), 这里守的就是它, 外加"只调一次连接器"。
+    """
+    calls = []
 
     class FakeConnector:
         def fetch(self, request):
-            page = request.params["page"]
-            requested_pages.append(page)
-            if page <= 4:
-                items = [{"name": f"repo-{page}-{idx}", "web_url": f"https://gitcode.com/openharmony/repo-{page}-{idx}", "star_count": idx} for idx in range(100)]
-            else:
-                items = []
-            return type("Result", (), {"errors": [], "items": items})()
+            calls.append(dict(request.params))
+            return type("Result", (), {"errors": [], "items": [
+                {"name": f"repo-{idx}", "web_url": f"https://gitcode.com/openharmony/repo-{idx}", "star_count": idx}
+                for idx in range(100)]})()
 
     class FakeRegistry:
         def get(self, platform):
             return FakeConnector()
 
     repos = huawei_sources._collect_live_repos(FakeRegistry(), {"scan_profile": "full", "orgs": ["gitcode:openharmony"], "max_workers": 1})
+    assert len(calls) == 1, calls
+    assert calls[0]["per_page"] == 100
+    assert len(repos) == 100
 
-    assert len(repos) == 400
-    assert max(requested_pages) == 5
+    calls.clear()
+    huawei_sources._collect_live_repos(FakeRegistry(), {"orgs": ["gitcode:openharmony"], "max_workers": 1})
+    assert [call["per_page"] for call in calls] == [50]
 
 
 def test_security_materials_are_org_level_not_project_copies(monkeypatch) -> None:

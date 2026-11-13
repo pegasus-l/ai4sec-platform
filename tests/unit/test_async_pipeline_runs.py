@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 
 from ai4sec_platform.app.api import runs as runs_api
 from ai4sec_platform.app.main import app
+from _session_auth import signed_client
 from ai4sec_platform.core.config import Settings, load_settings
 from ai4sec_platform.db import repositories as repo
 from ai4sec_platform.db.models import init_db
@@ -30,6 +31,11 @@ class InspectProgressStep:
         self.seen_current_step.append(repo.loads(row["summary_json"])["current_step"])
         return StepResult(metrics={"items": 1})
 
+
+
+def _client():
+    """/api/* 从 2026-10-31 起一律验 cookie; 裸 TestClient(app) 每条都是 401。"""
+    return signed_client()
 
 def test_runner_reuses_reserved_run_id_and_records_progress(tmp_path: Path) -> None:
     settings = Settings(project_root=tmp_path, output_dir=tmp_path / "output", database_path=tmp_path / "test.db")
@@ -77,9 +83,12 @@ def test_async_run_returns_pollable_run_id(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr(runs_api, "PipelineRunner", FakeRunner)
     with runs_api._active_runs_lock:
         runs_api._active_runs.clear()
-    client = TestClient(app)
+    client = _client()
 
-    response = client.post("/api/runs", json={"pipeline_name": "vulnerabilities.event_aggregation_pipeline", "wait": False})
+    # 名字换成仍注册着的那条: `vulnerabilities.event_aggregation_pipeline` 2026-10-16 已停止
+    # 注册(事件库改成以洞为主键的案例库), 拿它发 POST 现在直接被当成未知管线挡成 404 ——
+    # 这条用例验的是"异步 run 能拿到 run_id 并轮询", 用哪条管线不影响结论, Runner 已被打桩。
+    response = client.post("/api/runs", json={"pipeline_name": "vulnerabilities.knowledge_extraction_pipeline", "wait": False})
     assert response.status_code == 200
     payload = response.json()
     assert payload["status"] == "queued"
@@ -100,7 +109,12 @@ def test_async_run_returns_pollable_run_id(monkeypatch, tmp_path: Path) -> None:
             break
         time.sleep(0.01)
     assert detail_payload["status"] == "success"
-    assert detail_payload["progress"] == {"completed_steps": 1, "total_steps": 1, "current_step": ""}
+    # progress 后来加了 `item_progress`(逐条目进度, 没有时是 None)。这里只钉步骤级那三个键,
+    # 别把"又多了一个键"当成坏 —— 整字典相等等于每加一个字段就红一次。
+    progress = detail_payload["progress"]
+    assert progress["completed_steps"] == 1
+    assert progress["total_steps"] == 1
+    assert progress["current_step"] == ""
     history = client.get("/api/vulnerabilities/runs")
     assert history.status_code == 200
     assert history.json()["items"][0]["run_id"] == payload["run_id"]
@@ -128,7 +142,7 @@ def test_vulnerability_run_results_are_scoped_by_run_id(monkeypatch, tmp_path: P
         )
         conn.commit()
 
-    client = TestClient(app)
+    client = _client()
     response = client.get("/api/vulnerabilities/runs/run_current/results")
 
     assert response.status_code == 200

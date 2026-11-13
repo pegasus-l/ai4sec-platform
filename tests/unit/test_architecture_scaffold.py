@@ -42,7 +42,9 @@ def test_pipeline_registry_has_all_domain_entries() -> None:
     assert "news.shadow_collect_pipeline" in names
     assert "news.daily_pipeline" in names
     assert "capabilities.assessment_placeholder" not in names
-    assert "threats.huawei_raw_pipeline" in names
+    # b40df4a 把简化版 huawei_raw_pipeline 删了, 只留完整 11 步的 full_migration;
+    # 这里钉住"简化版不许回来"(它和完整版并存时, 页面上会出现两个长得很像的刷新按钮)。
+    assert "threats.huawei_raw_pipeline" not in names
     assert "threats.huawei_local_raw_import" not in names
     assert "threats.huawei_cve_scout_pipeline" in names
     assert "threats.huawei_attack_surface_pipeline" in names
@@ -51,7 +53,9 @@ def test_pipeline_registry_has_all_domain_entries() -> None:
     assert "threats.risk_reasoning_pipeline" in names
     assert "vulnerabilities.material_raw_pipeline" in names
     assert "vulnerabilities.material_local_raw_import" in names
-    assert "vulnerabilities.event_aggregation_pipeline" in names
+    # 2026-10-16: 「事件库」改成以洞为主键的案例库, 旧的"从素材聚合主题"管线停止注册
+    # (函数与模块都还留着, 回滚只需重新 register)。这里钉住它别再回到注册表。
+    assert "vulnerabilities.event_aggregation_pipeline" not in names
     assert "vulnerabilities.knowledge_extraction_pipeline" in names
     assert "vulnerabilities.batched_full_knowledge_discovery_pipeline" in names
     assert "legacy.sample_import" not in names

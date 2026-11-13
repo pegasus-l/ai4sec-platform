@@ -23,28 +23,41 @@ def test_threat_semantic_review_payload_contains_agent_judgement_inputs() -> Non
     }
     prompt = _semantic_review_prompt()
     payload = _semantic_review_payload(target)
-    assert "broad_sec_items" in prompt
+    # 提示词 2026-10 重写过: 现在只要模型做三件事 —— 攻击面校准 / CVE 优先级 / 挖洞假设。
+    # `broad_sec_items` 仍然随 payload 发出去(下面有断言), 只是提示词不再点名它,
+    # 所以"prompt 里必须有 broad_sec_items"这条旧断言已经不成立。
     assert "attack_surface" in prompt
+    assert "cve_priority" in prompt
+    assert "hypotheses" in prompt
     assert payload["attack_surface"]["grade"] == "A"
     assert payload["cves"][0]["cve_id"] == "CVE-2024-12345"
     assert payload["broad_sec_items"][0]["description"] == "possible injection"
 
 
 def test_normalize_semantic_review_schema() -> None:
+    # 清洗函数跟着提示词一起改过: 输出契约变成"攻击面校准 + CVE 优先级 + 挖洞假设",
+    # 旧的 `recommended_tracking_level` / `recommended_actions` / `false_positive_risks`
+    # 这套字段已经不再产出(旧用例按旧契约断言, 一直在 KeyError)。
     review = _normalize_semantic_review(
         {
             "summary": "高风险内核攻击面",
-            "is_real_security_target": True,
-            "valid_security_findings": ["critical CVE"],
-            "false_positive_risks": "普通 bug 混入",
-            "attack_surface_summary": "kernel/parser",
-            "vulnerability_hypotheses": ["解析器内存破坏"],
-            "recommended_tracking_level": "高风险跟踪",
-            "recommended_actions": ["核验修复版本"],
+            "calibrated_surface": "kernel",
+            "calibrated_score": 82,
+            "attack_surface_calibration": "规则说 parser/codec, 实际是 kernel",
+            "rule_score_assessment": "规则评分偏低",
+            "cve_priority": [{"cve_id": "CVE-2024-12345", "value": "high", "reason": "解析器可达"}],
+            "false_positives": "普通 bug 混入",
+            "hypotheses": ["解析器内存破坏"],
             "confidence": 0.86,
         }
     )
     assert review["summary"] == "高风险内核攻击面"
-    assert review["recommended_tracking_level"] == "高风险跟踪"
-    assert review["false_positive_risks"] == ["普通 bug 混入"]
+    assert review["calibrated_surface"] == "kernel"
+    assert review["calibrated_score"] == 82
+    assert review["cve_priority"][0]["value"] == "high"
+    # 单值会包成列表(`_as_list`), 老模型回 "普通 bug 混入" 这种字符串也不能让下游炸
+    assert review["false_positives"] == ["普通 bug 混入"]
+    assert review["hypotheses"] == ["解析器内存破坏"]
     assert review["confidence"] == 0.86
+    # 旧字段不许"复活": 复活意味着有人在没改提示词的情况下又写回旧契约
+    assert "recommended_tracking_level" not in review

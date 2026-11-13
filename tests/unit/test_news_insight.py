@@ -18,7 +18,7 @@ from ai4sec_platform.domains.news.tech_map import AgentTechMap
 from ai4sec_platform.domains.news.links import resolve_candidate_links
 from ai4sec_platform.domains.news import reviewer
 from ai4sec_platform.domains.news import operations as news_operations
-from ai4sec_platform.domains.news.reviewer import _input_hash, _normalize_breakdown, _normalize_deep_review, _normalize_gate, _percentage
+from ai4sec_platform.domains.news.reviewer import _input_hash, _normalize_breakdown, _percentage
 from ai4sec_platform.domains.news import service
 from ai4sec_platform.domains.news.adapters import sources as source_adapter
 from ai4sec_platform.domains.news.adapters.sources import _arxiv_requests, _github_requests
@@ -183,16 +183,39 @@ def test_tech_map_contract_and_discovery_reference_extraction() -> None:
     assert valid == [{"dimension": "工具调用", "category": "工具集成总线", "point": "MCP 协议"}]
     references = extract_reference_items("rss", {"title": "weekly", "summary": "See https://arxiv.org/abs/2501.01234 and https://github.com/acme/scanner"})
     assert {item["source_type"] for item in references} == {"paper", "project"}
-    gate = _normalize_gate({"decision": "pass", "map_relevance_score": 88, "potential_value_score": 72, "provisional_tech_paths": valid}, {"title": "MCP"}, tech_map)
-    assert gate["decision"] == "pass"
-    review = _normalize_deep_review({"score_breakdown": {"map_relevance": 90, "novelty": 80, "technical_depth": 80, "engineering_value": 70, "reproducibility": 70, "influence": 60, "freshness": 80}, "tech_paths": valid, "work_name": "MCPGuard", "theme_descriptor": "面向 Agent 工具调用的协议安全护栏"}, {"title": "MCP", "source_type": "paper", "gate_review": gate}, tech_map)
+    # 2026-10 起 gate + deep review 合并成一次 `_normalize_review`(见 reviewer.py 模块头),
+    # `_normalize_gate` / `_normalize_deep_review` 已不存在 —— 旧的两次调用在这里一导入就崩,
+    # 整个文件(18 条用例)连收集都过不去。这里按合并后的口径重写:
+    # recommended_score 给 5, 否则 `_RECOMMENDED_CEILING[3] = 60` 会把分数封在 60、判 watch。
+    review = reviewer._normalize_review(
+        {
+            "score_breakdown": {"map_relevance": 90, "novelty": 80, "technical_depth": 80, "engineering_value": 70, "reproducibility": 70, "influence": 60, "freshness": 80},
+            "tech_paths": valid,
+            "work_name": "MCPGuard",
+            "theme_descriptor": "面向 Agent 工具调用的协议安全护栏",
+            "recommended_score": 5,
+        },
+        {"title": "MCP", "source_type": "paper"},
+        tech_map,
+    )
     assert review["decision"] == "selected"
-    assert review["relevance_score"] == 90
-    assert review["score"] == 80.0
+    assert review["score_breakdown"]["map_relevance"] == 90
+    # 不加权重复算分: 权重来自 configs/scoring.yml, 用例钉"够格就选"而不是某一版权重下的算术结果
+    assert review["score"] >= 70
     assert review["work_name"] == "MCPGuard"
     assert review["theme_descriptor"] == "面向 Agent 工具调用的协议安全护栏"
     assert review["theme"] == "MCPGuard：面向 Agent 工具调用的协议安全护栏"
-    legacy_theme = _normalize_deep_review({"score_breakdown": {"map_relevance": 90, "novelty": 80, "technical_depth": 80, "engineering_value": 70, "reproducibility": 70, "influence": 60, "freshness": 80}, "tech_paths": valid, "theme": "ScopeJudge：面向进攻性安全 Agent 的执行前门控系统"}, {"title": "ScopeJudge: Cost-Aware Pre-Execution Gating", "source_type": "paper", "gate_review": gate}, tech_map)
+    # 旧字段兼容: 模型只给 theme(不给 work_name/theme_descriptor)时也要能拆回来
+    legacy_theme = reviewer._normalize_review(
+        {
+            "score_breakdown": {"map_relevance": 90, "novelty": 80, "technical_depth": 80, "engineering_value": 70, "reproducibility": 70, "influence": 60, "freshness": 80},
+            "tech_paths": valid,
+            "theme": "ScopeJudge：面向进攻性安全 Agent 的执行前门控系统",
+            "recommended_score": 5,
+        },
+        {"title": "ScopeJudge: Cost-Aware Pre-Execution Gating", "source_type": "paper"},
+        tech_map,
+    )
     assert legacy_theme["theme"] == "ScopeJudge：面向进攻性安全 Agent 的执行前门控系统"
     assert _percentage(8) == 8
     assert _percentage(0.7) == 0.7
@@ -228,18 +251,23 @@ def test_model_call_retries_transient_errors_only(monkeypatch) -> None:
     monkeypatch.setattr(reviewer.random, "uniform", lambda *_: 0.0)
     monkeypatch.setattr(reviewer.time, "sleep", pauses.append)
     transient_router = FakeRouter([TimeoutError("read timed out"), TimeoutError("read timed out"), {"provider": "dashscope", "result": {"decision": "pass"}}])
-    result, failed = reviewer._call_model(conn, transient_router, run_id="retry-run", agent_name="news_tech_map_gate", model_profile="DASHSCOPE", prompt="gate", input_payload={"candidate": "a"})
+    # 现在的口径: `_call_model_api` 只负责重试与逐次留痕, 落库由调用方调 `_record_attempts`。
+    # 原来那个 `_call_model(conn, router, ...)` 已经不存在了(两次 gate/deep 调用合并成一次)。
+    result, _output, failed, _provider, _latency, attempts = reviewer._call_model_api(transient_router, model_profile="DASHSCOPE", prompt="gate", input_payload={"candidate": "a"})
     assert not failed
     assert result == {"decision": "pass"}
     assert transient_router.calls == 3
     assert pauses == [1.0, 2.0]
+    reviewer._record_attempts(conn, run_id="retry-run", agent_name="news_tech_map_gate", model_profile="DASHSCOPE", provider="dashscope", input_payload={"candidate": "a"}, attempts=attempts)
+    conn.commit()
     statuses = [row["status"] for row in conn.execute("SELECT status FROM model_calls ORDER BY id").fetchall()]
     assert statuses == ["retryable_failure", "retryable_failure", "success"]
 
     permanent_router = FakeRouter([RuntimeError("HTTP Error 401: Unauthorized")])
-    result, failed = reviewer._call_model(conn, permanent_router, run_id="retry-run", agent_name="news_deep_review", model_profile="DASHSCOPE", prompt="review", input_payload={"candidate": "b"})
+    result, _output, failed, _provider, _latency, attempts = reviewer._call_model_api(permanent_router, model_profile="DASHSCOPE", prompt="review", input_payload={"candidate": "b"})
     assert failed
-    assert result["attempts"] == 1
+    assert "401" in result["error"]
+    assert [attempt["status"] for attempt in attempts] == ["failed"]
     assert permanent_router.calls == 1
 
 
@@ -274,7 +302,16 @@ def test_gate_cache_skips_model_and_preserves_input_order(monkeypatch) -> None:
             raise AssertionError("cached candidates must not call the model")
 
     monkeypatch.setattr(reviewer, "LLMRouter", CachedOnlyRouter)
-    monkeypatch.setattr(reviewer, "_cached_stage", lambda *_args, **_kwargs: {"decision": "pass", "map_relevance_score": 90, "potential_value_score": 80, "provisional_tech_paths": []})
+    # 缓存里存的是**归一化之后**的评审结果(reviewer.py 里 `_cached_stage(..., "review", ...)`)。
+    # 原来这份桩用的是合并前的 gate 字段(decision/map_relevance_score/provisional_tech_paths),
+    # 那些字段现在的取值里根本没有 "selected", 排序表里 rank=0, 三条全被过滤掉。
+    monkeypatch.setattr(reviewer, "_cached_stage", lambda *_args, **_kwargs: {
+        "decision": "selected",
+        "score": 88.0,
+        "score_breakdown": {"map_relevance": 90, "novelty": 80, "technical_depth": 80, "engineering_value": 70, "reproducibility": 70, "influence": 60, "freshness": 80},
+        "tech_paths": [],
+        "topic": "LLM 安全",
+    })
     items = [{"item_key": f"paper:{index}", "title": title, "source_type": "paper"} for index, title in enumerate(["first", "second", "third"])]
     gated, metrics = reviewer.gate_candidates(connection(), items, run_id="cached-run", project_root=PROJECT_ROOT)
     assert [item["title"] for item in gated] == ["first", "second", "third"]

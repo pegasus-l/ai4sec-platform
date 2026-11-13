@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+from datetime import date
 
 from ai4sec_platform.domains.capabilities.scorers import score_capability_candidate
 from ai4sec_platform.domains.news.classifiers import classify_news_item
@@ -25,13 +26,22 @@ def test_news_processing_classifies_and_scores_security_repo() -> None:
         "url": "https://github.com/acme/agent-security-scanner",
         "code_url": "https://github.com/acme/agent-security-scanner",
         "stars": 2400,
-        "primary_date": "2026-07-10",
+        # 新鲜度是打分的一维: 写死日期(原来是 2026-07-10)会让这条用例随着时间自然变红。
+        # 用当天日期, 断的是"新产品命中安全关键词应该高分", 不是"某个固定日期的分数"。
+        "primary_date": date.today().isoformat(),
     }
     classification = classify_news_item(item)
     scoring = score_news_item({**item, "classification": classification.as_payload()})
-    assert classification.category in {"Agent 安全", "安全工具与代码"}
+    # 分类器已改成"安全 + 通用 Agent 技术"双轨关键词表, 旧类目
+    # 「Agent 安全」/「安全工具与代码」不复存在; 这条仓库命中的是 agent security / prompt injection。
+    assert classification.category == "AI安全研究"
+    assert classification.signals["security_flag"] is True
+    assert {"agent security", "prompt injection"} <= set(classification.signals["security_topics"])
     assert scoring.priority == "high"
-    assert scoring.breakdown["reproducibility"] == 12
+    # 打分也换过模型(7 个维度、0-100 分), 旧断言 reproducibility == 12 是旧量纲。
+    # 要钉的是"带代码仓库的可复现性高", 所以给下限而不是精确值。
+    assert scoring.breakdown["code_clue"] == 100.0
+    assert scoring.breakdown["reproducibility"] > 80
 
 
 def test_capability_processing_scores_reproducible_repo() -> None:
