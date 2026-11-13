@@ -296,3 +296,76 @@ def test_rerun_endpoint_refuses_an_unfinished_task(conn) -> None:
     with pytest.raises(HTTPException) as exc:
         api.rerun_task(_request(), task["id"], start=False, timeout=None, conn=conn)
     assert exc.value.status_code == 400
+
+
+# ---------------------------------------------------------------- 报告(T4.3)
+
+def _terminal_task(conn, verdict: str = "partial", reason: str = "probe_not_matched") -> int:
+    _material(conn)
+    task = api.create_task(api.CreateTaskBody(material_id=1), _request(), conn)["task"]
+    conn.execute("UPDATE writeup_repro_tasks SET spec_json = ? WHERE id = ?", (json.dumps(SPEC), task["id"]))
+    conn.commit()
+    tasks.transition(conn, task["id"], "queued")
+    tasks.transition(conn, task["id"], "running")
+    tasks.transition(
+        conn, task["id"], verdict, verdict=verdict, failure_reason=reason,
+        evidence={"commands": [], "probe": {"found": False, "matched": None}, "guard": {"allowed": True}},
+    )
+    return int(task["id"])
+
+
+def _patch_report_model(monkeypatch, sections: dict | None) -> None:
+    from ai4sec_platform.domains.capabilities.writeup_repro import report as report_module
+
+    monkeypatch.setattr(report_module, "generate_model_sections", lambda payload: {
+        "status": "success", "sections": sections, "provider": "fake", "model": "fake-1",
+    } if sections is not None else {
+        "status": "error", "sections": {}, "reason": "HTTP 403",
+    })
+
+
+def test_report_routes_are_registered() -> None:
+    from ai4sec_platform.app.main import app
+
+    paths = app.openapi()["paths"]
+    assert "/api/writeup-repro/tasks/{task_id}/report" in paths
+    assert "get" in paths["/api/writeup-repro/tasks/{task_id}/report"]
+    assert "post" in paths["/api/writeup-repro/tasks/{task_id}/report"]
+
+
+def test_report_is_404_until_it_is_generated(conn, monkeypatch) -> None:
+    task_id = _terminal_task(conn)
+    with pytest.raises(HTTPException) as exc:
+        api.get_task_report(task_id, conn)
+    assert exc.value.status_code == 404
+
+    _patch_report_model(monkeypatch, {
+        "attribution": {"side": "ours", "reason": "沙箱没起来", "evidence_refs": []},
+        "root_cause": {}, "pattern": {}, "caveats": ["模型推断, 未核对"],
+    })
+    created = api.generate_task_report(task_id, regenerate=True, conn=conn)
+    assert created["status"] == "ok"
+    assert created["report"]["verdict"] == "partial"
+    assert created["report"]["caveats"]
+
+    again = api.get_task_report(task_id, conn)["report"]
+    assert again["task_id"] == task_id
+
+
+def test_report_generation_is_refused_on_a_running_task(conn) -> None:
+    _material(conn)
+    task = api.create_task(api.CreateTaskBody(material_id=1), _request(), conn)["task"]
+    with pytest.raises(HTTPException) as exc:
+        api.generate_task_report(task["id"], regenerate=True, conn=conn)
+    assert exc.value.status_code == 400
+
+
+def test_a_model_failure_returns_502_and_writes_nothing(conn, monkeypatch) -> None:
+    """502 之后库里仍然是空的 —— 否则下一轮重试会读到半份报告。"""
+    task_id = _terminal_task(conn)
+    _patch_report_model(monkeypatch, None)
+
+    with pytest.raises(HTTPException) as exc:
+        api.generate_task_report(task_id, regenerate=True, conn=conn)
+    assert exc.value.status_code == 502
+    assert conn.execute("SELECT COUNT(*) FROM writeup_repro_reports").fetchone()[0] == 0

@@ -44,6 +44,7 @@ from typing import Any
 
 from ai4sec_platform.domains.capabilities.writeup_repro import evidence as evidence_module
 from ai4sec_platform.domains.capabilities.writeup_repro import guard as guard_module
+from ai4sec_platform.domains.capabilities.writeup_repro import report as report_module
 from ai4sec_platform.domains.capabilities.writeup_repro import store, tasks
 from ai4sec_platform.domains.capabilities.writeup_repro.spec import TEXT_EXCERPT_CHARS
 
@@ -446,6 +447,10 @@ def _finish(task_id: int, verdict: str, reason: str, notes: list[str], **fields:
     ``queued`` 状态的行要落成结论时先补一次 ``queued → running``: 它确实开始执行过(或至少
     进过执行器), 而状态机不允许 queued 直接跳 success/partial —— 中间那一步是"真的开跑了"
     的证据, 跳过它等于伪造历史。
+
+    **报告在这里生成**(T4.3): 所有会带结论的收尾都走这个函数 —— 正常跑完、执行异常、
+    启动回收、开跑前被安全边界拦下(改成走这里之后), 一处不漏。取消 / spec_failed 不带
+    verdict, 由 ``write_report_for_task`` 自己判"不适用", 不在这里分支。
     """
     conn = _connect()
     try:
@@ -458,11 +463,42 @@ def _finish(task_id: int, verdict: str, reason: str, notes: list[str], **fields:
             return tasks.transition(conn, task_id, "cancelled")
         if task["status"] == "queued" and verdict in ("success", "partial", "cannot_repro"):
             tasks.transition(conn, task_id, "running")
-        return tasks.transition(
+        finished = tasks.transition(
             conn, task_id, verdict, verdict=verdict, failure_reason=reason, **fields,
         )
     finally:
         conn.close()
+    _write_report(task_id, verdict=verdict, evidence=fields.get("evidence"))
+    return finished
+
+
+def _write_report(task_id: int, *, verdict: str, evidence: dict[str, Any] | None) -> None:
+    """给刚终结的任务写八节报告。**报告生成失败绝不影响任务结论** —— 任务行已经落了。
+
+    模型报错时库里一条都不写(``report.write_report_for_task`` 的纪律), 日志里留一行,
+    页面上的「生成报告」按钮还能重来。这里吞掉异常是刻意的: 一条已经判完的任务不该因为
+    写报告时的一次网络抖动变成"执行器异常"。
+    """
+    if verdict not in tasks.VERDICT_STATES:
+        return
+    try:
+        result = report_module.write_report_for_task(task_id, evidence=evidence or {})
+    except Exception as exc:  # noqa: BLE001 - 报告失败不能反过来改结论
+        _log(task_id, f"⚠ 复现报告生成失败: {str(exc)[:300]}")
+        return
+    status = str(result.get("status") or "")
+    if status == "ok":
+        report = result.get("report") or {}
+        root = (report.get("evidence_json") or {}).get("generation") or {}
+        _log(
+            task_id,
+            "报告已生成(第 5–7 节由模型撰写): "
+            f"根因校验={'通过' if root.get('root_cause_verified') else '未通过'}"
+            f" · 规律可入库={'是' if root.get('pattern_verified') else '否'}"
+            f" · caveats {len(report.get('caveats') or [])} 条",
+        )
+    elif status in ("no_model", "error"):
+        _log(task_id, f"⚠ 复现报告未生成({status}): {str(result.get('reason') or '')[:200]}")
 
 
 def _run_task_body(task_id: int, timeout: int) -> None:
@@ -486,13 +522,16 @@ def _run_task_body(task_id: int, timeout: int) -> None:
     preflight = guard_module.preflight(task, spec)
     if not preflight.allowed:
         _log(task_id, f"⛔ 未执行: {preflight.detail}")
-        conn = _connect()
-        try:
-            tasks.transition(
-                conn, task_id, "blocked", verdict="blocked", failure_reason="online_target",
-            )
-        finally:
-            conn.close()
+        # 被拦下的任务同样要出报告(§13.6 第 5 条): 证据包里写清"一条命令都没跑",
+        # 否则第 3/4 节空白会被读成"跑了但没记录"。
+        blocked_evidence = evidence_module.build_evidence(
+            spec=spec, report=None, commands=[], guard=preflight.as_dict(),
+            extra_notes=[f"安全边界在开跑前拦下: {preflight.detail}", "本任务没有执行任何命令"],
+        )
+        _finish(
+            task_id, "blocked", "online_target", [str(preflight.detail)],
+            evidence=blocked_evidence, duration_seconds=0, tool_calls=0,
+        )
         _log(task_id, "已按平台规则拒绝: 复现只打本地部署实例, 打真实站点需要单独授权")
         return
     for note in preflight.notes:

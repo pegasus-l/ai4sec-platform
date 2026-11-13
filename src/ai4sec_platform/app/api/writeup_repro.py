@@ -11,6 +11,8 @@
     POST   /api/writeup-repro/tasks/{id}/run           真的跑一遍(T3, 后台线程)
     POST   /api/writeup-repro/tasks/{id}/stop          停止正在跑的任务
     POST   /api/writeup-repro/tasks/{id}/cancel        人取消
+    GET    /api/writeup-repro/tasks/{id}/report        八节复现报告(没生成过 → 404)
+    POST   /api/writeup-repro/tasks/{id}/report        生成/重生成报告(模型报错 → 502, 一行不写)
     GET    /api/writeup-repro/stats                    漏斗统计
 
 鉴权由 ``ASISSessionMiddleware`` 统一处理(``/api/*`` 一律 401), 这里不重复写。
@@ -35,6 +37,7 @@ from pydantic import BaseModel, Field
 
 from ai4sec_platform.app.dependencies import current_user, get_db
 from ai4sec_platform.domains.capabilities.writeup_repro import executor
+from ai4sec_platform.domains.capabilities.writeup_repro import report as report_module
 from ai4sec_platform.domains.capabilities.writeup_repro import spec as spec_module
 from ai4sec_platform.domains.capabilities.writeup_repro import store, tasks
 
@@ -338,3 +341,53 @@ def update_task_spec(
     if check.verdict != "ok":
         raise HTTPException(status_code=400, detail=f"spec 不合规: {check.reason}")
     return {"task": tasks.set_spec(conn, task_id, check.spec, source="human", notes=list(check.notes))}
+
+
+# ---------------------------------------------------------------- 报告(T4.3)
+
+@router.get("/tasks/{task_id}/report")
+def get_task_report(
+    task_id: int,
+    conn: sqlite3.Connection = Depends(get_db),
+) -> dict[str, Any]:
+    """八节复现报告。没生成过 → 404(执行器会自动生成; 模型网关故障那阵子会是 404)。"""
+    _must_get(conn, task_id)
+    report = report_module.get_report(conn, task_id)
+    if report is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"任务 {task_id} 还没有复现报告; 调 POST /api/writeup-repro/tasks/{task_id}/report 生成",
+        )
+    return {"report": report}
+
+
+@router.post("/tasks/{task_id}/report")
+def generate_task_report(
+    task_id: int,
+    regenerate: bool = Query(True, description="已有报告时是否覆盖重写"),
+    conn: sqlite3.Connection = Depends(get_db),
+) -> dict[str, Any]:
+    """生成/重生成报告。**模型报错一行都不写** —— 502 之后库里仍是空, 下一轮可以重试。
+
+    报告只在**带结论的终态**上有意义(success/partial/cannot_repro/failed/blocked);
+    cancelled / spec_failed 没有 verdict, 400。
+    """
+    task = _must_get(conn, task_id)
+    if task["status"] not in tasks.TERMINAL_STATES or task["verdict"] not in tasks.VERDICT_STATES:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"任务 {task_id} 当前是 {task['status']}"
+                f"{('/' + task['verdict']) if task.get('verdict') else ''}, 不产出报告;"
+                " 报告只给带结论的终态(success|partial|cannot_repro|failed|blocked)"
+            ),
+        )
+    result = report_module.write_report_for_task(task_id, regenerate=regenerate, conn=conn)
+    status = str(result.get("status") or "")
+    if status in ("ok", "exists"):
+        return {"status": status, "report": result.get("report") or {}}
+    if status == "no_model":
+        raise HTTPException(status_code=503, detail="没有可用的模型(当前是本地规则降级模式), 报告未生成")
+    if status == "error":
+        raise HTTPException(status_code=502, detail=f"报告生成失败, 库里未写入: {result.get('reason', '')}")
+    raise HTTPException(status_code=400, detail=str(result.get("reason") or status))

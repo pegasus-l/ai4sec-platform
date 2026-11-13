@@ -755,6 +755,34 @@ CREATE TABLE IF NOT EXISTS writeup_repro_tasks (
 CREATE INDEX IF NOT EXISTS idx_wrt_status   ON writeup_repro_tasks(status, id);
 CREATE INDEX IF NOT EXISTS idx_wrt_verdict  ON writeup_repro_tasks(verdict, id);
 CREATE INDEX IF NOT EXISTS idx_wrt_material ON writeup_repro_tasks(material_id);
+
+-- T4.3(2026-11-13): 八节复现报告。一份任务一份报告, task_id 就是主键。
+-- 报告是**证据文档**, 所以它把八节拆成 JSON 列存, 页面按模板渲染成中文 ——
+-- 存散文的话, 下游抽 recipe/pattern 还得再解析一遍(实施文档 §13.2)。
+-- 第 1/2/3/4 节由规则写, 第 5/6/7 节由模型写 + 规则校验, 第 8 节两边相加;
+-- 谁写的记在各 JSON 的 speaker 字段里(作者声称 / 我们跑的 / 模型推的, 永不混写)。
+-- caveats 上 CHECK 非空: 一份说不出"哪些是推断"的报告, 读者会默认它全都核对过。
+-- 模型报错时**一行都不写** —— 半份报告会被读成"5/6/7 节就是空的"(§13.8)。
+-- 历史行不重写: 重新生成走 ON CONFLICT(task_id) 覆盖同一行(不含半旧半新)。
+CREATE TABLE IF NOT EXISTS writeup_repro_reports (
+    task_id          INTEGER PRIMARY KEY,          -- writeup_repro_tasks.id, 一份任务一份
+    material_id      INTEGER NOT NULL,             -- domain_items(id), 便于按素材回查
+    verdict          TEXT NOT NULL,                -- success|partial|cannot_repro|failed|blocked
+    failure_reason   TEXT NOT NULL DEFAULT '',     -- 与 verdict 成对(§7.2), success 时为空
+    claim_json       TEXT NOT NULL DEFAULT '{}',   -- 第 2 节: 作者声称(原文 + 引句)
+    observed_json    TEXT NOT NULL DEFAULT '{}',   -- 第 4 节: 实测现象 + probe 命中
+    attribution_json TEXT NOT NULL DEFAULT '{}',   -- 第 5 节: 归因 + 指向第 3 节的条目编号
+    root_cause_json  TEXT NOT NULL DEFAULT '{}',   -- 第 6 节: 漏洞点/不变量/校验结果
+    pattern_json     TEXT NOT NULL DEFAULT '{}',   -- 第 7 节: 三种形态 + 泛化边界 + provenance
+    evidence_json    TEXT NOT NULL DEFAULT '{}',   -- 第 3 节(命令表) + 完整证据包 + 生成元信息
+    caveats          TEXT NOT NULL CHECK (length(trim(caveats)) > 0),  -- 第 8 节, JSON 数组
+    generated_by     TEXT NOT NULL,                -- rules|llm|hybrid
+    reviewed_by      TEXT,                         -- T4.2 复核 agent / 人工
+    reviewed_at      TEXT,
+    created_at       TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_wrr_verdict ON writeup_repro_reports(verdict, task_id);
+CREATE INDEX IF NOT EXISTS idx_wrr_material ON writeup_repro_reports(material_id);
 """
 
 

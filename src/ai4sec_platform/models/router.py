@@ -205,7 +205,10 @@ def _model_timeout_seconds(profile: str) -> float:
     # writeup 复现预筛(T1.2): 输入是 8k 字正文 + 最多 6 个代码块, 输出是一整段 JSON。
     # 45 秒在网关排队时会被判成超时, 而超时的条目不落库、要等下一轮 —— 没必要
     # 用默认值给整批预筛加一个固定比例的无声损耗。
-    "capability_writeup_screener"} else "45"
+    "capability_writeup_screener",
+    # 复现报告(T4.3): 输入是 12k 字正文 + 最近 40 条命令, 输出是 5/6/7 三节 JSON。
+    # 超时同样等于"这份报告没写"(下一次点「重生成」再来), 与其给一个固定比例的损耗, 不如给够。
+    "writeup_report_writer"} else "45"
     try:
         timeout = float(os.getenv(f"AI4SEC_{profile_key}_TIMEOUT_SECONDS", os.getenv("AI4SEC_MODEL_TIMEOUT_SECONDS", default)))
     except ValueError:
