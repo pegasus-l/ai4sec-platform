@@ -426,6 +426,19 @@ def set_runtime(conn: sqlite3.Connection, task_id: int, **fields: Any) -> None:
     conn.commit()
 
 
+def link_recipe(conn: sqlite3.Connection, task_id: int, recipe_id: int | None) -> None:
+    """把任务指向它固化出来的 recipe 行。``None`` = 摘掉指针。
+
+    **只写指针, 不写 ``recipe_json``**: recipe 的内容归 ``recipes.py`` 那张表所有, 任务行只是
+    从"这一遍跑的是什么"回指到"这一类怎么跑"。两处各存一份迟早会不一致。
+    """
+    conn.execute(
+        "UPDATE writeup_repro_tasks SET recipe_id = ? WHERE id = ?",
+        (int(recipe_id) if recipe_id else None, int(task_id)),
+    )
+    conn.commit()
+
+
 def list_tasks(
     conn: sqlite3.Connection,
     *,

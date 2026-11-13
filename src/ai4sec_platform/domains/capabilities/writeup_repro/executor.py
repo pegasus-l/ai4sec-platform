@@ -44,6 +44,7 @@ from typing import Any
 
 from ai4sec_platform.domains.capabilities.writeup_repro import evidence as evidence_module
 from ai4sec_platform.domains.capabilities.writeup_repro import guard as guard_module
+from ai4sec_platform.domains.capabilities.writeup_repro import recipes as recipes_module
 from ai4sec_platform.domains.capabilities.writeup_repro import report as report_module
 from ai4sec_platform.domains.capabilities.writeup_repro import store, tasks
 from ai4sec_platform.domains.capabilities.writeup_repro.spec import TEXT_EXCERPT_CHARS
@@ -451,6 +452,8 @@ def _finish(task_id: int, verdict: str, reason: str, notes: list[str], **fields:
     **报告在这里生成**(T4.3): 所有会带结论的收尾都走这个函数 —— 正常跑完、执行异常、
     启动回收、开跑前被安全边界拦下(改成走这里之后), 一处不漏。取消 / spec_failed 不带
     verdict, 由 ``write_report_for_task`` 自己判"不适用", 不在这里分支。
+    报告写完后紧接着抽 recipe + pattern(T5.1) —— 产物依赖报告, 顺序不能反; 抽不出来
+    只记一行日志(见 ``_extract_products``)。
     """
     conn = _connect()
     try:
@@ -469,6 +472,7 @@ def _finish(task_id: int, verdict: str, reason: str, notes: list[str], **fields:
     finally:
         conn.close()
     _write_report(task_id, verdict=verdict, evidence=fields.get("evidence"))
+    _extract_products(task_id, verdict=verdict)
     return finished
 
 
@@ -499,6 +503,43 @@ def _write_report(task_id: int, *, verdict: str, evidence: dict[str, Any] | None
         )
     elif status in ("no_model", "error"):
         _log(task_id, f"⚠ 复现报告未生成({status}): {str(result.get('reason') or '')[:200]}")
+
+
+def _extract_products(task_id: int, *, verdict: str) -> None:
+    """从刚写好的报告抽 recipe + pattern(T5.1)。**抽不出来不改结论**, 也不改报告。
+
+    与报告同一个纪律: 这里失败只留一行日志。产物是给后来者复用的, 而这一条任务已经
+    跑完并落了结论 —— 让固化失败反过来把结论变成"执行异常"是把因果关系弄反了。
+    """
+    if verdict not in tasks.VERDICT_STATES:
+        return
+    try:
+        result = recipes_module.extract_for_task(task_id, regenerate=False)
+    except Exception as exc:  # noqa: BLE001 - 固化失败不能反过来改结论
+        _log(task_id, f"⚠ recipe/pattern 抽取失败: {str(exc)[:300]}")
+        return
+    status = str(result.get("status") or "")
+    if status == "exists":
+        return  # 上一轮已经抽过(重生成报告后不会走到这里, 那条路径会带 regenerate=True)
+    if status in ("ok", "no_products"):
+        recipe = result.get("recipe") or {}
+        pattern = result.get("pattern") or {}
+        bits = []
+        if recipe:
+            steps = sum(
+                len(recipe.get("recipe_json", {}).get(key) or [])
+                for key in ("setup", "acquire", "trigger")
+            )
+            bits.append(f"recipe {steps} 步" + ("(降级)" if recipe.get("degraded") else ""))
+        if pattern:
+            bits.append(f"pattern 已入库({pattern.get('generalization')})")
+        if bits:
+            _log(task_id, "固化完成: " + " · ".join(bits))
+        else:
+            reason = "; ".join(str(item) for item in result.get("reasons") or [])[:300]
+            _log(task_id, f"本轮没有可固化的产物: {reason}")
+    else:
+        _log(task_id, f"⚠ recipe/pattern 未抽取({status}): {str(result.get('reason') or '')[:200]}")
 
 
 def _run_task_body(task_id: int, timeout: int) -> None:

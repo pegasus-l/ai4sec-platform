@@ -13,7 +13,10 @@
     POST   /api/writeup-repro/tasks/{id}/cancel        人取消
     GET    /api/writeup-repro/tasks/{id}/report        八节复现报告(没生成过 → 404)
     POST   /api/writeup-repro/tasks/{id}/report        生成/重生成报告(模型报错 → 502, 一行不写)
-    GET    /api/writeup-repro/stats                    漏斗统计
+    POST   /api/writeup-repro/tasks/{id}/extract       从报告抽 recipe + pattern(抽不出 → 200 + reasons)
+    GET    /api/writeup-repro/recipes                  固化下来的"这一类怎么跑"
+    GET    /api/writeup-repro/patterns                 固化下来的"这一类怎么找"
+    GET    /api/writeup-repro/stats                    漏斗统计(含产物计数)
 
 鉴权由 ``ASISSessionMiddleware`` 统一处理(``/api/*`` 一律 401), 这里不重复写。
 "谁建的"取 ``current_user`` —— 不写空串, 空串在页面上分不清"没登录"和"没记录"。
@@ -37,6 +40,7 @@ from pydantic import BaseModel, Field
 
 from ai4sec_platform.app.dependencies import current_user, get_db
 from ai4sec_platform.domains.capabilities.writeup_repro import executor
+from ai4sec_platform.domains.capabilities.writeup_repro import recipes as recipes_module
 from ai4sec_platform.domains.capabilities.writeup_repro import report as report_module
 from ai4sec_platform.domains.capabilities.writeup_repro import spec as spec_module
 from ai4sec_platform.domains.capabilities.writeup_repro import store, tasks
@@ -127,7 +131,9 @@ def list_tasks(
 @router.get("/stats")
 def task_stats(conn: sqlite3.Connection = Depends(get_db)) -> dict[str, Any]:
     """漏斗。``cannot_repro``(原文的锅)与 ``failed``(我们的锅)分列, 不合并。"""
-    return tasks.stats(conn)
+    counts = tasks.stats(conn)
+    counts["products"] = recipes_module.counts(conn)
+    return counts
 
 
 @router.get("/tasks/{task_id}")
@@ -385,9 +391,84 @@ def generate_task_report(
     result = report_module.write_report_for_task(task_id, regenerate=regenerate, conn=conn)
     status = str(result.get("status") or "")
     if status in ("ok", "exists"):
+        if status == "ok":
+            # 报告换了内容, 上一版抽出来的 recipe/pattern 就不再是"这份报告的结论"了。
+            # 覆盖重写 + 不合格就删旧行, 由 extract_for_task 自己保证(§13.7)。
+            _reextract(conn, task_id)
         return {"status": status, "report": result.get("report") or {}}
     if status == "no_model":
         raise HTTPException(status_code=503, detail="没有可用的模型(当前是本地规则降级模式), 报告未生成")
     if status == "error":
         raise HTTPException(status_code=502, detail=f"报告生成失败, 库里未写入: {result.get('reason', '')}")
+    raise HTTPException(status_code=400, detail=str(result.get("reason") or status))
+
+
+def _reextract(conn: sqlite3.Connection, task_id: int) -> dict[str, Any] | None:
+    """重生成报告后同步固化产物。失败**不回滚报告** —— 报告是主产物, 产物是衍生品。"""
+    try:
+        return recipes_module.extract_for_task(task_id, regenerate=True, conn=conn)
+    except Exception:  # noqa: BLE001 - 衍生品失败不该让"报告已生成"变成 500
+        return None
+
+
+# ---------------------------------------------------------------- 固化产物(T5.1)
+
+@router.get("/recipes")
+def list_recipes(
+    fingerprint: str | None = Query(None, description='如 lang:python / surface:rce / gen:generic'),
+    degraded: bool | None = Query(None, description="true 只看降级的(来自 partial)"),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    conn: sqlite3.Connection = Depends(get_db),
+) -> dict[str, Any]:
+    """"这一类怎么跑"。只从 ``success``(及降级标出的 ``partial``)抽出来。"""
+    items, total = recipes_module.list_recipes(
+        conn, fingerprint=fingerprint, degraded=degraded, limit=limit, offset=offset,
+    )
+    return {"items": items, "total": total, "limit": limit, "offset": offset}
+
+
+@router.get("/patterns")
+def list_patterns(
+    fingerprint: str | None = Query(None, description='如 lang:java / surface:deserialization'),
+    generalization: str | None = Query(None, description="framework|language|generic"),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    conn: sqlite3.Connection = Depends(get_db),
+) -> dict[str, Any]:
+    """“这一类怎么找”。门槛是**第 6 节通过校验**, 与复现成没成无关。"""
+    if generalization and generalization not in recipes_module.GENERALIZATIONS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"未知泛化边界 {generalization!r}; 可选: {', '.join(recipes_module.GENERALIZATIONS)}",
+        )
+    items, total = recipes_module.list_patterns(
+        conn, fingerprint=fingerprint, generalization=generalization, limit=limit, offset=offset,
+    )
+    return {"items": items, "total": total, "limit": limit, "offset": offset}
+
+
+@router.post("/tasks/{task_id}/extract")
+def extract_task_products(
+    task_id: int,
+    regenerate: bool = Query(True, description="已有产物时是否覆盖重抽"),
+    conn: sqlite3.Connection = Depends(get_db),
+) -> dict[str, Any]:
+    """手动抽 recipe + pattern。报告不存在 → 404; 报告在但抽不出东西 → 200 + ``reasons``。
+
+    **抽不出来不是错误**: ``failed``/``blocked`` 没有可复用的执行路径, 第 7 节没过校验也没有
+    可入库的规律 —— 那是事实, 用 200 把原因说清, 不伪装成接口故障。
+    """
+    task = _must_get(conn, task_id)
+    if report_module.get_report(conn, task_id) is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"任务 {task_id} 还没有复现报告; 先 POST /tasks/{task_id}/report",
+        )
+    if task["status"] not in tasks.TERMINAL_STATES:
+        raise HTTPException(status_code=400, detail=f"任务 {task_id} 当前是 {task['status']}, 还没终结")
+    result = recipes_module.extract_for_task(task_id, regenerate=regenerate, conn=conn)
+    status = str(result.get("status") or "")
+    if status in ("ok", "exists", "no_products"):
+        return result
     raise HTTPException(status_code=400, detail=str(result.get("reason") or status))

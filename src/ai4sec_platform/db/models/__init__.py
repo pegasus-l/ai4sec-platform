@@ -783,6 +783,51 @@ CREATE TABLE IF NOT EXISTS writeup_repro_reports (
 );
 CREATE INDEX IF NOT EXISTS idx_wrr_verdict ON writeup_repro_reports(verdict, task_id);
 CREATE INDEX IF NOT EXISTS idx_wrr_material ON writeup_repro_reports(material_id);
+
+-- 固化配方(T5.1): "这一类怎么跑"(§8.2/§8.3)。
+-- 与 writeup_repro_patterns 分工明确: recipe 回答"怎么跑", pattern 回答"怎么找"(§13.7)。
+-- 每条命令都带它在报告第 3 节里的 index —— **抽出来的东西必须能回指证据**,
+-- 这是 §13.11 第 5 条("抽出的命令能在证据包里逐条找到")的机器可查形态。
+-- recipe_key = wr-<material_id>-<task_id>: 一次运行一条, 重抽覆盖同一行。
+-- degraded: 从 partial 抽出来的是"只做到一半的成功路径", 复用时必须先看这个标记。
+CREATE TABLE IF NOT EXISTS writeup_repro_recipes (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    recipe_key       TEXT NOT NULL UNIQUE,
+    task_id          INTEGER NOT NULL,            -- 溯源: 不许无源 recipe
+    material_id      INTEGER NOT NULL,
+    fingerprint_json TEXT NOT NULL DEFAULT '[]',  -- ["lang:python","target:package",...]
+    recipe_json      TEXT NOT NULL DEFAULT '{}',  -- setup/acquire/trigger/probe 四段 + index
+    degraded         INTEGER NOT NULL DEFAULT 0,  -- 1 = 来源是 partial
+    success_count    INTEGER NOT NULL DEFAULT 0,
+    fail_count       INTEGER NOT NULL DEFAULT 0,
+    created_at       TEXT NOT NULL,
+    updated_at       TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_wrrec_task ON writeup_repro_recipes(task_id);
+CREATE INDEX IF NOT EXISTS idx_wrrec_material ON writeup_repro_recipes(material_id);
+
+-- 发现规律(T5.1, §13.10): "这一类怎么找"。
+-- invariant 上 CHECK 非空: 没有不变量的 pattern 不是规律, 是"这篇有个洞"的复述。
+-- report_id 指 writeup_repro_reports.task_id(报告的主键), 且**唯一** ——
+-- 一份报告只产一条规律; 重抽是覆盖, 不是追加(否则同一份证据会被数成两条规律)。
+-- 门槛不是"复现成功", 而是**第 6 节通过校验**(pattern_json.verified):
+-- cannot_repro 的报告也能抽 —— 复现失败否定的是我们的环境或原文完整性, 不是根因分析(§13.7)。
+CREATE TABLE IF NOT EXISTS writeup_repro_patterns (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    report_id      INTEGER NOT NULL,              -- 溯源: 不许有无源 pattern
+    material_id    INTEGER NOT NULL,
+    invariant      TEXT NOT NULL CHECK (length(trim(invariant)) > 0),
+    code_feature   TEXT NOT NULL DEFAULT '',
+    audit_entry    TEXT NOT NULL DEFAULT '',
+    discriminator  TEXT NOT NULL DEFAULT '',
+    generalization TEXT NOT NULL DEFAULT 'framework',  -- framework|language|generic
+    fingerprint    TEXT NOT NULL DEFAULT '',       -- JSON 数组, 用于匹配同类
+    provenance     TEXT NOT NULL,                  -- from_article|from_repro|llm_extracted
+    confidence     REAL,
+    created_at     TEXT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_wrpat_report ON writeup_repro_patterns(report_id);
+CREATE INDEX IF NOT EXISTS idx_wrpat_fingerprint ON writeup_repro_patterns(fingerprint);
 """
 
 
