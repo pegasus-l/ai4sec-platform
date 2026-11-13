@@ -225,6 +225,94 @@ def test_a_later_failing_run_wins_over_an_earlier_success() -> None:
                                     found["exit_code"], found["stdout"])["matched"] is False
 
 
+# ---------------------------------------------------------------- 退出码还原
+#
+# agent 写命令几乎总带尾巴: `poc.py 2>&1 | tee log; echo "EXIT=${PIPESTATUS[0]}"`。
+# 这时 transcript 记的 shell 退出码是**末尾 echo 的**(恒 0), 被测进程其实是 139。
+
+def test_probe_at_the_end_uses_the_shell_exit_code() -> None:
+    status = evidence.probe_exit_status(".venv/bin/python3 -u poc.py", 134, "boom", "python3 -u poc.py")
+    assert status == {"exit_code": 134, "known": True, "source": "shell"}
+
+
+def test_exit_code_swallowed_by_a_trailing_echo_is_recovered_from_the_output() -> None:
+    """真跑 2026-11-13 的形态: 崩溃的进程 139, shell 报 0。"""
+    cmd = ('cd /workspace/writeup-2 && .venv/bin/python3 -u poc.py 2>&1 | tee step3.log; '
+           'echo "EXIT=${PIPESTATUS[0]}"')
+    stdout = "X: 0x0\nY: 0x0\n(On curve <MyCurve>)\nEXIT=139\n"
+    status = evidence.probe_exit_status(cmd, 0, stdout, "python3 -u poc.py 2>&1")
+    assert status == {"exit_code": 139, "known": True, "source": "printed"}
+
+
+def test_exit_code_printed_through_a_variable_is_recovered() -> None:
+    """agent 常见的两跳写法: ``ec=$?`` 再 ``echo "EXIT_CODE=$ec"``。"""
+    cmd = ("cd /w && timeout 60 .venv/bin/python3 -u poc.py 2>&1; ec=$?; "
+           'echo "EXIT_CODE=$ec"; echo "ELAPSED_MS=2125"')
+    status = evidence.probe_exit_status(cmd, 0, "free(): invalid pointer\nEXIT_CODE=134\n",
+                                        "python3 -u poc.py 2>&1")
+    assert status["exit_code"] == 134 and status["source"] == "printed"
+
+
+def test_a_loop_tail_does_not_make_the_exit_code_unknown() -> None:
+    """``for ...; do poc.py; done`` 的 shell 退出码就是最后一轮的, 后面没有别的命令。"""
+    status = evidence.probe_exit_status(
+        "for i in 1 2 3; do .venv/bin/python3 -u poc.py; done", 139, "Segmentation fault",
+        "python3 -u poc.py",
+    )
+    assert status == {"exit_code": 139, "known": True, "source": "shell"}
+
+
+def test_an_unprinted_exit_code_is_unknown_not_zero() -> None:
+    """尾部有别的语句又没打印退出码 ⇒ 判不了。拿 wrapper 的 0 当成功是最坏的结果。"""
+    status = evidence.probe_exit_status("python3 -u poc.py; echo done", 0, "boom\ndone",
+                                        "python3 -u poc.py")
+    assert status == {"exit_code": None, "known": False, "source": "unknown"}
+
+    judged = evidence.evaluate_signal("exit_code == 0", status["exit_code"],
+                                     "boom", exit_code_known=status["known"])
+    assert judged["matched"] is None, "判不了 ≠ 命中, 也 ≠ 没命中"
+
+
+def test_exit_signal_judged_unknown_caps_the_evidence_at_partial() -> None:
+    spec = {"steps": [{"run": "python3 -u poc.py"}],
+            "probe": {"cmd": "python3 -u poc.py", "success_signal": "exit_code == 0"}}
+    commands = evidence.extract_commands(_messages(
+        _bash("python3 -u poc.py; echo done", "boom\ndone", 0),
+    ))
+    collected = evidence.build_evidence(spec=spec, report={"self_verdict": "success"},
+                                        commands=commands)
+    assert collected["probe"]["exit_code"] is None
+    assert collected["probe"]["shell_exit_code"] == 0
+    assert collected["probe"]["exit_code_source"] == "unknown"
+    assert collected["probe"]["matched"] is None
+    assert collected["incomplete"] is True
+    assert any("退出码" in reason for reason in collected["incomplete_reasons"])
+
+
+def test_recovered_exit_code_turns_a_swallowed_crash_into_a_real_failure() -> None:
+    """同一个 probe, 若判据是 ``exit_code == 0``: 旧口径(wrapper 0) 会判成功, 新口径判失败。"""
+    cmd = ('cd /w && .venv/bin/python3 -u poc.py 2>&1 | tee log; echo "EXIT=${PIPESTATUS[0]}"')
+    spec = {"steps": [{"run": "python3 -u poc.py"}],
+            "probe": {"cmd": "python3 -u poc.py 2>&1", "success_signal": "exit_code == 0"}}
+    commands = evidence.extract_commands(_messages(_bash(cmd, "Segmentation fault\nEXIT=139\n", 0)))
+    collected = evidence.build_evidence(spec=spec, report={"self_verdict": "success"},
+                                        commands=commands)
+    assert collected["probe"]["exit_code"] == 139
+    assert collected["probe"]["matched"] is False, "崩溃不能因为 agent 加了 echo 就算成功"
+    assert any("probe 判据未满足" in reason for reason in collected["incomplete_reasons"])
+
+
+def test_output_contains_signal_still_works_when_the_exit_code_is_unknown() -> None:
+    """退出码判不了, 但判据只看输出 —— 该判照判, 不连坐。"""
+    spec = {"steps": [{"run": "python3 -u poc.py"}],
+            "probe": {"cmd": "python3 -u poc.py", "success_signal": "stdout 包含 boom"}}
+    commands = evidence.extract_commands(_messages(_bash("python3 -u poc.py; echo done", "boom\ndone", 0)))
+    collected = evidence.build_evidence(spec=spec, report={"self_verdict": "success"},
+                                        commands=commands)
+    assert collected["probe"]["exit_code"] is None
+    assert collected["probe"]["matched"] is True
+
+
 def _success_evidence(**kwargs):
     spec = {
         "steps": [{"run": "./poc 127.0.0.1", "expect": "shell"}],

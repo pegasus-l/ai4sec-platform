@@ -8,7 +8,9 @@
 它认为哪条命令是 probe), 真正的证据从 **transcript 里 tool part 的实际命令与输出** 里抽:
 
 - ``cmd``: 实际执行的命令文本;
-- ``exit_code``: shell 真实退出码(transcript 的 ``state.metadata.exit``);
+- ``exit_code``: 那条 shell 命令的退出码(transcript 的 ``state.metadata.exit``)。**注意它不等于
+  probe 的退出码** —— agent 在尾巴加一句 ``echo`` 就把 0 顶上去了, 所以判定前要走
+  :func:`probe_exit_status` 还原(见下);
 - ``stdout_sha1`` / ``stdout_tail``: 完整输出的指纹与尾部。
 
 **"证据能独立复算"的定义**: 拿 ``cmd`` 在同一个环境重跑一遍, 输出的 sha1 应当相同
@@ -128,10 +130,12 @@ def _clauses(signal: str) -> list[str]:
     return [c for c in out if c.strip()]
 
 
-def evaluate_signal(signal: str, exit_code: int | None, stdout: str) -> dict[str, Any]:
+def evaluate_signal(signal: str, exit_code: int | None, stdout: str, *,
+                    exit_code_known: bool = True) -> dict[str, Any]:
     """把 ``probe.success_signal`` 解析成条件, 用真实 exit_code / stdout 跑一遍。
 
-    ``matched``: ``True`` 全中 / ``False`` 有未满足 / ``None`` 判据解析不出来(证据不足)。
+    ``matched``: ``True`` 全中 / ``False`` 有未满足 / ``None`` 判据解析不出来, 或**退出码本身
+    判不了**(``exit_code_known=False``, 见 :func:`probe_exit_status`) —— 证据不足, 不是失败。
     """
     text = str(signal or "").strip()
     clauses = _clauses(text)
@@ -141,6 +145,10 @@ def evaluate_signal(signal: str, exit_code: int | None, stdout: str) -> dict[str
         exit_match = _EXIT_CLAUSE.search(clause)
         if exit_match:
             op, raw = exit_match.group(1), int(exit_match.group(2))
+            if not exit_code_known:
+                checks.append({"clause": clause.strip(), "kind": "exit_code", "op": op,
+                               "expected": raw, "actual": None, "ok": None})
+                continue
             ok = _compare(exit_code, op, raw)
             checks.append({"clause": clause.strip(), "kind": "exit_code", "op": op,
                            "expected": raw, "actual": exit_code, "ok": ok})
@@ -168,6 +176,9 @@ def evaluate_signal(signal: str, exit_code: int | None, stdout: str) -> dict[str
     if not checks:
         return {"matched": None, "checks": [], "unparsed": unparsed,
                 "why": "判据解析不出来, 无法机器判定"}
+    if any(c["ok"] is None for c in checks):
+        return {"matched": None, "checks": checks, "unparsed": unparsed,
+                "why": "退出码无法确定(probe 后面还有别的语句), 不能拿外层 shell 的退出码代替"}
     matched = all(c["ok"] for c in checks) and not unparsed
     return {
         "matched": bool(matched),
@@ -228,6 +239,73 @@ def find_probe_command(commands: list[dict[str, Any]], probe_cmd: str) -> dict[s
     return None
 
 
+# ---------------------------------------------------------------- 退出码
+
+#: agent 在命令尾巴上把退出码打印出来的常见写法。只认这些标签 —— 它们约定俗成指"这条命令的
+#: 退出码"; ``status=`` 之类不收, 那更像被测程序自己的输出。
+_PRINTED_EXIT_LABELS = {"EXIT", "EXIT_CODE", "EXITCODE", "PROBE_EXIT", "RETURNCODE", "RC"}
+_ECHO_LABEL_RE = re.compile(
+    r"echo\s+(?:-e\s+)?[\"']?\s*(?P<label>[A-Za-z_][A-Za-z0-9_]*)\s*=", re.I
+)
+#: 切语句的口径与 ``guard._segments`` 一致(``;`` ``&&`` ``||`` ``|`` 与换行)。
+_SEGMENT_SPLIT = re.compile(r"\n|;|&&|\|\||\|")
+#: 循环/分支的收尾词: 它们不是"又跑了一条命令", 后面的东西不覆盖退出码。
+_STRUCTURAL_SEGMENTS = {"done", "fi", "esac", "}", "})", ")", "end"}
+
+
+def _echoed_exit_labels(segments: Iterable[str]) -> list[str]:
+    labels: list[str] = []
+    for segment in segments or []:
+        for match in _ECHO_LABEL_RE.finditer(str(segment or "")):
+            label = match.group("label").upper()
+            if label in _PRINTED_EXIT_LABELS and label not in labels:
+                labels.append(label)
+    return labels
+
+
+def _printed_value(stdout: str, label: str) -> int | None:
+    """输出里 ``LABEL=<整数>`` 的**最后一次**出现(同一条命令跑多遍时以最后一遍为准)。
+
+    ``\\b`` 边界很重要: 找 ``EXIT`` 时不能命中 ``PROBE_EXIT=134``。
+    """
+    hit = None
+    for match in re.finditer(rf"(?i)\b{label}\b\s*=\s*(-?\d+)", str(stdout or "")):
+        hit = match
+    return int(hit.group(1)) if hit else None
+
+
+def probe_exit_status(cmd: str, shell_exit: int | None, stdout: str,
+                      probe_cmd: str = "") -> dict[str, Any]:
+    """probe 那条命令**自己的**退出码, 而不是 agent 那整条 shell 命令的。
+
+    为什么要这一步(2026-11-12 重跑真跑暴露): ``shell_exit`` 是整条 shell 的退出码。agent 习惯
+    写成 ``poc.py 2>&1 | tee log; echo "EXIT=${PIPESTATUS[0]}"`` —— 这时 shell 的退出码是末尾
+    那条 ``echo`` 的(**恒为 0**), 被测进程其实是 139。拿 0 去跑 ``exit_code == 0`` 等于把
+    "崩溃了"判成"成功"; 反过来, 只知道后面还有语句却读不到真值, 也不能当失败 —— 那是证据不足。
+
+    返回 ``exit_code`` / ``known`` / ``source``:
+
+    - ``shell``: probe 就是最后一段(或在循环体里, 后面只剩 ``done``), shell 退出码可信;
+    - ``printed``: 从输出里读回 agent 自己打印的退出码(``EXIT=139`` / ``PROBE_EXIT=$?``);
+    - ``unknown``: 后面还有别的语句, 输出里也没有打印 —— **判不了**, 不是 0。
+    """
+    segments = [s for s in _SEGMENT_SPLIT.split(str(cmd or "")) if s.strip()]
+    wanted = _norm_cmd(probe_cmd)
+    hits = [i for i, s in enumerate(segments) if wanted and wanted in _norm_cmd(s)]
+    if not hits:
+        # 定位不到是哪一段: 沿用 shell 退出码(旧行为), 至少不比原来更差。
+        return {"exit_code": shell_exit, "known": shell_exit is not None, "source": "shell"}
+    index = hits[-1]
+    tail = [s for s in segments[index + 1:] if _norm_cmd(s) not in _STRUCTURAL_SEGMENTS]
+    if not tail:
+        return {"exit_code": shell_exit, "known": shell_exit is not None, "source": "shell"}
+    for label in reversed(_echoed_exit_labels(segments[index:])):
+        value = _printed_value(stdout, label)
+        if value is not None:
+            return {"exit_code": value, "known": True, "source": "printed"}
+    return {"exit_code": None, "known": False, "source": "unknown"}
+
+
 # ---------------------------------------------------------------- 组装
 
 def build_evidence(
@@ -258,16 +336,28 @@ def build_evidence(
     if found is None:
         probe_block: dict[str, Any] = {
             "spec_cmd": probe_cmd, "success_signal": signal, "found": False,
-            "cmd": "", "exit_code": None, "stdout_sha1": "", "stdout_tail": "",
+            "cmd": "", "exit_code": None, "shell_exit_code": None, "exit_code_source": "",
+            "stdout_sha1": "", "stdout_tail": "",
             "matched": None, "why": "执行记录里找不到 probe 命令, 无法核对",
         }
         reasons.append("找不到 probe 命令的实际执行记录")
     else:
+        stdout_full = str(found.get("stdout") or "")
+        # 先弄清"probe 这条命令自己的退出码"。agent 常在尾巴加 `; echo ...`, 那时 shell 退出码
+        # 是 echo 的(恒 0), 直接拿来跑 `exit_code == 0` 会把崩溃判成成功。
+        stage_exit = probe_exit_status(
+            str(found.get("cmd") or ""), found.get("exit_code"), stdout_full, probe_cmd,
+        )
         # 判据在**完整输出**上跑(只用尾部会把"输出包含"判漏), 落库只留指纹与尾部。
-        judged = evaluate_signal(signal, found.get("exit_code"), str(found.get("stdout") or ""))
+        judged = evaluate_signal(signal, stage_exit["exit_code"], stdout_full,
+                                 exit_code_known=bool(stage_exit["known"]))
         probe_block = {
             "spec_cmd": probe_cmd, "success_signal": signal, "found": True,
-            "cmd": found.get("cmd", ""), "exit_code": found.get("exit_code"),
+            "cmd": found.get("cmd", ""),
+            # probe 自己的退出码; 与 agent 那条 shell 命令的退出码不同时, 后者单独记。
+            "exit_code": stage_exit["exit_code"],
+            "shell_exit_code": found.get("exit_code"),
+            "exit_code_source": stage_exit["source"],
             "stdout_sha1": found.get("stdout_sha1", ""),
             "stdout_tail": found.get("stdout_tail", ""),
             "matched": judged["matched"],
@@ -277,7 +367,8 @@ def build_evidence(
             "occurrences": int(found.get("occurrences") or 1),
         }
         if judged["matched"] is None:
-            reasons.append(f"probe 判据无法机器判定: {signal[:120]!r}")
+            why = str(judged.get("why") or "")
+            reasons.append(f"probe 判据无法机器判定: {why or signal[:120]!r}")
         elif judged["matched"] is False:
             reasons.append("probe 判据未满足")
 
