@@ -253,6 +253,29 @@ def test_exit_code_printed_through_a_variable_is_recovered() -> None:
     assert status["exit_code"] == 134 and status["source"] == "printed"
 
 
+def test_an_exit_label_named_after_the_target_is_recovered() -> None:
+    """真跑 2026-11-13 第三遍的形态: agent 打的是 ``POC_EXIT=134``, 不是 ``EXIT=``。
+
+    白名单原来只认 ``EXIT`` / ``PROBE_EXIT`` 这几个固定写法, 于是这条命令的退出码被判成
+    "unknown"。若判据是 ``exit_code == 134``, 证据够了也会被判不了 —— 收紧白名单的理由是
+    "别拿 ELAPSED_MS 当退出码", 不是"只认我这几个词"。
+    """
+    cmd = ('cd /workspace/writeup-3 && source .venv3118/bin/activate && '
+           'python3 -u poc.py 2>&1; echo "POC_EXIT=$?"; echo "---FILES---"; ls -la')
+    status = evidence.probe_exit_status(cmd, 0, "free(): invalid pointer\nPOC_EXIT=134\n---FILES---\n",
+                                        "python3 -u poc.py 2>&1")
+    assert status == {"exit_code": 134, "known": True, "source": "printed"}
+
+
+def test_a_label_that_is_not_about_exit_status_is_still_ignored() -> None:
+    """放宽成"后缀是 _EXIT"之后, 时长/状态这类标签仍不能被当成退出码。"""
+    cmd = ('cd /w && .venv/bin/python3 -u poc.py 2>&1; echo "ELAPSED_MS=2225"; '
+           'echo "STATUS=0"; echo "EXIT_CODE_ELAPSED=7"')
+    status = evidence.probe_exit_status(cmd, 0, "boom\nELAPSED_MS=2225\nSTATUS=0\nEXIT_CODE_ELAPSED=7\n",
+                                        "python3 -u poc.py 2>&1")
+    assert status == {"exit_code": None, "known": False, "source": "unknown"}
+
+
 def test_a_loop_tail_does_not_make_the_exit_code_unknown() -> None:
     """``for ...; do poc.py; done`` 的 shell 退出码就是最后一轮的, 后面没有别的命令。"""
     status = evidence.probe_exit_status(

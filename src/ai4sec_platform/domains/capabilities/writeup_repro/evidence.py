@@ -294,11 +294,21 @@ def find_probe_command(commands: list[dict[str, Any]], probe_cmd: str) -> dict[s
 # ---------------------------------------------------------------- 退出码
 
 #: agent 在命令尾巴上把退出码打印出来的常见写法。只认这些标签 —— 它们约定俗成指"这条命令的
-#: 退出码"; ``status=`` 之类不收, 那更像被测程序自己的输出。
-_PRINTED_EXIT_LABELS = {"EXIT", "EXIT_CODE", "EXITCODE", "PROBE_EXIT", "RETURNCODE", "RC"}
+#: 退出码"; ``status=`` / ``ELAPSED_MS=`` 之类不收, 那更像被测程序自己的输出, 拿去当退出码
+#: 会把 2225 毫秒读成"退出了 2225"。
+_PRINTED_EXIT_LABELS = {"EXIT", "EXIT_CODE", "EXITCODE", "PROBE_EXIT", "POC_EXIT", "RETURNCODE", "RC"}
+#: 「<谁>_EXIT」是同一件事的另一种写法(2026-11-13 task #3 实测打的是 ``POC_EXIT=134``)。
+#: 只认**后缀**: 前缀随便(poc/target/build), 但整词必须落在退出码语义上 —— ``_RET`` 这种
+#: 过于泛化的缩写不收, ``EXIT_CODE_ELAPSED`` 这种"以退出码开头"的也不收。
+_PRINTED_EXIT_SUFFIXES = ("_EXIT", "_EXIT_CODE", "_EXITCODE", "_RETURNCODE")
 _ECHO_LABEL_RE = re.compile(
     r"echo\s+(?:-e\s+)?[\"']?\s*(?P<label>[A-Za-z_][A-Za-z0-9_]*)\s*=", re.I
 )
+
+
+def _is_printed_exit_label(label: str) -> bool:
+    """这个 ``echo LABEL=…`` 打印的是不是"刚跑的那条命令的退出码"。"""
+    return label in _PRINTED_EXIT_LABELS or label.endswith(_PRINTED_EXIT_SUFFIXES)
 #: 切语句的口径与 ``guard._segments`` 一致(``;`` ``&&`` ``||`` ``|`` 与换行)。
 _SEGMENT_SPLIT = re.compile(r"(\n|;|&&|\|\||\|)")
 #: 循环/分支的收尾词: 它们不是"又跑了一条命令", 后面的东西不覆盖退出码。
@@ -324,7 +334,7 @@ def _echoed_exit_labels(segments: Iterable[str]) -> list[str]:
     for segment in segments or []:
         for match in _ECHO_LABEL_RE.finditer(str(segment or "")):
             label = match.group("label").upper()
-            if label in _PRINTED_EXIT_LABELS and label not in labels:
+            if _is_printed_exit_label(label) and label not in labels:
                 labels.append(label)
     return labels
 
@@ -352,7 +362,8 @@ def probe_exit_status(cmd: str, shell_exit: int | None, stdout: str,
     返回 ``exit_code`` / ``known`` / ``source``:
 
     - ``shell``: probe 就是最后一段(或在循环体里, 后面只剩 ``done``), shell 退出码可信;
-    - ``printed``: 从输出里读回 agent 自己打印的退出码(``EXIT=139`` / ``PROBE_EXIT=$?``);
+    - ``printed``: 从输出里读回 agent 自己打印的退出码(``EXIT=139`` / ``PROBE_EXIT=$?`` /
+      ``POC_EXIT=134``);
     - ``unknown``: 后面还有别的语句, 输出里也没有打印 —— **判不了**, 不是 0。
 
     ``A && B`` 是唯一能"白拿"的例外: shell 退出码是 0 就说明 A 一定成功过(否则 B 跑不起来),
