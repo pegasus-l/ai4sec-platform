@@ -446,6 +446,7 @@ def list_tasks(
     verdict: str | None = None,
     material_id: int | None = None,
     active: bool | None = None,
+    latest_only: bool = False,
     limit: int = 50,
     offset: int = 0,
 ) -> tuple[list[dict[str, Any]], int]:
@@ -454,6 +455,13 @@ def list_tasks(
 
     ``active`` 是页面要的"未结束 / 已结束"两档: "进行中"是一个**概念**(pending 到 running
     四态), 不是单个 status。让页面拼四次请求再把结果拼回来, 分页与总数就都对不上了。
+
+    ``latest_only`` = 按素材折叠, 一个素材只留**符合当前筛选的最后一遍**。
+
+    为什么要折叠: 重跑是 ``attempt+1`` 新开一行(见 ``rerun`` 的 docstring), 于是一篇 writeup
+    跑三遍就在页面上变成三张标题一样的卡 —— 用户读到的是"三个 writeup"。
+    折叠的判据必须复用**同一套 WHERE**: 先筛后折, 否则点「复现成功」时, 一个素材
+    "第 1 遍 success、第 3 遍 partial"会因为终点是 partial 而从成功列表里消失。
     """
     conn.row_factory = conn.row_factory or sqlite3.Row
     where: list[str] = []
@@ -472,12 +480,37 @@ def list_tasks(
         where.append(f"status IN ({', '.join('?' * len(states))})")
         params.extend(states)
     clause = f" WHERE {' AND '.join(where)}" if where else ""
+    if latest_only:
+        # 子查询里重复同一段条件, 所以参数也要重复一遍(位置参数按出现顺序绑)。
+        fold = f"SELECT MAX(id) FROM writeup_repro_tasks{clause} GROUP BY material_id"
+        clause = f"{clause} AND id IN ({fold})" if clause else f" WHERE id IN ({fold})"
+        params = params + params
     total = conn.execute(f"SELECT COUNT(*) FROM writeup_repro_tasks{clause}", params).fetchone()[0]
     rows = conn.execute(
         f"SELECT * FROM writeup_repro_tasks{clause} ORDER BY id DESC LIMIT ? OFFSET ?",
         params + [max(1, int(limit)), max(0, int(offset))],
     ).fetchall()
     return [_parse(r) for r in rows], int(total)  # type: ignore[misc]
+
+
+def attempts_by_material(
+    conn: sqlite3.Connection, material_ids: list[int],
+) -> dict[int, list[dict[str, Any]]]:
+    """每个素材的全部尝试(按遍数升序)。折叠以后, "另一遍发生了什么"不能只能靠筛选才看得到。"""
+    ids = sorted({int(m) for m in material_ids if m})
+    if not ids:
+        return {}
+    rows = conn.execute(
+        "SELECT id, material_id, attempt, status, verdict, failure_reason, created_at, finished_at"
+        f" FROM writeup_repro_tasks WHERE material_id IN ({', '.join('?' * len(ids))})"
+        " ORDER BY material_id, attempt",
+        ids,
+    ).fetchall()
+    out: dict[int, list[dict[str, Any]]] = {}
+    for row in rows:
+        item = dict(row)  # type: ignore[arg-type]
+        out.setdefault(int(item["material_id"]), []).append(item)
+    return out
 
 
 def stats(conn: sqlite3.Connection) -> dict[str, Any]:
@@ -505,10 +538,30 @@ def stats(conn: sqlite3.Connection) -> dict[str, Any]:
         )
     }
     total = sum(by_status.values())
+    # 折叠视图上的数字必须与"能点出几张卡"一致: 一篇 writeup 跑三遍, 卡片是 1 张,
+    # 芯片却写 3 的话, 用户会以为筛选坏了。所以另给一份**按素材去重**的口径。
+    materials = conn.execute(
+        "SELECT COUNT(DISTINCT material_id) FROM writeup_repro_tasks"
+    ).fetchone()[0]
+    by_verdict_materials = {
+        verdict or "unknown": count
+        for verdict, count in conn.execute(
+            "SELECT verdict, COUNT(DISTINCT material_id) FROM writeup_repro_tasks "
+            "WHERE verdict != '' GROUP BY verdict"
+        )
+    }
+    active_materials = conn.execute(
+        "SELECT COUNT(DISTINCT material_id) FROM writeup_repro_tasks "
+        f"WHERE status IN ({', '.join('?' * len(ACTIVE_STATES))})",
+        list(ACTIVE_STATES),
+    ).fetchone()[0]
     return {
         "total": total,
+        "materials": int(materials),
         "by_status": by_status,
         "by_verdict": by_verdict,
+        "by_verdict_materials": by_verdict_materials,
+        "active_materials": int(active_materials),
         "by_failure_reason": by_failure,
         "active": sum(by_status.get(s, 0) for s in ACTIVE_STATES),
         "spec_source": {

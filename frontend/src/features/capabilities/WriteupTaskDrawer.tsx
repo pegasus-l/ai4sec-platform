@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Badge, EmptyState } from '../../components/ui';
 import { useToast } from '../../components/Toast';
 import { ConfirmModal, type ConfirmRequest } from '../../components/ConfirmModal';
+import { useDrawerStack } from '../../components/DrawerStack';
 import { fetchVulnerabilityMaterialText, materialDownloadUrl } from '../../api/vulnerabilities';
 import {
   cancelTask, extractProducts, fetchProducts, fetchReport, fetchTask, fetchTaskSkill, generateReport,
@@ -215,6 +216,15 @@ function TaskActions({ task }: { task: WriteupTask }) {
 function OverviewTab({ task, onOpenSource }: { task: WriteupTask; onOpenSource: () => void }) {
   const status = statusMeta(task.status);
   const verdict = task.verdict ? verdictMeta(task.verdict) : null;
+  const { push } = useDrawerStack();
+  const history = task.attempts ?? [];
+  // 从深链 / 通知直接落在第 3 遍上时, 抽屉里必须能看出"这篇还跑过另外两遍" ——
+  // 证据与结论挂在遍上, 但"这篇到底跑成过没有"要横着看全部尝试才答得出来。
+  const openAttempt = (attemptId: number, attempt: number, taskStatus: string) => push({
+    title: `复现任务 #${attemptId}`,
+    subtitle: `第 ${attempt} 遍 · ${statusMeta(taskStatus).label}`,
+    render: () => <WriteupTaskDrawer taskId={attemptId} />,
+  });
   return <>
     <Section title="这条任务" note={`#${task.id} · 第 ${task.attempt} 遍 · ${triggerLabel(task.trigger)}`}>
       <div className="badges">
@@ -224,6 +234,15 @@ function OverviewTab({ task, onOpenSource }: { task: WriteupTask; onOpenSource: 
         <Badge tone="slate">素材 #{task.material_id}</Badge>
       </div>
       {status.hint && <p className="muted small" style={{ margin: '8px 0 0' }}>{status.hint}</p>}
+      {history.length > 1 && <Row label={`这篇跑过 ${history.length} 遍`} value={<div className="badges">
+        {history.map(item => <button
+          key={item.id}
+          className={`view-pill ${item.id === task.id ? 'active' : ''}`}
+          style={{ fontSize: 11, padding: '1px 6px' }}
+          title={`#${item.id} · ${statusMeta(item.status).label} · ${fmtTime(item.finished_at || item.created_at)}`}
+          onClick={() => openAttempt(item.id, item.attempt, item.status)}
+        >第 {item.attempt} 遍 · {item.verdict ? verdictMeta(item.verdict).label : statusMeta(item.status).label}</button>)}
+      </div>} />}
       <Row label="文章声称" value={task.claim ? `「${task.claim}」` : ''} />
       <Row label="原文引句" value={task.claim_quote ? <Quote text={task.claim_quote} /> : ''} />
       <Row label="目标" value={[task.target_repo, task.target_version, task.target_kind].filter(Boolean).join(' · ')} />

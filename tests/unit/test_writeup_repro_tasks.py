@@ -331,6 +331,82 @@ def test_two_attempts_of_the_same_material_cannot_collide(conn) -> None:
         )
 
 
+# ---------------------------------------------------------------- 按素材折叠
+#
+# 重跑新开 attempt+1 一行是**数据层的正确**; 平铺到页面上就变成"一篇 writeup 三个条目"。
+# 折叠放在查询层: 一个素材只留符合当前筛选的最后一遍 —— 不是"只留最新的那行"。
+
+def _run_attempt(conn, task: dict, verdict: str) -> dict:
+    """把一条 spec_ready 的任务跑成指定结论(用于造出 attempt 1/2/3 的历史)。"""
+    tasks.transition(conn, task["id"], "queued")
+    tasks.transition(conn, task["id"], "running")
+    return tasks.transition(
+        conn, task["id"], verdict,
+        failure_reason="probe_not_matched" if verdict == "partial" else "",
+    )
+
+
+def test_latest_only_keeps_one_row_per_material(conn) -> None:
+    first = _finished(conn, 1)
+    second = tasks.rerun(conn, first["id"])
+    _run_attempt(conn, second, "partial")
+    third = tasks.rerun(conn, second["id"])
+    store.upsert_candidate(conn, _candidate(2))
+    tasks.create_task(conn, 2)
+
+    rows, total = tasks.list_tasks(conn, latest_only=True)
+    assert total == 2, "两个素材 ⇒ 两行; 三遍是同一篇, 不能算三条"
+    by_material = {r["material_id"]: r for r in rows}
+    assert set(by_material) == {1, 2}
+    assert by_material[1]["id"] == third["id"], "折叠后展示的是最新一遍"
+    assert by_material[1]["attempt"] == 3
+
+
+def test_latest_only_folds_after_filtering(conn) -> None:
+    """先筛后折: 第 1 遍成功、第 2 遍 partial 的素材, 点「复现成功」必须还看得见。
+
+    如果按"最新一遍"折完再筛, 它会因为终点是 partial 而从成功列表里消失 ——
+    页面显示"复现成功 1", 点进去却是空的。
+    """
+    first = _finished(conn, 1, verdict="success")
+    second = tasks.rerun(conn, first["id"])
+    _run_attempt(conn, second, "partial")
+
+    rows, total = tasks.list_tasks(conn, verdict="success", latest_only=True)
+    assert total == 1
+    assert [r["id"] for r in rows] == [first["id"]]
+    assert rows[0]["attempt"] == 1
+
+
+def test_attempts_by_material_is_the_whole_history_in_order(conn) -> None:
+    """折叠视图里那一行要能说清"另外两遍怎么了" —— 历史按遍数升序, 不按 id 倒序。"""
+    first = _finished(conn, 1, verdict="partial")
+    second = tasks.rerun(conn, first["id"])
+    _run_attempt(conn, second, "partial")
+    third = tasks.rerun(conn, second["id"])
+    _run_attempt(conn, third, "success")
+
+    history = tasks.attempts_by_material(conn, [1, 999])
+    assert [h["attempt"] for h in history[1]] == [1, 2, 3]
+    assert [h["verdict"] for h in history[1]] == ["partial", "partial", "success"]
+    assert 999 not in history
+
+
+def test_stats_counts_materials_separately_from_attempts(conn) -> None:
+    """芯片数字要跟"能点出几张卡"一致: 折叠视图数素材, 展开视图数遍。"""
+    first = _finished(conn, 1, verdict="success")
+    second = tasks.rerun(conn, first["id"])
+    _run_attempt(conn, second, "partial")
+    other = _finished(conn, 2, verdict="partial")
+
+    counts = tasks.stats(conn)
+    assert (counts["total"], counts["materials"]) == (3, 2)
+    assert counts["by_verdict"] == {"success": 1, "partial": 2}
+    assert counts["by_verdict_materials"] == {"success": 1, "partial": 2}, "两个素材都 partial 过"
+    assert counts["active"] == 0 and counts["active_materials"] == 0
+    assert other["material_id"] == 2
+
+
 def test_migration_rebuilds_the_old_single_column_unique(conn) -> None:
     """老库(UNIQUE(material_id))要被 init_db 重建成 (material_id, attempt), 且数据不丢。
 

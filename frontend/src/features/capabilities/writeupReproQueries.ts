@@ -15,6 +15,8 @@ export interface TaskQuery {
   /** true = 未结束(pending/spec_ready/queued/running); false = 终态。与 status 互斥。 */
   active?: boolean;
   material_id?: number;
+  /** true = 按素材折叠, 一篇 writeup 只有一行(重跑会开出多行)。默认折叠。 */
+  latestOnly?: boolean;
   limit?: number;
   offset?: number;
 }
@@ -33,6 +35,7 @@ export function fetchTasks(query: TaskQuery = {}): Promise<TaskPage> {
   // 布尔要显式写字符串: `active=false` 与"不给这个参数"是两件事(后者 = 两档都要)。
   if (query.active !== undefined) sp.set('active', String(query.active));
   if (query.material_id) sp.set('material_id', String(query.material_id));
+  if (query.latestOnly) sp.set('latest_only', 'true');
   sp.set('limit', String(query.limit ?? 20));
   sp.set('offset', String(query.offset ?? 0));
   return getJson<TaskPage>(`/api/writeup-repro/tasks?${sp.toString()}`);

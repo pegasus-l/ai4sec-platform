@@ -155,15 +155,21 @@ def _products(conn: sqlite3.Connection, task_ids: list[int]) -> dict[int, dict[s
 
 
 def _decorate(conn: sqlite3.Connection, items: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """列表/详情共用的一层展示信息: 素材标题链接 + 三件产物有没有。"""
+    """列表/详情共用的一层展示信息: 素材标题链接 + 三件产物有没有 + 该素材跑过几遍。"""
     materials = _materials(conn, [int(t.get("material_id") or 0) for t in items])
     products = _products(conn, [int(t.get("id") or 0) for t in items])
+    history = tasks.attempts_by_material(
+        conn, [int(t.get("material_id") or 0) for t in items],
+    )
     for task in items:
         # None(素材被删/查不到)与"空标题"是两件事, 页面据此决定挂不挂链接。
         task["material"] = materials.get(int(task.get("material_id") or 0))
         task["products"] = products.get(int(task.get("id") or 0)) or {
             "report": False, "recipe": False, "pattern": False,
         }
+        # 折叠视图一个素材只剩一行, "另一遍发生过什么"必须跟在这一行上 ——
+        # 否则用户只能靠切换筛选才拼得出历史。
+        task["attempts"] = history.get(int(task.get("material_id") or 0), [])
     return items
 
 
@@ -182,6 +188,10 @@ def list_tasks(
     verdict: str | None = Query(None, description="success|partial|cannot_repro|failed|blocked"),
     material_id: int | None = Query(None, gt=0),
     active: bool | None = Query(None, description="true 只看未结束的, false 只看终态; 与 status 互斥"),
+    latest_only: bool = Query(
+        False,
+        description="true = 按素材折叠, 一个素材只留符合筛选的最后一遍(重跑会开出多行)",
+    ),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
     conn: sqlite3.Connection = Depends(get_db),
@@ -194,7 +204,7 @@ def list_tasks(
         raise HTTPException(status_code=400, detail="active 与 status 只能给一个(否则两个条件谁说了算说不清)")
     items, total = tasks.list_tasks(
         conn, status=status, verdict=verdict, material_id=material_id,
-        active=active, limit=limit, offset=offset,
+        active=active, latest_only=latest_only, limit=limit, offset=offset,
     )
     return {"items": _decorate(conn, items), "total": total, "limit": limit, "offset": offset}
 

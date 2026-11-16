@@ -251,6 +251,25 @@ export interface WriteupTask {
   /** 列表接口补的: 这条任务跑的是哪篇文章。素材被删过就是 null(不是空标题)。 */
   material?: WriteupMaterialRef | null;
   products?: WriteupProducts;
+  /**
+   * 同一素材的**全部尝试**, 按遍数升序(列表接口补的)。
+   *
+   * 列表默认按素材折叠, 一篇 writeup 只出现一行 —— 所以"另外两遍跑成了什么样"
+   * 必须跟在这一行上, 否则用户得靠切筛选才能拼出历史。
+   */
+  attempts?: WriteupAttemptBrief[];
+}
+
+/** 一条尝试的摘要(折叠视图里的历史条)。 */
+export interface WriteupAttemptBrief {
+  id: number;
+  material_id: number;
+  attempt: number;
+  status: string;
+  verdict: string;
+  failure_reason: string;
+  created_at: string;
+  finished_at: string | null;
 }
 
 // ---------------------------------------------------------------- 固化产物
@@ -356,11 +375,20 @@ export interface WriteupSkillExport {
 
 export interface WriteupStats {
   total: number;
+  /**
+   * 按素材去重的任务数。折叠视图上的芯片数字用这个 —— 芯片写 3、列表只有 1 张卡
+   * 等于让用户以为筛选坏了。
+   */
+  materials: number;
   by_status: Record<string, number>;
   by_verdict: Record<string, number>;
+  /** 与 by_verdict 同口径但按素材去重(折叠视图的芯片用)。 */
+  by_verdict_materials: Record<string, number>;
   by_failure_reason: Record<string, number>;
   /** 未结束的任务数(pending → running)。 */
   active: number;
+  /** 与 active 同口径但按素材去重(折叠视图用)。 */
+  active_materials: number;
   spec_source: Record<string, number>;
   products: {
     recipes: number;

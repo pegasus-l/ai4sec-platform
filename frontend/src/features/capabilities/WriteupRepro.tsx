@@ -54,17 +54,21 @@ export function WriteupRepro({ focusTaskId, onFocusConsumed }: { focusTaskId?: n
   const [status, setStatus] = useState('');
   const [offset, setOffset] = useState(0);
   const [materialId, setMaterialId] = useState('');
+  // 默认按素材折叠: 重跑是 attempt+1 新开一行, 不平铺的话一篇 writeup 跑三遍就是三张
+  // 标题一样的卡 —— 用户读到的是"三个 writeup"。
+  const [folded, setFolded] = useState(true);
   const { push } = useDrawerStack();
   const { toast } = useToast();
   const qc = useQueryClient();
 
   const stats = useQuery({ queryKey: ['writeup', 'stats'], queryFn: fetchStats, refetchInterval: 30_000 });
   const list = useQuery({
-    queryKey: ['writeup', 'tasks', { verdict, activeOnly, status, offset }],
+    queryKey: ['writeup', 'tasks', { verdict, activeOnly, status, folded, offset }],
     queryFn: () => fetchTasks({
       verdict: verdict || undefined,
       active: activeOnly ? true : undefined,
       status: status || undefined,
+      latestOnly: folded,
       limit: PAGE_SIZE,
       offset,
     }),
@@ -77,12 +81,19 @@ export function WriteupRepro({ focusTaskId, onFocusConsumed }: { focusTaskId?: n
   });
 
   // 换筛选必须回第一页, 否则会停在新结果集里越界的 offset 上(页面看着像空了)。
-  useEffect(() => { setOffset(0); }, [verdict, activeOnly, status]);
+  useEffect(() => { setOffset(0); }, [verdict, activeOnly, status, folded]);
 
   const openTask = (task: WriteupTask) => push({
     title: task.material?.title || `复现任务 #${task.id}`,
     subtitle: `#${task.id} · 第 ${task.attempt} 遍 · ${statusMeta(task.status).label}`,
     render: () => <WriteupTaskDrawer taskId={task.id} />,
+  });
+
+  /** 折叠视图里点历史条 = 打开**那一遍**的抽屉(证据、报告都挂在遍上, 不是挂在素材上)。 */
+  const openAttempt = (attemptId: number, attempt: number, taskStatus: string) => push({
+    title: `复现任务 #${attemptId}`,
+    subtitle: `第 ${attempt} 遍 · ${statusMeta(taskStatus).label}`,
+    render: () => <WriteupTaskDrawer taskId={attemptId} />,
   });
 
   // 从素材抽屉点「复现这篇」跳进来: 直接把那一条的抽屉打开(落地就是 "对应条目")。
@@ -122,15 +133,21 @@ export function WriteupRepro({ focusTaskId, onFocusConsumed }: { focusTaskId?: n
   const isOn = (next: { verdict?: string; active?: boolean; status?: string }) =>
     verdict === (next.verdict ?? '') && activeOnly === (next.active ?? false) && status === (next.status ?? '');
 
+  // 折叠视图上芯片必须数**素材**, 不是数遍: 卡片只有一张, 芯片写 3 会让用户以为筛选坏了。
+  const verdictCount = (key: string) =>
+    (folded ? kpi?.by_verdict_materials?.[key] : kpi?.by_verdict?.[key]) ?? 0;
+  const totalCount = (folded ? kpi?.materials : kpi?.total) ?? 0;
+  const activeCount = (folded ? kpi?.active_materials : kpi?.active) ?? 0;
+
   return <div className="v11-view">
     <section className="panel case-stat-strip">
       <div className="case-stat-row">
-        <StatChip label="全部任务" value={kpi?.total ?? total} active={isOn({})} onClick={() => apply({})} hint="一行 = 把一篇 writeup 跑一遍；同一篇跑多遍就多行" />
-        <StatChip label="进行中" value={kpi?.active ?? 0} active={isOn({ active: true })} onClick={() => apply({ active: true })} hint="还没结束：待 spec / spec 就绪 / 排队 / 执行中" />
-        <StatChip label="复现成功" value={kpi?.by_verdict.success ?? 0} active={isOn({ verdict: 'success' })} onClick={() => apply({ verdict: 'success' })} hint="判据命中且证据无缺口" />
-        <StatChip label="部分复现" value={kpi?.by_verdict.partial ?? 0} active={isOn({ verdict: 'partial' })} onClick={() => apply({ verdict: 'partial' })} hint="跑到了，但判据没完全命中或证据有缺口" />
-        <StatChip label="原文不可复现" value={kpi?.by_verdict.cannot_repro ?? 0} active={isOn({ verdict: 'cannot_repro' })} onClick={() => apply({ verdict: 'cannot_repro' })} hint="原文的问题：没写清攻击过程 / 版本对不上 —— 不是我们没做出来" />
-        <StatChip label="执行失败" value={kpi?.by_verdict.failed ?? 0} active={isOn({ verdict: 'failed' })} onClick={() => apply({ verdict: 'failed' })} hint="我们的问题：环境没起来 / 执行异常" />
+        <StatChip label={folded ? '素材（已折叠）' : '全部任务'} value={totalCount} active={isOn({})} onClick={() => apply({})} hint={folded ? `一篇 writeup 一行，共 ${kpi?.total ?? 0} 遍任务` : '一行 = 把一篇 writeup 跑一遍；同一篇跑多遍就多行'} />
+        <StatChip label="进行中" value={activeCount} active={isOn({ active: true })} onClick={() => apply({ active: true })} hint="还没结束：待 spec / spec 就绪 / 排队 / 执行中" />
+        <StatChip label="复现成功" value={verdictCount('success')} active={isOn({ verdict: 'success' })} onClick={() => apply({ verdict: 'success' })} hint="判据命中且证据无缺口" />
+        <StatChip label="部分复现" value={verdictCount('partial')} active={isOn({ verdict: 'partial' })} onClick={() => apply({ verdict: 'partial' })} hint="跑到了，但判据没完全命中或证据有缺口" />
+        <StatChip label="原文不可复现" value={verdictCount('cannot_repro')} active={isOn({ verdict: 'cannot_repro' })} onClick={() => apply({ verdict: 'cannot_repro' })} hint="原文的问题：没写清攻击过程 / 版本对不上 —— 不是我们没做出来" />
+        <StatChip label="执行失败" value={verdictCount('failed')} active={isOn({ verdict: 'failed' })} onClick={() => apply({ verdict: 'failed' })} hint="我们的问题：环境没起来 / 执行异常" />
       </div>
       <div className="case-mini-foot">
         <button className={`view-pill ${tab === 'tasks' ? 'active' : ''}`} onClick={() => setTab('tasks')}>任务 {kpi?.total ?? 0}</button>
@@ -154,8 +171,14 @@ export function WriteupRepro({ focusTaskId, onFocusConsumed }: { focusTaskId?: n
       <section className="panel">
         <div className="panel-head">
           <h3>复现任务</h3>
-          <span>一条任务 = 一篇 writeup 的一次真实执行；证据、报告、配方都挂在它下面</span>
+          <span>{folded
+            ? '一篇 writeup 一行；同一篇跑过多遍时，卡片上列出每一遍的结论，点进去看那一遍的证据'
+            : '一条任务 = 一篇 writeup 的一次真实执行；证据、报告、配方都挂在它下面'}</span>
           <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+            <label className="small muted" style={{ display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer' }} title="重跑会新开一行；折叠后一个素材只留符合当前筛选的最后一遍">
+              <input type="checkbox" checked={folded} onChange={event => setFolded(event.target.checked)} />
+              每个素材一行
+            </label>
             <input className="search" placeholder="按素材 ID 建任务" value={materialId}
               onChange={event => setMaterialId(event.target.value.replace(/\D/g, ''))}
               onKeyDown={event => { if (event.key === 'Enter' && materialId) create.mutate(Number(materialId)); }}
@@ -169,7 +192,7 @@ export function WriteupRepro({ focusTaskId, onFocusConsumed }: { focusTaskId?: n
           {list.isLoading
             ? <p className="muted small">正在读取任务…</p>
             : items.length
-              ? <div className="case-list">{items.map(task => <TaskCard key={task.id} task={task} onOpen={() => openTask(task)} />)}</div>
+              ? <div className="case-list">{items.map(task => <TaskCard key={task.id} task={task} onOpen={() => openTask(task)} onOpenAttempt={openAttempt} />)}</div>
               : <EmptyState
                 title={hasFilter ? '没有匹配的任务' : '还没有复现任务'}
                 description={hasFilter
@@ -202,23 +225,45 @@ function CoverageNote() {
   </p>;
 }
 
-function TaskCard({ task, onOpen }: { task: WriteupTask; onOpen: () => void }) {
+function TaskCard({ task, onOpen, onOpenAttempt }: {
+  task: WriteupTask;
+  onOpen: () => void;
+  onOpenAttempt: (attemptId: number, attempt: number, taskStatus: string) => void;
+}) {
   const status = statusMeta(task.status);
   const verdict = task.verdict ? verdictMeta(task.verdict) : null;
   const title = task.material?.title || task.claim || `复现任务 #${task.id}`;
   // 标题已经是文章标题时, 正文不要再复述一遍 claim; 标题缺失时 claim 就是标题。
   const subtitle = task.material?.title && task.claim ? `「${task.claim}」` : '';
+  const history = task.attempts ?? [];
   return <article className="case-card clickable" onClick={onOpen}>
     <div className="case-card-main">
       <div className="badges">
         <Badge tone={status.tone}>{status.label}</Badge>
         {verdict && <Badge tone={verdict.tone}>{verdict.label}</Badge>}
         {task.failure_reason && <Badge tone="slate">{failureLabel(task.failure_reason)}</Badge>}
-        {task.attempt > 1 && <Badge tone="violet">第 {task.attempt} 遍</Badge>}
+        {history.length > 1
+          ? <Badge tone="violet">共 {history.length} 遍</Badge>
+          : task.attempt > 1 ? <Badge tone="violet">第 {task.attempt} 遍</Badge> : null}
         <Badge tone="slate">素材 #{task.material_id}</Badge>
       </div>
       <h4>{title}</h4>
       {subtitle && <p>{subtitle}</p>}
+      {/* 折叠后一行代表多遍 —— 每一遍的结论都得看得见, 否则"这篇到底跑成过没有"要靠切筛选去猜。
+          点某一遍打开的是**那一遍**的抽屉: 证据和报告挂在遍上, 不在素材上。 */}
+      {history.length > 1 && <div className="case-mini-foot" style={{ gap: 6, flexWrap: 'wrap' }}>
+        {history.map(item => {
+          const meta = statusMeta(item.status);
+          const current = item.id === task.id;
+          return <button
+            key={item.id}
+            className={`view-pill ${current ? 'active' : ''}`}
+            style={{ fontSize: 11, padding: '1px 6px' }}
+            title={`#${item.id} · ${meta.label}${item.failure_reason ? ` · ${failureLabel(item.failure_reason)}` : ''} · ${fmtTime(item.finished_at || item.created_at)}`}
+            onClick={event => { event.stopPropagation(); onOpenAttempt(item.id, item.attempt, item.status); }}
+          >第 {item.attempt} 遍 · {item.verdict ? verdictMeta(item.verdict).label : meta.label}</button>;
+        })}
+      </div>}
       <p className="small">
         {[task.target_repo, task.target_version].filter(Boolean).join(' · ') || '目标未在原文里写明'}
         {task.material?.url ? ' · 原文已关联' : task.material === null ? ' · 原文已查不到' : ''}
