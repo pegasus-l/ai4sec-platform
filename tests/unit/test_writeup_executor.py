@@ -479,6 +479,20 @@ def test_prompt_carries_the_spec_and_the_red_lines() -> None:
     assert "30 分钟" in prompt
 
 
+def test_prompt_points_at_the_skill_but_keeps_the_spec_authoritative() -> None:
+    """opencode **不会自动加载 skill** —— 不看 description 就没机会触发, 所以引导必须写进 prompt。
+
+    但引导不能把经验写成判据: 复现的结论只由 spec.steps / spec.probe 决定, 否则模型会拿
+    "上次那类洞是这么崩的" 去凑一个成功。
+    """
+    prompt = executor.build_exec_prompt(
+        task={"id": 3}, material={"title": "t"}, spec={"steps": []}, budget_seconds=600,
+    )
+    assert "ai4sec-vuln-audit" in prompt
+    assert "spec.steps 与 spec.probe 的判定条件" in prompt
+    assert "永远优先" in prompt
+
+
 # ---------------------------------------------------------------- decide
 
 def _decide(**kwargs):
