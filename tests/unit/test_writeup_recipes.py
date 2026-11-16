@@ -485,6 +485,40 @@ def test_products_can_be_listed_and_filtered_by_fingerprint() -> None:
     assert ptotal == 1 and patterns[0]["fingerprint"] == by_token[0]["fingerprint_json"]
 
 
+def test_the_products_route_and_the_list_route_agree_on_the_pattern_shape() -> None:
+    """2026-11-16 真白屏: `fingerprint` 是 JSON 串, 列表接口解析了、产物接口没解析。
+
+    同一个字段在两条接口里一个是 `["lang:python", ...]`、一个是那串 JSON 本身, 前端按
+    `string[]` 调 `.join()` 直接抛 —— React 卸载整棵树, 页面白屏。**一种字段只许有一种形状**,
+    这条用例把两条出口钉在一起, 谁再各自解析一次就会红。
+    """
+    conn = _conn()
+    recipes_module.extract_for_task(3, conn=conn)
+
+    listed, _ = recipes_module.list_patterns(conn)
+    products = recipes_module.products_for_task(conn, 3)
+    task3 = tasks.get_task(conn, 3)
+
+    assert isinstance(listed[0]["fingerprint"], list)
+    assert isinstance(products["pattern"]["fingerprint"], list)
+    assert isinstance(recipes_module._get_pattern(conn, 3)["fingerprint"], list)
+    # 三条出口指向同一行, 指纹必须逐字相同(不是"都解析过"就够了)。
+    assert listed[0]["fingerprint"] == products["pattern"]["fingerprint"]
+    assert products["recipe"]["fingerprint_json"] == listed[0]["fingerprint"]
+    assert task3 is not None
+
+
+def test_a_pattern_row_with_a_broken_fingerprint_degrades_to_an_empty_list() -> None:
+    """脏数据不该把页面带走: 解析不了就是"没有指纹", 不是把原始串透传出去。"""
+    conn = _conn()
+    recipes_module.extract_for_task(3, conn=conn)
+    conn.execute("UPDATE writeup_repro_patterns SET fingerprint = 'not json' WHERE report_id = 3")
+    conn.commit()
+
+    assert recipes_module._get_pattern(conn, 3)["fingerprint"] == []
+    assert recipes_module.list_patterns(conn)[0][0]["fingerprint"] == []
+
+
 def test_stats_counts_products_and_degraded_recipes_separately() -> None:
     conn = _conn()
     recipes_module.extract_for_task(3, conn=conn)

@@ -82,3 +82,18 @@ export function fmtTime(value: string | null | undefined): string {
   const text = String(value).replace('T', ' ').replace('Z', '');
   return text.slice(0, 16);
 }
+
+/**
+ * 把一个"应该是数组"的字段安全地读成 `string[]`。
+ *
+ * 起因是 2026-11-16 的一次真白屏: `writeup_repro_patterns.fingerprint` 在库里是 JSON 串,
+ * 列表接口解析过、产物接口漏了, 于是 `fingerprint.join(...)` 在渲染时抛
+ * `join is not a function` —— React 直接卸载整棵树, 用户看到的是白屏而不是一个坏字段。
+ * 后端那条已经改成"一个字段只有一种形状"(见 `_parse_pattern_row`), 这里再兜一层:
+ * **单个字段形状不对, 不该把整页带走**。
+ */
+export function listOf(value: unknown): string[] {
+  if (Array.isArray(value)) return value.map(item => String(item));
+  if (typeof value === 'string' && value.trim()) return [value];
+  return [];
+}

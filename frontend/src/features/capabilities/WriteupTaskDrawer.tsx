@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react';
+import { Component, useState, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Badge, EmptyState } from '../../components/ui';
 import { useToast } from '../../components/Toast';
@@ -12,7 +12,7 @@ import type {
   EvidenceCommand, RecipeJson, RecipeStep, WriteupPatternRow, WriteupRecipeRow, WriteupReport, WriteupTask,
 } from './writeupReproTypes';
 import {
-  failureLabel, fmtDuration, fmtTime, matchedMeta, sideLabel, statusMeta, triggerLabel, verdictMeta,
+  failureLabel, fmtDuration, fmtTime, listOf, matchedMeta, sideLabel, statusMeta, triggerLabel, verdictMeta,
 } from './writeupReproLabels';
 
 /**
@@ -30,14 +30,13 @@ type Tab = 'overview' | 'report' | 'evidence' | 'spec' | 'products' | 'log' | 's
 
 const TAB_LABELS: Array<[Tab, string]> = [
   ['overview', '概览'],
+  // 原文紧跟概览: 用户点进一条任务, 第一件想核对的常常是"这篇文章到底写了啥"。
+  ['source', '原文'],
   ['report', '报告'],
   ['evidence', '证据'],
   ['spec', 'spec'],
   ['products', '产物'],
   ['log', '日志'],
-  // 原文放最后: 它是**核对用的底稿**, 不是结论。概览那一行有「看原文」直接跳过来,
-  // 所以排第几不影响找得到 —— 但别指望用户从头读到尾才发现它。
-  ['source', '原文'],
 ];
 
 const ACTIVE_STATUSES = ['pending', 'spec_ready', 'queued', 'running'];
@@ -76,14 +75,43 @@ export function WriteupTaskDrawer({ taskId }: { taskId: number }) {
         onClick={() => setTab(id)}
       >{label}{counts[id] ? ` ${counts[id]}` : ''}</button>)}
     </div>
-    {tab === 'overview' && <OverviewTab task={task} onOpenSource={() => setTab('source')} />}
-    {tab === 'report' && <ReportTab task={task} />}
-    {tab === 'evidence' && <EvidenceTab task={task} />}
-    {tab === 'spec' && <SpecTab task={task} />}
-    {tab === 'products' && <ProductsTab task={task} />}
-    {tab === 'log' && <LogTab task={task} />}
-    {tab === 'source' && <SourceTab task={task} />}
+    {/* key 用 tab: 切走再切回来要重新挂载, 上一页的报错不该留在下一 tab 上。 */}
+    <TabBoundary key={tab} tab={tab}>
+      {tab === 'overview' && <OverviewTab task={task} onOpenSource={() => setTab('source')} />}
+      {tab === 'source' && <SourceTab task={task} />}
+      {tab === 'report' && <ReportTab task={task} />}
+      {tab === 'evidence' && <EvidenceTab task={task} />}
+      {tab === 'spec' && <SpecTab task={task} />}
+      {tab === 'products' && <ProductsTab task={task} />}
+      {tab === 'log' && <LogTab task={task} />}
+    </TabBoundary>
   </div>;
+}
+
+/**
+ * 单个 tab 的渲染兜底。
+ *
+ * 2026-11-16 真事故: 「产物」里把一个 JSON 串当数组 `.join()`, 渲染期抛错 —— React 会
+ * **卸载整棵树**, 用户看到的是整页白屏, 连"哪一页坏了"都不知道。一个字段形状不对,
+ * 不该把整个抽屉(乃至整个页面)带走。
+ */
+class TabBoundary extends Component<{ tab: Tab; children: ReactNode }, { error: Error | null }> {
+  state = { error: null as Error | null };
+
+  static getDerivedStateFromError(error: Error) {
+    return { error };
+  }
+
+  render() {
+    if (this.state.error) {
+      const label = TAB_LABELS.find(([id]) => id === this.props.tab)?.[1] ?? this.props.tab;
+      return <EmptyState
+        title={`「${label}」这一页渲染失败了`}
+        description={`${this.state.error.message || String(this.state.error)} —— 其余 tab 不受影响, 数据本身没有丢。`}
+      />;
+    }
+    return this.props.children;
+  }
 }
 
 // ========== 动作条 ==========
@@ -479,7 +507,7 @@ function RecipeCard({ recipe }: { recipe: WriteupRecipeRow }) {
     {recipe.degraded && <p className="muted small" style={{ marginTop: 0 }}>
       这份配方来自一次 <b>partial</b>（只做到一半）的执行 —— 路径是跑过的，但不要当成"这条一定成功"。
     </p>}
-    <Row label="指纹" value={(body.applies_to?.fingerprint ?? recipe.fingerprint_json ?? []).join(' · ')} />
+    <Row label="指纹" value={listOf(body.applies_to?.fingerprint ?? recipe.fingerprint_json).join(' · ')} />
     <Row label="来源" value={`任务 #${recipe.task_id} · 材料 #${recipe.material_id} · ${body.source?.verdict ?? ''}`} />
     {groups.map(([title, steps, hint]) => steps.length === 0 ? null : <div key={title} style={{ marginTop: 12 }}>
       <p className="small" style={{ margin: '0 0 6px' }}><b>{title}</b> <span className="muted">· {hint}</span></p>
@@ -516,7 +544,7 @@ function PatternCard({ pattern }: { pattern: WriteupPatternRow }) {
     <Row label="判别点" value={pattern.discriminator} />
     <Row label="来源" value={`任务 #${pattern.report_id} · 材料 #${pattern.material_id} · ${pattern.provenance}`} />
     <Row label="置信度" value={pattern.confidence != null ? `${Math.round(pattern.confidence * 100)}%` : ''} />
-    <Row label="指纹" value={(pattern.fingerprint ?? []).join(' · ')} />
+    <Row label="指纹" value={listOf(pattern.fingerprint).join(' · ')} />
   </Section>;
 }
 

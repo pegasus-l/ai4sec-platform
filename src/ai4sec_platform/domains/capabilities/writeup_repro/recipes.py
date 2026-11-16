@@ -526,7 +526,7 @@ def _save_pattern(conn: sqlite3.Connection, row: dict[str, Any]) -> dict[str, An
     saved = conn.execute(
         "SELECT * FROM writeup_repro_patterns WHERE report_id = ?", (row["report_id"],)
     ).fetchone()
-    return dict(saved) if saved is not None else {}
+    return _parse_pattern_row(saved) or {}
 
 
 # ---------------------------------------------------------------- 入口
@@ -618,7 +618,34 @@ def _get_pattern(conn: sqlite3.Connection, task_id: int) -> dict[str, Any] | Non
     row = conn.execute(
         "SELECT * FROM writeup_repro_patterns WHERE report_id = ?", (int(task_id),)
     ).fetchone()
-    return dict(row) if row is not None else None
+    return _parse_pattern_row(row)
+
+
+def _parse_pattern_row(row: sqlite3.Row | dict[str, Any] | None) -> dict[str, Any] | None:
+    """`fingerprint` 列存的是 JSON 串, 出来必须是**数组**。
+
+    2026-11-16 真事故: `list_patterns` 解析了、`_get_pattern`(详情/产物接口走它)没解析,
+    于同一个字段在两条接口里一个是 `["lang:python", ...]`、一个是那串 JSON 本身 ——
+    前端按 `string[]` 调 `.join()` 直接抛, 整页白屏。**一种字段只许有一种形状。**
+    """
+    if row is None:
+        return None
+    item = dict(row)
+    raw = item.get("fingerprint")
+    if isinstance(raw, str):
+        try:
+            parsed = json.loads(raw or "[]")
+        except (TypeError, ValueError):
+            parsed = []
+        item["fingerprint"] = parsed if isinstance(parsed, list) else []
+    elif raw is None:
+        item["fingerprint"] = []
+    if item.get("confidence") is not None:
+        try:
+            item["confidence"] = float(item["confidence"])
+        except (TypeError, ValueError):
+            item["confidence"] = None
+    return item
 
 
 def _delete_recipe(conn: sqlite3.Connection, task: dict[str, Any]) -> None:
@@ -683,12 +710,9 @@ def list_patterns(
     ).fetchall()
     items = []
     for row in rows:
-        item = dict(row)
-        try:
-            item["fingerprint"] = json.loads(item.get("fingerprint") or "[]")
-        except (TypeError, ValueError):
-            item["fingerprint"] = []
-        items.append(item)
+        item = _parse_pattern_row(row)
+        if item is not None:
+            items.append(item)
     return items, int(total)
 
 

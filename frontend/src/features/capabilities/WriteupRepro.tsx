@@ -7,7 +7,7 @@ import { CommandBlock, WriteupTaskDrawer } from './WriteupTaskDrawer';
 import { createTask, fetchPatterns, fetchRecipes, fetchStats, fetchTasks } from './writeupReproQueries';
 import type { WriteupPatternRow, WriteupRecipeRow, WriteupTask } from './writeupReproTypes';
 import {
-  failureLabel, fmtDuration, fmtTime, statusMeta, triggerLabel, verdictMeta,
+  failureLabel, fmtDuration, fmtTime, listOf, statusMeta, triggerLabel, verdictMeta,
 } from './writeupReproLabels';
 
 /**
@@ -285,7 +285,7 @@ function RecipesTab() {
 
 function RecipeCard({ recipe }: { recipe: WriteupRecipeRow }) {
   const body = recipe.recipe_json ?? {};
-  const fingerprint = body.applies_to?.fingerprint ?? recipe.fingerprint_json ?? [];
+  const fingerprint = listOf(body.applies_to?.fingerprint ?? recipe.fingerprint_json);
   const commandCount = (body.acquire?.length ?? 0) + (body.setup?.length ?? 0) + (body.trigger?.length ?? 0) + (body.probe ? 1 : 0);
   return <article className="case-card">
     <div className="case-card-main">
@@ -370,7 +370,7 @@ function PatternCard({ pattern }: { pattern: WriteupPatternRow }) {
       <div className="badges">
         <Badge tone="violet">{GENERALIZATION_LABELS[pattern.generalization] ?? pattern.generalization}</Badge>
         {pattern.confidence != null && <Badge tone="sky">置信度 {Math.round(pattern.confidence * 100)}%</Badge>}
-        {(pattern.fingerprint ?? []).map(item => <Badge key={item} tone="slate">{item}</Badge>)}
+        {listOf(pattern.fingerprint).map(item => <Badge key={item} tone="slate">{item}</Badge>)}
       </div>
       <h4>{pattern.invariant}</h4>
       {pattern.code_feature && <p>代码特征：{pattern.code_feature}</p>}
