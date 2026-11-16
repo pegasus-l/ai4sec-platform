@@ -445,11 +445,16 @@ def list_tasks(
     status: str | None = None,
     verdict: str | None = None,
     material_id: int | None = None,
+    active: bool | None = None,
     limit: int = 50,
     offset: int = 0,
 ) -> tuple[list[dict[str, Any]], int]:
     """列表 + 总数。总数用与 WHERE 相同的条件单独 COUNT —— 不要拿 len(items) 当总数
-    (2026-09-11 与 2026-10-23 各踩过一次: 卡片写着"共 20 条", 实际是当前页 3 条)。"""
+    (2026-09-11 与 2026-10-23 各踩过一次: 卡片写着"共 20 条", 实际是当前页 3 条)。
+
+    ``active`` 是页面要的"未结束 / 已结束"两档: "进行中"是一个**概念**(pending 到 running
+    四态), 不是单个 status。让页面拼四次请求再把结果拼回来, 分页与总数就都对不上了。
+    """
     conn.row_factory = conn.row_factory or sqlite3.Row
     where: list[str] = []
     params: list[Any] = []
@@ -462,6 +467,10 @@ def list_tasks(
     if material_id:
         where.append("material_id = ?")
         params.append(int(material_id))
+    if active is not None:
+        states = ACTIVE_STATES if active else TERMINAL_STATES
+        where.append(f"status IN ({', '.join('?' * len(states))})")
+        params.extend(states)
     clause = f" WHERE {' AND '.join(where)}" if where else ""
     total = conn.execute(f"SELECT COUNT(*) FROM writeup_repro_tasks{clause}", params).fetchone()[0]
     rows = conn.execute(

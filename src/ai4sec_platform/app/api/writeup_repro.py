@@ -100,11 +100,76 @@ def _material(conn: sqlite3.Connection, material_id: int) -> dict[str, Any] | No
     }
 
 
+def _materials(conn: sqlite3.Connection, ids: list[int]) -> dict[int, dict[str, Any]]:
+    """批量取素材标题/链接(三列, 不碰 payload)。
+
+    列表页每一条任务都挂着"是哪篇文章", 逐条 ``_material()`` 会变成 N+1 —— 而 ``_material``
+    还要把 payload 整块读出来解 cleaned_text, 在 15GB 量级的库上按条读是最不该做的事。
+    """
+    unique = sorted({int(i) for i in ids if i})
+    if not unique:
+        return {}
+    conn.row_factory = conn.row_factory or sqlite3.Row
+    marks = ",".join("?" * len(unique))
+    rows = conn.execute(
+        f"SELECT id, title, source_url FROM domain_items"
+        f" WHERE domain = ? AND item_type = 'material' AND id IN ({marks})",
+        [_DOMAIN, *unique],
+    ).fetchall()
+    return {
+        int(row["id"]): {
+            "id": int(row["id"]),
+            "title": row["title"] or "",
+            "url": row["source_url"] or "",
+        }
+        for row in rows
+    }
+
+
+def _products(conn: sqlite3.Connection, task_ids: list[int]) -> dict[int, dict[str, bool]]:
+    """这批任务各自有没有 报告 / 配方 / 规律。
+
+    三条 ``IN`` 查询各取一次主键集合, 不用三条 LEFT JOIN 拼一张宽表 —— 一个任务最多一行报告、
+    一行配方、一行规律, 拼表只会把"某一条缺失"写成 NULL, 页面还得再判一次。
+    """
+    unique = sorted({int(i) for i in task_ids if i})
+    if not unique:
+        return {}
+    marks = ",".join("?" * len(unique))
+    reports = {int(r[0]) for r in conn.execute(
+        f"SELECT task_id FROM writeup_repro_reports WHERE task_id IN ({marks})", unique)}
+    recipes = {int(r[0]) for r in conn.execute(
+        f"SELECT task_id FROM writeup_repro_recipes WHERE task_id IN ({marks})", unique)}
+    patterns = {int(r[0]) for r in conn.execute(
+        f"SELECT report_id FROM writeup_repro_patterns WHERE report_id IN ({marks})", unique)}
+    return {
+        task_id: {
+            "report": task_id in reports,
+            "recipe": task_id in recipes,
+            "pattern": task_id in patterns,
+        }
+        for task_id in unique
+    }
+
+
+def _decorate(conn: sqlite3.Connection, items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """列表/详情共用的一层展示信息: 素材标题链接 + 三件产物有没有。"""
+    materials = _materials(conn, [int(t.get("material_id") or 0) for t in items])
+    products = _products(conn, [int(t.get("id") or 0) for t in items])
+    for task in items:
+        # None(素材被删/查不到)与"空标题"是两件事, 页面据此决定挂不挂链接。
+        task["material"] = materials.get(int(task.get("material_id") or 0))
+        task["products"] = products.get(int(task.get("id") or 0)) or {
+            "report": False, "recipe": False, "pattern": False,
+        }
+    return items
+
+
 def _must_get(conn: sqlite3.Connection, task_id: int) -> dict[str, Any]:
     task = tasks.get_task(conn, task_id)
     if task is None:
         raise HTTPException(status_code=404, detail=f"任务 {task_id} 不存在")
-    return task
+    return _decorate(conn, [task])[0]
 
 
 # ---------------------------------------------------------------- 任务
@@ -114,6 +179,7 @@ def list_tasks(
     status: str | None = Query(None, description="pending|spec_ready|queued|running|终态"),
     verdict: str | None = Query(None, description="success|partial|cannot_repro|failed|blocked"),
     material_id: int | None = Query(None, gt=0),
+    active: bool | None = Query(None, description="true 只看未结束的, false 只看终态; 与 status 互斥"),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
     conn: sqlite3.Connection = Depends(get_db),
@@ -122,10 +188,13 @@ def list_tasks(
         raise HTTPException(status_code=400, detail=f"未知状态 {status!r}; 可选: {', '.join(tasks.STATES)}")
     if verdict and verdict not in tasks.VERDICT_STATES:
         raise HTTPException(status_code=400, detail=f"未知 verdict {verdict!r}; 可选: {', '.join(tasks.VERDICT_STATES)}")
+    if active is not None and status:
+        raise HTTPException(status_code=400, detail="active 与 status 只能给一个(否则两个条件谁说了算说不清)")
     items, total = tasks.list_tasks(
-        conn, status=status, verdict=verdict, material_id=material_id, limit=limit, offset=offset,
+        conn, status=status, verdict=verdict, material_id=material_id,
+        active=active, limit=limit, offset=offset,
     )
-    return {"items": items, "total": total, "limit": limit, "offset": offset}
+    return {"items": _decorate(conn, items), "total": total, "limit": limit, "offset": offset}
 
 
 @router.get("/stats")
@@ -446,6 +515,17 @@ def list_patterns(
         conn, fingerprint=fingerprint, generalization=generalization, limit=limit, offset=offset,
     )
     return {"items": items, "total": total, "limit": limit, "offset": offset}
+
+
+@router.get("/tasks/{task_id}/products")
+def task_products(task_id: int, conn: sqlite3.Connection = Depends(get_db)) -> dict[str, Any]:
+    """这条任务当前存着的 recipe / pattern。
+
+    列表只给"有没有"(``products`` 三个布尔), 正文在这里取 —— 抽出来的命令可能有几十条,
+    把它们塞进列表响应就是重复第 3 节「列表恒 SELECT *」那次的老路。
+    """
+    _must_get(conn, task_id)
+    return recipes_module.products_for_task(conn, task_id)
 
 
 @router.post("/tasks/{task_id}/extract")

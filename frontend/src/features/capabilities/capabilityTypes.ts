@@ -1,4 +1,4 @@
-export type CapabilityView = 'today' | 'library' | 'repro' | 'conversion' | 'eval' | 'ops-overview' | 'ops-quality' | 'ops-runs';
+export type CapabilityView = 'today' | 'library' | 'repro' | 'conversion' | 'eval' | 'ops-overview' | 'ops-quality' | 'ops-runs' | 'writeup-repro';
 
 // ========== 能力评测(E1) ==========
 // 与 E0(复现跑没跑起来)是两件事: E0 回答"能不能起来", E1 回答"在标准样本上判得准不准"。

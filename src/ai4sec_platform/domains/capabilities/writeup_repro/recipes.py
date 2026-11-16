@@ -592,6 +592,21 @@ def extract_for_task(
             conn.close()
 
 
+def products_for_task(conn: sqlite3.Connection, task_id: int) -> dict[str, Any]:
+    """一条任务当前存着的 recipe / pattern(页面「产物」tab 用)。
+
+    **没有就是 None**, 页面据此说明"为什么没有"(报告没生成 / 结论不支持 / 第 7 节没过闸门),
+    而不是渲染一块空面板 —— 空面板读起来像"抽出来了但是空的"。
+    """
+    task = tasks.get_task(conn, int(task_id))
+    if task is None:
+        return {"recipe": None, "pattern": None}
+    return {
+        "recipe": _get_recipe(conn, task),
+        "pattern": _get_pattern(conn, int(task["id"])),
+    }
+
+
 def _get_recipe(conn: sqlite3.Connection, task: dict[str, Any]) -> dict[str, Any] | None:
     row = conn.execute(
         "SELECT * FROM writeup_repro_recipes WHERE recipe_key = ?", (recipe_key(task),)

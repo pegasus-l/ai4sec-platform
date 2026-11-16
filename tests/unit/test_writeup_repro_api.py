@@ -91,6 +91,7 @@ def test_all_routes_are_in_openapi() -> None:
         "/api/writeup-repro/tasks/{task_id}/spec",
         "/api/writeup-repro/tasks/{task_id}/transition",
         "/api/writeup-repro/tasks/{task_id}/cancel",
+        "/api/writeup-repro/tasks/{task_id}/products",
         "/api/writeup-repro/stats",
     ):
         assert path in paths, path
@@ -128,7 +129,8 @@ def test_create_rejects_unfresh_material(conn) -> None:
 
 def test_list_rejects_unknown_status(conn) -> None:
     with pytest.raises(HTTPException) as exc:
-        api.list_tasks(status="whatever", verdict=None, material_id=None, limit=50, offset=0, conn=conn)
+        api.list_tasks(status="whatever", verdict=None, material_id=None, active=None,
+                       limit=50, offset=0, conn=conn)
     assert exc.value.status_code == 400
 
 
@@ -369,3 +371,119 @@ def test_a_model_failure_returns_502_and_writes_nothing(conn, monkeypatch) -> No
         api.generate_task_report(task_id, regenerate=True, conn=conn)
     assert exc.value.status_code == 502
     assert conn.execute("SELECT COUNT(*) FROM writeup_repro_reports").fetchone()[0] == 0
+
+
+# ---------------------------------------------------------------- T6: 列表可读性
+
+def _row_task(conn, task_id: int, status: str, verdict: str = "", material_id: int = 1) -> None:
+    """直接插一行任务。**不走 create_task**, 因为它只会建出 pending —— 这一节要的是"各种终态"。
+
+    ``material_id`` 逐条不同: 表上是 ``UNIQUE(material_id, attempt)``, 同一个素材同一条 attempt
+    插两次会撞约束(那正是设计要的), 这里只想造历史状态。
+    """
+    conn.execute(
+        "INSERT INTO writeup_repro_tasks (id, material_id, attempt, status, verdict, failure_reason,"
+        " claim, claim_quote, spec_json, created_at, updated_at)"
+        " VALUES (?, ?, 1, ?, ?, '', 'c', 'q', '{}', '2026-11-16T00:00:00Z', '2026-11-16T00:00:00Z')",
+        (task_id, material_id, status, verdict),
+    )
+    conn.commit()
+
+
+def test_active_covers_every_unfinished_state_not_just_running(conn) -> None:
+    """「进行中」是四个状态, 不是一个。只查 running 会把待测任务漏掉, 页面计数与列表对不上。"""
+    _row_task(conn, 1, "pending", material_id=11)
+    _row_task(conn, 2, "spec_ready", material_id=12)
+    _row_task(conn, 3, "queued", material_id=13)
+    _row_task(conn, 4, "running", material_id=14)
+    _row_task(conn, 5, "success", "success", material_id=15)
+    _row_task(conn, 6, "cannot_repro", "cannot_repro", material_id=16)
+
+    active = api.list_tasks(status=None, verdict=None, material_id=None, active=True,
+                            limit=50, offset=0, conn=conn)
+    done = api.list_tasks(status=None, verdict=None, material_id=None, active=False,
+                          limit=50, offset=0, conn=conn)
+
+    assert active["total"] == 4 and {t["id"] for t in active["items"]} == {1, 2, 3, 4}
+    assert done["total"] == 2 and {t["id"] for t in done["items"]} == {5, 6}
+    # 两个筛选是同一个分区: 加起来必须等于全量, 不能有任务两边都不出现。
+    assert active["total"] + done["total"] == 6
+
+
+def test_active_and_status_together_are_refused(conn) -> None:
+    """同时给两个筛选, "谁说了算"说不清 —— 静默取交集会让页面上的「进行中 N」和列表不是一回事。"""
+    with pytest.raises(HTTPException) as exc:
+        api.list_tasks(status="running", verdict=None, material_id=None, active=True,
+                       limit=50, offset=0, conn=conn)
+    assert exc.value.status_code == 400
+    assert "active" in exc.value.detail
+
+
+def test_list_carries_material_title_and_product_flags(conn) -> None:
+    """列表要能直接回答"这是哪篇文章 / 出没出报告", 不必为每条再打一次详情。"""
+    _material(conn)  # 素材 1, 标题 'foo'
+    _material(conn, 2)
+    _row_task(conn, 1, "success", "success", material_id=1)
+    _row_task(conn, 2, "running", material_id=2)
+    conn.execute(
+        "INSERT INTO writeup_repro_reports (task_id, material_id, verdict, caveats, generated_by,"
+        " created_at) VALUES (1, 1, 'success', '[]', 'rules', 'x')"
+    )
+    conn.execute(
+        "INSERT INTO writeup_repro_recipes (recipe_key, task_id, material_id, created_at)"
+        " VALUES ('wr-1-1', 1, 1, 'x')"
+    )
+    conn.commit()
+
+    items = api.list_tasks(status=None, verdict=None, material_id=None, active=None,
+                           limit=50, offset=0, conn=conn)["items"]
+    by_id = {item["id"]: item for item in items}
+
+    assert by_id[1]["material"] == {"id": 1, "title": "foo", "url": "http://blog/1"}
+    assert by_id[1]["products"] == {"report": True, "recipe": True, "pattern": False}
+    assert by_id[2]["products"] == {"report": False, "recipe": False, "pattern": False}
+    # 素材被删 / 查不到 ⇒ None, 不是空对象 —— 页面据此显示「原文已查不到」而不是一个坏链接。
+    _row_task(conn, 3, "running", material_id=999)
+    again = {item["id"]: item for item in api.list_tasks(
+        status=None, verdict=None, material_id=None, active=None, limit=50, offset=0, conn=conn)["items"]}
+    assert again[3]["material"] is None
+
+
+def test_detail_carries_the_same_decoration_as_the_list(conn) -> None:
+    """抽屉与列表说同一件事: 列表有标题, 抽屉里也必须有; 两处各写一套必然漂移。"""
+    _material(conn)
+    _row_task(conn, 1, "success", "success", material_id=1)
+
+    assert api.get_task(1, conn=conn)["material"]["title"] == "foo"
+
+
+def test_products_route_is_empty_not_missing_when_nothing_was_extracted(conn) -> None:
+    """没抽过 ≠ 抽失败了。两者都返回 null, 但页面文案不同: 前者说"终态才会抽", 后者说"抽取报错"。"""
+    _material(conn)
+    _row_task(conn, 1, "success", "success", material_id=1)
+
+    assert api.task_products(1, conn=conn) == {"recipe": None, "pattern": None}
+
+
+def test_products_route_returns_what_is_stored(conn) -> None:
+    _material(conn)
+    _row_task(conn, 1, "success", "success", material_id=1)
+    conn.execute(
+        "INSERT INTO writeup_repro_recipes (recipe_key, task_id, material_id, created_at)"
+        " VALUES ('wr-1-1', 1, 1, 'x')"
+    )
+    conn.execute(
+        "INSERT INTO writeup_repro_patterns (report_id, material_id, invariant, provenance, created_at)"
+        " VALUES (1, 1, '阶为 0 时不得写回未初始化的结果', 'from_repro', 'x')"
+    )
+    conn.commit()
+
+    products = api.task_products(1, conn=conn)
+    assert products["recipe"]["task_id"] == 1
+    assert products["pattern"]["invariant"] == "阶为 0 时不得写回未初始化的结果"
+
+
+def test_products_route_404s_for_an_unknown_task(conn) -> None:
+    with pytest.raises(HTTPException) as exc:
+        api.task_products(424242, conn=conn)
+    assert exc.value.status_code == 404

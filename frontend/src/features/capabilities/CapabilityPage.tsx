@@ -1,6 +1,6 @@
 import { useMemo, useState, useEffect, useRef, useCallback } from 'react';
 import { ThemeToggle } from '../../components/ThemeToggle';
-import { Star, ListChecks, Settings, ArrowUpRight, Activity, ShieldCheck, RefreshCw, Gauge, type LucideIcon } from 'lucide-react';
+import { Star, ListChecks, Settings, ArrowUpRight, Activity, ShieldCheck, RefreshCw, Gauge, FlaskConical, type LucideIcon } from 'lucide-react';
 import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Badge, MetricCard, EmptyState } from '../../components/ui';
 import { ConfirmModal, type ConfirmRequest } from '../../components/ConfirmModal';
@@ -14,6 +14,7 @@ import {
 import type { CapabilityItem, E0Level, ReproTask, ConversionRecord, CapabilityView, LibraryStats, LibraryFormKey, ReproBucketKey } from './capabilityTypes';
 import { CapabilityOps, CapabilityOpsQuality, CapabilityOpsRuns } from './CapabilityOps';
 import { CapabilityEval } from './CapabilityEval';
+import { WriteupRepro } from './WriteupRepro';
 
 const navGroups: Array<{ title: string; items: Array<{ id: CapabilityView; icon: LucideIcon; title: string }> }> = [
   { title: '能力洞察', items: [
@@ -34,7 +35,23 @@ const navGroups: Array<{ title: string; items: Array<{ id: CapabilityView; icon:
   // { title: '评测', items: [
   //   { id: 'eval', icon: Gauge, title: '能力评测' },
   // ]},
+  // 2026-11-16: writeup 复现是**研究工作流**(把一篇真文章跑一遍), 与「复现验证」里
+  // "这个项目能不能跑起来"不是一件事 —— 那条链跑的是能力条目的仓库, 这条链跑的是 writeup 里的 PoC。
+  // 单开一组, 追加在末尾。
+  { title: '研究复现', items: [
+    { id: 'writeup-repro', icon: FlaskConical, title: 'writeup 复现' },
+  ]},
 ];
+
+/** 地址栏里能认的 view。写错一个不存在的 id 就回落默认页, 不留一片空白。 */
+const KNOWN_VIEWS: CapabilityView[] = ['today', 'library', 'repro', 'conversion', 'eval', 'ops-overview', 'ops-quality', 'ops-runs', 'writeup-repro'];
+
+/** `?view=writeup-repro&task=42` —— 从素材抽屉「复现这篇」跳过来时落到对应条目。
+ *  不用 react-router(整站是单页 + 路径前缀), 所以在这里读一次 search 就够了。 */
+function readSearch(): URLSearchParams {
+  try { return new URLSearchParams(window.location.search); }
+  catch { return new URLSearchParams(); }
+}
 
 const conversionGroups = ['待评估', '待复现', '复现中', '复现成功', '待集成', '持续观察', '已采用'];
 
@@ -105,7 +122,16 @@ function matchItem(item: CapabilityItem, q: string): boolean {
 }
 
 export function CapabilityPage() {
-  const [view, setView] = useState<CapabilityView>('today');
+  // 首屏先看地址栏: 从素材抽屉「复现这篇」跳进来时是 `?view=writeup-repro&task=<id>`,
+  // 落在哪一条由 task 决定(下面交给 WriteupRepro 打开抽屉), 不是落在列表顶部。
+  const [view, setView] = useState<CapabilityView>(() => {
+    const wanted = readSearch().get('view');
+    return wanted && KNOWN_VIEWS.includes(wanted as CapabilityView) ? wanted as CapabilityView : 'today';
+  });
+  const [focusTaskId, setFocusTaskId] = useState<number | null>(() => {
+    const raw = Number(readSearch().get('task'));
+    return Number.isFinite(raw) && raw > 0 ? raw : null;
+  });
   const [search, setSearch] = useState('');
   // 【跳转复现】从能力库点「查看复现」时记录目标能力, 切到复现验证页后由 CapabilityRepro 选中对应任务
   const [reproTargetItemId, setReproTargetItemId] = useState<number | null>(null);
@@ -197,13 +223,14 @@ export function CapabilityPage() {
         {view === 'ops-overview' && <CapabilityOps />}
         {view === 'ops-quality' && <CapabilityOpsQuality />}
         {view === 'ops-runs' && <CapabilityOpsRuns />}
+        {view === 'writeup-repro' && <WriteupRepro focusTaskId={focusTaskId} onFocusConsumed={() => setFocusTaskId(null)} />}
       </div>
     </section>
   </main>;
 }
 
 function heroTitle(view: CapabilityView): string {
-  return { today: '今日能力推荐', library: '能力库', repro: '复现验证', conversion: '能力转化', eval: '能力评测', 'ops-overview': '运营概览', 'ops-quality': '质量审计', 'ops-runs': 'Pipeline 运行' }[view];
+  return { today: '今日能力推荐', library: '能力库', repro: '复现验证', conversion: '能力转化', eval: '能力评测', 'ops-overview': '运营概览', 'ops-quality': '质量审计', 'ops-runs': 'Pipeline 运行', 'writeup-repro': 'writeup 复现' }[view];
 }
 function heroCopy(view: CapabilityView): string {
   return {
@@ -215,6 +242,7 @@ function heroCopy(view: CapabilityView): string {
     'ops-overview': '运营数据概览、复现失败审计、能力卡缺字段审计、Web 分类统计。',
     'ops-quality': '复现失败详情、能力卡缺字段详情、Web 分类统计。',
     'ops-runs': '能力洞察 Pipeline 运行历史、步骤详情、产物列表。',
+    'writeup-repro': '把一篇漏洞 writeup 真的跑一遍：执行证据 → 八节复现报告 → 可复用的配方与规律。',
   }[view];
 }
 
