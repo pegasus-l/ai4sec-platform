@@ -1,6 +1,7 @@
 import { getJson, postJson } from '../../api/client';
 import type {
-  WriteupPatternRow, WriteupProductsDetail, WriteupRecipeRow, WriteupReport, WriteupStats, WriteupTask,
+  WriteupPatternRow, WriteupProductsDetail, WriteupRecipeRow, WriteupReport, WriteupSkillExport,
+  WriteupStats, WriteupTask,
 } from './writeupReproTypes';
 
 /**
@@ -62,6 +63,16 @@ export async function fetchReport(taskId: number): Promise<WriteupReport | null>
 /** 这一条任务存着的 recipe / pattern(正文)。列表只给"有没有"。 */
 export function fetchProducts(taskId: number): Promise<WriteupProductsDetail> {
   return getJson<WriteupProductsDetail>(`/api/writeup-repro/tasks/${taskId}/products`);
+}
+
+/**
+ * 这条任务会导出成哪些审计 skill 文件(渲染好的 markdown)。
+ *
+ * **不要用 `fetchProducts` 自己拼一份** —— 页面预览必须与磁盘上的
+ * `references/verified/*.md` 是同一串字符, 两边各拼一份迟早不一致。
+ */
+export function fetchTaskSkill(taskId: number): Promise<WriteupSkillExport> {
+  return getJson<WriteupSkillExport>(`/api/writeup-repro/tasks/${taskId}/skill`);
 }
 
 export interface RecipeQuery {

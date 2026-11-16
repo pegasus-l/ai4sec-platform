@@ -5,11 +5,12 @@ import { useToast } from '../../components/Toast';
 import { ConfirmModal, type ConfirmRequest } from '../../components/ConfirmModal';
 import { fetchVulnerabilityMaterialText, materialDownloadUrl } from '../../api/vulnerabilities';
 import {
-  cancelTask, extractProducts, fetchProducts, fetchReport, fetchTask, generateReport, generateSpec,
-  rerunTask, runTask, stopTask,
+  cancelTask, extractProducts, fetchProducts, fetchReport, fetchTask, fetchTaskSkill, generateReport,
+  generateSpec, rerunTask, runTask, stopTask,
 } from './writeupReproQueries';
 import type {
-  EvidenceCommand, RecipeJson, RecipeStep, WriteupPatternRow, WriteupRecipeRow, WriteupReport, WriteupTask,
+  EvidenceCommand, RecipeJson, RecipeStep, WriteupPatternRow, WriteupRecipeRow, WriteupReport,
+  WriteupSkillExport, WriteupTask,
 } from './writeupReproTypes';
 import {
   failureLabel, fmtDuration, fmtTime, listOf, matchedMeta, sideLabel, statusMeta, triggerLabel, verdictMeta,
@@ -482,7 +483,10 @@ function ProductsTab({ task }: { task: WriteupTask }) {
   if (productsQuery.isLoading) return <EmptyState title="正在读取产物…" />;
   const recipe = productsQuery.data?.recipe ?? null;
   const pattern = productsQuery.data?.pattern ?? null;
-  if (!recipe && !pattern) {
+  const hasReport = Boolean(task.products?.report);
+  // 有报告但没有配方/规律时**不整页返回空态** —— 报告本身还会导出成案例文件,
+  // 那句话留在下面的 SkillExportCard 里说, 免得用户以为这条任务什么都没留下。
+  if (!recipe && !pattern && !hasReport) {
     return <EmptyState
       title="这条任务没有可复用的产物"
       description={ACTIVE_STATUSES.includes(task.status)
@@ -493,7 +497,68 @@ function ProductsTab({ task }: { task: WriteupTask }) {
   return <>
     {recipe && <RecipeCard recipe={recipe} />}
     {pattern && <PatternCard pattern={pattern} />}
+    <SkillExportCard task={task} />
   </>;
+}
+
+/**
+ * 「已导出到审计 skill」。
+ *
+ * 这一块回答的是"这些产物最后去了哪里": 它们会被写成 markdown, 放进我下次做审计时会自动
+ * 读到的 skill 里。**markdown 由后端渲染** —— 页面看到的和磁盘上写下的必须是同一串字符,
+ * 页面自己拼一份就是第二份真相。
+ *
+ * 预览默认折叠: 规律 + 案例合起来上万字, 展开会把"这条任务有什么"淹掉。
+ */
+function SkillExportCard({ task }: { task: WriteupTask }) {
+  const { toast } = useToast();
+  const query = useQuery({
+    queryKey: ['writeup', 'skill', task.id],
+    queryFn: () => fetchTaskSkill(task.id),
+    staleTime: 60_000,
+  });
+  const data: WriteupSkillExport | undefined = query.data;
+  if (query.isLoading) return <Section title="已导出到审计 skill"><p className="muted small" style={{ margin: 0 }}>正在读取导出内容…</p></Section>;
+  if (query.isError) {
+    return <Section title="已导出到审计 skill">
+      <p className="muted small" style={{ margin: 0 }}>
+        读取失败（{(query.error as Error)?.message ?? '未知错误'}）—— 产物本身没有丢，入口在上面的配方/规律卡片里。
+      </p>
+    </Section>;
+  }
+  if (!data) return <></>;
+  const copy = async (text: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      toast('路径已复制', 'success');
+    } catch {
+      // 组件常被嵌在 iframe 里, clipboard 可能被浏览器拒 —— 退回到"选中让你自己复制"。
+      toast(`复制被浏览器拦下了，路径是：${text}`, 'error');
+    }
+  };
+  return <Section title="已导出到审计 skill" note={`${data.skill} · ${data.files.length} 个文件`}>
+    <p className="muted small" style={{ marginTop: 0, lineHeight: 1.75 }}>
+      这些产物会写成 markdown 放进 <code>{data.skill}</code> skill，我下次做代码审计时会自动读到。
+      预览与磁盘上的文件<b>同源</b>（都由后端渲染），所以这里看到的就是实际写进去的内容。
+      重新导出：`python3 /mnt/d/漏洞挖掘/洞察工具/洞察平台改进/tools/sync_ai4sec_vuln_skills.py`
+    </p>
+    {data.files.length === 0
+      ? <p className="muted small" style={{ margin: 0 }}>{data.note || '这条任务还没有可导出的内容。'}</p>
+      : data.files.map(file => <div key={file.path} style={{ marginTop: 10 }}>
+        <p className="small" style={{ margin: '0 0 4px' }}>
+          <Badge tone={file.kind === 'verified' ? 'sky' : 'slate'}>
+            {file.kind === 'verified' ? '已验证规律' : '复现案例'}
+          </Badge>
+          {' '}<code>{file.path}</code>
+          {' '}<span className="muted">{file.chars.toLocaleString()} 字</span>
+          {' '}<button className="btn" onClick={() => void copy(`${data.skill}/${file.path}`)}>复制路径</button>
+        </p>
+        <details>
+          <summary className="small muted" style={{ cursor: 'pointer' }}>展开预览</summary>
+          <pre className="snippet case-code" style={{ maxHeight: 460, marginTop: 6 }}>{file.markdown}</pre>
+        </details>
+      </div>)}
+  </Section>;
 }
 
 function RecipeCard({ recipe }: { recipe: WriteupRecipeRow }) {

@@ -21,6 +21,7 @@ import pytest
 from ai4sec_platform.db.models import init_db
 from ai4sec_platform.domains.capabilities.writeup_repro import recipes as recipes_module
 from ai4sec_platform.domains.capabilities.writeup_repro import report as report_module
+from ai4sec_platform.domains.capabilities.writeup_repro import skill_export
 from ai4sec_platform.domains.capabilities.writeup_repro import tasks
 
 ARTICLE = """# fastecdsa 2.3.1 double free
@@ -644,3 +645,100 @@ def test_a_broken_extractor_never_changes_the_verdict(monkeypatch) -> None:
 
     assert tasks.get_task(conn, 3)["status"] == "partial"
     assert any("recipe/pattern 抽取失败" in line for line in logged)
+
+
+# ---------------------------------------------------------------- 导出到审计 skill
+
+def test_skill_export_renders_the_rule_and_the_case() -> None:
+    """一条跑通的任务导出两个文件: 已验证规律(怎么找) + 复现案例(完整八节)。
+
+    页面「产物 → 导出预览」看的就是这两个字符串, 所以路径与开头那句口径必须稳定 ——
+    少了"这条是真跑过的", 读者会把规律当成通用断言。
+    """
+    conn = _conn()
+    recipes_module.extract_for_task(3, conn=conn)
+
+    bundle = skill_export.task_export(conn, 3)
+    paths = {item["kind"]: item["path"] for item in bundle["files"]}
+
+    assert paths == {
+        "verified": "references/verified/material-132734.md",
+        "case": "references/cases/task-3-material-132734.md",
+    }
+    verified = next(item["markdown"] for item in bundle["files"] if item["kind"] == "verified")
+    assert "这条是真跑过的" in verified
+    for heading in ("不变量", "代码特征", "审计入口", "判别点"):
+        assert heading in verified, heading
+    assert "free(): invalid pointer" in verified, "成功判据要跟着规律一起走"
+    assert "caveats" in verified, "结论必须带着它的限制"
+
+
+def test_skill_export_says_why_there_is_no_rule() -> None:
+    """有报告但第 7 节没过闸门 ⇒ 只导出案例, 并说明为什么没有规律。
+
+    不说明的话, 用户会读成"规律抽取坏了"; 实际是结论不支持入库。
+    """
+    conn = _conn()
+    report_module.save_report(conn, _report(pattern=False))
+    recipes_module.extract_for_task(3, conn=conn, regenerate=True)
+
+    bundle = skill_export.task_export(conn, 3)
+
+    assert [item["kind"] for item in bundle["files"]] == ["case"]
+    assert "第 7 节" in bundle["note"]
+
+
+def test_skill_export_never_invents_a_file_when_nothing_was_extracted() -> None:
+    """还没抽过 ⇒ 空列表 + 原因。**空不等于失败**, 也不许补一份"看起来像"的文件。"""
+    conn = _conn()
+    conn.execute("DELETE FROM writeup_repro_reports")
+    conn.commit()
+
+    bundle = skill_export.task_export(conn, 3)
+
+    assert bundle["files"] == []
+    assert bundle["note"], "空的时候必须有一句为什么"
+
+
+def test_catalog_export_keeps_the_coverage_note_and_the_confidence_caveat() -> None:
+    """catalog 是线索不是结论 —— 这两句话必须写进文件本身, 不能靠读者记得。"""
+    payload = {
+        "pattern_id": "ptn-cwe-CWE-416",
+        "cwe_ids": ["CWE-416"],
+        "member_count": 10,
+        "pattern_name": "对象生命周期管理缺陷导致 UAF",
+        "pattern_summary": "释放后仍被解引用",
+        "detection_guidance": "找释放之后的使用路径",
+        "code_search_keywords": ["use-after-free", "dangling pointer"],
+        "representative_examples": [{"knowledge_id": 1, "title": "某篇真实文章"}],
+        "coverage_note": "基于 10 条知识条目归纳; 部分条目待人工确认",
+        "confidence": 0.8,
+        "generated_by": "pattern_synthesizer",
+    }
+
+    text = skill_export.render_catalog(payload)
+
+    assert "线索, 未经本机复现验证" in text
+    assert "不是准确率" in text
+    assert "基于 10 条知识条目归纳; 部分条目待人工确认" in text
+
+
+def test_export_bundle_covers_catalog_and_verified_in_one_pass() -> None:
+    """同步脚本一次拉全量: catalog 来自漏洞模式库, verified/案例来自复现产物。"""
+    conn = _conn()
+    recipes_module.extract_for_task(3, conn=conn)
+    conn.execute(
+        "INSERT INTO domain_items (id, domain, item_type, title, status, source, source_url,"
+        " primary_date, payload_json, created_at, updated_at)"
+        " VALUES (9001, 'vulnerabilities', 'vulnerability_pattern', 'CWE-416', 'active', 'src',"
+        " '', '2026-11-01', ?, 'now', 'now')",
+        (json.dumps({"pattern_id": "ptn-cwe-CWE-416", "cluster_key": "cwe:CWE-416",
+                     "cwe_ids": ["CWE-416"], "pattern_name": "UAF", "member_count": 3}),),
+    )
+    conn.commit()
+
+    bundle = skill_export.export_bundle(conn)
+    kinds = sorted(item["kind"] for item in bundle["files"])
+
+    assert kinds == ["case", "catalog", "verified"]
+    assert bundle["skill"] == "ai4sec-vuln-audit"

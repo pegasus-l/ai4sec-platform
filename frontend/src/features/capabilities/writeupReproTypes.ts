@@ -333,6 +333,25 @@ export interface WriteupProductsDetail {
   pattern: WriteupPatternRow | null;
 }
 
+/** 一条会导出到审计 skill 的文件。markdown 由后端渲染, 与磁盘上的文件同源。 */
+export interface WriteupSkillFile {
+  kind: 'verified' | 'case' | 'catalog';
+  /** skill 根目录下的相对路径, 如 references/verified/material-132734.md。 */
+  path: string;
+  markdown: string;
+  chars: number;
+}
+
+export interface WriteupSkillExport {
+  skill: string;
+  task_id: number;
+  material_id: number | null;
+  title?: string;
+  files: WriteupSkillFile[];
+  /** files 为空时的原因 —— "没东西可导出"是结论, 不是故障。 */
+  note?: string;
+}
+
 // ---------------------------------------------------------------- 统计
 
 export interface WriteupStats {

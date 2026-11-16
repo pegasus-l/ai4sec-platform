@@ -16,6 +16,7 @@
     POST   /api/writeup-repro/tasks/{id}/extract       从报告抽 recipe + pattern(抽不出 → 200 + reasons)
     GET    /api/writeup-repro/recipes                  固化下来的"这一类怎么跑"
     GET    /api/writeup-repro/patterns                 固化下来的"这一类怎么找"
+    GET    /api/writeup-repro/tasks/{id}/skill         这条任务会导出成哪些审计 skill 文件(markdown)
     GET    /api/writeup-repro/stats                    漏斗统计(含产物计数)
 
 鉴权由 ``ASISSessionMiddleware`` 统一处理(``/api/*`` 一律 401), 这里不重复写。
@@ -42,6 +43,7 @@ from ai4sec_platform.app.dependencies import current_user, get_db
 from ai4sec_platform.domains.capabilities.writeup_repro import executor
 from ai4sec_platform.domains.capabilities.writeup_repro import recipes as recipes_module
 from ai4sec_platform.domains.capabilities.writeup_repro import report as report_module
+from ai4sec_platform.domains.capabilities.writeup_repro import skill_export as skill_module
 from ai4sec_platform.domains.capabilities.writeup_repro import spec as spec_module
 from ai4sec_platform.domains.capabilities.writeup_repro import store, tasks
 
@@ -526,6 +528,21 @@ def task_products(task_id: int, conn: sqlite3.Connection = Depends(get_db)) -> d
     """
     _must_get(conn, task_id)
     return recipes_module.products_for_task(conn, task_id)
+
+
+@router.get("/tasks/{task_id}/skill")
+def task_skill_export(task_id: int, conn: sqlite3.Connection = Depends(get_db)) -> dict[str, Any]:
+    """这条任务会导出成哪些 skill 文件(渲染好的 markdown)。
+
+    为什么由后端渲染, 而不是页面自己拼: 「产物」页显示的内容与磁盘上的
+    ``references/verified/*.md`` 必须是**同一串字符**, 否则两边一改就各说各话。
+    同步脚本也调同一份 ``skill_export``, 所以页面预览 = 真实文件。
+
+    ``files`` 为空是正常结果(没有报告 / 第 7 节没过闸门), 用 ``note`` 说明原因,
+    不报错 —— "没东西可导出"是结论, 不是故障。
+    """
+    _must_get(conn, task_id)
+    return skill_module.task_export(conn, task_id)
 
 
 @router.post("/tasks/{task_id}/extract")
