@@ -16,6 +16,7 @@ import type {
   ManualKeyword,
   ManualKeywordListResponse,
   MaterialPayload,
+  MaterialText,
   PagedListResponse,
   PatternCasesResponse,
   PatternPayload,
@@ -281,6 +282,17 @@ export function fetchCaseStats(): Promise<CaseStats> {
  */
 export function fetchVulnerabilityMaterial(itemId: number): Promise<DomainItem<MaterialPayload>> {
   return getJson(`/api/vulnerabilities/materials/${itemId}`);
+}
+
+/**
+ * 素材正文, 供「看原文」。
+ *
+ * **不要拿 `fetchVulnerabilityMaterial` 代替它**: 那条返回完整 payload(含整页 raw, 单条实测
+ * 992KB, 过隧道要几十秒), 而页面这里只需要读得完的正文。列表接口又故意把 cleaned_text 剥掉了,
+ * 所以在抽屉里展开原文只能走这一条。
+ */
+export function fetchVulnerabilityMaterialText(itemId: number): Promise<MaterialText> {
+  return getJson(`/api/vulnerabilities/materials/${itemId}/text`);
 }
 
 export function fetchCaseDetail(caseId: number): Promise<CaseDetail> {

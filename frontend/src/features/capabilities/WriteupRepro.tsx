@@ -233,6 +233,14 @@ function TaskCard({ task, onOpen }: { task: WriteupTask; onOpen: () => void }) {
       <ProductDots products={task.products} />
       <b>{fmtDuration(task.duration_seconds)}</b>
       <span className="small muted">{task.tool_calls ?? 0} 次工具调用</span>
+      {/* 回到文章本身。新开一个页签: 用户多半是想边看原文边对照这条任务的结论, 不该丢掉列表位置。 */}
+      <a
+        className="btn"
+        href={`/insights/vulnerabilities?material=${task.material_id}`}
+        target="_blank"
+        rel="noreferrer"
+        onClick={event => event.stopPropagation()}
+      >原文</a>
       <button className="btn primary" onClick={event => { event.stopPropagation(); onOpen(); }}>看证据</button>
     </div>
   </article>;

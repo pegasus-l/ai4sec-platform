@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Badge, EmptyState } from '../../components/ui';
 import { useToast } from '../../components/Toast';
 import { ConfirmModal, type ConfirmRequest } from '../../components/ConfirmModal';
+import { fetchVulnerabilityMaterialText, materialDownloadUrl } from '../../api/vulnerabilities';
 import {
   cancelTask, extractProducts, fetchProducts, fetchReport, fetchTask, generateReport, generateSpec,
   rerunTask, runTask, stopTask,
@@ -25,7 +26,7 @@ import {
  * `EvidenceCommand` 的形状, 不做"摘要版"。
  */
 
-type Tab = 'overview' | 'report' | 'evidence' | 'spec' | 'products' | 'log';
+type Tab = 'overview' | 'report' | 'evidence' | 'spec' | 'products' | 'log' | 'source';
 
 const TAB_LABELS: Array<[Tab, string]> = [
   ['overview', '概览'],
@@ -34,6 +35,9 @@ const TAB_LABELS: Array<[Tab, string]> = [
   ['spec', 'spec'],
   ['products', '产物'],
   ['log', '日志'],
+  // 原文放最后: 它是**核对用的底稿**, 不是结论。概览那一行有「看原文」直接跳过来,
+  // 所以排第几不影响找得到 —— 但别指望用户从头读到尾才发现它。
+  ['source', '原文'],
 ];
 
 const ACTIVE_STATUSES = ['pending', 'spec_ready', 'queued', 'running'];
@@ -60,6 +64,7 @@ export function WriteupTaskDrawer({ taskId }: { taskId: number }) {
     spec: task.spec_json?.steps?.length ?? 0,
     products: (task.products?.recipe ? 1 : 0) + (task.products?.pattern ? 1 : 0),
     log: 0,
+    source: 0,
   };
 
   return <div className="v11-view">
@@ -71,12 +76,13 @@ export function WriteupTaskDrawer({ taskId }: { taskId: number }) {
         onClick={() => setTab(id)}
       >{label}{counts[id] ? ` ${counts[id]}` : ''}</button>)}
     </div>
-    {tab === 'overview' && <OverviewTab task={task} />}
+    {tab === 'overview' && <OverviewTab task={task} onOpenSource={() => setTab('source')} />}
     {tab === 'report' && <ReportTab task={task} />}
     {tab === 'evidence' && <EvidenceTab task={task} />}
     {tab === 'spec' && <SpecTab task={task} />}
     {tab === 'products' && <ProductsTab task={task} />}
     {tab === 'log' && <LogTab task={task} />}
+    {tab === 'source' && <SourceTab task={task} />}
   </div>;
 }
 
@@ -177,7 +183,7 @@ function TaskActions({ task }: { task: WriteupTask }) {
 
 // ========== 概览 ==========
 
-function OverviewTab({ task }: { task: WriteupTask }) {
+function OverviewTab({ task, onOpenSource }: { task: WriteupTask; onOpenSource: () => void }) {
   const status = statusMeta(task.status);
   const verdict = task.verdict ? verdictMeta(task.verdict) : null;
   return <>
@@ -193,9 +199,12 @@ function OverviewTab({ task }: { task: WriteupTask }) {
       <Row label="原文引句" value={task.claim_quote ? <Quote text={task.claim_quote} /> : ''} />
       <Row label="目标" value={[task.target_repo, task.target_version, task.target_kind].filter(Boolean).join(' · ')} />
       <Row label="来源文章" value={task.material
-        ? (task.material.url
-          ? <a href={task.material.url} target="_blank" rel="noreferrer">{task.material.title || task.material.url}</a>
-          : task.material.title || `素材 #${task.material_id}`)
+        ? <>
+          {task.material.url
+            ? <a href={task.material.url} target="_blank" rel="noreferrer">{task.material.title || task.material.url}</a>
+            : task.material.title || `素材 #${task.material_id}`}
+          {' '}<button className="btn sm" onClick={onOpenSource}>看原文</button>
+        </>
         : <span className="muted">素材 #{task.material_id} 已查不到（可能被清理）</span>} />
       <Row label="发起" value={`${triggerLabel(task.trigger)} · ${task.created_by || '未知'} · ${fmtTime(task.created_at)}`} />
       <Row label="耗时 / 工具调用" value={`${fmtDuration(task.duration_seconds)} · ${task.tool_calls ?? '—'} 次`} />
@@ -509,6 +518,62 @@ function PatternCard({ pattern }: { pattern: WriteupPatternRow }) {
     <Row label="置信度" value={pattern.confidence != null ? `${Math.round(pattern.confidence * 100)}%` : ''} />
     <Row label="指纹" value={(pattern.fingerprint ?? []).join(' · ')} />
   </Section>;
+}
+
+// ========== 原文 ==========
+
+/**
+ * 任务指向的那篇文章的正文。
+ *
+ * 这一页存在的理由只有一个: **复现出来的每一句结论, 用户都得能自己回原文核对** ——
+ * 报告第 2 节引的那一句、spec 里抄下来的命令, 光有「原文链接」不够(站点会 404、会改版、
+ * 会挂付费墙), 得把平台当初读到的那份正文摊开给人看。
+ *
+ * 正文取素材落库时的 `payload.cleaned_text`(下载/抽取时就写好了), **不重新抓、不调模型**;
+ * 没有正文的素材(PDF、反爬、只有链接)如实说没有 —— 不拿摘要或标题顶上, 那会让
+ * "原文这么写的" 变成一个无法核对的断言。
+ */
+function SourceTab({ task }: { task: WriteupTask }) {
+  const query = useQuery({
+    queryKey: ['vulnerabilities', 'material-text', task.material_id],
+    queryFn: () => fetchVulnerabilityMaterialText(task.material_id),
+    // 素材正文落库后不再变; 抽屉里来回切 tab 不该反复拉。
+    staleTime: Infinity,
+    retry: false,
+  });
+  if (query.isLoading) return <EmptyState title="正在读取原文…" />;
+  if (query.isError) {
+    const notFound = ((query.error as Error)?.message ?? '').endsWith(': 404');
+    return <EmptyState
+      title={notFound ? `素材 #${task.material_id} 已经查不到` : '原文读取失败'}
+      description={notFound
+        ? '任务行还在, 但指向的素材已被清理。'
+        : errorText(query.error, '素材接口报错')} />;
+  }
+
+  const data = query.data;
+  if (!data) return <EmptyState title="正在读取原文…" />;
+  const body = data.text.trim();
+  return <>
+    <Section title="原文" note={`素材 #${task.material_id} · ${body ? `${body.length} 字` : '没有正文'}`}>
+      <div className="badges" style={{ marginBottom: 4 }}>
+        {data.url && <a className="btn sm" href={data.url} target="_blank" rel="noreferrer">打开原站 ↗</a>}
+        <a className="btn sm" href={materialDownloadUrl(task.material_id)}>下载素材</a>
+        <a className="btn sm" href={`/insights/vulnerabilities?material=${task.material_id}`}>在漏洞洞察中打开</a>
+      </div>
+      <Row label="标题" value={data.title} />
+      {data.title_cn && data.title_cn !== data.title && <Row label="中文标题" value={data.title_cn} />}
+      <Row label="来源" value={[data.source, data.source_host].filter(Boolean).join(' · ')} />
+      <Row label="抓取时间" value={data.primary_date ? fmtTime(data.primary_date) : ''} />
+      <Row label="素材类型" value={data.material_type} />
+      {body
+        ? <pre className="snippet case-code" style={{ maxHeight: 640 }}>{body}</pre>
+        : <p className="muted small" style={{ margin: '10px 0 0' }}>
+          这篇素材没有留下正文（常见原因：PDF/二进制格式、站点反爬只抓到拦截页，或只登记了链接）。
+          复现结论基于当时抓到的内容，正文缺失时请以上面的原站链接为准。
+        </p>}
+    </Section>
+  </>;
 }
 
 // ========== 日志 ==========

@@ -455,6 +455,40 @@ def material_detail(item_id: int, conn: sqlite3.Connection = Depends(get_db)) ->
     return item
 
 
+@router.get("/materials/{item_id}/text")
+def material_text(item_id: int, conn: sqlite3.Connection = Depends(get_db)) -> dict:
+    """素材正文，供页面「看原文」。
+
+    与 `/materials/{id}` 的分工：那个返回**完整 payload**（含整页 `raw`，实测单条 992KB、
+    列表里 200 条合计 129MB），是给下载与排障用的；这一条只回"人读得完"的那部分 ——
+    展示用的元信息 + 正文。页面在抽屉里展开原文时不该为了几 KB 正文拖一个 1MB 的响应过来。
+
+    正文缺失时返回空串并让人去看站外链接，**不拿 summary 顶替** —— 顶替会让
+    "原文是这么写的"变成一句无法核对的断言。
+    """
+    item = domain_items.detail(conn, DOMAIN, item_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="material not found")
+    payload = item.get("payload") or {}
+    # 与 build_material_markdown / 素材下载保持同一口径：cleaned_text 优先，退到 markdown。
+    text = str(payload.get("cleaned_text") or payload.get("markdown") or "").strip()
+    return {
+        "id": item.get("id"),
+        "title": item.get("title") or "",
+        "title_cn": payload.get("title_cn") or "",
+        "source": item.get("source") or "",
+        "source_url": item.get("source_url") or "",
+        "url": payload.get("url") or item.get("source_url") or "",
+        "source_host": payload.get("source_host") or "",
+        "material_type": payload.get("material_type") or "",
+        "primary_date": item.get("primary_date") or "",
+        "status": item.get("status") or "",
+        "score": item.get("score"),
+        "text": text,
+        "text_chars": len(text),
+    }
+
+
 @router.get("/materials/{item_id}/download")
 def material_download(item_id: int, conn: sqlite3.Connection = Depends(get_db)) -> Response:
     """漏洞素材一键下载：把单条素材渲染为 markdown 附件返回。"""
