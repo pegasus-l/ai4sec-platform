@@ -192,7 +192,7 @@ export function WriteupRepro({ focusTaskId, onFocusConsumed }: { focusTaskId?: n
           {list.isLoading
             ? <p className="muted small">正在读取任务…</p>
             : items.length
-              ? <div className="case-list">{items.map(task => <TaskCard key={task.id} task={task} onOpen={() => openTask(task)} onOpenAttempt={openAttempt} />)}</div>
+              ? <div className="case-list">{items.map(task => <TaskCard key={task.id} task={task} folded={folded} onOpen={() => openTask(task)} onOpenAttempt={openAttempt} />)}</div>
               : <EmptyState
                 title={hasFilter ? '没有匹配的任务' : '还没有复现任务'}
                 description={hasFilter
@@ -225,8 +225,10 @@ function CoverageNote() {
   </p>;
 }
 
-function TaskCard({ task, onOpen, onOpenAttempt }: {
+function TaskCard({ task, folded, onOpen, onOpenAttempt }: {
   task: WriteupTask;
+  /** 折叠视图下这一行代表一篇 writeup 的全部遍数; 展开视图下每一行本来就是一遍。 */
+  folded: boolean;
   onOpen: () => void;
   onOpenAttempt: (attemptId: number, attempt: number, taskStatus: string) => void;
 }) {
@@ -243,15 +245,16 @@ function TaskCard({ task, onOpen, onOpenAttempt }: {
         {verdict && <Badge tone={verdict.tone}>{verdict.label}</Badge>}
         {task.failure_reason && <Badge tone="slate">{failureLabel(task.failure_reason)}</Badge>}
         {history.length > 1
-          ? <Badge tone="violet">共 {history.length} 遍</Badge>
+          ? <Badge tone="violet">{folded ? `共 ${history.length} 遍` : `第 ${task.attempt}/${history.length} 遍`}</Badge>
           : task.attempt > 1 ? <Badge tone="violet">第 {task.attempt} 遍</Badge> : null}
         <Badge tone="slate">素材 #{task.material_id}</Badge>
       </div>
       <h4>{title}</h4>
       {subtitle && <p>{subtitle}</p>}
       {/* 折叠后一行代表多遍 —— 每一遍的结论都得看得见, 否则"这篇到底跑成过没有"要靠切筛选去猜。
-          点某一遍打开的是**那一遍**的抽屉: 证据和报告挂在遍上, 不在素材上。 */}
-      {history.length > 1 && <div className="case-mini-foot" style={{ gap: 6, flexWrap: 'wrap' }}>
+          点某一遍打开的是**那一遍**的抽屉: 证据和报告挂在遍上, 不在素材上。
+          展开视图里每一行本来就是一遍, 再挂一排兄弟遍就是三份一模一样的东西。 */}
+      {folded && history.length > 1 && <div className="case-mini-foot" style={{ gap: 6, flexWrap: 'wrap' }}>
         {history.map(item => {
           const meta = statusMeta(item.status);
           const current = item.id === task.id;
