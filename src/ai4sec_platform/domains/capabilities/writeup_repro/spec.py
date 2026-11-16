@@ -50,6 +50,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
+from ai4sec_platform.domains.capabilities.writeup_repro import evidence
 from ai4sec_platform.domains.capabilities.writeup_repro.screener import verify_repo
 from ai4sec_platform.models.local_rules import LocalRuleProvider
 from ai4sec_platform.models.router import LLMRouter
@@ -102,8 +103,11 @@ SPEC_PROMPT = """你是漏洞复现工程师, 现在要把一篇 writeup 变成*
   "probe": {
     "type": "exit_code|stdout_match|file_state|http_status",
     "cmd": "判定用的命令; 也可以是上面某一步本身, 但必须是一条能跑的命令",
-    "success_signal": "机器可判的成功条件, 例如 'exit_code == 0' / 'stdout 包含 root_shell';"
-                      "同一现象有多种等价形态时用「或」连接, 任一成立即可"
+    "success_signal": "机器可判的成功条件。**平台只认这几种写法**: 'exit_code == 0'(运算符可换"
+                      " != / >= / <= / > / <) / 'stdout 包含 <原文里会出现的一段输出>' /"
+                      " 'stdout 匹配 /<正则>/' / 'stdout 非空'。多个子条件用「且」连接;"
+                      "同一现象有多种等价形态时用「或」连接, 任一成立即可。"
+                      "**别写这几种之外的措辞**(如'服务正常''漏洞触发'): 平台解析不了, 会按未满足处理"
   },
   "evidence": ["复现成功后应当留下的证据文件或输出, 逐条"],
   "known_pitfalls": ["原文提到的失败/限制, 逐条; 没提就空数组"],
@@ -378,6 +382,12 @@ def verify_spec(
     if not _is_machine_checkable(probe.get("success_signal")):
         return SpecCheck(spec=spec, verdict="invalid",
                          reason=f"probe.success_signal 无法机器判定: {str(probe.get('success_signal'))[:80]!r}")
+    # 上面那条只查关键词, 比解析器宽: 判据里有一个子条件解析不了, 那一"或"组就永远不成立。
+    # 不在这里否掉(重试是无反馈的, 否掉可能连续 3 次都栽在同一句话上), 但要写进 notes,
+    # 让它出现在任务日志里 —— 否则只能等跑完才看到 partial/probe_not_matched。
+    _unknown = evidence.unparsed_clauses(str(probe.get("success_signal") or ""))
+    if _unknown:
+        notes.append(f"probe.success_signal 里这些子条件平台解析不了(按未满足处理): {'；'.join(_unknown)}")
 
     # ── target: 以 T1 已校验过的为准, 模型给的不同就丢掉 ──
     target = dict(spec.get("target") or {}) if isinstance(spec.get("target"), dict) else {}

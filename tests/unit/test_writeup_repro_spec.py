@@ -125,6 +125,28 @@ def test_insufficient_spec_becomes_article_incomplete() -> None:
     assert check.verdict == "article_incomplete" and check.reason == "没写怎么编译"
 
 
+def test_an_unparsable_sub_clause_is_surfaced_in_notes() -> None:
+    """关键词齐了但某个子条件解析不了 ⇒ 那一组永远不成立, 必须在**跑之前**看见。
+
+    2026-11-16 task #4 实况: ``stdout 非空且包含 backdoor.php`` 里的"非空"当时解析不了,
+    agent 的 ``find /`` 明明找到了 ``/backdoor.php``, 结论却是 partial/probe_not_matched ——
+    一次真复现被这一句话吃掉。不在这里否掉(重试是无反馈的, 连着 3 次可能栽在同一句话上),
+    但要点名写进 notes。
+    """
+    check = spec_module.verify_spec(
+        _spec(probe={"cmd": "curl -s http://127.0.0.1:8080/admin",
+                     "success_signal": "stdout 包含 admin 且 服务正常"}),
+        ARTICLE,
+    )
+    assert check.ok, check.reason
+    assert any("服务正常" in note for note in check.notes)
+
+
+def test_a_fully_parsable_signal_raises_no_such_note() -> None:
+    check = spec_module.verify_spec(_spec(), ARTICLE, title="foo 管理接口越权", candidate=CANDIDATE)
+    assert not any("解析不了" in note for note in check.notes)
+
+
 def test_empty_steps_is_invalid() -> None:
     check = spec_module.verify_spec(_spec(steps=[]), ARTICLE)
     assert check.verdict == "invalid"

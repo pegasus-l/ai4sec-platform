@@ -50,6 +50,25 @@ _CONTAINS_CLAUSE = re.compile(
     r"(?:中包含|中包括|包含|含有|出现|includes?|contains?|匹配|matches?)\s*(?P<needle>.+)$",
     re.I,
 )
+#: 「有没有输出」这类判据判的是**长度**, 不是匹配某个串 —— 它同样是机器可判的, 所以必须认。
+#: 2026-11-16 task #4 的实况: 判据写成 ``stdout 非空且包含 backdoor.php``, 前半句解析不出来,
+#: 整组按"有子条件无法解析"判成不成立 —— 可 ``find /`` 明明找到了 ``/backdoor.php``,
+#: 于是一次真的复现被记成 partial/probe_not_matched。
+_EMPTY_CLAUSE = re.compile(
+    r"(?:stdout|stderr|标准输出|标准错误|输出|output)\s*"
+    r"(?P<neg>非空|不为空|不空|有内容|有输出|not\s+empty|non-?empty"
+    r"|为空|是空的|没有输出|无输出|empty)",
+    re.I,
+)
+#: 判"输出为空"的那几种写法。其余一律按"非空"。
+_EMPTY_WORDS = frozenset({"为空", "是空的", "没有输出", "无输出", "empty"})
+#: 「输出整段等于某个值」—— ``curl -s -o /dev/null -w '%{http_code}'`` 只有一行 ``200``,
+#: 判据自然写成 ``stdout 等于 200``。这是**精确**比较(去掉首尾空白后整段相比),
+#: 不做子串包含: 那正是 ``包含`` 与 ``等于`` 的区别, 混起来会把 ``2001`` 认成 ``200``。
+_EQUALS_CLAUSE = re.compile(
+    r"(?:stdout|stderr|标准输出|标准错误|输出|output)\s*(?:==|=|等于|equals?|为|是)\s*(?P<needle>.+)$",
+    re.I,
+)
 #: 判据里连接多个子条件的词(且)。
 _CLAUSE_SPLIT = re.compile(r"\s*(?:且|并且|而且|\band\b|[;；])\s*", re.I)
 #: 判据里表示"任一满足即可"的词(或)。**AND 结合更紧**, 先按它切组, 再在组内按 AND 切。
@@ -163,6 +182,30 @@ def _judge_clause(clause: str, exit_code: int | None, stdout: str, *,
             check["actual"] = None
             check["ok"] = None
         return check
+    empty_match = _EMPTY_CLAUSE.search(clause)
+    if empty_match:
+        word = " ".join(empty_match.group("neg").split()).lower()
+        text = str(stdout or "").strip()
+        want_empty = word in _EMPTY_WORDS
+        return {"clause": clause.strip(),
+                "kind": "output_empty" if want_empty else "output_nonempty",
+                "chars": len(text),
+                "ok": (not text) if want_empty else bool(text)}
+    equals_match = _EQUALS_CLAUSE.search(clause)
+    if equals_match:
+        needle, is_regex = _clean_needle(equals_match.group("needle"))
+        if not needle:
+            return None
+        haystack = str(stdout or "").strip()
+        if is_regex:
+            try:
+                ok = re.fullmatch(needle, haystack, re.S) is not None
+            except re.error:
+                return None
+        else:
+            ok = haystack == needle.strip()
+        return {"clause": clause.strip(), "kind": "output_equals",
+                "needle": needle, "regex": is_regex, "ok": bool(ok)}
     contains_match = _CONTAINS_CLAUSE.search(clause)
     if contains_match:
         needle, is_regex = _clean_needle(contains_match.group("needle"))
@@ -238,6 +281,16 @@ def evaluate_signal(signal: str, exit_code: int | None, stdout: str, *,
     else:
         why = "有子条件未满足"
     return {"matched": matched, "checks": checks, "unparsed": unparsed, "why": why}
+
+
+def unparsed_clauses(signal: str) -> list[str]:
+    """判据里**解析器看不懂**的子条件(空列表 = 每个子条件都能机器判定)。
+
+    给 spec 校验用。``spec._is_machine_checkable`` 只查有没有关键词, 比解析器宽; 判据里只要
+    有一个子条件解析不了, 那一组"或"就永远不成立 —— 等到跑完才判成 partial, 一次复现已经烧掉
+    (2026-11-16 task #4)。所以校验时就把它挑出来, 写进 notes 让人在跑之前看见。
+    """
+    return list(evaluate_signal(signal, 0, "")["unparsed"])
 
 
 def _compare(actual: Any, op: str, expected: int) -> bool:

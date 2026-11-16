@@ -178,10 +178,33 @@ def test_unfinished_commands_are_marked_not_completed() -> None:
         ("stdout 包含 uid=0(root),gid=0(root)", 0, "uid=0(root),gid=0(root)", True),
         ("匹配 /uid=0\\(root\\)/", 0, "uid=0(root)", True),
         ("看起来成功了", 0, "", None),
+        # 「有没有输出」是长度判据, 同样是机器可判的 —— 2026-11-16 task #4 实测:
+        # `stdout 非空且包含 backdoor.php` 命中了 /backdoor.php, 却被判 partial。
+        ("stdout 非空且包含 backdoor.php", 1, "/backdoor.php\n", True),
+        ("stdout 非空且包含 backdoor.php", 1, "", False),
+        ("stdout 非空", 0, "anything", True),
+        ("stdout 非空", 0, "  \n\t ", False),
+        ("stdout 为空", 0, "", True),
+        ("stdout 为空", 0, "/backdoor.php", False),
+        ("标准输出非空且 exit_code == 0", 0, "ok", True),
+        # 待匹配串里带"非空"两个字, 不能被当成"输出非空"的子条件
+        ("stdout 包含 非空指针", 0, "检测到非空指针解引用", True),
+        ("stdout 包含 非空指针", 0, "null pointer at 0x0", False),
+        # 「等于」是整段比较, 不是包含 —— `2001` 不算 `200`
+        ("stdout 等于 200", 0, "200", True),
+        ("stdout 等于 200", 0, "200\n", True),
+        ("stdout 等于 200", 0, "2001", False),
+        ("stdout == 200", 0, "200", True),
     ],
 )
 def test_probe_signal_is_evaluated_by_the_platform(signal, exit_code, stdout, expected) -> None:
     assert evidence.evaluate_signal(signal, exit_code, stdout)["matched"] is expected
+
+
+def test_unparsed_clauses_names_the_part_the_platform_cannot_judge() -> None:
+    """校验层只查关键词, 解析器才说真话 —— 差集要能点名, 否则只能等跑完才看到 partial。"""
+    assert evidence.unparsed_clauses("stdout 非空且包含 backdoor.php") == []
+    assert evidence.unparsed_clauses("stdout 包含 uid=0 且 服务正常") == ["服务正常"]
 
 
 def test_find_probe_command_does_not_fall_back_to_the_last_command() -> None:
