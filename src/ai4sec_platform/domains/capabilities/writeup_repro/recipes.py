@@ -640,6 +640,14 @@ def _parse_pattern_row(row: sqlite3.Row | dict[str, Any] | None) -> dict[str, An
         item["fingerprint"] = parsed if isinstance(parsed, list) else []
     elif raw is None:
         item["fingerprint"] = []
+    # backtest_json 同理: 存的是 JSON 串, 出去必须是对象(2026-11-16 白屏事故的同一条纪律)。
+    backtest = item.get("backtest_json")
+    if isinstance(backtest, str):
+        try:
+            parsed = json.loads(backtest or "{}")
+        except (TypeError, ValueError):
+            parsed = {}
+        item["backtest_json"] = parsed if isinstance(parsed, dict) else {}
     if item.get("confidence") is not None:
         try:
             item["confidence"] = float(item["confidence"])

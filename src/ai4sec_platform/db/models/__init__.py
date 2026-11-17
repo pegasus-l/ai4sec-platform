@@ -824,6 +824,9 @@ CREATE TABLE IF NOT EXISTS writeup_repro_patterns (
     fingerprint    TEXT NOT NULL DEFAULT '',       -- JSON 数组, 用于匹配同类
     provenance     TEXT NOT NULL,                  -- from_article|from_repro|llm_extracted
     confidence     REAL,
+    backtest_status TEXT NOT NULL DEFAULT '',      -- pass|fail|unverified(2026-11-17)
+    backtest_json  TEXT NOT NULL DEFAULT '',       -- 检索式 + 候选数 + 目标排名, 可复算
+    backtested_at  TEXT NOT NULL DEFAULT '',
     created_at     TEXT NOT NULL
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_wrpat_report ON writeup_repro_patterns(report_id);
@@ -856,6 +859,13 @@ def init_db(conn: sqlite3.Connection) -> None:
     try: conn.execute("ALTER TABLE writeup_repro_candidates ADD COLUMN target_cve TEXT NOT NULL DEFAULT ''")
     except Exception: pass
     try: conn.execute("ALTER TABLE writeup_repro_candidates ADD COLUMN target_product TEXT NOT NULL DEFAULT ''")
+    except Exception: pass
+    # 回测三列(2026-11-17): 表 11-13 已建过, CREATE TABLE IF NOT EXISTS 补不了列。
+    try: conn.execute("ALTER TABLE writeup_repro_patterns ADD COLUMN backtest_status TEXT NOT NULL DEFAULT ''")
+    except Exception: pass
+    try: conn.execute("ALTER TABLE writeup_repro_patterns ADD COLUMN backtest_json TEXT NOT NULL DEFAULT ''")
+    except Exception: pass
+    try: conn.execute("ALTER TABLE writeup_repro_patterns ADD COLUMN backtested_at TEXT NOT NULL DEFAULT ''")
     except Exception: pass
     try: conn.execute("ALTER TABLE writeup_repro_candidates ADD COLUMN target_source TEXT NOT NULL DEFAULT ''")
     except Exception: pass

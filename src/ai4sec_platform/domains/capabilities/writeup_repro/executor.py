@@ -42,6 +42,7 @@ import urllib.request
 from datetime import datetime, timezone
 from typing import Any
 
+from ai4sec_platform.domains.capabilities.writeup_repro import backtest as backtest_module
 from ai4sec_platform.domains.capabilities.writeup_repro import evidence as evidence_module
 from ai4sec_platform.domains.capabilities.writeup_repro import guard as guard_module
 from ai4sec_platform.domains.capabilities.writeup_repro import judge as judge_module
@@ -391,6 +392,42 @@ def _slots() -> Any:
     return _WRITEUP_SLOTS
 
 
+def _backtest_products(task_id: int) -> None:
+    """给刚抽出来的 pattern 做回测(见 ``backtest.py``)。**排在清理之前** —— 扫描要用工作目录里
+    还在的源码。
+
+    失败只记一行日志: 回测是质量信号, 不是结论的一部分, 它出问题不该反过来改任务的 verdict。
+    """
+    try:
+        if not backtest_module.enabled():
+            return
+        conn = _connect()
+        try:
+            rows = conn.execute(
+                "SELECT id, invariant, code_feature, audit_entry FROM writeup_repro_patterns"
+                " WHERE report_id = ?", (int(task_id),),
+            ).fetchall()
+            if not rows:
+                return
+            report = conn.execute(
+                "SELECT root_cause_json FROM writeup_repro_reports WHERE task_id = ?", (int(task_id),),
+            ).fetchone()
+            root_cause = json.loads((report["root_cause_json"] if report else "") or "{}")
+            location = (root_cause.get("location") or {}).get("file") or ""
+            for row in rows:
+                result = backtest_module.backtest_pattern(dict(row), location, task_id)
+                backtest_module.store(conn, int(row["id"]), result)
+                _log(
+                    task_id,
+                    f"🧪 回测 {result.get('status')}: 目标 {result.get('target_file') or '—'}"
+                    f" · 候选 {result.get('candidates')} · {str(result.get('reason') or '')[:120]}",
+                )
+        finally:
+            conn.close()
+    except Exception as exc:  # noqa: BLE001 - 回测失败不能改结论
+        _log(task_id, f"⚠ 回测异常: {str(exc)[:300]}")
+
+
 def _cleanup_workspace(task_id: int) -> None:
     """跑完就删自己的工作目录 —— 写重复现没有"给用户再看一眼"的需求。
 
@@ -573,6 +610,8 @@ def _finish(task_id: int, verdict: str, reason: str, notes: list[str], **fields:
         conn.close()
     _write_report(task_id, verdict=verdict, evidence=fields.get("evidence"))
     _extract_products(task_id, verdict=verdict)
+    # 回测要用工作目录里还在的源码, 所以必须排在清理之前。
+    _backtest_products(task_id)
     # 报告与产物都落库之后才清理工作目录 —— 顺序反了就等于把证据先删了再写报告。
     _cleanup_workspace(task_id)
     return finished
