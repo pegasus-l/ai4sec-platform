@@ -560,6 +560,10 @@ def _run_task_body(task_id: int, timeout: int) -> None:
         if task is None:
             return
         material = store.get_material(conn, int(task["material_id"])) or {}
+        candidate = store.get_candidate(conn, int(task["material_id"])) or {}
+        # T5.2: 开跑前找一条同类 recipe。**在这里查而不是在提示词里让 agent 自己找** ——
+        # 执行会话看不到库里的 recipe 表, 而"上次同类目标怎么跑通的"只有平台知道。
+        reuse = recipes_module.pick_reusable(conn, task, candidate)
     finally:
         conn.close()
 
@@ -611,7 +615,18 @@ def _run_task_body(task_id: int, timeout: int) -> None:
         _touch(task_id, session_id=session_id)
         _log(task_id, f"已创建执行会话 {session_id}")
 
-        prompt = build_exec_prompt(task=task, material=material, spec=spec, budget_seconds=timeout)
+        prompt = build_exec_prompt(
+            task=task, material=material, spec=spec,
+            recipe_hint=reuse.get("hint") or "", budget_seconds=timeout,
+        )
+        if reuse.get("used"):
+            _log(
+                task_id,
+                f"♻ 命中同类 recipe {reuse.get('recipe_key')}"
+                f"(共享 {', '.join(reuse.get('shared') or [])}), 已注入提示词",
+            )
+        else:
+            _log(task_id, f"○ 没有可复用的同类 recipe(指纹 {', '.join(reuse.get('fingerprint') or []) or '空'})")
         _log(task_id, f"执行提示词 {len(prompt)} 字符, 步骤 {len(spec.get('steps') or [])} 步")
 
         box: dict[str, Any] = {}
@@ -687,6 +702,15 @@ def _run_task_body(task_id: int, timeout: int) -> None:
         guard=preflight.as_dict(), duration_seconds=duration,
         tool_calls=len(commands),
     )
+    # T5.3 的原料: 这条任务有没有吃到同类 recipe。**命中与否都落**, 否则只能统计
+    # "复用过的那几条", 拿不到同口径的对照组。
+    collected["recipe_reuse"] = {
+        "used": bool(reuse.get("used")),
+        "recipe_key": reuse.get("recipe_key") or "",
+        "recipe_task_id": reuse.get("recipe_task_id") or 0,
+        "shared": list(reuse.get("shared") or []),
+        "fingerprint": list(reuse.get("fingerprint") or []),
+    }
     verdict, reason, notes = decide(report=report, evidence=collected, preflight=preflight.as_dict())
 
     _log(task_id, f"[结论] {verdict}{('/' + reason) if reason else ''} · 命令 {len(commands)} 条 · 耗时 {duration}s")

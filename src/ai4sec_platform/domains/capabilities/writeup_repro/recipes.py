@@ -659,6 +659,126 @@ def _delete_pattern(conn: sqlite3.Connection, task_id: int) -> None:
     conn.commit()
 
 
+# ---------------------------------------------------------------- 复用: 按指纹找同类(T5.2)
+
+#: 复用门槛: 除 ``target:`` 之外至少还要共享一个 token(语言或攻击面)。
+#: 只共享 ``target:`` 等于"都是 pip 包" —— 这种相似度不足以让 agent 改执行流程。
+MIN_SHARED_TOKENS = 2
+
+#: 提示词里每条命令保留的字符数。够看清"跑了什么", 又不至于把提示词撑成第二份报告。
+_HINT_CMD_CHARS = 160
+
+
+def find_reusable(
+    conn: sqlite3.Connection,
+    tokens: list[str],
+    *,
+    exclude_material_id: int | None = None,
+    limit: int = 1,
+) -> list[dict[str, Any]]:
+    """按指纹找可复用的 recipe —— 抽出来的东西要有人用(T5.2)。
+
+    为什么不是"指纹全等": 执行**之前**我们还没跑过, 拿不到第 7 节的 ``gen:`` 和第 6 节的
+    判别点, 此刻能算出来的只有 ``lang:`` / ``target:`` / ``surface:``。所以判据是
+    "子集 + 硬门槛":
+
+    - ``target:`` 必须相同 —— 包 / 仓库 / 靶场的执行流程不能互借;
+    - 除它之外至少再共享一个 token;
+    - 同一个素材自己的 recipe 不算(那是"重跑", 不是"复用")。
+
+    排序: 共享 token 数 → 成功的优先(degraded 靠后) → 新的优先。
+    匹配不上就返回空列表, **不退化成"随便给一条"**: 指错路的提示比没有提示更贵。
+    """
+    wanted = {str(t).strip() for t in (tokens or []) if str(t).strip()}
+    if not any(t.startswith("target:") for t in wanted):
+        return []
+    scored: list[tuple[tuple[int, int, int], dict[str, Any], list[str]]] = []
+    for row in conn.execute("SELECT * FROM writeup_repro_recipes ORDER BY id DESC").fetchall():
+        recipe = _parse_recipe_row(row)
+        if not recipe:
+            continue
+        if exclude_material_id is not None:
+            if int(recipe.get("material_id") or 0) == int(exclude_material_id):
+                continue
+        mine = {str(t) for t in (recipe.get("fingerprint_json") or [])}
+        shared = sorted(wanted & mine)
+        if not any(t.startswith("target:") for t in shared):
+            continue
+        if len(shared) < MIN_SHARED_TOKENS:
+            continue
+        key = (len(shared), 0 if recipe.get("degraded") else 1, int(recipe.get("id") or 0))
+        scored.append((key, recipe, shared))
+    scored.sort(key=lambda item: item[0], reverse=True)
+    output: list[dict[str, Any]] = []
+    for _key, recipe, shared in scored[: max(1, int(limit))]:
+        recipe["shared_tokens"] = shared
+        output.append(recipe)
+    return output
+
+
+def _hint_commands(label: str, items: Any, out: list[str]) -> None:
+    commands = [item for item in (items or []) if isinstance(item, dict)]
+    if not commands:
+        return
+    lines = [f"- {label}:"]
+    for item in commands[:6]:
+        cmd = " ".join(str(item.get("cmd") or "").split())
+        lines.append(f"    [{item.get('index')}] {cmd[:_HINT_CMD_CHARS]}  (exit={item.get('exit_code')})")
+    if len(commands) > 6:
+        lines.append(f"    …另有 {len(commands) - 6} 条")
+    out.append("\n".join(lines))
+
+
+def format_hint(recipe: dict[str, Any], *, max_chars: int = 1500) -> str:
+    """把一条 recipe 压成给执行 agent 看的一段文字。
+
+    只写**跑过的**东西: 每条命令都带 ``exit_code``, 失败的命令照写并标明 —— 上一条同类任务
+    踩到的坑, 是这条提示里最值钱的部分。``recipe_json`` 缺失就返回空串(不注入半成品)。
+    """
+    body = recipe.get("recipe_json") if isinstance(recipe.get("recipe_json"), dict) else {}
+    if not body:
+        return ""
+    where = ", ".join(recipe.get("shared_tokens") or recipe.get("fingerprint_json") or [])
+    head = (
+        f"任务 {recipe.get('recipe_key')} 在 {where} 上"
+        f"{'只跑到 partial' if recipe.get('degraded') else '跑通过'}"
+    )
+    parts = [head]
+    for label, key in (("获取目标", "acquire"), ("准备环境", "setup"),
+                       ("触发", "trigger"), ("判据", "probe")):
+        _hint_commands(label, body.get(key), parts)
+    pitfalls = [str(item).strip() for item in (body.get("known_pitfalls") or []) if str(item).strip()]
+    if pitfalls:
+        parts.append("- 已知的坑:\n" + "\n".join(f"    · {item[:200]}" for item in pitfalls[:4]))
+    text = "\n".join(parts)
+    return text if len(text) <= max_chars else text[:max_chars] + "\n…(已截断)"
+
+
+def pick_reusable(
+    conn: sqlite3.Connection,
+    task: dict[str, Any],
+    candidate: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """执行前给这条任务找一条同类 recipe, 返回注入用的 ``hint`` 与可追溯的元信息。
+
+    抽签结果**不管有没有命中都返回**: ``evidence_json["recipe_reuse"]`` 要靠 ``used``
+    把"有配方没用"和"没配方可用"分开 —— 否则 T5.3 的复利指标算不出来。
+    """
+    tokens = build_fingerprint(task, candidate or {})
+    hits = find_reusable(conn, tokens, exclude_material_id=task.get("material_id"))
+    if not hits:
+        return {"used": False, "hint": "", "fingerprint": tokens}
+    best = hits[0]
+    return {
+        "used": True,
+        "hint": format_hint(best),
+        "recipe_key": str(best.get("recipe_key") or ""),
+        "recipe_task_id": int(best.get("task_id") or 0),
+        "shared": list(best.get("shared_tokens") or []),
+        "fingerprint": tokens,
+    }
+
+
 # ---------------------------------------------------------------- 查询
 
 def list_recipes(

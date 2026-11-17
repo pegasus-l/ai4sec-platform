@@ -516,6 +516,25 @@ def test_prompt_points_at_the_skill_but_keeps_the_spec_authoritative() -> None:
     assert "永远优先" in prompt
 
 
+def test_recipe_hint_is_injected_as_a_reference_not_a_verdict() -> None:
+    """T5.2: 同类 recipe 进提示词, 但只当参考 —— 判据仍然是这条任务自己的 spec。"""
+    prompt = executor.build_exec_prompt(
+        task={"id": 3}, material={"title": "t"}, spec={"steps": []},
+        recipe_hint="任务 wr-132734-3 跑通过\n- 准备环境:\n    [4] pip install -e .  (exit=0)",
+        budget_seconds=600,
+    )
+    assert "同类 recipe" in prompt
+    assert "wr-132734-3" in prompt
+    assert "可参考但不要照抄" in prompt
+
+
+def test_no_hint_leaves_no_empty_recipe_block() -> None:
+    prompt = executor.build_exec_prompt(
+        task={"id": 3}, material={"title": "t"}, spec={"steps": []}, budget_seconds=600,
+    )
+    assert "同类 recipe" not in prompt
+
+
 # ---------------------------------------------------------------- decide
 
 def _decide(**kwargs):

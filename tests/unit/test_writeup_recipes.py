@@ -742,3 +742,91 @@ def test_export_bundle_covers_catalog_and_verified_in_one_pass() -> None:
 
     assert kinds == ["case", "catalog", "verified"]
     assert bundle["skill"] == "ai4sec-vuln-audit"
+
+
+# ---------------------------------------------------------------- T5.2: 按指纹复用
+
+_USABLE = ["lang:python", "target:package", "surface:memory_corruption"]
+
+
+def _one_recipe(conn: sqlite3.Connection) -> dict:
+    recipes_module.extract_for_task(3, conn=conn)
+    # 夹具里的任务没有 target_kind, 抽出来的指纹缺 ``target:``; 线上真任务的指纹是
+    # ``["lang:python","target:package","surface:memory_corruption","gen:language"]``。
+    # 这里按线上的形态补齐, 否则测的是"没有目标形态的 recipe", 不是真实复用场景。
+    conn.execute(
+        "UPDATE writeup_repro_recipes SET fingerprint_json = ?",
+        (json.dumps([*_USABLE, "gen:language"]),),
+    )
+    conn.commit()
+    return recipes_module.list_recipes(conn)[0][0]
+
+
+def test_a_recipe_is_found_for_the_same_target_and_surface() -> None:
+    """抽出来的东西要有人用: 同语言 + 同目标形态 + 同攻击面 ⇒ 命中。"""
+    conn = _conn()
+    _one_recipe(conn)
+
+    hits = recipes_module.find_reusable(conn, _USABLE, exclude_material_id=999)
+
+    assert len(hits) == 1
+    assert hits[0]["recipe_key"] == "wr-132734-3"
+    assert "target:package" in hits[0]["shared_tokens"]
+
+
+def test_a_task_never_reuses_its_own_recipe() -> None:
+    """同一素材自己的 recipe 是"重跑"的证据, 不是"复用"的经验 —— 喂回去只会让它照抄上一遍。"""
+    conn = _conn()
+    _one_recipe(conn)
+
+    assert recipes_module.find_reusable(conn, _USABLE, exclude_material_id=132734) == []
+
+
+def test_sharing_only_the_target_kind_is_not_a_match() -> None:
+    """只共享 ``target:`` = 都是 pip 包, 语言与攻击面都不同, 流程不能互借。"""
+    conn = _conn()
+    _one_recipe(conn)
+
+    assert recipes_module.find_reusable(conn, ["target:package"], exclude_material_id=999) == []
+    assert recipes_module.find_reusable(
+        conn, ["lang:go", "target:package"], exclude_material_id=999
+    ) == []
+
+
+def test_no_target_token_means_no_match() -> None:
+    conn = _conn()
+    _one_recipe(conn)
+
+    assert recipes_module.find_reusable(conn, ["lang:python"], exclude_material_id=999) == []
+
+
+def test_the_hint_carries_commands_with_their_exit_codes() -> None:
+    """提示词里每条命令都要带退出码: 失败的命令照写并标明, 那才是上一条踩过的坑。"""
+    conn = _conn()
+    recipe = _one_recipe(conn)
+    recipe["shared_tokens"] = _USABLE
+
+    hint = recipes_module.format_hint(recipe)
+
+    assert "wr-132734-3" in hint
+    assert "git clone https://github.com/AntonKueltz/fastecdsa" in hint
+    assert "exit=134" in hint
+
+
+def test_a_recipe_without_body_injects_nothing() -> None:
+    assert recipes_module.format_hint({"recipe_key": "x", "recipe_json": {}}) == ""
+
+
+def test_pick_reusable_records_both_hit_and_miss() -> None:
+    """命中与否都要能查: 只有用到的那几条进不了对照组。"""
+    conn = _conn()
+    _one_recipe(conn)
+    candidate = {"poc_lang": "python", "target_kind": "package", "claimed_effect": "内存破坏"}
+
+    hit = recipes_module.pick_reusable(conn, {"id": 9, "material_id": 999}, candidate)
+    miss = recipes_module.pick_reusable(conn, {"id": 10, "material_id": 132734}, candidate)
+
+    assert hit["used"] is True and "fastecdsa" in hit["hint"]
+    assert hit["recipe_key"] == "wr-132734-3" and hit["shared"]
+    assert miss["used"] is False and miss["hint"] == ""
+    assert miss["fingerprint"], "没命中也要留下这条任务的指纹, 否则事后说不清它像不像"
