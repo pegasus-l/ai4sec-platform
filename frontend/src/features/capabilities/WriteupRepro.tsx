@@ -418,6 +418,9 @@ function PatternCard({ pattern }: { pattern: WriteupPatternRow }) {
       <div className="badges">
         <Badge tone="violet">{GENERALIZATION_LABELS[pattern.generalization] ?? pattern.generalization}</Badge>
         {pattern.confidence != null && <Badge tone="sky">置信度 {Math.round(pattern.confidence * 100)}%</Badge>}
+        {pattern.backtest_status === 'pass' && <Badge tone="green">回测通过 · 第 {pattern.backtest_json?.target_rank ?? '?'}/{pattern.backtest_json?.candidates ?? 0} 位</Badge>}
+        {pattern.backtest_status === 'fail' && <Badge tone="red">回测未通过</Badge>}
+        {pattern.backtest_status === 'unverified' && <Badge tone="amber">回测未验证</Badge>}
         {listOf(pattern.fingerprint).map(item => <Badge key={item} tone="slate">{item}</Badge>)}
       </div>
       <h4>{pattern.invariant}</h4>

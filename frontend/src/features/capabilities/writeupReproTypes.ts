@@ -344,6 +344,20 @@ export interface WriteupPatternRow {
   fingerprint: string[];
   provenance: string;
   confidence: number | null;
+  /** 回测结论: pass(目标文件在候选里) / fail(扫到了但目标不在) / unverified(没源码或规则不合法) */
+  backtest_status?: '' | 'pass' | 'fail' | 'unverified' | string;
+  /** 检索式 + 候选数 + 目标排名; 后端已解析成对象(不是 JSON 串) */
+  backtest_json?: {
+    status?: string;
+    reason?: string;
+    target_file?: string;
+    candidates?: number;
+    target_rank?: number;
+    files_scanned?: number;
+    sample?: string[];
+    rule?: { path_glob?: string; include?: string[]; exclude?: string[] };
+  } | null;
+  backtested_at?: string;
   created_at: string;
 }
 

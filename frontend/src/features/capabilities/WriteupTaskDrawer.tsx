@@ -629,7 +629,30 @@ function PatternCard({ pattern }: { pattern: WriteupPatternRow }) {
     <Row label="来源" value={`任务 #${pattern.report_id} · 材料 #${pattern.material_id} · ${pattern.provenance}`} />
     <Row label="置信度" value={pattern.confidence != null ? `${Math.round(pattern.confidence * 100)}%` : ''} />
     <Row label="指纹" value={listOf(pattern.fingerprint).join(' · ')} />
+    <BacktestRow pattern={pattern} />
   </Section>;
+}
+
+/**
+ * 回测结论: 把这条规律拿回**它自己的来源**上跑, 看能不能指回第 6 节的位置。
+ *
+ * 三种结论里只有 pass 是好消息; unverified 不是坏消息(没源码/规则太窄), fail 才说明
+ * "按它自己的描述指不回自己的洞"。这里把检索式和候选数一并摊开, 让人能自己复算。
+ */
+function BacktestRow({ pattern }: { pattern: WriteupPatternRow }) {
+  const info = pattern.backtest_json ?? {};
+  const status = String(pattern.backtest_status || info.status || '');
+  if (!status) return null;
+  const tone = status === 'pass' ? 'green' : status === 'fail' ? 'red' : 'slate';
+  const rule = info.rule ?? {};
+  return <div style={{ marginTop: 8 }}>
+    <Row label="回测" value={status === 'pass'
+      ? `通过 · 目标在第 ${info.target_rank ?? '?'} 位 / 共 ${info.candidates ?? 0} 个候选`
+      : status === 'fail' ? `未通过 · ${info.reason || '目标不在候选里'}`
+      : `未验证 · ${info.reason || '缺少源码或规则'}`} />
+    {rule.path_glob ? <Row label="检索式" value={`${rule.path_glob} · 含 ${(rule.include ?? []).join(' , ')}${(rule.exclude ?? []).length ? ` · 排除 ${(rule.exclude ?? []).join(' , ')}` : ''}`} /> : null}
+    <Badge tone={tone as 'green' | 'red' | 'slate'}>{status === 'pass' ? '回测通过' : status === 'fail' ? '回测未通过' : '回测未验证'}</Badge>
+  </div>;
 }
 
 // ========== 原文 ==========
