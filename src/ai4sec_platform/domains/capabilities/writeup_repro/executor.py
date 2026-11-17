@@ -44,6 +44,7 @@ from typing import Any
 
 from ai4sec_platform.domains.capabilities.writeup_repro import evidence as evidence_module
 from ai4sec_platform.domains.capabilities.writeup_repro import guard as guard_module
+from ai4sec_platform.domains.capabilities.writeup_repro import judge as judge_module
 from ai4sec_platform.domains.capabilities.writeup_repro import recipes as recipes_module
 from ai4sec_platform.domains.capabilities.writeup_repro import report as report_module
 from ai4sec_platform.domains.capabilities.writeup_repro import store, tasks
@@ -262,6 +263,50 @@ def parse_report(text: str) -> tuple[dict[str, Any] | None, str]:
 # ---------------------------------------------------------------------------
 # 判定(规则层; T4 的复核 agent 在此之上再盖一层)
 # ---------------------------------------------------------------------------
+
+def _maybe_judge_probe(
+    task_id: int,
+    spec: dict[str, Any],
+    report: dict[str, Any] | None,
+    evidence: dict[str, Any],
+    commands: list[dict[str, Any]],
+    preflight: Any,
+) -> None:
+    """规则没认出来、agent 却自述成功时, 请模型核对一次。
+
+    三条边界写在 ``judge.py`` 的模块 docstring 里: 只在"自述成功 + 规则未命中"时介入;
+    模型说满足必须带逐字引文且由代码回查; 结论落 ``judged_by`` 留痕。安全边界已判死的任务
+    不问模型 —— 那是"不许打", 不是"没认出来"。
+    """
+    if not judge_module.enabled() or not isinstance(report, dict):
+        return
+    if str(report.get("self_verdict") or "") != "success":
+        return
+    if not getattr(preflight, "allowed", True):
+        return
+    probe = evidence.get("probe") or {}
+    if probe.get("matched") is True:
+        return
+    probe_spec = spec.get("probe") if isinstance(spec.get("probe"), dict) else {}
+    cmd = str(probe_spec.get("cmd") or "")
+    found = evidence_module.find_probe_command(commands, cmd)
+    if not found:
+        _log(task_id, "⚖ 规则没找到 probe 命令, 也没有可核对的原输出 —— 不改判")
+        return
+    outcome = judge_module.judge_probe(
+        probe_cmd=cmd,
+        criterion=str(probe.get("success_signal") or probe_spec.get("success_signal") or ""),
+        stdout=str(found.get("stdout") or ""),
+        agent_reason=str(report.get("self_reason") or ""),
+    )
+    label = str(outcome.get("verdict") or outcome.get("status") or "")
+    quoted = "引文已核实" if outcome.get("quote_verified") else "引文未核实"
+    _log(task_id, f"⚖ 规则未命中, 模型复核: {label}({quoted})")
+    if judge_module.apply_to_evidence(evidence, outcome):
+        _log(task_id, "  模型判定满足且引文逐字存在, 改判 probe 命中(judged_by=llm)")
+    elif outcome.get("status") == "ok":
+        _log(task_id, f"  模型未改判: {str(outcome.get('reason') or '')[:150]}")
+
 
 def decide(
     *,
@@ -757,6 +802,8 @@ def _run_task_body(task_id: int, timeout: int) -> None:
         "shared": list(reuse.get("shared") or []),
         "fingerprint": list(reuse.get("fingerprint") or []),
     }
+    # 规则没认出来才请模型看一眼(见 judge.py), 它在 decide 之前改 evidence。
+    _maybe_judge_probe(task_id, spec, report, collected, commands, preflight)
     verdict, reason, notes = decide(report=report, evidence=collected, preflight=preflight.as_dict())
 
     _log(task_id, f"[结论] {verdict}{('/' + reason) if reason else ''} · 命令 {len(commands)} 条 · 耗时 {duration}s")
