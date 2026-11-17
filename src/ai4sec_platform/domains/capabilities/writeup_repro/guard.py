@@ -108,9 +108,13 @@ _INSTALL_WORDS = re.compile(
 _PREFIX_WORDS = frozenset({"sudo", "env", "nohup", "setsid", "exec", "command", "time", "watch", "xargs"})
 
 #: 用来看"这行到底有没有真的发出网络请求"。
+#: 末尾的 ``(?![A-Za-z0-9_])`` 是 2026-11-17 加的一条实测教训: ``transport.local_version``
+#: 这种**属性访问**会被前半截抽成主机名 ``transport.local``, 于是"打公网"把一条 OpenSSH
+#: 复现 0 秒判死 —— 而那段代码只是在给 paramiko 的 Transport 赋值。
 _HOST_TOKEN = re.compile(
     r"(?:[a-z][a-z0-9+.\-]*://)?(?P<host>\[[0-9a-f:]+\]|(?:\d{1,3}\.){3}\d{1,3}|"
-    r"[a-z0-9](?:[a-z0-9\-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9\-]*[a-z0-9])?)+)",
+    r"[a-z0-9](?:[a-z0-9\-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9\-]*[a-z0-9])?)+)"
+    r"(?![A-Za-z0-9_])",
     re.I,
 )
 
@@ -200,6 +204,10 @@ def classify_host(host: str) -> str:
             # 私有网段: 靶场/内网靶机。允许, 但要在 notes 里说明"按本地靶机处理"。
             return "private"
         return "public"
+    if h == "local" or h.endswith(".local"):
+        # ``*.local`` 是 mDNS/内网名(RFC 6762 保留给本地链路), 不是可路由的公网域名。
+        # 归 private: 放行但留 note —— 判成 public 会把"指向本地 mDNS 靶机"的复现直接拦死。
+        return "private"
     return "public"
 
 

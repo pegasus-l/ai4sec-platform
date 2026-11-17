@@ -58,6 +58,8 @@ GRACE_SECONDS = int(os.getenv("WRITEUP_GRACE_SECONDS", "600"))
 
 #: 停止标志。线程杀不掉, 只能在心跳检查点退出(与能力复现同一套办法)。
 _STOP_FLAGS: dict[int, threading.Event] = {}
+#: 写重复现自己的并发名额(懒建; 独立容器有自己的 mem_limit, 见 ``_slots``)。
+_WRITEUP_SLOTS: threading.BoundedSemaphore | None = None
 _LOCK = threading.Lock()
 
 _VERDICTS = ("success", "partial", "cannot_repro", "failed", "blocked")
@@ -110,6 +112,10 @@ WRITEUP_EXEC_PROMPT = """你在一个隔离的 Linux 容器里(root, 可以装�
 6. spec 里某一步在原文中标注不清、你无法确定怎么执行 → self_verdict=cannot_repro /
    failure_bucket=article_incomplete, 不要自己编步骤。
 7. 版本对不上(原文写的版本部署不出来、行为与原文不符)→ failure_bucket=version_mismatch。
+8. **probe 必须单独执行**: 把 spec.probe.cmd 原样跑成一条独立的命令, 不要和准备步骤串在
+   同一个 shell 里。平台的结论是从这条命令的**整段 stdout** 判出来的, 混进别的输出会让
+   判据失效(2026-11-17 实测: 文件确实被截成 0 字节, 但 probe 被串在复合命令里, 判成了
+   partial)。需要先做准备就先做完, 再单独执行 probe。
 
 # 环境事实
 - 工作目录用 /workspace/writeup-{task_id}; 若它或 /workspace/repo* 有上次残留, 先 rm -rf
@@ -310,23 +316,61 @@ def decide(
 # ---------------------------------------------------------------------------
 
 def _repro_api() -> tuple[str, dict[str, str]]:
+    """写重复现自己的沙箱(``repro-writeup``), 不与能力复现共用容器。
+
+    2026-11-17 拆开的原因: 两边同容器时, 一条写重复现把磁盘写满 / 把进程杀错 / 触发 cgroup
+    OOM, 连坐的是**用户正在看的那些 web 复现页**。写重复现跑完只剩报告与产物, 不需要留着
+    页面, 所以它天然适合一个"用完即弃"的独立容器。
+    """
     from ai4sec_platform.pipelines.steps import repro as repro_step
 
-    return os.getenv("REPRO_API_URL", "http://repro:4096"), repro_step._headers(
-        os.getenv("REPRO_PASSWORD", "")
+    return os.getenv("WRITEUP_REPRO_API_URL", "http://repro-writeup:4096"), repro_step._headers(
+        os.getenv("WRITEUP_REPRO_PASSWORD", "")
     )
 
 
 def _slots() -> Any:
-    """与能力复现**共用**并发名额。
+    """写重复现**自己的**并发名额(独立容器 ⇒ 独立 cgroup)。
 
-    不是省事: 一条复现能吃掉 1~2G, 沙箱 cgroup 超限时内核会挑个进程杀 —— 2026-10-29
-    就是杀掉 PID1 的 opencode, 整个沙箱重启、所有复现页 502。两边各自数自己的名额就等于
-    把上限翻倍, 所以这里拿同一个信号量。
+    以前与能力复现共用一个信号量, 是因为两边同处一个 10G 的 cgroup, 各自数自己的名额等于
+    把上限翻倍(2026-10-29 的 OOM 事故)。现在写重复现在 ``repro-writeup`` 里, 有独立的
+    ``mem_limit``, 共享名额反而会让"web 页面忙"卡住写重复现 —— 各自独立计数才对应各自的
+    资源边界。
     """
-    from ai4sec_platform.pipelines.steps import repro as repro_step
+    global _WRITEUP_SLOTS
+    if _WRITEUP_SLOTS is None:
+        with _LOCK:
+            if _WRITEUP_SLOTS is None:
+                limit = max(1, int(os.getenv("WRITEUP_MAX_CONCURRENT", "2")))
+                _WRITEUP_SLOTS = threading.BoundedSemaphore(limit)
+    return _WRITEUP_SLOTS
 
-    return repro_step._REPRO_SLOTS
+
+def _cleanup_workspace(task_id: int) -> None:
+    """跑完就删自己的工作目录 —— 写重复现没有"给用户再看一眼"的需求。
+
+    与 web 复现不同: 那边的产物是**能访问的页面**, 删掉等于把功能删了; 这边的产物是报告、
+    recipe、pattern(都已落库), 工作目录留着只会吃磁盘(实测 MLflow 那条 813MB)。删不掉时
+    不报错, 交给容器里的 janitor 定时兜底 —— 清理由平台触发, 兜底由容器保证。
+    """
+    base = os.getenv("WRITEUP_JANITOR_URL") or (
+        _repro_api()[0].rsplit(":", 1)[0] + ":4098"
+    )
+    url = f"{base.rstrip('/')}/cleanup"
+    body = json.dumps({"task_id": int(task_id)}).encode()
+    req = urllib.request.Request(url, data=body, method="POST")
+    req.add_header("Content-Type", "application/json")
+    for key, value in _repro_api()[1].items():
+        req.add_header(key, value)
+    try:
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            payload = json.loads(resp.read().decode() or "{}")
+        if payload.get("removed"):
+            _log(task_id, f"工作目录已清理: {payload.get('path', '')}")
+        else:
+            _log(task_id, f"工作目录未清理({payload.get('reason') or '不存在'}), 由 janitor 兜底")
+    except Exception as exc:  # noqa: BLE001 - 清理失败不能反过来改结论
+        _log(task_id, f"⚠ 工作目录清理请求失败: {str(exc)[:200]} (janitor 会兜底)")
 
 
 def _connect() -> sqlite3.Connection:
@@ -484,6 +528,8 @@ def _finish(task_id: int, verdict: str, reason: str, notes: list[str], **fields:
         conn.close()
     _write_report(task_id, verdict=verdict, evidence=fields.get("evidence"))
     _extract_products(task_id, verdict=verdict)
+    # 报告与产物都落库之后才清理工作目录 —— 顺序反了就等于把证据先删了再写报告。
+    _cleanup_workspace(task_id)
     return finished
 
 

@@ -212,15 +212,35 @@ def _judge_clause(clause: str, exit_code: int | None, stdout: str, *,
         if not needle:
             return None
         haystack = str(stdout or "")
+        check: dict[str, Any] = {"clause": clause.strip(), "kind": "output_contains",
+                                 "needle": needle, "regex": is_regex}
         if is_regex:
             try:
                 ok = re.search(needle, haystack, re.S) is not None
             except re.error:
                 return None
+            if not ok and _is_line_anchored(needle):
+                # 锚定判据(``^0$`` 这类)按行再试一次。agent 常把 probe 嵌进复合命令,
+                # 整段 stdout 里混着回显, 锚在串首尾的正则必然不中 —— 而那一行事实是
+                # 真的(实测: filelock 把 victim 文件截成 0 字节, 判据 ``^0$`` 却判不过)。
+                # **这是放宽, 必须留痕**: 命中时记 ``anchored_line_fallback``, 复核的人
+                # 能看出这次不是整段匹配出来的。
+                try:
+                    hit = next(
+                        (line for line in haystack.splitlines()
+                         if re.search(needle, line, re.S) is not None),
+                        None,
+                    )
+                except re.error:
+                    hit = None
+                if hit is not None:
+                    ok = True
+                    check["anchored_line_fallback"] = True
+                    check["matched_line"] = hit.strip()[:200]
         else:
             ok = needle in haystack
-        return {"clause": clause.strip(), "kind": "output_contains",
-                "needle": needle, "regex": is_regex, "ok": bool(ok)}
+        check["ok"] = bool(ok)
+        return check
     return None
 
 
@@ -307,23 +327,65 @@ def _compare(actual: Any, op: str, expected: int) -> bool:
     }.get(op, False)
 
 
+def _is_line_anchored(pattern: str) -> bool:
+    """判据正则是否"整段锚定"—— 以 ``^``/``\\A`` 开头或以 ``$``/``\\Z`` 结尾。
+
+    只有这类才有"按行再试一次"的意义: 非锚定的正则本来就该在整个输出里找, 逐行重试只会
+    把同一件事做两遍; 而锚定的正则碰到复合命令的回显就必然失效。
+    """
+    body = pattern.strip()
+    return body.startswith(("^", r"\A")) or body.endswith(("$", r"\Z"))
+
+
 def _norm_cmd(text: str) -> str:
     return " ".join(str(text or "").split()).lower()
+
+
+def _tokens(text: str) -> list[str]:
+    """按空白切成 token, 小写。只用于"同一条命令被加了参数"这一种比对。"""
+    return [tok for tok in _norm_cmd(text).split() if tok]
+
+
+def _is_subsequence(wanted: list[str], have: list[str]) -> bool:
+    """``wanted`` 的每个 token 是否按原顺序出现在 ``have`` 里(允许多出来的 token)。
+
+    agent 几乎不会一字不差地照抄 probe: 实测会给 curl 补 ``--max-time 15``、给 pip 补
+    ``-q``。这种改动不改变"它确实执行了这条 probe"这个事实, 字面包含却会判成没跑过。
+    """
+    cursor = iter(have)
+    return all(any(tok == item for item in cursor) for tok in wanted)
+
+
+def _subsequence_candidates(commands: list[dict[str, Any]], wanted: list[str]) -> list[dict[str, Any]]:
+    """字面匹配失败后的第二档: token 顺序子序列。
+
+    **门槛刻意设得很硬**, 因为放宽匹配等于放宽证据:
+
+    - probe 至少 4 个 token, 且至少一个 token 长于 8 字符(URL / 路径这种锚点)——
+      ``ls -la`` 这种短命令永远不会靠这一档命中;
+    - 反过来不要求"执行记录被 probe 包含": 那会退化成"跑了个前缀就认"。
+    """
+    if len(wanted) < 4 or not any(len(tok) >= 8 for tok in wanted):
+        return []
+    return [row for row in commands if _is_subsequence(wanted, _tokens(row["cmd"]))]
 
 
 def find_probe_command(commands: list[dict[str, Any]], probe_cmd: str) -> dict[str, Any] | None:
     """在真实执行记录里找到 probe 那一条。
 
     先找"执行记录包含 spec 的 probe.cmd"(模型通常会把命令原样跑一遍), 再反向找
-    "probe.cmd 包含执行记录里的那条命令"(spec 可能写得更完整, 比如加了管道)。都没有
-    就返回 ``None`` —— **不要拿最后一条命令顶替**: 那会把"跑了个 ls"当成 probe。
+    "probe.cmd 包含执行记录里的那条命令"(spec 可能写得更完整, 比如加了管道), 最后放宽到
+    **token 顺序子序列**(agent 给命令补了 ``--max-time`` 之类参数)。都没有就返回 ``None``
+    —— **不要拿最后一条命令顶替**: 那会把"跑了个 ls"当成 probe。
 
     **同一条命令跑了多次时取最后一次**(2026-11-12 真跑暴露)。agent 为了对齐环境常常会
     先试一次(换 Python 版本、加不加 timeout), 再按 spec 跑一次正式的; 取第一次等于拿
     "环境还没对齐时的结果"下结论 —— 实测第一次在 3.11.2 上是 SIGSEGV、没有
     ``free(): invalid pointer``, 最后一次在 3.11.8 上才是原文那个 SIGABRT。最后一次是
     最终环境里的最终事实, 也是唯一能被"重跑同一条命令"复核的那一次。
-    ``occurrences`` 一并落库, 让复核的人知道这条命令跑过几次。
+    ``occurrences`` 一并落库, 让复核的人知道这条命令跑过几次;
+    ``match`` 记命中的是哪一档(``substring`` / ``reverse`` / ``tokens``), 复核时能看出
+    这次结论建立在多宽松的匹配上。
     """
     wanted = _norm_cmd(probe_cmd)
     if not wanted:
@@ -332,6 +394,7 @@ def find_probe_command(commands: list[dict[str, Any]], probe_cmd: str) -> dict[s
     if forward:
         found = dict(forward[-1])
         found["occurrences"] = len(forward)
+        found["match"] = "substring"
         return found
     backward = [
         row for row in commands
@@ -340,6 +403,13 @@ def find_probe_command(commands: list[dict[str, Any]], probe_cmd: str) -> dict[s
     if backward:
         found = dict(backward[-1])
         found["occurrences"] = len(backward)
+        found["match"] = "reverse"
+        return found
+    tokens = _subsequence_candidates(commands, _tokens(probe_cmd))
+    if tokens:
+        found = dict(tokens[-1])
+        found["occurrences"] = len(tokens)
+        found["match"] = "tokens"
         return found
     return None
 
@@ -502,6 +572,9 @@ def build_evidence(
             "why": judged.get("why", ""),
             # 同一条命令跑了几次; >1 时上面记的是**最后一次**。
             "occurrences": int(found.get("occurrences") or 1),
+            # 命中档次: substring / reverse / tokens。tokens = 执行记录里那条命令
+            # 只是"按序含全部 token", agent 补过参数; 复核时据此知道匹配有多宽。
+            "match": str(found.get("match") or "substring"),
         }
         if judged["matched"] is None:
             why = str(judged.get("why") or "")
