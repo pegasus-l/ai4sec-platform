@@ -176,6 +176,89 @@ def build_hunt_rule(pattern: dict[str, Any], target_glob: str = "") -> dict[str,
     return build_rule(pattern, target_glob, mode="hunt")
 
 
+def build_hunt_rules(
+    pattern: dict[str, Any],
+    target_glob: str = "",
+    *,
+    samples: int = 3,
+) -> dict[str, Any]:
+    """**多采样取并集**: 同一条规律让模型翻译 ``samples`` 次, 得到多条互不相同的检索式。
+
+    为什么(2026-11-18 实测): 同一个 pattern 两次生成的规则一条能命中 tarfile、一条收窄成
+    ``symlink`` 一个都没搜到 —— 失败不在规律, 在**翻译的措辞**。多翻译几次取并集, 任一条
+    命中就不算漏; 代价只是多几次模型调用和更长的候选清单。
+
+    相同的规则(JSON 完全一样)只留一条 —— 重复扫描不会多出信息, 只会浪费一次全库 walk。
+    """
+    wanted = max(1, min(int(samples or 1), 6))
+    rules: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    errors: list[str] = []
+    identifiers: list[str] = []
+    for _ in range(wanted):
+        built = build_hunt_rule(pattern, target_glob)
+        if built.get("status") != "ok":
+            errors.append(str(built.get("reason") or built.get("status")))
+            continue
+        key = json.dumps(built["rule"], sort_keys=True, ensure_ascii=False)
+        if key in seen:
+            continue
+        seen.add(key)
+        rules.append(built["rule"])
+        for token in built.get("long_identifiers") or []:
+            if token not in identifiers:
+                identifiers.append(token)
+    if not rules:
+        return {"status": "error", "rules": [], "reason": "; ".join(errors)[:300] or "没有生成任何规则"}
+    return {"status": "ok", "rules": rules, "mode": "hunt",
+            "samples_requested": wanted, "samples_used": len(rules),
+            "long_identifiers": identifiers, "errors": errors[:3]}
+
+
+def scan_many(
+    task_id: int,
+    rules: list[dict[str, Any]],
+    suffixes: list[str],
+    *,
+    timeout: int = 60,
+) -> dict[str, Any]:
+    """把多条规则的扫描结果**并起来**, 并按"被几条规则同时命中"给候选排序。
+
+    排序用票数而不是"第一条规则的顺序": 被多条独立规则同时圈中的文件, 更可能是真的同一种写法。
+    目标是否命中按**并集**判断 —— 任一条规则找到就算找到, 这正是多采样的意义。
+    """
+    votes: dict[str, int] = {}
+    scanned_total = 0
+    failures: list[str] = []
+    for rule in rules:
+        out = scan(task_id, rule, suffixes, timeout=timeout)
+        if out.get("status") != "ok":
+            failures.append(str(out.get("reason") or out.get("status")))
+            continue
+        scanned_total = max(scanned_total, int(out.get("files_scanned") or 0))
+        # sidecar 回完整候选列表(上限 200); 老版本只回 sample, 兼容一下。
+        for item in out.get("candidates") or out.get("sample") or []:
+            votes[str(item)] = votes.get(str(item), 0) + 1
+    ranked = sorted(votes.items(), key=lambda kv: (-kv[1], kv[0]))
+    candidates = [path for path, _ in ranked]
+    rank = 0
+    for index, item in enumerate(candidates, start=1):
+        if any(item == s or item.endswith("/" + s) for s in suffixes):
+            rank = index
+            break
+    return {
+        "status": "ok" if candidates or not failures else "error",
+        "files_scanned": scanned_total,
+        "candidates_count": len(candidates),
+        "target_hit": bool(rank),
+        "target_rank": rank,
+        "candidates": candidates[:50],
+        "votes": {path: votes[path] for path in candidates[:50]},
+        "rules_used": len(rules),
+        "failures": failures[:3],
+    }
+
+
 # ---------------------------------------------------------------- 目标定位
 
 def target_suffixes(location_file: str) -> list[str]:

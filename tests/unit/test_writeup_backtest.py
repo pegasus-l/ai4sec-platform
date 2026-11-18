@@ -181,3 +181,51 @@ def test_long_identifiers_surface_name_bound_rules() -> None:
     # 不负责判定, 所以测试锁的是"长 token 会被列出", 不是"只列私有名字"。
     assert backtest.long_identifiers({"include": ["os\\.open\\("]}) == []
     assert backtest.long_identifiers({"exclude": ["O_NOFOLLOW"]}) == ["O_NOFOLLOW"]
+
+
+# ---------------------------------------------------------------- 多采样取并集
+
+def test_identical_rules_are_deduplicated(monkeypatch: pytest.MonkeyPatch) -> None:
+    same = {"status": "ok", "rule": {"path_glob": "*.py", "include": ["x"]}, "long_identifiers": []}
+    other = {"status": "ok", "rule": {"path_glob": "*.py", "include": ["y"]}, "long_identifiers": ["y_long_name"]}
+    seq = [same, same, other]
+    monkeypatch.setattr(backtest, "build_hunt_rule", lambda pattern, glob="": seq.pop(0))
+    out = backtest.build_hunt_rules(PATTERN, "*.py", samples=3)
+    assert out["status"] == "ok"
+    assert out["samples_used"] == 2          # 重复的那条被丢掉
+    assert out["long_identifiers"] == ["y_long_name"]
+
+
+def test_no_rule_at_all_is_an_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(backtest, "build_hunt_rule", lambda pattern, glob="": {"status": "error", "reason": "坏"})
+    out = backtest.build_hunt_rules(PATTERN, "*.py", samples=2)
+    assert out["status"] == "error"
+
+
+def test_the_union_ranks_by_how_many_rules_hit(monkeypatch: pytest.MonkeyPatch) -> None:
+    """被两条规则同时圈中的文件排在只有一条规则命中的前面。"""
+    results = [
+        {"status": "ok", "files_scanned": 10, "candidates": ["a.py", "tarfile.py"]},
+        {"status": "ok", "files_scanned": 12, "candidates": ["tarfile.py", "b.py"]},
+    ]
+    monkeypatch.setattr(backtest, "scan", lambda *a, **kw: results.pop(0))
+    out = backtest.scan_many(1, [
+        {"path_glob": "*.py", "include": ["x"]},
+        {"path_glob": "*.py", "include": ["y"]},
+    ], ["tarfile.py"])
+    assert out["candidates"][0] == "tarfile.py"      # 2 票, 第一
+    assert out["target_hit"] is True and out["target_rank"] == 1
+    assert out["votes"]["tarfile.py"] == 2
+
+
+def test_one_broken_rule_does_not_kill_the_union(monkeypatch: pytest.MonkeyPatch) -> None:
+    results = [
+        {"status": "error", "reason": "超时"},
+        {"status": "ok", "files_scanned": 3, "candidates": ["tarfile.py"]},
+    ]
+    monkeypatch.setattr(backtest, "scan", lambda *a, **kw: results.pop(0))
+    out = backtest.scan_many(1, [{"path_glob": "*.py", "include": ["x"]},
+                                 {"path_glob": "*.py", "include": ["y"]}], ["tarfile.py"])
+    assert out["status"] == "ok"
+    assert out["target_hit"] is True
+    assert out["failures"] == ["超时"]
