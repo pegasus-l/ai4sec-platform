@@ -143,3 +143,41 @@ def test_a_fail_demotes_but_keeps_the_row() -> None:
     assert row["backtest_status"] == "fail"
     assert row["provenance"] == "llm_extracted"
     assert conn.execute("SELECT COUNT(*) FROM writeup_repro_patterns").fetchone()[0] == 1
+
+
+# ---------------------------------------------------------------- 找洞口径
+
+class _Spy:
+    def __init__(self, result: dict) -> None:
+        self.result = result
+        self.prompt = ""
+        self.payload: dict = {}
+
+    def complete_json(self, *, prompt: str, payload: dict) -> dict:  # noqa: ARG002
+        self.prompt = prompt
+        self.payload = payload
+        return {"result": self.result}
+
+
+def test_hunt_mode_forbids_project_identifiers_in_the_prompt(monkeypatch: pytest.MonkeyPatch) -> None:
+    spy = _Spy({"include": ["extractall\\("]})
+    monkeypatch.setattr(backtest.LLMRouter, "provider_for", lambda self, profile: spy)
+    out = backtest.build_hunt_rule(PATTERN)
+    assert out["mode"] == "hunt"
+    assert "禁止出现只属于某个项目的标识符" in spy.prompt
+    assert "target_file_hint" not in spy.payload
+
+
+def test_backtest_mode_still_passes_the_target_file(monkeypatch: pytest.MonkeyPatch) -> None:
+    spy = _Spy({"include": ["O_TRUNC"]})
+    monkeypatch.setattr(backtest.LLMRouter, "provider_for", lambda self, profile: spy)
+    backtest.build_rule(PATTERN, "src/filelock/_unix.py")
+    assert spy.payload["target_file_hint"] == "src/filelock/_unix.py"
+
+
+def test_long_identifiers_surface_name_bound_rules() -> None:
+    assert backtest.long_identifiers({"include": ["_find_fastapi_validator"]}) == ["_find_fastapi_validator"]
+    # 这个启发式是**粗的**: 通用常量 O_NOFOLLOW 也会被列出来 —— 它只负责"摆出来给人看",
+    # 不负责判定, 所以测试锁的是"长 token 会被列出", 不是"只列私有名字"。
+    assert backtest.long_identifiers({"include": ["os\\.open\\("]}) == []
+    assert backtest.long_identifiers({"exclude": ["O_NOFOLLOW"]}) == ["O_NOFOLLOW"]
