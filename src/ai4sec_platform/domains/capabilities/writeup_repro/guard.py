@@ -54,6 +54,19 @@ PLACEHOLDER_HOSTS: frozenset[str] = frozenset({
     "target_ip", "target-ip", "<target_ip>", "rhost", "lhost",
 })
 
+#: 资料站: 查 CVE、看官方文档、读内核手册。**它们不是攻击目标** —— 复现过程中去查资料
+#: 是正常工作流(2026-11-19 试点里, agent 查 nvd.nist.gov / www.php.net 被判成"打了公网")。
+#: 与依赖源的区别只是语义, 放行口径相同: 记下来, 但不触发 review_required。
+RESEARCH_HOSTS: frozenset[str] = frozenset({
+    "nvd.nist.gov", "cve.mitre.org", "cve.org", "www.cve.org", "osv.dev", "api.osv.dev",
+    "www.php.net", "php.net", "docs.python.org", "man7.org", "www.gnu.org", "gnu.org",
+    "kernel.org", "www.kernel.org", "git.kernel.org", "lore.kernel.org",
+    "docs.docker.com", "kubernetes.io", "readthedocs.org", "readthedocs.io",
+    "developer.mozilla.org", "owasp.org", "portswigger.net", "attack.mitre.org",
+    "cwe.mitre.org", "capec.mitre.org", "security.snyk.io", "snyk.io",
+    "github.io",
+})
+
 #: "装依赖 / 取源码"可以出网的那一侧。判据是**这个主机是分发源**, 不是"这一行看起来像装的"。
 DEPENDENCY_HOSTS: frozenset[str] = frozenset({
     # Python
@@ -74,6 +87,11 @@ DEPENDENCY_HOSTS: frozenset[str] = frozenset({
     # JVM
     "repo1.maven.org", "repo.maven.apache.org", "maven.org", "plugins.gradle.org",
     "jcenter.bintray.com", "repo.spring.io",
+    # 发行版归档 / 厂商仓库 / 制品库(2026-11-19 试点实测遇到的)
+    "old-releases.ubuntu.com", "downloads.mysql.com", "download.opensuse.org",
+    "download.elastic.co", "artifacts.elastic.co", "repo.anaconda.com",
+    "conda.anaconda.org", "archive.apache.org", "downloads.apache.org",
+    "dlcdn.apache.org", "ftp.gnu.org", "pip.ace-research.openai.org",
     # 代码托管 / 源码分发
     "github.com", "codeload.github.com", "raw.githubusercontent.com",
     "objects.githubusercontent.com", "api.github.com", "github-releases.githubusercontent.com",
@@ -114,7 +132,9 @@ _PREFIX_WORDS = frozenset({"sudo", "env", "nohup", "setsid", "exec", "command", 
 _HOST_TOKEN = re.compile(
     r"(?:[a-z][a-z0-9+.\-]*://)?(?P<host>\[[0-9a-f:]+\]|(?:\d{1,3}\.){3}\d{1,3}|"
     r"[a-z0-9](?:[a-z0-9\-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9\-]*[a-z0-9])?)+)"
-    r"(?![A-Za-z0-9_])",
+    # 后面紧跟 "_" 是变量名/属性; 紧跟 ".X" 是 Java 风格的点号类名/包路径
+    # (``java.io.IOException`` / ``java.io.*`` —— 2026-11-19 实测被当成公网主机, 把成功任务判死)。
+    r"(?![A-Za-z0-9_])(?!\.[A-Za-z0-9*_])",
     re.I,
 )
 
@@ -182,6 +202,15 @@ def _looks_like_host(host: str) -> bool:
     return True
 
 
+def _has_domain(host: str, hosts: frozenset[str]) -> bool:
+    """``host`` 是否落在清单里某个域名之下(``docs.foo.org`` 命中 ``foo.org``)。
+
+    只用于依赖源/资料站这类**信任清单** —— 子域放行是刻意的: ``raw.githubusercontent.com``
+    与 ``objects.githubusercontent.com`` 是一回事, 逐个列举永远补不全。
+    """
+    return any(host == item or host.endswith("." + item) for item in hosts)
+
+
 def classify_host(host: str) -> str:
     """``local`` / ``placeholder`` / ``private`` / ``dependency`` / ``public`` / ``invalid``。"""
     h = (host or "").strip().strip(".").lower()
@@ -191,8 +220,10 @@ def classify_host(host: str) -> str:
         return "local"
     if h in PLACEHOLDER_HOSTS:
         return "placeholder"
-    if h in DEPENDENCY_HOSTS:
+    if h in DEPENDENCY_HOSTS or _has_domain(h, DEPENDENCY_HOSTS):
         return "dependency"
+    if h in RESEARCH_HOSTS or _has_domain(h, RESEARCH_HOSTS):
+        return "research"
     try:
         ip = ipaddress.ip_address(h.strip("[]"))
     except ValueError:
@@ -405,10 +436,15 @@ def audit_egress(commands: Iterable[dict[str, Any]], spec: dict[str, Any] | None
             })
     external = sorted({h["host"] for h in hits if h["category"] == "public" and h["command_kind"] == "request"})
     installed = sorted({h["host"] for h in hits if h["command_kind"] in ("install", "download")})
+    # 与开跑前的预检**同一套分类**: 依赖源与资料站不是攻击目标。以前这里只看"公网+request",
+    # 于是 ``curl -I http://old-releases.ubuntu.com/``(探发行版镜像)、``curl nvd.nist.gov``
+    # (查 CVE)全被判成"打了公网真实主机" —— 2026-11-19 的试点里 4 条 blocked 全是这么来的。
+    allowed_sources = sorted({h["host"] for h in hits if h["category"] in ("dependency", "research")})
     return {
         "domains_accessed": sorted({h["host"] for h in hits}),
         "external_requests": external,
         "dependency_hosts": installed,
+        "allowed_sources": allowed_sources,
         "review_required": bool(external),
         "hits": hits[:300],
         "note": (
