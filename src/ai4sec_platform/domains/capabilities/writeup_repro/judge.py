@@ -263,7 +263,10 @@ def apply_to_evidence(evidence: dict[str, Any], outcome: dict[str, Any]) -> bool
         "model": MODEL_PROFILE,
     }
     probe["why"] = "规则未命中, 模型引用原文片段后判定满足"
+    # 证据包里有**三种**措辞都表示"probe 这一步没算过": 没找到命令 / 判不了 / 判据未满足。
+    # 只删前两种会让改判白做 —— 2026-11-23 task 41 实测: matched 已经是 True,
+    # 但旧行 "probe 判据未满足" 还留着, evidence_gaps 照样把它算成缺口, 结论仍是 partial。
     reasons = [r for r in (evidence.get("incomplete_reasons") or [])
-               if r not in ("没有 probe 的执行记录", "probe 未命中或无法判定")]
+               if not (str(r).startswith("probe") or str(r) == "没有 probe 的执行记录")]
     evidence["incomplete_reasons"] = reasons
     return True
