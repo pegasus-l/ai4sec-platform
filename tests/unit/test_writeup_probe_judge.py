@@ -94,9 +94,11 @@ def test_a_quote_that_does_not_satisfy_the_criterion_is_rejected(monkeypatch: py
     assert outcome["verdict"] == "insufficient"
 
 
-def test_exit_code_only_criteria_are_not_judged_by_the_model() -> None:
+def test_exit_code_only_criteria_are_judged_by_the_number_in_the_quote() -> None:
+    """2026-11-23 起退出码类判据也能复核: 模型指出"程序打印退出码的那一段", 数值由代码比。"""
     assert judge.output_criterion("exit_code == 0") == ""
-    assert judge.quote_satisfies("0", "exit_code == 0") is False
+    assert judge.quote_satisfies("EXIT=0", "exit_code == 0") is True
+    assert judge.quote_satisfies("EXIT=1", "exit_code == 0") is False
 
 
 def test_output_clauses_survive_while_exit_clauses_are_dropped() -> None:
@@ -175,3 +177,39 @@ def test_the_judge_can_be_switched_off(monkeypatch: pytest.MonkeyPatch) -> None:
     executor._maybe_judge_probe(1, _spec(), _report(), _evidence(), [], guard.GuardResult())
     assert calls == []
     assert judge.enabled() is False
+
+
+# ---------------------------------------------------------------- 退出码类判据(2026-11-23)
+
+def test_exit_only_criteria_can_be_checked_against_a_printed_code() -> None:
+    """mlx 那条: 判据全是退出码, agent 打印了 EXIT=139 —— 以前模型复核直接拒绝。"""
+    checked = judge.check_quote("Segmentation fault (core dumped)\nEXIT=139", "exit_code == 134 或 exit_code == 139")
+    assert checked["ok"] is True
+    assert checked["exit_value"] == 139
+
+
+def test_an_exit_only_criterion_without_a_number_is_not_satisfied() -> None:
+    checked = judge.check_quote("Segmentation fault (core dumped)", "exit_code == 134 或 exit_code == 139")
+    assert checked["ok"] is False
+    assert checked["exit_ok"] is False
+
+
+def test_version_numbers_are_not_mistaken_for_exit_codes() -> None:
+    checked = judge.check_quote("python 3.11.8\nall good", "exit_code == 139")
+    assert checked["exit_ok"] is False
+
+
+def test_both_output_and_exit_parts_must_hold() -> None:
+    exact = 'job_id: abc-123\nEXIT=0'
+    assert judge.check_quote(exact, 'exit_code == 0 且 stdout 包含 "job_id"')["ok"] is True
+    assert judge.check_quote("no such field\nEXIT=0", 'exit_code == 0 且 stdout 包含 "job_id"')["ok"] is False
+    assert judge.check_quote("job_id: abc\nEXIT=1", 'exit_code == 0 且 stdout 包含 "job_id"')["ok"] is False
+
+
+def test_a_judge_answer_on_an_exit_only_criterion_is_accepted_end_to_end(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(judge.LLMRouter, "provider_for",
+                        lambda self, profile: _Provider({"verdict": "satisfied", "quote": "EXIT=139"}))
+    outcome = judge.judge_probe(probe_cmd="python3 poc.py", criterion="exit_code == 134 或 exit_code == 139",
+                                stdout="Segmentation fault\nEXIT=139")
+    assert outcome["verdict"] == "satisfied"
+    assert outcome["exit_value"] == 139

@@ -215,3 +215,28 @@ def test_a_local_request_with_a_dotted_class_in_the_body_is_clean() -> None:
     out = guard.audit_egress(commands, {})
     assert out["review_required"] is False
     assert "java.io" not in out["domains_accessed"]
+
+
+# ---------------------------------------------------------------- probe 占位符(2026-11-23)
+
+def test_a_placeholder_host_probe_matches_the_executed_command() -> None:
+    """Groovy 那条: spec 写 http://TARGET:8080/deserialize, agent 换成 127.0.0.1 执行。"""
+    executed = ("cd /tmp && curl -X POST http://127.0.0.1:8080/deserialize "
+                "-d 'data=AAAA' -H 'Content-Type: application/x-www-form-urlencoded'")
+    found = evidence.find_probe_command([_row(executed)],
+                                        "curl -X POST http://TARGET:8080/deserialize -d 'data=<BASE64_PAYLOAD>'")
+    assert found is not None
+    assert found["match"] == "placeholder"
+
+
+def test_placeholder_matching_keeps_the_endpoint_identity() -> None:
+    """只遮主机, 不遮路径 —— 打的是别的端点就不该认。"""
+    executed = "curl -X POST http://127.0.0.1:8080/other-endpoint -d 'data=AAAA'"
+    assert evidence.find_probe_command([_row(executed)],
+                                       "curl -X POST http://TARGET:8080/deserialize -d 'data=AAAA'") is None
+
+
+def test_masking_leaves_a_plain_command_alone() -> None:
+    assert evidence.has_placeholder("curl -s http://127.0.0.1:8000/x") is False
+    assert evidence.has_placeholder("curl -s http://TARGET:8000/x") is True
+    assert evidence.mask_hosts("curl -s http://TARGET:8000/x") == "curl -s http://__HOST__/x"

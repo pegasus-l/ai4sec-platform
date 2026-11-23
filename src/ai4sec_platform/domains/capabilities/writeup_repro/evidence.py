@@ -370,6 +370,95 @@ def _subsequence_candidates(commands: list[dict[str, Any]], wanted: list[str]) -
     return [row for row in commands if _is_subsequence(wanted, _tokens(row["cmd"]))]
 
 
+#: probe 里常见的占位符主机。agent 执行时必然把它们换成本地地址, 于是字面/子序列都断掉
+#: (2026-11-19 实测: probe 写 ``http://TARGET:8080/deserialize``, agent 跑的是
+#: ``http://127.0.0.1:8080/deserialize``, 判成"没跑过 probe")。
+_PLACEHOLDER_WORDS = (
+    "target", "victim", "host", "server", "rhost", "lhost", "yourtarget", "your-host",
+    "remote_host", "remote-host",
+)
+_URL_PREFIX = re.compile(r"\b(?:https?|wss?)://", re.I)
+#: URL(含 scheme 与主机), 遮主机时用; 判断"有没有占位符"时不看它。
+_URL_TOKEN = re.compile(r"\b(?:https?|wss?)://[^\s'\"]+", re.I)
+#: 真正的占位符写法: ``TARGET`` / ``target.local`` / ``TARGET:8080`` / ``<target_ip>``。
+_PLACEHOLDER_TOKEN = re.compile(
+    r"(?:<)?" + r"\b(?:" + "|".join(_PLACEHOLDER_WORDS) + r")\b[\w.\-]*(?::\d+)?(?:>)?",
+    re.I,
+)
+_MASK_TOKEN = re.compile(_URL_TOKEN.pattern + "|" + _PLACEHOLDER_TOKEN.pattern, re.I)
+
+
+def has_placeholder(text: str) -> bool:
+    """这段文本里有没有占位符主机/URL —— 有才值得走"遮掉主机再比"这一档。"""
+    return bool(_PLACEHOLDER_TOKEN.search(str(text or "")))
+
+
+def mask_hosts(text: str) -> str:
+    """把命令里的 **URL 与占位符主机** 统一换成 ``<HOST>``, 保留路径与参数。
+
+    只遮主机, 不遮路径: "打的是哪个地址"在复现里不重要(都应该是本地实例), "打了哪个端点、
+    带什么参数"才是这条 probe 的身份。
+    """
+    def _repl(match: re.Match[str]) -> str:
+        whole = match.group(0)
+        prefix = _URL_PREFIX.match(whole)
+        if prefix:
+            # 保留 scheme 与端口之后的部分
+            rest = whole[prefix.end():]
+            tail = ""
+            slash = rest.find("/")
+            if slash >= 0:
+                tail = rest[slash:]
+            return "%s__HOST__%s" % (prefix.group(0), tail)
+        return "__HOST__"
+
+    masked = _MASK_TOKEN.sub(_repl, str(text or ""))
+    # 端口也遮: agent 按提示用 8101~8199 的空闲端口, 与 spec 里写的 8080 对不上是常态。
+    # 主机在同一台机器上, 端口不同不改变"打的是哪个端点"。
+    masked = re.sub(r"(__HOST__):\d+", r"\1", masked)
+    # 载荷参数的写法在 curl 里可以互换(-d / --data / --data-urlencode / --data-binary …),
+    # 对"这条 probe 打的是什么"没有影响。
+    masked = re.sub(r"(?:^|(?<=\s))(?:-d|--data|--data-raw|--data-binary|--data-urlencode|-F|--form)(?=\s|$)",
+                    "--data", masked)
+    return masked
+
+
+def _is_placeholder_token(token: str) -> bool:
+    """``data=<BASE64_PAYLOAD>`` 这种: 尖括号里的内容在执行时必然被替换, 只能当通配符。"""
+    return "<" in token and ">" in token
+
+
+def _is_wild_subsequence(wanted: list[str], have: list[str]) -> bool:
+    """占位符 token 匹配任意一个 token, 其余按顺序精确比对。
+
+    ``http://__HOST__:8080/deserialize`` 里的 ``__HOST__`` 是**字面哨兵**, 不是占位符 —— 主机
+    被遮掉, 端点与端口仍要一致; 只有 ``<...>`` 才是"随便填"。
+    """
+    cursor = iter(have)
+    for token in wanted:
+        if _is_placeholder_token(token):
+            if next(cursor, None) is None:
+                return False
+            continue
+        if not any(item == token for item in cursor):
+            return False
+    return True
+
+
+def _placeholder_candidates(commands: list[dict[str, Any]], probe_cmd: str) -> list[dict[str, Any]]:
+    """第三档: 遮掉主机之后再做 token 子序列。
+
+    门槛比上一档更硬 —— 必须**同时**满足: probe 本身带占位符(否则没有遮的理由)、遮完
+    仍有 ≥4 个 token 且至少一个 ≥8 字符锚点(路径/参数)。
+    """
+    if not has_placeholder(probe_cmd):
+        return []
+    wanted = _tokens(mask_hosts(probe_cmd))
+    if len(wanted) < 4 or not any(len(tok) >= 8 for tok in wanted):
+        return []
+    return [row for row in commands if _is_wild_subsequence(wanted, _tokens(mask_hosts(row["cmd"])))]
+
+
 def find_probe_command(commands: list[dict[str, Any]], probe_cmd: str) -> dict[str, Any] | None:
     """在真实执行记录里找到 probe 那一条。
 
@@ -384,8 +473,9 @@ def find_probe_command(commands: list[dict[str, Any]], probe_cmd: str) -> dict[s
     ``free(): invalid pointer``, 最后一次在 3.11.8 上才是原文那个 SIGABRT。最后一次是
     最终环境里的最终事实, 也是唯一能被"重跑同一条命令"复核的那一次。
     ``occurrences`` 一并落库, 让复核的人知道这条命令跑过几次;
-    ``match`` 记命中的是哪一档(``substring`` / ``reverse`` / ``tokens``), 复核时能看出
-    这次结论建立在多宽松的匹配上。
+    ``match`` 记命中的是哪一档(``substring`` / ``reverse`` / ``tokens`` / ``placeholder``),
+    复核时能看出这次结论建立在多宽松的匹配上。``placeholder`` = spec 写的是 ``TARGET`` 这类
+    占位符、agent 换成本地地址执行 —— 遮掉主机后按路径与参数比对。
     """
     wanted = _norm_cmd(probe_cmd)
     if not wanted:
@@ -410,6 +500,12 @@ def find_probe_command(commands: list[dict[str, Any]], probe_cmd: str) -> dict[s
         found = dict(tokens[-1])
         found["occurrences"] = len(tokens)
         found["match"] = "tokens"
+        return found
+    masked = _placeholder_candidates(commands, probe_cmd)
+    if masked:
+        found = dict(masked[-1])
+        found["occurrences"] = len(masked)
+        found["match"] = "placeholder"
         return found
     return None
 
