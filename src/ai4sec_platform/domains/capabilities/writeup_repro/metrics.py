@@ -81,8 +81,12 @@ def summary(conn: sqlite3.Connection) -> dict[str, Any]:
             key = reuse["recipe_key"]
             if key:
                 reused_keys[key] = reused_keys.get(key, 0) + 1
-        buckets[bucket]["duration"].append(item.get("duration_seconds") or 0)
-        buckets[bucket]["calls"].append(item.get("tool_calls") or 0)
+        # **只统计真正执行过的任务**: spec 阶段就出局的行 duration 是 None/0, 把它们算进
+        # "无复用"桶会把均值拉到 94 秒(实测), 对比就失真了。
+        duration = item.get("duration_seconds")
+        if isinstance(duration, (int, float)) and duration > 0:
+            buckets[bucket]["duration"].append(duration)
+            buckets[bucket]["calls"].append(item.get("tool_calls") or 0)
 
     recipes = conn.execute(
         "SELECT recipe_key, material_id, degraded, fingerprint_json FROM writeup_repro_recipes"

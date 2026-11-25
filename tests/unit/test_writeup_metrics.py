@@ -86,3 +86,13 @@ def test_recipe_counts_come_from_the_recipe_table() -> None:
     ])
     out = metrics.summary(conn)
     assert out["recipes"] == {"total": 3, "non_degraded": 2, "materials": 2}
+
+
+def test_only_executed_tasks_enter_the_duration_buckets() -> None:
+    """spec 阶段就出局的任务(耗时 0)不能混进"无复用"桶 —— 否则均值被拉到 94 秒。"""
+    conn = _conn()
+    _task(conn, 1, status="cannot_repro", verdict="cannot_repro", dur=0, calls=0)
+    _task(conn, 2, dur=200, calls=20)
+    out = metrics.summary(conn)
+    assert out["reuse"]["by_bucket"]["none"]["tasks"] == 1
+    assert out["reuse"]["by_bucket"]["none"]["avg_duration_seconds"] == 200.0
