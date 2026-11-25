@@ -830,3 +830,31 @@ def test_pick_reusable_records_both_hit_and_miss() -> None:
     assert hit["recipe_key"] == "wr-132734-3" and hit["shared"]
     assert miss["used"] is False and miss["hint"] == ""
     assert miss["fingerprint"], "没命中也要留下这条任务的指纹, 否则事后说不清它像不像"
+
+
+# ---------------------------------------------------------------- 复用强弱(2026-11-25)
+
+def test_strength_requires_a_shared_surface_and_target() -> None:
+    assert recipes_module.match_strength(
+        ["lang:python", "target:oss_repo", "surface:path_traversal"]) == "strong"
+    # 只共享语言与目标形态 —— 试点里 3 次不相干的命中都是这种
+    assert recipes_module.match_strength(["lang:python", "target:oss_repo"]) == "weak"
+    assert recipes_module.match_strength(["target:oss_repo", "surface:rce"]) == "weak"  # 没有 lang
+
+
+def test_a_language_mismatch_makes_it_weak() -> None:
+    assert recipes_module.match_strength(
+        ["lang:shell", "target:oss_repo", "surface:rce"],
+        wanted=["lang:yaml", "target:oss_repo", "surface:rce"],
+        mine=["lang:shell", "target:oss_repo", "surface:rce"],
+    ) == "weak"
+
+
+def test_pick_reusable_reports_the_strength() -> None:
+    """命中时把强弱一并给出, 由 evidence 落库 —— 指标靠它把噪声和复利分开。"""
+    conn = _conn()
+    _one_recipe(conn)
+    out = recipes_module.pick_reusable(
+        conn, {"id": 9, "material_id": 999}, {"poc_lang": "python", "target_kind": "package"})
+    assert out["used"] is True
+    assert out["strength"] in ("strong", "weak")

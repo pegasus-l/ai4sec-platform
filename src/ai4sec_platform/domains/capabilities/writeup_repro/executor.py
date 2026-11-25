@@ -839,6 +839,8 @@ def _run_task_body(task_id: int, timeout: int) -> None:
         "recipe_key": reuse.get("recipe_key") or "",
         "recipe_task_id": reuse.get("recipe_task_id") or 0,
         "shared": list(reuse.get("shared") or []),
+        # T5.3: 强/弱命分开落库 —— 把 3 次噪声算成 3 次复利, 指标就失去意义。
+        "strength": str(reuse.get("strength") or ""),
         "fingerprint": list(reuse.get("fingerprint") or []),
     }
     # 规则没认出来才请模型看一眼(见 judge.py), 它在 decide 之前改 evidence。

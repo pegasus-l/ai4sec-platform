@@ -411,3 +411,34 @@ export interface WriteupStats {
     pattern_materials: number;
   };
 }
+
+/** T5.3 复利指标: 经验有没有被用上、用了之后是不是更省。 */
+export interface WriteupMetrics {
+  generated_at: string;
+  tasks: {
+    total: number;
+    executed: number;
+    by_status: Record<string, number>;
+    by_verdict: Record<string, number>;
+    spec_stage_dropped: number;
+    spec_stage_rate: number | null;
+  };
+  reuse: {
+    hits: { total: number; strong: number; weak: number };
+    by_bucket: Record<'none' | 'weak' | 'strong', {
+      tasks: number;
+      avg_duration_seconds: number | null;
+      avg_tool_calls: number | null;
+    }>;
+    top_recipes: { recipe_key: string; times: number }[];
+  };
+  recipes: { total: number; non_degraded: number; materials: number };
+  patterns: {
+    total: number;
+    traceable: number;
+    traceable_rate: number | null;
+    by_provenance: Record<string, number>;
+    backtest: Record<string, number>;
+  };
+  note: string;
+}

@@ -41,6 +41,7 @@ from pydantic import BaseModel, Field
 
 from ai4sec_platform.app.dependencies import current_user, get_db
 from ai4sec_platform.domains.capabilities.writeup_repro import executor
+from ai4sec_platform.domains.capabilities.writeup_repro import metrics as metrics_module
 from ai4sec_platform.domains.capabilities.writeup_repro import recipes as recipes_module
 from ai4sec_platform.domains.capabilities.writeup_repro import report as report_module
 from ai4sec_platform.domains.capabilities.writeup_repro import skill_export as skill_module
@@ -215,6 +216,16 @@ def task_stats(conn: sqlite3.Connection = Depends(get_db)) -> dict[str, Any]:
     counts = tasks.stats(conn)
     counts["products"] = recipes_module.counts(conn)
     return counts
+
+
+@router.get("/metrics")
+def compounding_metrics(conn: sqlite3.Connection = Depends(get_db)) -> dict[str, Any]:
+    """T5.3 复利指标: 复用命中(强/弱)、有/无复用的耗时差、recipe 与 pattern 的沉淀质量。
+
+    与 ``/stats`` 的区别: 那个是**漏斗**(每条任务落在哪个状态), 这个是**复利**(经验有没有
+    真的被用上、用了之后是不是更省)。两者不可互相替代。
+    """
+    return metrics_module.summary(conn)
 
 
 @router.get("/tasks/{task_id}")

@@ -4,8 +4,8 @@ import { Badge, EmptyState } from '../../components/ui';
 import { useDrawerStack } from '../../components/DrawerStack';
 import { useToast } from '../../components/Toast';
 import { CommandBlock, WriteupTaskDrawer } from './WriteupTaskDrawer';
-import { createTask, fetchPatterns, fetchRecipes, fetchStats, fetchTasks } from './writeupReproQueries';
-import type { WriteupPatternRow, WriteupRecipeRow, WriteupTask } from './writeupReproTypes';
+import { createTask, fetchMetrics, fetchPatterns, fetchRecipes, fetchStats, fetchTasks } from './writeupReproQueries';
+import type { WriteupMetrics, WriteupPatternRow, WriteupRecipeRow, WriteupTask } from './writeupReproTypes';
 import {
   failureLabel, fmtDuration, fmtTime, listOf, statusMeta, triggerLabel, verdictMeta,
 } from './writeupReproLabels';
@@ -26,6 +26,32 @@ const PAGE_SIZE = 20;
 const ACTIVE_STATUSES = ['pending', 'spec_ready', 'queued', 'running'];
 
 /** 顶部统计 = 筛选按钮。六格对应六种"我现在想看哪一批", 点一下就是一次服务端查询。 */
+/**
+ * T5.3 复利:一张小表回答"沉淀到底有没有用"。
+ *
+ * 三个数字必须并排看: 命中次数(强/弱分开, 弱命中多是噪声)、有/无复用的耗时差(相关性, 不是
+ * 因果)、以及 spec 阶段的出局率(原文写不清 —— 它比"复现失败"更能说明池子质量)。
+ */
+function CompoundingPanel({ data }: { data?: WriteupMetrics }) {
+  if (!data) return null;
+  const bucket = (name: 'none' | 'weak' | 'strong') => data.reuse.by_bucket[name];
+  const fmt = (value: number | null, unit: string) => value == null ? '—' : `${value}${unit}`;
+  return <section className="panel case-stat-strip">
+    <div className="case-mini-foot" style={{ gap: 18, flexWrap: 'wrap' }}>
+      <span><strong>复用命中</strong> {data.reuse.hits.total} 次（强 {data.reuse.hits.strong} / 弱 {data.reuse.hits.weak}）</span>
+      <span title="相关性，不是因果：命中的任务可能本来就更简单">
+        <strong>平均耗时</strong> 无复用 {fmt(bucket('none').avg_duration_seconds, 's')}
+        （{fmt(bucket('none').avg_tool_calls, ' 条命令')}）
+        · 弱命中 {fmt(bucket('weak').avg_duration_seconds, 's')}
+        · 强命中 {fmt(bucket('strong').avg_duration_seconds, 's')}
+      </span>
+      <span><strong>配方</strong> {data.recipes.total} 条（非降级 {data.recipes.non_degraded}）</span>
+      <span><strong>规律</strong> {data.patterns.total} 条（可溯源 {data.patterns.traceable_rate == null ? '—' : `${Math.round(data.patterns.traceable_rate * 100)}%`}）</span>
+      <span title="原文没写清触发方式/预期现象，根本没进执行"><strong>spec 出局</strong> {data.tasks.spec_stage_dropped} 条（{data.tasks.spec_stage_rate == null ? '—' : `${Math.round(data.tasks.spec_stage_rate * 100)}%`}）</span>
+    </div>
+  </section>;
+}
+
 function StatChip({ label, value, hint, active, onClick }: { label: string; value: number; hint?: string; active: boolean; onClick: () => void }) {
   return <button type="button" className={`case-stat-chip ${active ? 'active' : ''}`} title={hint} onClick={onClick}>
     <span className="case-stat-chip-label">{label}</span>
@@ -62,6 +88,8 @@ export function WriteupRepro({ focusTaskId, onFocusConsumed }: { focusTaskId?: n
   const qc = useQueryClient();
 
   const stats = useQuery({ queryKey: ['writeup', 'stats'], queryFn: fetchStats, refetchInterval: 30_000 });
+  // T5.3 复利: 与"漏斗"是两张表 —— 这张回答"经验有没有被用上、用上是不是更省"
+  const metrics = useQuery({ queryKey: ['writeup', 'metrics'], queryFn: fetchMetrics, refetchInterval: 60_000 });
   const list = useQuery({
     queryKey: ['writeup', 'tasks', { verdict, activeOnly, status, folded, offset }],
     queryFn: () => fetchTasks({
@@ -164,6 +192,8 @@ export function WriteupRepro({ focusTaskId, onFocusConsumed }: { focusTaskId?: n
         </select>}
       </div>
     </section>
+
+    <CompoundingPanel data={metrics.data} />
 
     {tab === 'tasks' && <CoverageNote />}
 

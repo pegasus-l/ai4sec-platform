@@ -1,6 +1,6 @@
 import { getJson, postJson } from '../../api/client';
 import type {
-  WriteupPatternRow, WriteupProductsDetail, WriteupRecipeRow, WriteupReport, WriteupSkillExport,
+  WriteupMetrics, WriteupPatternRow, WriteupProductsDetail, WriteupRecipeRow, WriteupReport, WriteupSkillExport,
   WriteupStats, WriteupTask,
 } from './writeupReproTypes';
 
@@ -149,4 +149,8 @@ export function generateReport(taskId: number): Promise<{ status: string; report
 /** 从报告抽 recipe + pattern。抽不出来是 200 + reasons(结论不支持), 不是接口故障。 */
 export function extractProducts(taskId: number): Promise<{ status: string; reasons?: string[] }> {
   return postJson(`/api/writeup-repro/tasks/${taskId}/extract`);
+}
+
+export function fetchMetrics(): Promise<WriteupMetrics> {
+  return getJson<WriteupMetrics>('/api/writeup-repro/metrics');
 }

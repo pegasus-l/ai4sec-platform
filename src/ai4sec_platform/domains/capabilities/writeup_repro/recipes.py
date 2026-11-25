@@ -720,8 +720,32 @@ def find_reusable(
     output: list[dict[str, Any]] = []
     for _key, recipe, shared in scored[: max(1, int(limit))]:
         recipe["shared_tokens"] = shared
+        recipe["match_strength"] = match_strength(
+            shared, wanted=sorted(wanted), mine=sorted(recipe.get("fingerprint_json") or []))
         output.append(recipe)
     return output
+
+
+#: 复用强弱的口径(2026-11-25)。**这是启发式, 不是结论**: 复用相关性取决于"命令序列能不能
+#: 借用", 而指纹里没有命令形态这一维。定义保持可解释:
+#:   strong —— 共享了 ``surface:`` 且语言相同(两边都有 lang 时)且 ``target:`` 相同;
+#:   weak   —— 其余(通常只共享 lang/target, 或只共享一个 surface)。
+#: 实测 4 次命中里按这个口径 1 strong / 3 weak, 而真正有用的那 1 次恰好是 weak —— 所以它只能
+#: 用来**提示谨慎**, 不能用来决定要不要给提示。
+def match_strength(shared: list[str], *, wanted: list[str] | None = None,
+                   mine: list[str] | None = None) -> str:
+    shared_set = {str(t) for t in shared}
+    has_surface = any(t.startswith("surface:") for t in shared_set)
+    has_target = any(t.startswith("target:") for t in shared_set)
+    has_lang = any(t.startswith("lang:") for t in shared_set)
+    # 三样都要有: 少了 lang 就等于"跨语言也算同类", 那正是试点里误命中最多的一类。
+    if not (has_surface and has_target and has_lang):
+        return "weak"
+    wanted_lang = {t for t in (wanted or []) if str(t).startswith("lang:")}
+    mine_lang = {t for t in (mine or []) if str(t).startswith("lang:")}
+    if wanted_lang and mine_lang and not (wanted_lang & mine_lang):
+        return "weak"
+    return "strong"
 
 
 def _hint_commands(label: str, items: Any, out: list[str]) -> None:
@@ -752,6 +776,9 @@ def format_hint(recipe: dict[str, Any], *, max_chars: int = 1500) -> str:
         f"{'只跑到 partial' if recipe.get('degraded') else '跑通过'}"
     )
     parts = [head]
+    if recipe.get("match_strength") == "weak":
+        parts.append("  注意: 这条只共享了语言/目标形态这类宽泛特征, **未必适用**; "
+                     "只在工具链真的对得上时参考, 不要照搬命令。")
     for label, key in (("获取目标", "acquire"), ("准备环境", "setup"),
                        ("触发", "trigger"), ("判据", "probe")):
         _hint_commands(label, body.get(key), parts)
@@ -775,7 +802,7 @@ def pick_reusable(
     tokens = build_fingerprint(task, candidate or {})
     hits = find_reusable(conn, tokens, exclude_material_id=task.get("material_id"))
     if not hits:
-        return {"used": False, "hint": "", "fingerprint": tokens}
+        return {"used": False, "hint": "", "strength": "", "fingerprint": tokens}
     best = hits[0]
     return {
         "used": True,
@@ -783,6 +810,7 @@ def pick_reusable(
         "recipe_key": str(best.get("recipe_key") or ""),
         "recipe_task_id": int(best.get("task_id") or 0),
         "shared": list(best.get("shared_tokens") or []),
+        "strength": str(best.get("match_strength") or "weak"),
         "fingerprint": tokens,
     }
 
