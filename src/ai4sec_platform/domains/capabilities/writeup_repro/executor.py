@@ -693,7 +693,14 @@ def _run_task_body(task_id: int, timeout: int) -> None:
         candidate = store.get_candidate(conn, int(task["material_id"])) or {}
         # T5.2: 开跑前找一条同类 recipe。**在这里查而不是在提示词里让 agent 自己找** ——
         # 执行会话看不到库里的 recipe 表, 而"上次同类目标怎么跑通的"只有平台知道。
-        reuse = recipes_module.pick_reusable(conn, task, candidate)
+        if int(task.get("recipe_hint", 1) or 0) == 0:
+            # A/B 实验的对照组: 同一个 spec, 只是不注入同类经验。
+            reuse = {
+                "used": False, "hint": "", "strength": "", "skipped": True,
+                "fingerprint": recipes_module.build_fingerprint(task, candidate or {}),
+            }
+        else:
+            reuse = recipes_module.pick_reusable(conn, task, candidate)
     finally:
         conn.close()
 
@@ -749,12 +756,17 @@ def _run_task_body(task_id: int, timeout: int) -> None:
             task=task, material=material, spec=spec,
             recipe_hint=reuse.get("hint") or "", budget_seconds=timeout,
         )
-        if reuse.get("used"):
+        if reuse.get("skipped"):
+            _log(task_id, "○ 本次关闭 recipe 注入(A/B 对照组)")
+        elif reuse.get("used"):
             _log(
                 task_id,
                 f"♻ 命中同类 recipe {reuse.get('recipe_key')}"
                 f"(共享 {', '.join(reuse.get('shared') or [])}), 已注入提示词",
             )
+        elif reuse.get("suppressed"):
+            _log(task_id, f"○ 命中弱 recipe {reuse.get('suppressed')}, "
+                          f"按策略不注入(2026-11-27 A/B: 弱提示反而更慢)")
         else:
             _log(task_id, f"○ 没有可复用的同类 recipe(指纹 {', '.join(reuse.get('fingerprint') or []) or '空'})")
         _log(task_id, f"执行提示词 {len(prompt)} 字符, 步骤 {len(spec.get('steps') or [])} 步")
@@ -841,6 +853,10 @@ def _run_task_body(task_id: int, timeout: int) -> None:
         "shared": list(reuse.get("shared") or []),
         # T5.3: 强/弱命分开落库 —— 把 3 次噪声算成 3 次复利, 指标就失去意义。
         "strength": str(reuse.get("strength") or ""),
+        "skipped": bool(reuse.get("skipped")),
+        # 命中了弱 recipe 但按策略不注入 —— 留痕, 否则"复用率归零"看起来像功能坏了。
+        "suppressed": str(reuse.get("suppressed") or ""),
+        "suppressed_strength": str(reuse.get("suppressed_strength") or ""),
         "fingerprint": list(reuse.get("fingerprint") or []),
     }
     # 规则没认出来才请模型看一眼(见 judge.py), 它在 decide 之前改 evidence。

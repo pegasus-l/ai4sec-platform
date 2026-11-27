@@ -855,6 +855,35 @@ def test_pick_reusable_reports_the_strength() -> None:
     conn = _conn()
     _one_recipe(conn)
     out = recipes_module.pick_reusable(
-        conn, {"id": 9, "material_id": 999}, {"poc_lang": "python", "target_kind": "package"})
+        conn, {"id": 9, "material_id": 999},
+        {"poc_lang": "python", "target_kind": "package", "claimed_effect": "内存破坏"})
     assert out["used"] is True
-    assert out["strength"] in ("strong", "weak")
+    assert out["strength"] == "strong"
+
+
+# ---------------------------------------------------------------- 只注入强匹配(2026-11-27)
+
+def test_a_weak_match_is_suppressed_instead_of_injected() -> None:
+    """A/B 实测: 弱提示让平均命令数从 9.3 涨到 14.7 —— 命中但不注入, 并留痕。"""
+    conn = _conn()
+    _one_recipe(conn)
+    # 把 recipe 的指纹改成"只有语言和目标形态"的弱组合
+    conn.execute("UPDATE writeup_repro_recipes SET fingerprint_json = ?",
+                 (json.dumps(["lang:python", "target:package"]),))
+    conn.commit()
+    out = recipes_module.pick_reusable(
+        conn, {"id": 9, "material_id": 999}, {"poc_lang": "python", "target_kind": "package"})
+    assert out["used"] is False
+    assert out["hint"] == ""
+    assert out["suppressed"] == "wr-132734-3"
+    assert out["suppressed_strength"] == "weak"
+
+
+def test_a_strong_match_is_still_injected() -> None:
+    conn = _conn()
+    _one_recipe(conn)
+    # 强匹配要三样都对上: 语言 + 目标形态 + 攻击面(claimed_effect 里带"内存破坏")
+    out = recipes_module.pick_reusable(
+        conn, {"id": 9, "material_id": 999},
+        {"poc_lang": "python", "target_kind": "package", "claimed_effect": "内存破坏"})
+    assert out["used"] is True and out["strength"] == "strong"

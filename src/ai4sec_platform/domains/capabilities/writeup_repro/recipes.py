@@ -804,6 +804,15 @@ def pick_reusable(
     if not hits:
         return {"used": False, "hint": "", "strength": "", "fingerprint": tokens}
     best = hits[0]
+    # 2026-11-27 A/B 实测: 只注入**强匹配**。弱匹配(只共享语言/目标形态)在对照实验里不但没
+    # 省时间, 命令数还从平均 9.3 涨到 14.7 —— 一份不相干的"上次笔记"会占掉 agent 的注意力。
+    # 现在库里 17 次命中全是弱匹配, 所以这条策略的实际效果 = 暂时不注入, 直到指纹能给出强匹配。
+    if str(best.get("match_strength") or "weak") != "strong":
+        return {
+            "used": False, "hint": "", "strength": "", "fingerprint": tokens,
+            "suppressed": str(best.get("recipe_key") or ""),
+            "suppressed_strength": str(best.get("match_strength") or "weak"),
+        }
     return {
         "used": True,
         "hint": format_hint(best),
