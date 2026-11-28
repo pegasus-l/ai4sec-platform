@@ -1,6 +1,7 @@
 import { getJson, postJson } from '../../api/client';
 import type {
-  WriteupMetrics, WriteupPatternRow, WriteupProductsDetail, WriteupRecipeRow, WriteupReport, WriteupSkillExport,
+  CandidateRow, CandidateStats, WriteupMetrics, WriteupPatternRow, WriteupProductsDetail,
+  WriteupRecipeRow, WriteupReport, WriteupSkillExport,
   WriteupStats, WriteupTask,
 } from './writeupReproTypes';
 
@@ -153,4 +154,30 @@ export function extractProducts(taskId: number): Promise<{ status: string; reaso
 
 export function fetchMetrics(): Promise<WriteupMetrics> {
   return getJson<WriteupMetrics>('/api/writeup-repro/metrics');
+}
+
+export interface CandidateQuery {
+  priority?: string;
+  screenable?: boolean;
+  q?: string;
+  hasTask?: boolean;
+  limit?: number;
+  offset?: number;
+}
+
+export function fetchCandidates(query: CandidateQuery = {}): Promise<{
+  items: CandidateRow[]; total: number; limit: number; offset: number;
+}> {
+  const sp = new URLSearchParams();
+  if (query.priority) sp.set('priority', query.priority);
+  if (query.screenable !== undefined) sp.set('screenable', String(query.screenable));
+  if (query.q) sp.set('q', query.q);
+  if (query.hasTask !== undefined) sp.set('has_task', String(query.hasTask));
+  sp.set('limit', String(query.limit ?? 20));
+  sp.set('offset', String(query.offset ?? 0));
+  return getJson(`/api/writeup-repro/candidates?${sp.toString()}`);
+}
+
+export function fetchCandidateStats(): Promise<CandidateStats> {
+  return getJson<CandidateStats>('/api/writeup-repro/candidates/stats');
 }

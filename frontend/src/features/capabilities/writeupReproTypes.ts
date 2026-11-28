@@ -442,3 +442,34 @@ export interface WriteupMetrics {
   };
   note: string;
 }
+
+/** 候选列表的一行: 预筛结论 + 优先级 + 素材标题(不包含素材正文)。 */
+export interface CandidateRow {
+  material_id: number;
+  screenable: number;
+  reject_reason: string;
+  priority: '' | 'P0' | 'P1' | 'P2' | string;
+  priority_reason: string;
+  asset_hit: number;
+  asset_ids: string;
+  asset_confidence: string;
+  has_poc: number;
+  poc_lang: string;
+  target_kind: string;
+  target_repo: string;
+  target_version: string;
+  target_cve: string;
+  target_product: string;
+  claimed_effect: string;
+  title: string | null;
+  source_url: string | null;
+  task_id: number | null;
+  task_status: string | null;
+  task_verdict: string | null;
+}
+
+export interface CandidateStats {
+  screenable: number;
+  by_priority: Record<'P0' | 'P1' | 'P2', number>;
+  with_task: number;
+}

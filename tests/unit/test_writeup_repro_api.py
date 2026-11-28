@@ -487,3 +487,34 @@ def test_products_route_404s_for_an_unknown_task(conn) -> None:
     with pytest.raises(HTTPException) as exc:
         api.task_products(424242, conn=conn)
     assert exc.value.status_code == 404
+
+
+# ---------------------------------------------------------------- 候选列表(2026-11-28)
+
+def test_candidates_endpoint_returns_rows_and_rejects_unknown_priority() -> None:
+    conn = _conn()
+    _material(conn, 7)
+    # 预筛只写结论, 优先级是紧接着的 assign 步骤补的(表默认是 '' = 未计算)
+    from ai4sec_platform.domains.capabilities.writeup_repro import priority
+    priority.assign(conn)
+    # 直接调函数(FastAPI 未介入)时默认值还是 Query(...) 对象, 必须显式传参
+    out = api.list_candidates(priority=None, screenable=True, q=None, has_task=None,
+                              limit=30, offset=0, conn=conn)
+    assert out["total"] == 1
+    assert out["items"][0]["material_id"] == 7
+    # 这条 fixture 的仓库被校验清空了(原文里没出现该 GitHub 地址), 所以是 P2 而不是 P1
+    assert out["items"][0]["priority"] == "P2"
+    with pytest.raises(HTTPException) as exc:
+        api.list_candidates(priority="P9", screenable=True, q=None, has_task=None,
+                            limit=30, offset=0, conn=conn)
+    assert exc.value.status_code == 400
+
+
+def test_candidate_stats_count_by_priority() -> None:
+    conn = _conn()
+    _material(conn, 7)
+    from ai4sec_platform.domains.capabilities.writeup_repro import priority
+    priority.assign(conn)
+    out = api.candidate_stats(conn=conn)
+    assert out["screenable"] == 1
+    assert out["by_priority"]["P2"] == 1

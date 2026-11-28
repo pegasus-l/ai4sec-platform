@@ -40,6 +40,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 from ai4sec_platform.app.dependencies import current_user, get_db
+from ai4sec_platform.domains.capabilities.writeup_repro import candidates as candidates_module
 from ai4sec_platform.domains.capabilities.writeup_repro import executor
 from ai4sec_platform.domains.capabilities.writeup_repro import metrics as metrics_module
 from ai4sec_platform.domains.capabilities.writeup_repro import recipes as recipes_module
@@ -210,6 +211,33 @@ def list_tasks(
     return {"items": _decorate(conn, items), "total": total, "limit": limit, "offset": offset}
 
 
+@router.get("/candidates")
+def list_candidates(
+    priority: str | None = Query(None, description="P0|P1|P2"),
+    screenable: bool = Query(True, description="false = 看被预筛拒掉的"),
+    q: str | None = Query(None, description="标题/仓库/CVE 关键词"),
+    has_task: bool | None = Query(None, description="true 只看已建任务的"),
+    limit: int = Query(30, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    conn: sqlite3.Connection = Depends(get_db),
+) -> dict[str, Any]:
+    """候选列表(带优先级)。**只回列表需要的列**, 不碰素材 payload。"""
+    try:
+        items, total = candidates_module.list_candidates(
+            conn, priority=priority, screenable=screenable, q=q, has_task=has_task,
+            limit=limit, offset=offset,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"items": items, "total": total, "limit": limit, "offset": offset}
+
+
+@router.get("/candidates/stats")
+def candidate_stats(conn: sqlite3.Connection = Depends(get_db)) -> dict[str, Any]:
+    """按优先级统计(只算可复现的)。P0 为 0 是**事实**, 页面要写清"暂无资产命中"。"""
+    return candidates_module.stats(conn)
+
+
 @router.get("/stats")
 def task_stats(conn: sqlite3.Connection = Depends(get_db)) -> dict[str, Any]:
     """漏斗。``cannot_repro``(原文的锅)与 ``failed``(我们的锅)分列, 不合并。"""
@@ -298,6 +326,7 @@ def rerun_task(
     task_id: int,
     start: bool = Query(True, description="建完直接开跑(新行带着上一遍的 spec)"),
     timeout: int | None = Query(None, ge=120, le=7200),
+    recipe_hint: bool = Query(True, description="本次是否注入同类 recipe(A/B 实验的对照组用 false)"),
     conn: sqlite3.Connection = Depends(get_db),
 ) -> dict[str, Any]:
     """重跑一条**终态**任务: 新开 ``attempt+1`` 一行, 上一行(含它的证据与结论)原样保留。
@@ -308,6 +337,7 @@ def rerun_task(
     try:
         created = tasks.rerun(
             conn, task_id, created_by=str(current_user(request).get("username") or ""),
+            recipe_hint=recipe_hint,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

@@ -4,8 +4,8 @@ import { Badge, EmptyState } from '../../components/ui';
 import { useDrawerStack } from '../../components/DrawerStack';
 import { useToast } from '../../components/Toast';
 import { CommandBlock, WriteupTaskDrawer } from './WriteupTaskDrawer';
-import { createTask, fetchMetrics, fetchPatterns, fetchRecipes, fetchStats, fetchTasks } from './writeupReproQueries';
-import type { WriteupMetrics, WriteupPatternRow, WriteupRecipeRow, WriteupTask } from './writeupReproTypes';
+import { createTask, fetchCandidateStats, fetchCandidates, fetchMetrics, fetchPatterns, fetchRecipes, fetchStats, fetchTasks } from './writeupReproQueries';
+import type { CandidateRow, WriteupMetrics, WriteupPatternRow, WriteupRecipeRow, WriteupTask } from './writeupReproTypes';
 import {
   failureLabel, fmtDuration, fmtTime, listOf, statusMeta, triggerLabel, verdictMeta,
 } from './writeupReproLabels';
@@ -71,7 +71,7 @@ function ProductDots({ products }: { products?: WriteupTask['products'] }) {
   </div>;
 }
 
-type Tab = 'tasks' | 'recipes' | 'patterns';
+type Tab = 'tasks' | 'recipes' | 'patterns' | 'candidates';
 
 export function WriteupRepro({ focusTaskId, onFocusConsumed }: { focusTaskId?: number | null; onFocusConsumed?: () => void }) {
   const [tab, setTab] = useState<Tab>('tasks');
@@ -115,6 +115,13 @@ export function WriteupRepro({ focusTaskId, onFocusConsumed }: { focusTaskId?: n
     title: task.material?.title || `复现任务 #${task.id}`,
     subtitle: `#${task.id} · 第 ${task.attempt} 遍 · ${statusMeta(task.status).label}`,
     render: () => <WriteupTaskDrawer taskId={task.id} />,
+  });
+
+  /** 候选页只拿得到 task_id(它查的是候选表, 不拉任务详情), 这里按 id 开抽屉。 */
+  const openTaskById = (taskId: number) => push({
+    title: `复现任务 #${taskId}`,
+    subtitle: `#${taskId}`,
+    render: () => <WriteupTaskDrawer taskId={taskId} />,
   });
 
   /** 折叠视图里点历史条 = 打开**那一遍**的抽屉(证据、报告都挂在遍上, 不是挂在素材上)。 */
@@ -181,6 +188,7 @@ export function WriteupRepro({ focusTaskId, onFocusConsumed }: { focusTaskId?: n
         <button className={`view-pill ${tab === 'tasks' ? 'active' : ''}`} onClick={() => setTab('tasks')}>任务 {kpi?.total ?? 0}</button>
         <button className={`view-pill ${tab === 'recipes' ? 'active' : ''}`} onClick={() => setTab('recipes')}>配方 {kpi?.products.recipes ?? 0}</button>
         <button className={`view-pill ${tab === 'patterns' ? 'active' : ''}`} onClick={() => setTab('patterns')}>规律 {kpi?.products.patterns ?? 0}</button>
+        <button className={`view-pill ${tab === 'candidates' ? 'active' : ''}`} onClick={() => setTab('candidates')}>候选</button>
         {tab === 'tasks' && <select value={status} onChange={event => { setStatus(event.target.value); setVerdict(''); setActiveOnly(false); }}>
           <option value="">全部状态</option>
           <option value="pending">待生成 spec</option>
@@ -236,6 +244,7 @@ export function WriteupRepro({ focusTaskId, onFocusConsumed }: { focusTaskId?: n
 
     {tab === 'recipes' && <RecipesTab />}
     {tab === 'patterns' && <PatternsTab />}
+    {tab === 'candidates' && <CandidatesTab onOpenTask={openTaskById} />}
   </div>;
 }
 
@@ -473,4 +482,99 @@ function Pagination({ page, pages, total, setOffset }: { page: number; pages: nu
     <button className="btn" disabled={page <= 1} onClick={() => setOffset((page - 2) * PAGE_SIZE)}>上一页</button>
     <button className="btn" disabled={page >= pages} onClick={() => setOffset(page * PAGE_SIZE)}>下一页</button>
   </div>;
+}
+
+// ========== 候选列表(T1.5 优先级) ==========
+
+/**
+ * 候选池: 先复现哪一篇。
+ *
+ * 为什么单独一页: 任务页只显示"已经建了任务的", 而**真正要决策的是还没建的**。这里的排序
+ * 口径就是 T1.5 的优先级 —— P0(命中资产/生态) → P1(PoC+仓库+版本齐全) → P2。
+ * P0 为 0 是**事实**(卡在缺 SBOM), 页面写清楚, 不能让它看起来像功能坏了。
+ */
+function CandidatesTab({ onOpenTask }: { onOpenTask: (taskId: number) => void }) {
+  const { toast } = useToast();
+  const qc = useQueryClient();
+  const [priority, setPriority] = useState('');
+  const [keyword, setKeyword] = useState('');
+  const [search, setSearch] = useState('');
+  const [offset, setOffset] = useState(0);
+  const limit = 20;
+
+  const stats = useQuery({ queryKey: ['writeup', 'candidate-stats'], queryFn: fetchCandidateStats, refetchInterval: 60_000 });
+  const list = useQuery({
+    queryKey: ['writeup', 'candidates', { priority, search, offset }],
+    queryFn: () => fetchCandidates({ priority: priority || undefined, q: search || undefined, limit, offset }),
+    placeholderData: keepPreviousData,
+  });
+  const create = useMutation({
+    mutationFn: (materialId: number) => createTask(materialId),
+    onSuccess: result => {
+      qc.invalidateQueries({ queryKey: ['writeup'] });
+      toast(result.created ? `已建任务 #${result.task.id}` : `这篇已有任务 #${result.task.id}`, 'success');
+    },
+    onError: (error: Error) => toast(`建任务失败: ${error.message}`, 'error'),
+  });
+
+  const items = list.data?.items ?? [];
+  const total = list.data?.total ?? 0;
+  const pages = Math.max(1, Math.ceil(total / limit));
+  const page = Math.floor(offset / limit) + 1;
+  const counts = stats.data?.by_priority ?? { P0: 0, P1: 0, P2: 0 };
+
+  return <>
+    <section className="panel case-stat-strip">
+      <div className="case-stat-row">
+        <StatChip label="可复现候选" value={stats.data?.screenable ?? 0} active={!priority} onClick={() => { setPriority(''); setOffset(0); }} hint="通过预筛、可进复现队列的总数" />
+        <StatChip label="P0 资产/生态命中" value={counts.P0} active={priority === 'P0'} onClick={() => { setPriority('P0'); setOffset(0); }} hint="优先复现：命中我司资产或跟踪仓公告里的 CVE" />
+        <StatChip label="P1 可直接跑" value={counts.P1} active={priority === 'P1'} onClick={() => { setPriority('P1'); setOffset(0); }} hint="PoC、仓库与版本齐全" />
+        <StatChip label="P2 其余" value={counts.P2} active={priority === 'P2'} onClick={() => { setPriority('P2'); setOffset(0); }} hint="可复现但信息不全" />
+      </div>
+      <div className="case-mini-foot">
+        <span className="muted small">已建任务 {stats.data?.with_task ?? 0} 篇</span>
+        <input value={keyword} onChange={event => setKeyword(event.target.value)} placeholder="标题 / 仓库 / CVE"
+               onKeyDown={event => { if (event.key === 'Enter') { setSearch(keyword.trim()); setOffset(0); } }} />
+        <button className="btn" onClick={() => { setSearch(keyword.trim()); setOffset(0); }}>搜索</button>
+        {counts.P0 === 0 && <span className="muted small">暂无资产命中：P0 需要 SBOM 或用户登记的盯源，现在两边都是空的，队列主力是 P1/P2。</span>}
+      </div>
+    </section>
+
+    {list.isLoading && <EmptyState title="加载中…" />}
+    {!list.isLoading && items.length === 0 && <EmptyState title="没有符合条件的候选"
+      description={search ? `关键词「${search}」没有命中；换个词或清空筛选。` : '这一档暂时没有候选。'} />}
+
+    <section className="panel">
+      {items.map(item => <CandidateCard key={item.material_id} item={item}
+        busy={create.isPending && create.variables === item.material_id}
+        onCreate={() => (item.task_id ? onOpenTask(item.task_id) : create.mutate(item.material_id))} />)}
+    </section>
+    <Pagination page={page} pages={pages} total={total} setOffset={setOffset} />
+  </>;
+}
+
+const PRIORITY_TONE: Record<string, 'red' | 'amber' | 'slate'> = { P0: 'red', P1: 'amber', P2: 'slate' };
+
+function CandidateCard({ item, busy, onCreate }: { item: CandidateRow; busy: boolean; onCreate: () => void }) {
+  const priority = item.priority || '—';
+  const target = [item.target_kind, item.target_repo, item.target_version].filter(Boolean).join(' · ');
+  return <article className="case-card">
+    <div className="case-card-main">
+      <div className="badges">
+        {item.priority ? <Badge tone={PRIORITY_TONE[item.priority] ?? 'slate'}>{priority}</Badge> : <Badge tone="slate">未排序</Badge>}
+        {item.asset_hit ? <Badge tone="violet">资产 {item.asset_confidence}</Badge> : null}
+        {item.target_cve ? <Badge tone="sky">{item.target_cve}</Badge> : null}
+        {item.has_poc ? <Badge tone="slate">有 PoC</Badge> : null}
+        {item.task_id ? <Badge tone="green">已有任务 #{item.task_id}{item.task_verdict ? ` · ${item.task_verdict}` : ''}</Badge> : null}
+      </div>
+      <h4>{item.title ?? `素材 #${item.material_id}`}</h4>
+      {target && <p className="small">{target}</p>}
+      {item.priority_reason && <p className="small">{item.priority_reason}</p>}
+      {item.claimed_effect && <p className="muted small">声称效果：{item.claimed_effect}</p>}
+      <div className="case-mini-foot">
+        <span className="muted small">素材 #{item.material_id}</span>
+        <button className="btn" disabled={busy} onClick={onCreate}>{busy ? '建任务中…' : (item.task_id ? '打开任务' : '复现这篇')}</button>
+      </div>
+    </div>
+  </article>;
 }
