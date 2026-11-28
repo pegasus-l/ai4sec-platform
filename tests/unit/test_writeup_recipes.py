@@ -887,3 +887,56 @@ def test_a_strong_match_is_still_injected() -> None:
         conn, {"id": 9, "material_id": 999},
         {"poc_lang": "python", "target_kind": "package", "claimed_effect": "内存破坏"})
     assert out["used"] is True and out["strength"] == "strong"
+
+
+# ---------------------------------------------------------------- 按洞去重(2026-11-28)
+
+def _pattern(conn, *, pid: int, report_id: int, material_id: int = 132734,
+             provenance: str = "from_repro", backtest: str = "") -> None:
+    conn.execute(
+        "INSERT INTO writeup_repro_patterns (id, report_id, material_id, invariant, provenance,"
+        " backtest_status, fingerprint, created_at) VALUES (?,?,?,?,?,?,?,?)",
+        (pid, report_id, material_id, f"不变量 {pid}", provenance, backtest, "[]", "2026-11-28"),
+    )
+    conn.commit()
+
+
+def test_dedupe_keeps_the_backtested_row() -> None:
+    conn = _conn()
+    _pattern(conn, pid=1, report_id=101, backtest="fail")
+    _pattern(conn, pid=2, report_id=102, backtest="pass")
+    out = recipes_module.dedupe_material(conn, 132734)
+    assert out["kept"] == 2 and out["removed"] == [1]
+    assert recipes_module.count_patterns_by_material(conn, 132734) == 1
+
+
+def test_dedupe_prefers_from_repro_over_llm_extracted_at_the_same_rank() -> None:
+    conn = _conn()
+    _pattern(conn, pid=3, report_id=103, provenance="llm_extracted", backtest="unverified")
+    _pattern(conn, pid=4, report_id=104, provenance="from_repro", backtest="unverified")
+    out = recipes_module.dedupe_material(conn, 132734)
+    assert out["kept"] == 4 and out["removed"] == [3]
+
+
+def test_dedupe_takes_the_newest_when_everything_is_equal() -> None:
+    conn = _conn()
+    _pattern(conn, pid=5, report_id=105)
+    _pattern(conn, pid=6, report_id=106)
+    out = recipes_module.dedupe_material(conn, 132734)
+    assert out["kept"] == 6 and out["removed"] == [5]
+
+
+def test_dedupe_is_a_noop_for_a_single_pattern() -> None:
+    conn = _conn()
+    _pattern(conn, pid=7, report_id=107)
+    out = recipes_module.dedupe_material(conn, 132734)
+    assert out["kept"] == 7 and out["removed"] == []
+
+
+def test_dedupe_only_touches_the_given_material() -> None:
+    conn = _conn()
+    _pattern(conn, pid=8, report_id=108, material_id=132734)
+    _pattern(conn, pid=9, report_id=109, material_id=999999)
+    out = recipes_module.dedupe_material(conn, 132734)
+    assert out["removed"] == []
+    assert recipes_module.count_patterns_by_material(conn, 999999) == 1

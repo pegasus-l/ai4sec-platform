@@ -529,6 +529,52 @@ def _save_pattern(conn: sqlite3.Connection, row: dict[str, Any]) -> dict[str, An
     return _parse_pattern_row(saved) or {}
 
 
+#: 同一个洞(素材)只留一条 pattern 时, "哪条更好"的排序。回测通过的是最可信的;
+#: 其次是"复现时发现"(from_repro);最后才比新旧 —— 新的一条可能只是个更差的重跑。
+_BACKTEST_RANK = {"pass": 3, "unverified": 2, "": 1, "fail": 0}
+
+
+def count_patterns_by_material(conn: sqlite3.Connection, material_id: int) -> int:
+    return int(conn.execute(
+        "SELECT COUNT(*) FROM writeup_repro_patterns WHERE material_id = ?", (int(material_id),)
+    ).fetchone()[0])
+
+
+def dedupe_material(conn: sqlite3.Connection, material_id: int) -> dict[str, Any]:
+    """**按洞去重**: 同一素材只留一条 pattern, 其余删掉。
+
+    为什么按素材而不是按不变量: 同一个洞跑两遍, 模型两次写出来的不变量措辞往往不同
+    (实测 19059 两次的表述差半句), 按文本哈希去重等于没去。而"一篇 writeup = 一个洞"
+    是这个域里的硬事实 —— 同一素材的多条 pattern 就是同一件事的多个复述。
+
+    保留规则: 回测 pass > unverified > 未回测 > fail;同档优先 from_repro;再同则取新的。
+    **被删的是派生行**, 报告里的第 7 节原文仍然在(`writeup_repro_reports.pattern_json`)。
+    """
+    rows = conn.execute(
+        "SELECT id, provenance, backtest_status FROM writeup_repro_patterns WHERE material_id = ?",
+        (int(material_id),),
+    ).fetchall()
+    if len(rows) <= 1:
+        return {"kept": int(rows[0]["id"]) if rows else 0, "removed": []}
+    def rank(row: Any) -> tuple[int, int, int]:
+        return (
+            _BACKTEST_RANK.get(str(row["backtest_status"] or ""), 1),
+            1 if str(row["provenance"] or "") == "from_repro" else 0,
+            int(row["id"]),
+        )
+    best = max(rows, key=rank)
+    removed = [int(row["id"]) for row in rows if int(row["id"]) != int(best["id"])]
+    if removed:
+        conn.executemany("DELETE FROM writeup_repro_patterns WHERE id = ?", [(i,) for i in removed])
+        conn.commit()
+    return {"kept": int(best["id"]), "removed": removed}
+
+
+def get_pattern_by_id(conn: sqlite3.Connection, pattern_id: int) -> dict[str, Any] | None:
+    row = conn.execute("SELECT * FROM writeup_repro_patterns WHERE id = ?", (int(pattern_id),)).fetchone()
+    return _parse_pattern_row(row)
+
+
 # ---------------------------------------------------------------- 入口
 
 def extract_for_task(
@@ -577,6 +623,11 @@ def extract_for_task(
         saved_pattern = None
         if pattern is not None:
             saved_pattern = _save_pattern(conn, pattern)
+            # 按洞去重: 同一素材只留最好的一条(重跑会不断产出新的复述)。
+            # 保留的未必是刚保存的这条 —— 所以返回值要用去重后那一行, 否则调用方拿到的是已删对象。
+            kept = dedupe_material(conn, int(task["material_id"]))
+            if kept["kept"] and int(saved_pattern.get("id") or 0) != kept["kept"]:
+                saved_pattern = get_pattern_by_id(conn, kept["kept"]) or saved_pattern
         else:
             _delete_pattern(conn, int(task["id"]))
 
