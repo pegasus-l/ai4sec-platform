@@ -31,6 +31,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from ai4sec_platform.db import repositories as repo
+from ai4sec_platform.domains.capabilities.writeup_repro import priority as priority_module
 from ai4sec_platform.domains.capabilities.writeup_repro import screener_rules, store
 from ai4sec_platform.domains.capabilities.writeup_repro.cve_targets import (
     DEFAULT_MAX_LOOKUPS,
@@ -271,6 +272,14 @@ class ScreenWriteupMaterialsStep:
                 break
 
         context.conn.commit()
+        # T1.5: 给还没算过优先级的候选补一次(P0 资产/生态命中 / P1 PoC+仓库+版本齐全 / P2 其余)。
+        # 单独一步而不是塞进 upsert_candidate: 重筛不该抹掉已算好的优先级, 而优先级依赖威胁侧的
+        # 最新数据(威胁跑批在不同时间点), 两边解耦才能各自重跑。
+        try:
+            counts = priority_module.assign(context.conn, only_empty=True)
+            metrics["priority"] = {k: v for k, v in counts.items() if k}
+        except Exception as exc:  # noqa: BLE001 - 优先级算不出来不该让整轮预筛失败
+            metrics["priority_error"] = str(exc)[:200]
         metrics["remaining"] = max(int(metrics["pending"]) - int(metrics["processed"]), 0)
         metrics["reject_reason"] = reasons
         if error_kinds:
