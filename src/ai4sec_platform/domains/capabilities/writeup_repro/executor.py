@@ -48,6 +48,7 @@ from ai4sec_platform.domains.capabilities.writeup_repro import guard as guard_mo
 from ai4sec_platform.domains.capabilities.writeup_repro import judge as judge_module
 from ai4sec_platform.domains.capabilities.writeup_repro import recipes as recipes_module
 from ai4sec_platform.domains.capabilities.writeup_repro import report as report_module
+from ai4sec_platform.domains.capabilities.writeup_repro import review as review_module
 from ai4sec_platform.domains.capabilities.writeup_repro import store, tasks
 from ai4sec_platform.domains.capabilities.writeup_repro.spec import TEXT_EXCERPT_CHARS
 
@@ -863,6 +864,17 @@ def _run_task_body(task_id: int, timeout: int) -> None:
     _maybe_judge_probe(task_id, spec, report, collected, commands, preflight)
     verdict, reason, notes = decide(report=report, evidence=collected, preflight=preflight.as_dict())
 
+    # T4.2: 判成 success 之后再请一个"只读证据"的复核者看一眼。**只降不升** —— 它能把
+    # 规则判宽松的成功压成 partial/review_conflict, 但没有权限把 partial 抬成 success。
+    review_outcome: dict[str, Any] = {}
+    if verdict == "success" and review_module.enabled():
+        review_outcome = review_module.review(collected, spec, report)
+        verdict, reason, notes = review_module.apply(verdict, reason, notes, review_outcome)
+        label = str(review_outcome.get("review_verdict") or review_outcome.get("status") or "")
+        _log(task_id, f"🔍 独立复核: {label}"
+                      f"{'(引文已核实)' if review_outcome.get('quote_verified') else ''}"
+                      f"{(' → ' + verdict + '/' + reason) if verdict != 'success' else ' → 维持 success'}")
+
     _log(task_id, f"[结论] {verdict}{('/' + reason) if reason else ''} · 命令 {len(commands)} 条 · 耗时 {duration}s")
     for note in notes:
         if note:
@@ -877,6 +889,7 @@ def _run_task_body(task_id: int, timeout: int) -> None:
         duration_seconds=duration,
         tool_calls=len(commands),
         session_id=session_id or "",
+        **review_module.fields(review_outcome),
     )
 
 
